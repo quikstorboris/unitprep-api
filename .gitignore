@@ -1,0 +1,34 @@
+# Rust build artifacts
+/target/
+
+# Generated outputs
+/output/
+/results/
+/tmp/
+
+# Sample/customer data
+/sampleData/
+
+# Environment
+.env
+.env.*
+
+# Editor metadata
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+*~
+
+# Logs
+*.log
+
+# Export artifacts
+Exports/
+exports/
+UnitPrep_Output/
+test-output/
+
+*.zip
