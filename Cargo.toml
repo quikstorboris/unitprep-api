@@ -45,6 +45,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Session IDs
 uuid = { version = "1", features = ["v4"] }
 
+# Session locking — panicking while a lock is held releases it instead of
+# poisoning it, so a bug in one request can never permanently wedge session
+# access for every other request.
+parking_lot = "0.12"
+
 # ZIP export generation
 zip = "2"
 
