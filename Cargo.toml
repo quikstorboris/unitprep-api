@@ -30,7 +30,9 @@ unitprep-core = { path = "core" }
 # Core error handling
 anyhow = "1"
 
-# CSV parsing
+# CSV *writing* — infrastructure/csv_export.rs uses csv::Writer to build
+# export output. Parsing/reading input CSVs lives entirely in
+# unitprep-core now; this is a distinct, still-legitimate direct use.
 csv = "1"
 
 # Serialization
@@ -65,11 +67,3 @@ zip = "2"
 # Analysis fingerprinting
 regex = "1"
 once_cell = "1"
-
-# Excel support
-calamine = "0.25"
-
-# Excel 2003 SpreadsheetML (XML) support — some facility export tools
-# label this format with a .xls extension even though it's neither real
-# binary XLS nor OOXML XLSX, which calamine can't open.
-quick-xml = "0.36"

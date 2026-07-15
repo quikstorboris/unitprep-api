@@ -1393,11 +1393,9 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "axum",
- "calamine",
  "chrono",
  "csv",
  "once_cell",
- "quick-xml 0.36.2",
  "regex",
  "serde",
  "serde_json",
