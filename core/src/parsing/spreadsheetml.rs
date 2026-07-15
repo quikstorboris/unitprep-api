@@ -1,10 +1,3 @@
-use std::io::Cursor;
-
-use calamine::{
-    open_workbook_auto_from_rs,
-    Data,
-    Reader,
-};
 use quick_xml::events::{
     BytesStart,
     Event,
@@ -13,187 +6,13 @@ use quick_xml::events::{
 use crate::csv_document::CsvDocument;
 use crate::uploaded_file::UploadedFile;
 
-/// Returns the lowercased file extension only (the text after the last
-/// `.`), not the whole path — used for dispatch and for the "unsupported
-/// file type" diagnostic below.
-fn extension_of(file_name: &str) -> &str {
-    file_name
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-}
-
-pub fn parse_document(
-    file: &UploadedFile,
-) -> anyhow::Result<CsvDocument> {
-    // Content is sniffed before the extension is trusted: some facility
-    // export tools label Excel 2003 SpreadsheetML XML with a `.xls`
-    // extension (Excel itself opens it by content, not extension), which
-    // otherwise defeats calamine's binary/OOXML auto-detection. Discovery
-    // decides relevance by header inspection, not by which files happened
-    // to parse, so a file in this dialect needs to actually be read.
-    if is_spreadsheetml(&file.bytes) {
-        return parse_spreadsheetml_document(
-            file,
-        );
-    }
-
-    let lower =
-        file.file_name.to_lowercase();
-
-    match extension_of(&lower) {
-        "csv" => parse_csv_document(file),
-
-        "xlsx" | "xls" => {
-            parse_excel_document(file)
-        }
-
-        other => {
-            tracing::warn!(
-                file = %file.file_name,
-                extension = %other,
-                "Unsupported file type — skipping"
-            );
-
-            anyhow::bail!(
-                "Unsupported file type: {}",
-                file.file_name
-            );
-        }
-    }
-}
-
-pub fn parse_csv_document(
-    file: &UploadedFile,
-) -> anyhow::Result<CsvDocument> {
-    let cursor =
-        Cursor::new(&file.bytes);
-
-    let mut reader =
-        csv::Reader::from_reader(cursor);
-
-    let headers: Vec<String> = reader
-        .headers()?
-        .iter()
-        .map(|h| h.trim().to_lowercase())
-        .collect();
-
-    let mut rows: Vec<Vec<String>> =
-        Vec::new();
-
-    for result in reader.records() {
-        let record = result?;
-
-        let row: Vec<String> = record
-            .iter()
-            .map(|field| {
-                field.trim().to_string()
-            })
-            .collect();
-
-        rows.push(row);
-    }
-
-    Ok(CsvDocument {
-        file_name:
-            file.file_name.clone(),
-        headers,
-        rows,
-    })
-}
-
-/// Parses an Excel workbook (`.xlsx`/`.xls`) into a CsvDocument.
-///
-/// LIMITATION: only the first worksheet is read. If a real-world export
-/// puts data on a sheet other than the first (e.g. a cover/readme sheet
-/// precedes it), that data will not be found. Not yet needed by any known
-/// export format, so left as a documented limitation rather than adding
-/// sheet-selection UI/logic before there's a real use case for it — revisit
-/// if a workbook with the data on a non-first sheet shows up.
-pub fn parse_excel_document(
-    file: &UploadedFile,
-) -> anyhow::Result<CsvDocument> {
-    // `Cursor<&[u8]>` satisfies calamine's `Read + Seek` requirement just
-    // as well as an owned `Cursor<Vec<u8>>` — no need to clone the whole
-    // file's bytes just to hand them to the workbook reader.
-    let cursor =
-        Cursor::new(&file.bytes);
-
-    let mut workbook =
-        open_workbook_auto_from_rs(cursor)?;
-
-    let sheet_names =
-        workbook.sheet_names().to_vec();
-
-    let first_sheet =
-        sheet_names
-            .first()
-            .cloned()
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "Workbook '{}' contains no worksheets",
-                    file.file_name
-                )
-            })?;
-
-    let range =
-        workbook.worksheet_range(
-            &first_sheet,
-        )?;
-
-    let mut rows_iter =
-        range.rows();
-
-    let header_row =
-        rows_iter.next().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Workbook '{}' contains no rows",
-                file.file_name
-            )
-        })?;
-
-    let headers: Vec<String> =
-        header_row
-            .iter()
-            .map(cell_to_string)
-            .map(|v| {
-                v.trim()
-                    .to_lowercase()
-            })
-            .collect();
-
-    let mut rows: Vec<Vec<String>> =
-        Vec::new();
-
-    for row in rows_iter {
-        let values: Vec<String> =
-            row.iter()
-                .map(cell_to_string)
-                .collect();
-
-        let has_data =
-            values.iter().any(|v| {
-                !v.trim().is_empty()
-            });
-
-        if has_data {
-            rows.push(values);
-        }
-    }
-
-    Ok(CsvDocument {
-        file_name:
-            file.file_name.clone(),
-        headers,
-        rows,
-    })
-}
-
 /// True if `bytes` looks like Excel 2003 SpreadsheetML XML — an
 /// `<?xml ...?>` prolog followed by the `urn:schemas-microsoft-com:office:
 /// spreadsheet` namespace within the first kilobyte. Cheap enough to run
-/// on every upload regardless of extension.
-fn is_spreadsheetml(
+/// on every upload regardless of extension. `pub(crate)` — only
+/// `parsing::parse_document`'s dispatch needs this; parsing the actual
+/// content stays entirely within this module.
+pub(crate) fn is_spreadsheetml(
     bytes: &[u8],
 ) -> bool {
     let head_len =
@@ -264,9 +83,9 @@ fn place_spreadsheetml_cell(
 /// paths.
 ///
 /// LIMITATION: only the first `<Worksheet>` is read (same limitation as
-/// `parse_excel_document`). `ss:Index` gaps and `ss:MergeAcross` spans are
-/// filled with empty strings; `ss:Repeat`-compressed repeated cells are
-/// not expanded — not yet needed by any known export format.
+/// `excel::parse_excel_document`). `ss:Index` gaps and `ss:MergeAcross`
+/// spans are filled with empty strings; `ss:Repeat`-compressed repeated
+/// cells are not expanded — not yet needed by any known export format.
 pub fn parse_spreadsheetml_document(
     file: &UploadedFile,
 ) -> anyhow::Result<CsvDocument> {
@@ -492,44 +311,10 @@ pub fn parse_spreadsheetml_document(
     })
 }
 
-fn cell_to_string(
-    cell: &Data,
-) -> String {
-    match cell {
-        Data::Empty => String::new(),
-        Data::String(v) => v.clone(),
-        Data::Bool(v) => v.to_string(),
-        Data::Int(v) => v.to_string(),
-
-        Data::Float(v) => {
-            if v.fract() == 0.0 {
-                (*v as i64).to_string()
-            } else {
-                v.to_string()
-            }
-        }
-
-        Data::DateTime(v) => {
-            v.to_string()
-        }
-
-        Data::DateTimeIso(v) => {
-            v.clone()
-        }
-
-        Data::DurationIso(v) => {
-            v.clone()
-        }
-
-        Data::Error(v) => {
-            v.to_string()
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parsing::parse_document;
 
     const SAMPLE_SPREADSHEETML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <?mso-application progid="Excel.Sheet"?>
