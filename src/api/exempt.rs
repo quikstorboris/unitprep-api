@@ -9,6 +9,7 @@ use unitprep_core::session_store::SessionStoreExt;
 use crate::{
     api::{
         session_not_found,
+        stage_conflict,
         validate::run_validation,
         AppState,
     },
@@ -66,8 +67,12 @@ pub async fn exempt_dimensions(
         );
 
     match response {
-        Some(response) => {
+        Some(Ok(response)) => {
             Json(response).into_response()
+        }
+
+        Some(Err(err)) => {
+            stage_conflict(err)
         }
 
         None => session_not_found(),
@@ -83,6 +88,7 @@ mod tests {
         discovered_state,
         empty_state,
         unit_document,
+        uploaded_state,
     };
 
     #[tokio::test]
@@ -110,6 +116,51 @@ mod tests {
         assert_eq!(
             response.status(),
             StatusCode::NOT_FOUND
+        );
+    }
+
+    /// Regression test for the stage/error inconsistency fix:
+    /// `/exempt-dimensions` re-runs validation internally, so it must
+    /// surface the same 409 (not a fake 200) when the session hasn't
+    /// been discovered yet.
+    #[tokio::test]
+    async fn exempt_dimensions_returns_409_when_called_before_discovery(
+    ) {
+        let state = uploaded_state(
+            "s1",
+            vec![unit_document(
+                "units.csv",
+                vec![[
+                    "Office",
+                    "10x10 Inside Climate",
+                    "",
+                    "",
+                ]],
+            )],
+        );
+
+        let response =
+            exempt_dimensions(
+                State(state),
+                Json(
+                    ExemptDimensionsRequest {
+                        session_id:
+                            "s1"
+                                .to_string(),
+                        file_name:
+                            "units.csv"
+                                .to_string(),
+                        unit_number:
+                            "Office"
+                                .to_string(),
+                    },
+                ),
+            )
+            .await;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::CONFLICT
         );
     }
 

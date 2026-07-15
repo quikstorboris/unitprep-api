@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use axum::{
     extract::{Json, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -9,7 +10,13 @@ use serde::{Deserialize, Serialize};
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::{
-    api::{session_not_found, AppState},
+    api::{
+        internal_error,
+        session_not_found,
+        stage_conflict,
+        ApiErrorBody,
+        AppState,
+    },
     domain::{
         analysis::{
             analyze_batch,
@@ -20,9 +27,21 @@ use crate::{
             AdvisoryIssue,
             SimilarityMatch,
         },
-        session::WorkflowStage,
+        session::{
+            StageError,
+            WorkflowStage,
+        },
     },
 };
+
+/// Why `/analyze` isn't ready to run yet — distinct from "session
+/// missing" (404) and distinct from each other, so the response can say
+/// specifically what's needed instead of collapsing both into one vague
+/// "not ready" state.
+enum AnalyzeNotReady {
+    Stage(StageError),
+    GroupFileNotSelected,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct AnalyzeRequest {
@@ -52,8 +71,8 @@ pub async fn analyze(
 
     // `with_session`'s own `None` means the session itself doesn't exist
     // (expired or invalid id) — distinct from the closure returning
-    // `None`, which means the session exists but hasn't reached the
-    // right stage yet (a business-logic gate, not an expiry).
+    // `Err`, which means the session exists but isn't ready for a
+    // business-logic reason (wrong stage, or ambiguous group file).
     let analysis_inputs = match state
         .session_store
         .with_session(
@@ -71,7 +90,7 @@ pub async fn analyze(
                         "Analyze called before discovery/validation completed"
                     );
 
-                    return None;
+                    return Err(AnalyzeNotReady::Stage(err));
                 }
 
                 let discovery = session
@@ -93,30 +112,37 @@ pub async fn analyze(
                         "Analysis requires master group file selection"
                     );
 
-                    return None;
+                    return Err(AnalyzeNotReady::GroupFileNotSelected);
                 }
 
-                Some((
+                Ok((
                     discovery,
                     session
                         .effective_documents(),
                 ))
             },
         ) {
-        Some(data) => data,
+        Some(Ok(data)) => data,
+        Some(Err(AnalyzeNotReady::Stage(err))) => {
+            return stage_conflict(err);
+        }
+        Some(Err(AnalyzeNotReady::GroupFileNotSelected)) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(ApiErrorBody {
+                    error: "group_file_not_selected",
+                    message: "Multiple candidate master group files were found; select one via /group-file/select before analyzing.".to_string(),
+                }),
+            )
+                .into_response();
+        }
         None => {
             return session_not_found();
         }
     };
 
-    let Some((
-        discovery,
-        documents,
-    )) = analysis_inputs
-    else {
-        return empty_response()
-            .into_response();
-    };
+    let (discovery, documents) =
+        analysis_inputs;
 
     let unit_docs: Vec<
         &unitprep_core::csv_document::CsvDocument,
@@ -171,8 +197,9 @@ pub async fn analyze(
                 "Failed to build batch"
             );
 
-            return empty_response()
-                .into_response();
+            return internal_error(
+                "Failed to build analysis batch from documents",
+            );
         }
     };
 
@@ -214,8 +241,9 @@ pub async fn analyze(
                 "Analysis failed"
             );
 
-            return empty_response()
-                .into_response();
+            return internal_error(
+                "Analysis failed",
+            );
         }
     };
 
@@ -310,30 +338,13 @@ pub async fn analyze(
     .into_response()
 }
 
-fn empty_response()
--> Json<AnalyzeResponse>
-{
-    Json(AnalyzeResponse {
-        facilities: 0,
-        global_groups: 0,
-        net_new_groups: 0,
-        similar_groups: 0,
-        advisory_issues: 0,
-        net_new_group_details:
-            Vec::new(),
-        similar_group_details:
-            Vec::new(),
-        advisory_issue_details:
-            Vec::new(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
 
     use super::*;
     use crate::api::test_support::{
+        discovered_state,
         empty_state,
         unit_document,
         validated_state,
@@ -354,6 +365,41 @@ mod tests {
         assert_eq!(
             response.status(),
             StatusCode::NOT_FOUND
+        );
+    }
+
+    /// Regression test for the stage/error inconsistency fix: calling
+    /// `/analyze` before `/validate` must return a distinct 409, not the
+    /// fake all-zero 200 success this used to return (indistinguishable
+    /// from "validated and genuinely found zero net-new/similar groups").
+    #[tokio::test]
+    async fn analyze_returns_409_when_called_before_validation(
+    ) {
+        let state = discovered_state(
+            "s1",
+            vec![unit_document(
+                "units.csv",
+                vec![[
+                    "A01",
+                    "10x10 Inside Climate",
+                    "10",
+                    "10",
+                ]],
+            )],
+        );
+
+        let response = analyze(
+            State(state),
+            Json(AnalyzeRequest {
+                session_id: "s1"
+                    .to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::CONFLICT
         );
     }
 

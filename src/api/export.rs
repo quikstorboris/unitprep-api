@@ -42,7 +42,7 @@ use zip::{
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::{
-    api::AppState,
+    api::{stage_conflict, AppState},
     domain::session::WorkflowStage,
     infrastructure::csv_export,
 };
@@ -87,7 +87,7 @@ pub async fn export(
                         "Export attempted before validation/analysis completed"
                     );
 
-                    return None;
+                    return Err(err);
                 }
 
                 let validation = session
@@ -106,13 +106,16 @@ pub async fn export(
                         "Analyzed stage guarantees analysis data",
                     );
 
-                Some((
+                Ok((
                     validation,
                     analysis,
                 ))
             },
         ) {
-        Some(data) => data,
+        Some(Ok(data)) => data,
+        Some(Err(err)) => {
+            return stage_conflict(err);
+        }
         None => {
             return (
                 StatusCode::NOT_FOUND,
@@ -122,15 +125,8 @@ pub async fn export(
         }
     };
 
-    let Some((validation, analysis)) =
-        session_data
-    else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "Validation and analysis must be completed before export",
-        )
-            .into_response();
-    };
+    let (validation, analysis) =
+        session_data;
 
     if !validation.ready
         && !request.acknowledge_errors
@@ -373,6 +369,7 @@ mod tests {
         analyzed_state_with_errors,
         empty_state,
         unit_document,
+        validated_state,
     };
 
     #[tokio::test]
@@ -392,6 +389,44 @@ mod tests {
         assert_eq!(
             response.status(),
             StatusCode::NOT_FOUND
+        );
+    }
+
+    /// Regression test for the stage/error inconsistency fix: calling
+    /// `/export` before `/analyze` must return 409, consistent with
+    /// `/validate` and `/analyze`'s own stage-violation responses —
+    /// previously this specific case used a bespoke plain-text 400
+    /// rather than the shared structured 409 the other endpoints use.
+    #[tokio::test]
+    async fn export_returns_409_when_called_before_analysis(
+    ) {
+        let state = validated_state(
+            "s1",
+            vec![unit_document(
+                "units.csv",
+                vec![[
+                    "A01",
+                    "10x10 Inside Climate",
+                    "10",
+                    "10",
+                ]],
+            )],
+        );
+
+        let response = export(
+            State(state),
+            Json(ExportRequest {
+                session_id: "s1"
+                    .to_string(),
+                acknowledge_errors:
+                    false,
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::CONFLICT
         );
     }
 

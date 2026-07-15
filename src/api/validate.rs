@@ -9,11 +9,16 @@ use serde::{Deserialize, Serialize};
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::{
-    api::{session_not_found, AppState},
+    api::{
+        session_not_found,
+        stage_conflict,
+        AppState,
+    },
     domain::{
         models::Severity,
         session::{
             Session,
+            StageError,
             ValidationIssueSummary,
             ValidationResult,
             WorkflowStage,
@@ -41,36 +46,20 @@ pub struct ValidateResponse {
     pub ready: bool,
 }
 
-pub fn not_discovered_response(
-    session_id: &str,
-    err: crate::domain::session::StageError,
-) -> ValidateResponse {
-    tracing::warn!(
-        session_id = %session_id,
-        required = ?err.required,
-        current = ?err.current,
-        "Validate called before discovery"
-    );
-
-    ValidateResponse {
-        files_checked: 0,
-        issue_count: 0,
-        error_count: 0,
-        warning_count: 0,
-        issues: Vec::new(),
-        ready: false,
-    }
-}
-
 /// Runs validation against the session's current effective documents
 /// (original data plus any manual corrections) and stores the result on
 /// the session. Shared by the `/validate` handler and the `/correct`
 /// handler — a saved correction re-runs this exact same logic so the
 /// caller gets a fresh, consistent `ValidateResponse` either way.
+///
+/// Returns `Err(StageError)` if the session hasn't reached
+/// `WorkflowStage::Discovered` yet — the caller is responsible for
+/// turning that into a `stage_conflict` response rather than a fake
+/// all-zero success, which is what this used to do directly.
 pub fn run_validation(
     session: &mut Session,
     session_id: &str,
-) -> ValidateResponse {
+) -> Result<ValidateResponse, StageError> {
     let started = Instant::now();
 
     if let Err(err) = session
@@ -78,10 +67,14 @@ pub fn run_validation(
             WorkflowStage::Discovered,
         )
     {
-        return not_discovered_response(
-            session_id,
-            err,
+        tracing::warn!(
+            session_id = %session_id,
+            required = ?err.required,
+            current = ?err.current,
+            "Validate called before discovery"
         );
+
+        return Err(err);
     }
 
     let discovery = session
@@ -225,7 +218,7 @@ pub fn run_validation(
         "Validation complete"
     );
 
-    ValidateResponse {
+    Ok(ValidateResponse {
         files_checked: validation
             .files_checked,
         issue_count: validation
@@ -236,7 +229,7 @@ pub fn run_validation(
             .warning_count,
         issues: validation.issues,
         ready: validation.ready,
-    }
+    })
 }
 
 pub async fn validate(
@@ -256,8 +249,12 @@ pub async fn validate(
         );
 
     match response {
-        Some(response) => {
+        Some(Ok(response)) => {
             Json(response).into_response()
+        }
+
+        Some(Err(err)) => {
+            stage_conflict(err)
         }
 
         None => session_not_found(),
@@ -273,6 +270,7 @@ mod tests {
         discovered_state,
         empty_state,
         unit_document,
+        uploaded_state,
     };
 
     async fn body_json(
@@ -304,6 +302,41 @@ mod tests {
         assert_eq!(
             response.status(),
             StatusCode::NOT_FOUND
+        );
+    }
+
+    /// Regression test for the stage/error inconsistency fix: calling
+    /// `/validate` before `/discover` must return a distinct 409, not the
+    /// fake all-zero 200 success this used to return (indistinguishable
+    /// from "discovered and genuinely found nothing to validate").
+    #[tokio::test]
+    async fn validate_returns_409_when_called_before_discovery(
+    ) {
+        let state = uploaded_state(
+            "s1",
+            vec![unit_document(
+                "units.csv",
+                vec![[
+                    "A01",
+                    "10x10 Inside Climate",
+                    "10",
+                    "10",
+                ]],
+            )],
+        );
+
+        let response = validate(
+            State(state),
+            Json(ValidateRequest {
+                session_id: "s1"
+                    .to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(
+            response.status(),
+            StatusCode::CONFLICT
         );
     }
 

@@ -54,6 +54,64 @@ pub(crate) fn session_not_found() -> Response {
         .into_response()
 }
 
+/// Structured shape for every non-2xx JSON error response below —
+/// `error` is a stable, machine-matchable code (for a frontend or a
+/// second tool's client to branch on); `message` is the human-readable
+/// detail, safe to display as-is.
+#[derive(Serialize)]
+pub(crate) struct ApiErrorBody {
+    pub error: &'static str,
+    pub message: String,
+}
+
+/// The session exists but hasn't reached the workflow stage this action
+/// requires yet (e.g. calling `/analyze` before `/validate` has
+/// completed) — a 409 Conflict: the request is well-formed and the
+/// session is real, it's just not in the right state yet. Distinct from
+/// both "session missing" (404, `session_not_found`) and a genuine
+/// internal failure (500, `internal_error`).
+///
+/// Previously, endpoints returned a fake all-zero 200 success for this
+/// case — indistinguishable from a legitimately empty (but real) result,
+/// which is exactly the ambiguity `session_not_found`'s own doc comment
+/// above already identifies as the thing to avoid. This closes that same
+/// gap for stage violations.
+pub(crate) fn stage_conflict(
+    err: crate::domain::session::StageError,
+) -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(ApiErrorBody {
+            error: "stage_conflict",
+            message: format!(
+                "This action requires the session to have reached the {:?} stage; it is currently at {:?}.",
+                err.required, err.current
+            ),
+        }),
+    )
+        .into_response()
+}
+
+/// A genuine internal failure while processing an otherwise-valid
+/// request (not a data-quality or stage problem) — a 500. `context`
+/// should be a short, safe-to-display description; the real error detail
+/// belongs in the `tracing::error!` call the caller already makes
+/// alongside this, not in the response body.
+pub(crate) fn internal_error(
+    context: &str,
+) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ApiErrorBody {
+            error: "internal_error",
+            message: format!(
+                "{context} — check server logs for details.",
+            ),
+        }),
+    )
+        .into_response()
+}
+
 /// Origins allowed to call this API. Defaults to the frontend dev servers
 /// so local development needs no configuration; set
 /// `CORS_ALLOWED_ORIGINS` (comma-separated) to add real deployed
