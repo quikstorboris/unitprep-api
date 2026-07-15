@@ -164,39 +164,31 @@ pub async fn discover(
     }
 }
 
-fn normalize(header: &str) -> String {
-    header
-        .to_lowercase()
-        .replace(['_', ' '], "")
-}
+// Column presence is decided through `CsvDocument::header_index` — the
+// single normalization rule every lookup in the system shares (see its
+// doc comment) — rather than each caller building its own normalized
+// header list. That's deliberate: this file previously had its own
+// `normalize()` that stripped spaces/underscores while `header_index`
+// only lowercased, so a header like "Unit_Group" could pass this check
+// and then silently fail every subsequent lookup validation did.
 
 fn is_unit_document(
     document: &unitprep_core::csv_document::CsvDocument,
 ) -> bool {
-    let headers: Vec<String> = document
-        .headers
-        .iter()
-        .map(|h| normalize(h))
-        .collect();
-
-    headers.contains(
-        &"unitgroup".to_string(),
-    ) && headers.contains(
-        &"number".to_string(),
-    ) && headers.contains(
-        &"category".to_string(),
-    )
+    document
+        .header_index("unitgroup")
+        .is_some()
+        && document
+            .header_index("number")
+            .is_some()
+        && document
+            .header_index("category")
+            .is_some()
 }
 
 fn is_group_document(
     document: &unitprep_core::csv_document::CsvDocument,
 ) -> bool {
-    let headers: Vec<String> = document
-        .headers
-        .iter()
-        .map(|h| normalize(h))
-        .collect();
-
     let required = [
         "name",
         "description",
@@ -206,9 +198,9 @@ fn is_group_document(
     ];
 
     required.iter().all(|r| {
-        headers.contains(
-            &r.to_string(),
-        )
+        document
+            .header_index(r)
+            .is_some()
     })
 }
 
@@ -312,6 +304,60 @@ mod tests {
 
         assert_eq!(
             body["ready"], true
+        );
+    }
+
+    /// Regression test for the exact bug this fix closes: a unit file
+    /// whose headers use underscores/spaces (e.g. "Unit_Group" instead
+    /// of "UnitGroup") must still be classified as a unit file — and,
+    /// critically, validation downstream must still be able to find
+    /// those same columns (see the equivalent `header_index` tests in
+    /// `unitprep-core`'s csv_document tests and
+    /// `domain::validation::tests::validate_document_errors_loudly_when_a_supposed_unit_file_has_no_matching_columns`).
+    #[tokio::test]
+    async fn discover_classifies_unit_file_with_underscored_headers(
+    ) {
+        let unit_doc = CsvDocument {
+            file_name: "units.csv"
+                .to_string(),
+            headers: vec![
+                "Number".to_string(),
+                "Unit_Group".to_string(),
+                "Category".to_string(),
+            ],
+            rows: Vec::new(),
+        };
+
+        let state = uploaded_state(
+            "s1",
+            vec![unit_doc],
+        );
+
+        let response = discover(
+            State(state),
+            Json(DiscoverRequest {
+                session_id: "s1"
+                    .to_string(),
+            }),
+        )
+        .await;
+
+        let bytes = axum::body::to_bytes(
+            response.into_body(),
+            usize::MAX,
+        )
+        .await
+        .unwrap();
+
+        let body: serde_json::Value =
+            serde_json::from_slice(
+                &bytes,
+            )
+            .unwrap();
+
+        assert_eq!(
+            body["unit_files_found"],
+            1
         );
     }
 }

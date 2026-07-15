@@ -74,10 +74,23 @@ pub fn validate_document(
     document: &CsvDocument,
     dimension_exempt_units: &HashSet<String>,
 ) -> Result<Vec<ValidationIssue>> {
+    // Discovery already classified this file as a unit file (that's the
+    // only way it reaches `validate_document` at all — see
+    // `api::discover::is_unit_document`), which means it already found
+    // UnitGroup/Number/Category headers. If `ColumnIndices::discover`
+    // still can't find them here, that's not "nothing to validate" —
+    // it's an internal inconsistency between discovery's and
+    // validation's column lookup that must never be silently swallowed
+    // as a clean zero-issues result. Fail loudly instead: the caller
+    // (see `api::validate`) already treats an `Err` here as "skip this
+    // file and log a warning," rather than counting it as checked.
     let Some(indices) =
         ColumnIndices::discover(document)
     else {
-        return Ok(vec![]);
+        anyhow::bail!(
+            "'{}' was classified as a unit file but its required UnitGroup/Number columns could not be found — this indicates a bug in column discovery, not a clean file",
+            document.file_name
+        );
     };
 
     let mut blank = Vec::new();
@@ -644,6 +657,76 @@ mod tests {
         assert!(issues.iter().any(|i| {
             i.description
                 == "Inconsistent unit-number casing"
+        }));
+    }
+
+    /// A document missing the required UnitGroup/Number columns must
+    /// fail loudly (`Err`), not silently report zero issues — see the
+    /// comment on `ColumnIndices::discover`'s `None` branch above. This
+    /// path should be unreachable in practice (discovery already
+    /// requires these columns before a file is passed here), but if
+    /// discovery and validation's column lookups ever disagree again,
+    /// this must surface as an error, not a false "all clean" result.
+    #[test]
+    fn validate_document_errors_loudly_when_a_supposed_unit_file_has_no_matching_columns(
+    ) {
+        let document = CsvDocument {
+            file_name: "units.csv"
+                .to_string(),
+            headers: vec![
+                "some_other_column"
+                    .to_string(),
+            ],
+            rows: vec![vec![
+                "value".to_string(),
+            ]],
+        };
+
+        let err = validate_document(
+            &document,
+            &HashSet::new(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("units.csv")
+        );
+    }
+
+    /// The regression this whole fix exists for: a real unit file whose
+    /// UnitGroup header uses an underscore (as discovery already
+    /// tolerates — see
+    /// `api::discover::tests::discover_classifies_unit_file_with_underscored_headers`)
+    /// must still be validated normally, not silently skipped.
+    #[test]
+    fn validates_a_unit_file_with_an_underscored_unitgroup_header(
+    ) {
+        let document = CsvDocument {
+            file_name: "units.csv"
+                .to_string(),
+            headers: vec![
+                "number".to_string(),
+                "unit_group".to_string(),
+            ],
+            rows: vec![
+                vec![
+                    "A01".to_string(),
+                    "".to_string(),
+                ],
+            ],
+        };
+
+        let issues =
+            validate_document(
+                &document,
+                &HashSet::new(),
+            )
+            .unwrap();
+
+        assert!(issues.iter().any(|i| {
+            i.description
+                == issues::BLANK_UNITGROUP
         }));
     }
 }
