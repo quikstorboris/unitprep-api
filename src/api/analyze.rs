@@ -22,6 +22,7 @@ use crate::{
             analyze_batch,
             build_batch_from_documents,
             load_reference_groups_from_document,
+            select_group_document,
         },
         models::{
             AdvisoryIssue,
@@ -155,35 +156,11 @@ pub async fn analyze(
         })
         .collect();
 
-    let group_doc = match
-        &discovery.selected_group_file_name
-    {
-        Some(selected_file) => {
-            tracing::info!(
-                file = %selected_file,
-                "Using selected master group file"
-            );
-
-            documents
-                .iter()
-                .find(|d| {
-                    d.file_name
-                        == *selected_file
-                })
-        }
-
-        None => {
-            documents
-                .iter()
-                .find(|d| {
-                    discovery
-                        .group_file_names
-                        .contains(
-                            &d.file_name,
-                        )
-                })
-        }
-    };
+    let group_doc =
+        select_group_document(
+            &documents,
+            &discovery,
+        );
 
     let batch = match build_batch_from_documents(
         unit_docs,

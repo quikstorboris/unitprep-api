@@ -16,7 +16,10 @@ pub use fingerprint::{
     GroupFingerprint,
     Location,
 };
-pub use reference::load_reference_groups_from_document;
+pub use reference::{
+    load_reference_groups_from_document,
+    select_group_document,
+};
 
 use std::collections::HashSet;
 
