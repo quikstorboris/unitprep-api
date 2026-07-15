@@ -1425,6 +1425,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "unitprep-dedup"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "unitprep-core",
+]
+
+[[package]]
 name = "unitprep-unit-group"
 version = "0.1.0"
 

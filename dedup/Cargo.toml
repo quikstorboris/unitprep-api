@@ -1,0 +1,11 @@
+[package]
+name = "unitprep-dedup"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# File ingestion — CsvDocument / header_index, so this crate never grows
+# its own ad hoc header-name parser.
+unitprep-core = { path = "../core" }
+
+anyhow = "1"
