@@ -113,8 +113,11 @@ pub fn parse_csv_document(
 pub fn parse_excel_document(
     file: &UploadedFile,
 ) -> anyhow::Result<CsvDocument> {
+    // `Cursor<&[u8]>` satisfies calamine's `Read + Seek` requirement just
+    // as well as an owned `Cursor<Vec<u8>>` — no need to clone the whole
+    // file's bytes just to hand them to the workbook reader.
     let cursor =
-        Cursor::new(file.bytes.clone());
+        Cursor::new(&file.bytes);
 
     let mut workbook =
         open_workbook_auto_from_rs(cursor)?;

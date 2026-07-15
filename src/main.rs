@@ -30,9 +30,22 @@ async fn main() {
         )
         .init();
 
+    // Overridable per deployment without a code change — defaults to
+    // the same 10 minutes as before if unset or unparseable.
+    let session_timeout_secs = std::env::var(
+        "SESSION_TIMEOUT_SECS",
+    )
+    .ok()
+    .and_then(|v| v.parse::<u64>().ok())
+    .unwrap_or(60 * 10);
+
     let session_store =
         Arc::new(
-            InMemorySessionStore::<Session>::new(),
+            InMemorySessionStore::<Session>::with_timeout(
+                std::time::Duration::from_secs(
+                    session_timeout_secs,
+                ),
+            ),
         );
 
     session_store

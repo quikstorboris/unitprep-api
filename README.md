@@ -32,7 +32,8 @@ to allow real deployed frontend origins instead.
 ## Request flow
 
 Each browser session is tracked server-side by `session_id` (in-memory,
-10-minute idle timeout). The pipeline is sequential:
+10-minute idle timeout by default — override with `SESSION_TIMEOUT_SECS`).
+The pipeline is sequential:
 
 1. `POST /upload` — multipart upload of a folder's files. Creates a
    session and parses every `.csv`, `.xlsx`, and `.xls` file (including
