@@ -1,7 +1,13 @@
 use std::collections::HashSet;
+use std::io::{Cursor, Write};
 
 use anyhow::Result;
 use csv::Writer;
+use zip::{
+    write::SimpleFileOptions,
+    CompressionMethod,
+    ZipWriter,
+};
 
 use crate::domain::models::{AnalysisResults, Issue};
 
@@ -58,6 +64,64 @@ pub fn generate_outputs(
     )?);
 
     Ok(files)
+}
+
+/// Packages generated export files into a ZIP archive, built entirely in
+/// memory. Returns a plain `Result` rather than an HTTP response directly —
+/// deciding how a failure here becomes an HTTP status is the caller's
+/// concern (see `api::export`), not this module's. Keeping "how do we
+/// package export artifacts" and "how do we respond to a client" as
+/// separate concerns is why this lives here rather than in the handler:
+/// this module already owns every other step of turning analysis results
+/// into a deliverable.
+pub fn build_zip(
+    files: Vec<ExportFile>,
+) -> Result<Vec<u8>> {
+    let mut cursor =
+        Cursor::new(Vec::<u8>::new());
+
+    {
+        let mut zip =
+            ZipWriter::new(&mut cursor);
+
+        let options =
+            SimpleFileOptions::default()
+                .compression_method(
+                    CompressionMethod::Deflated,
+                );
+
+        for file in files {
+            zip.start_file(
+                &file.file_name,
+                options,
+            )
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Failed adding '{}' to ZIP: {}",
+                    file.file_name,
+                    err
+                )
+            })?;
+
+            zip.write_all(&file.bytes)
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Failed writing ZIP entry '{}': {}",
+                        file.file_name,
+                        err
+                    )
+                })?;
+        }
+
+        zip.finish().map_err(|err| {
+            anyhow::anyhow!(
+                "Failed finalizing ZIP: {}",
+                err
+            )
+        })?;
+    }
+
+    Ok(cursor.into_inner())
 }
 
 fn generate_net_new_groups_csv(

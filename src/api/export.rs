@@ -19,7 +19,6 @@
 //!
 //! No files are written to disk.
 
-use std::io::{Cursor, Write};
 use std::time::Instant;
 
 use axum::{
@@ -33,16 +32,15 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Deserialize;
-use zip::{
-    write::SimpleFileOptions,
-    CompressionMethod,
-    ZipWriter,
-};
 
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::{
-    api::{stage_conflict, AppState},
+    api::{
+        internal_error,
+        stage_conflict,
+        AppState,
+    },
     domain::session::WorkflowStage,
     infrastructure::csv_export,
 };
@@ -197,89 +195,31 @@ pub async fn export(
                     "Failed generating export files"
                 );
 
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
+                return internal_error(
                     "Failed generating export files",
-                )
-                    .into_response();
+                );
             }
         };
 
     let file_count =
         export_files.len();
 
-    let mut cursor =
-        Cursor::new(Vec::<u8>::new());
-
-    {
-        let mut zip =
-            ZipWriter::new(
-                &mut cursor,
-            );
-
-        let options =
-            SimpleFileOptions::default()
-                .compression_method(
-                    CompressionMethod::Deflated,
-                );
-
-        for file in export_files {
-            if let Err(err) =
-                zip.start_file(
-                    &file.file_name,
-                    options,
-                )
-            {
-                tracing::error!(
-                    session_id = %request.session_id,
-                    file_name = %file.file_name,
-                    error = %err,
-                    "Failed adding file to ZIP"
-                );
-
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Failed building ZIP",
-                )
-                    .into_response();
-            }
-
-            if let Err(err) =
-                zip.write_all(
-                    &file.bytes,
-                )
-            {
-                tracing::error!(
-                    session_id = %request.session_id,
-                    file_name = %file.file_name,
-                    error = %err,
-                    "Failed writing ZIP entry"
-                );
-
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Failed building ZIP",
-                )
-                    .into_response();
-            }
-        }
-
-        if let Err(err) =
-            zip.finish()
-        {
+    let zip_bytes = match csv_export::build_zip(
+        export_files,
+    ) {
+        Ok(bytes) => bytes,
+        Err(err) => {
             tracing::error!(
                 session_id = %request.session_id,
                 error = %err,
-                "Failed finalizing ZIP"
+                "Failed building export ZIP"
             );
 
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed finalizing ZIP",
-            )
-                .into_response();
+            return internal_error(
+                "Failed building export ZIP",
+            );
         }
-    }
+    };
 
     let timestamp = Utc::now()
         .format("%Y-%m-%d_%H%M%S")
@@ -289,9 +229,6 @@ pub async fn export(
         "UnitPrep_Output_{}.zip",
         timestamp
     );
-
-    let zip_bytes =
-        cursor.into_inner();
 
     //
     // Tiny mutation scope.
