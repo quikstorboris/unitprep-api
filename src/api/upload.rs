@@ -134,7 +134,7 @@ pub async fn upload(
     let session_id =
         SessionService::new(
             Arc::clone(
-                &state.session_store,
+                &state.unit_group_sessions,
             ),
         )
         .create_session(

@@ -27,7 +27,7 @@ pub async fn select_group_file(
     Json(request): Json<SelectGroupFileRequest>,
 ) -> Response {
     let result = state
-        .session_store
+        .unit_group_sessions
         .with_session_mut(
             &request.session_id,
             |session| {

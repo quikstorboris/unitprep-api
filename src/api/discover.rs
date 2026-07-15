@@ -37,7 +37,7 @@ pub async fn discover(
     let started = Instant::now();
 
     let response = state
-        .session_store
+        .unit_group_sessions
         .with_session_mut(
             &request.session_id,
             |session| {

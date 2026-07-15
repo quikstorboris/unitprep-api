@@ -6,6 +6,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Calling an endpoint before the session has reached the required
+  workflow stage (e.g. `/analyze` before `/validate`) now returns
+  `409 Conflict` with a structured `{ error, message }` body, instead of
+  a fake all-zero `200` success that looked identical to a real,
+  successful "nothing to report" result. Every error response across
+  the API now shares this same `{ error, message }` shape.
+
 ## [1.0.0] - 2026-07-08
 
 ### Added

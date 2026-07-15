@@ -48,14 +48,14 @@ pub fn select_group_document<'a>(
 pub fn load_reference_groups_from_document(
     document: &CsvDocument,
 ) -> Result<Vec<String>> {
+    // Uses the same normalization every other column lookup in the
+    // system shares (see CsvDocument::header_index) rather than a
+    // bespoke lowercase-only comparison — the same class of gap fixed
+    // elsewhere: a header like "Group_Name" would otherwise silently
+    // fail this check despite discovery already accepting the file.
     let name_index =
         document
-            .headers
-            .iter()
-            .position(|h| {
-                h.to_lowercase()
-                    == "name"
-            })
+            .header_index("name")
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "Group file '{}' is missing a Name column",

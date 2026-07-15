@@ -75,7 +75,7 @@ pub async fn analyze(
     // `Err`, which means the session exists but isn't ready for a
     // business-logic reason (wrong stage, or ambiguous group file).
     let analysis_inputs = match state
-        .session_store
+        .unit_group_sessions
         .with_session(
             &request.session_id,
             |session| {
@@ -225,7 +225,7 @@ pub async fn analyze(
     };
 
     let _ = state
-        .session_store
+        .unit_group_sessions
         .with_session_mut(
             &request.session_id,
             |session| {

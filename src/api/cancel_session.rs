@@ -34,7 +34,7 @@ pub async fn cancel_session(
     // which is why this is worth reading even though we're about to
     // delete the session anyway.
     let age_ms = state
-        .session_store
+        .unit_group_sessions
         .with_session(
             &request.session_id,
             |session| {
@@ -50,7 +50,7 @@ pub async fn cancel_session(
         );
 
     state
-        .session_store
+        .unit_group_sessions
         .delete(&request.session_id);
 
     tracing::info!(

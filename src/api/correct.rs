@@ -47,7 +47,7 @@ pub async fn correct(
     };
 
     let response = state
-        .session_store
+        .unit_group_sessions
         .with_session_mut(
             &request.session_id,
             |session| {

@@ -89,15 +89,33 @@ closed before this is exposed beyond that.
 
 ## Project layout
 
+This is a Cargo workspace, not a single crate — `unitprep-core` holds the
+tool-agnostic engine (file ingestion/parsing, session storage) that any
+future UnitPrep tool depends on; this binary holds the UnitGroup-specific
+domain logic and HTTP layer. See `Cargo.toml`'s own comments for the
+rationale.
+
 - `src/main.rs` — process entry point, logging setup, server bind.
 - `src/api/` — Axum handlers and routing, one module per endpoint.
-- `src/application/` — session lifecycle (`SessionService`,
-  `SessionStore` trait, `InMemorySessionStore`).
-- `src/domain/` — business logic: CSV parsing, discovery/validation
-  rules, the analysis/fingerprint-matching engine, domain models.
+- `src/application/` — `SessionService`, the one piece of session
+  orchestration specific to this tool (parses uploads into a UnitGroup
+  `Session`). The generic storage mechanics it builds on
+  (`SessionStore` trait, `InMemorySessionStore`) live in `unitprep-core`,
+  not here.
+- `src/domain/` — business logic: discovery/validation rules, the
+  analysis/fingerprint-matching engine, domain models. File
+  parsing itself (CSV/XLSX/SpreadsheetML) also moved to `unitprep-core`
+  (`core/src/parsing/`), since it's identical regardless of which tool
+  is consuming the data.
 - `src/infrastructure/` — export artifact generation (CSV/JSON/ZIP).
 - `src/ai/` — placeholder seam for future AI-assisted decision support;
   not wired into the pipeline yet.
+- `core/` — the `unitprep-core` crate: `parsing/` (per-format parsers),
+  `csv_document.rs`/`uploaded_file.rs` (source-agnostic document models),
+  `session.rs`/`session_store.rs`/`in_memory_session_store.rs` (the
+  generic session engine, generic over any tool's own session type).
+- `unit-group/` — an intentionally empty crate stub; the eventual home
+  for this binary's domain logic once it's extracted out, not yet done.
 
 ## Tests
 

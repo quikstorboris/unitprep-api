@@ -38,7 +38,9 @@ use unitprep_core::session_store::SessionStoreExt;
 use crate::{
     api::{
         internal_error,
+        session_not_found,
         stage_conflict,
+        ApiErrorBody,
         AppState,
     },
     domain::session::WorkflowStage,
@@ -69,7 +71,7 @@ pub async fn export(
     // This shape is deliberately future-proof for PR3.
     //
     let session_data = match state
-        .session_store
+        .unit_group_sessions
         .with_session(
             &request.session_id,
             |session| {
@@ -115,11 +117,7 @@ pub async fn export(
             return stage_conflict(err);
         }
         None => {
-            return (
-                StatusCode::NOT_FOUND,
-                "Session not found",
-            )
-                .into_response();
+            return session_not_found();
         }
     };
 
@@ -138,7 +136,10 @@ pub async fn export(
 
         return (
             StatusCode::BAD_REQUEST,
-            "Validation issues must be resolved before export",
+            Json(ApiErrorBody {
+                error: "validation_unresolved",
+                message: "Validation issues must be resolved before export".to_string(),
+            }),
         )
             .into_response();
     }
@@ -177,7 +178,10 @@ pub async fn export(
 
         return (
             StatusCode::BAD_REQUEST,
-            "No exportable data available",
+            Json(ApiErrorBody {
+                error: "no_exportable_data",
+                message: "No exportable data available".to_string(),
+            }),
         )
             .into_response();
     }
@@ -234,7 +238,7 @@ pub async fn export(
     // Tiny mutation scope.
     //
     let _ = state
-        .session_store
+        .unit_group_sessions
         .with_session_mut(
             &request.session_id,
             |session| {

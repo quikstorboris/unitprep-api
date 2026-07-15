@@ -35,7 +35,12 @@ use crate::domain::session::Session;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub session_store:
+    // Named for the tool it serves, not just "the store" — UnitPrep is
+    // moving toward multiple tools each with their own session type and
+    // their own store instance (see unitprep-core's generic
+    // SessionStore<S>); this field will get company (e.g.
+    // `dedup_sessions`) rather than being renamed later under pressure.
+    pub unit_group_sessions:
         Arc<dyn SessionStore<Session>>,
 }
 
@@ -49,7 +54,10 @@ pub struct AppState {
 pub(crate) fn session_not_found() -> Response {
     (
         StatusCode::NOT_FOUND,
-        "Session not found or expired",
+        Json(ApiErrorBody {
+            error: "session_not_found",
+            message: "Session not found or expired".to_string(),
+        }),
     )
         .into_response()
 }
@@ -208,7 +216,7 @@ async fn health(
             "CARGO_PKG_VERSION"
         ),
         sessions: state
-            .session_store
+            .unit_group_sessions
             .metrics(),
     })
 }

@@ -52,7 +52,7 @@ async fn main() {
         .start_cleanup_task();
 
     let state = AppState {
-        session_store,
+        unit_group_sessions: session_store,
     };
 
     let app =

@@ -19,7 +19,7 @@ use super::AppState;
 
 pub fn empty_state() -> AppState {
     AppState {
-        session_store: Arc::new(
+        unit_group_sessions: Arc::new(
             InMemorySessionStore::<Session>::new(),
         ),
     }
@@ -75,7 +75,7 @@ pub fn uploaded_state(
     store.save(session);
 
     AppState {
-        session_store: store,
+        unit_group_sessions: store,
     }
 }
 
@@ -118,7 +118,7 @@ pub fn discovered_state(
     store.save(session);
 
     AppState {
-        session_store: store,
+        unit_group_sessions: store,
     }
 }
 
@@ -172,7 +172,7 @@ pub fn validated_state(
     store.save(session);
 
     AppState {
-        session_store: store,
+        unit_group_sessions: store,
     }
 }
 
@@ -257,6 +257,6 @@ pub fn analyzed_state_with_errors(
     store.save(session);
 
     AppState {
-        session_store: store,
+        unit_group_sessions: store,
     }
 }
