@@ -12,7 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::api::AppState;
-use crate::application::session_store::SessionStoreExt;
+use unitprep_core::session_store::SessionStoreExt;
 
 #[derive(Debug, Deserialize)]
 pub struct CancelSessionRequest {

@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use crate::domain::csv_document::CsvDocument;
+use unitprep_core::csv_document::CsvDocument;
 use crate::domain::models::{BatchRun, Facility};
 
 pub fn build_batch_from_documents(

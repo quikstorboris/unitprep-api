@@ -26,14 +26,17 @@ use tower_http::cors::{
     CorsLayer,
 };
 
-use crate::application::session_store::{
+use unitprep_core::session_store::{
     SessionMetrics,
     SessionStore,
 };
 
+use crate::domain::session::Session;
+
 #[derive(Clone)]
 pub struct AppState {
-    pub session_store: Arc<dyn SessionStore>,
+    pub session_store:
+        Arc<dyn SessionStore<Session>>,
 }
 
 /// The one true "your session is gone" response — a session can disappear
@@ -162,9 +165,9 @@ async fn health(
 pub(crate) mod test_support {
     use std::sync::Arc;
 
-    use crate::application::in_memory_session_store::InMemorySessionStore;
-    use crate::application::session_store::SessionStore;
-    use crate::domain::csv_document::CsvDocument;
+    use unitprep_core::in_memory_session_store::InMemorySessionStore;
+    use unitprep_core::session_store::SessionStore;
+    use unitprep_core::csv_document::CsvDocument;
     use crate::domain::models::{
         AnalysisResults,
         BatchRun,
@@ -182,7 +185,7 @@ pub(crate) mod test_support {
     pub fn empty_state() -> AppState {
         AppState {
             session_store: Arc::new(
-                InMemorySessionStore::new(),
+                InMemorySessionStore::<Session>::new(),
             ),
         }
     }
@@ -231,7 +234,7 @@ pub(crate) mod test_support {
             Arc::new(documents);
 
         let store = Arc::new(
-            InMemorySessionStore::new(),
+            InMemorySessionStore::<Session>::new(),
         );
 
         store.save(session);
@@ -274,7 +277,7 @@ pub(crate) mod test_support {
         );
 
         let store = Arc::new(
-            InMemorySessionStore::new(),
+            InMemorySessionStore::<Session>::new(),
         );
 
         store.save(session);
@@ -328,7 +331,7 @@ pub(crate) mod test_support {
         );
 
         let store = Arc::new(
-            InMemorySessionStore::new(),
+            InMemorySessionStore::<Session>::new(),
         );
 
         store.save(session);
@@ -413,7 +416,7 @@ pub(crate) mod test_support {
         );
 
         let store = Arc::new(
-            InMemorySessionStore::new(),
+            InMemorySessionStore::<Session>::new(),
         );
 
         store.save(session);

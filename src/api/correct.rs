@@ -4,13 +4,14 @@ use axum::{
 };
 use serde::Deserialize;
 
+use unitprep_core::session_store::SessionStoreExt;
+
 use crate::{
     api::{
         session_not_found,
         validate::run_validation,
         AppState,
     },
-    application::session_store::SessionStoreExt,
     domain::corrections::CorrectionKey,
 };
 

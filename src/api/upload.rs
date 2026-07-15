@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use crate::api::AppState;
 use crate::application::session_service::SessionService;
-use crate::domain::uploaded_file::UploadedFile;
+use unitprep_core::uploaded_file::UploadedFile;
 
 #[derive(Serialize)]
 pub struct UploadResponse {

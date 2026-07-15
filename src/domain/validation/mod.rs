@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 
 use crate::domain::analysis::parse_fingerprint;
-use crate::domain::csv_document::CsvDocument;
+use unitprep_core::csv_document::CsvDocument;
 use crate::domain::models::Severity;
 
 pub use issues::{
@@ -268,7 +268,7 @@ pub fn validate_document(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::csv_document::CsvDocument;
+    use unitprep_core::csv_document::CsvDocument;
 
     #[test]
     fn detects_duplicate_unit_numbers() {

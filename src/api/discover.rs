@@ -6,9 +6,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use unitprep_core::session_store::SessionStoreExt;
+
 use crate::{
     api::{session_not_found, AppState},
-    application::session_store::SessionStoreExt,
     domain::session::DiscoveryResult,
 };
 
@@ -170,7 +171,7 @@ fn normalize(header: &str) -> String {
 }
 
 fn is_unit_document(
-    document: &crate::domain::csv_document::CsvDocument,
+    document: &unitprep_core::csv_document::CsvDocument,
 ) -> bool {
     let headers: Vec<String> = document
         .headers
@@ -188,7 +189,7 @@ fn is_unit_document(
 }
 
 fn is_group_document(
-    document: &crate::domain::csv_document::CsvDocument,
+    document: &unitprep_core::csv_document::CsvDocument,
 ) -> bool {
     let headers: Vec<String> = document
         .headers
@@ -220,7 +221,7 @@ mod tests {
         empty_state,
         uploaded_state,
     };
-    use crate::domain::csv_document::CsvDocument;
+    use unitprep_core::csv_document::CsvDocument;
 
     #[tokio::test]
     async fn discover_returns_404_for_missing_session(

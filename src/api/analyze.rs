@@ -6,9 +6,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use unitprep_core::session_store::SessionStoreExt;
+
 use crate::{
     api::{session_not_found, AppState},
-    application::session_store::SessionStoreExt,
     domain::{
         analysis::{
             analyze_batch,
@@ -118,7 +119,7 @@ pub async fn analyze(
     };
 
     let unit_docs: Vec<
-        &crate::domain::csv_document::CsvDocument,
+        &unitprep_core::csv_document::CsvDocument,
     > = documents
         .iter()
         .filter(|d| {

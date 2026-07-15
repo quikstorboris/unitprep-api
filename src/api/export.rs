@@ -39,9 +39,10 @@ use zip::{
     ZipWriter,
 };
 
+use unitprep_core::session_store::SessionStoreExt;
+
 use crate::{
     api::AppState,
-    application::session_store::SessionStoreExt,
     domain::session::WorkflowStage,
     infrastructure::csv_export,
 };

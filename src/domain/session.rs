@@ -1,13 +1,16 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::SystemTime;
 
 use crate::domain::corrections::{
     apply_corrections,
     CorrectionKey,
     DimensionExemptionKey,
 };
-use crate::domain::csv_document::CsvDocument;
+use unitprep_core::csv_document::CsvDocument;
+use unitprep_core::session::{
+    HasSessionMetadata,
+    SessionMetadata,
+};
 use crate::domain::models::{
     AnalysisResults,
     Severity,
@@ -31,13 +34,6 @@ pub enum WorkflowStage {
     Exported,
 }
 
-#[derive(Debug, Clone)]
-pub struct SessionMetadata {
-    pub id: String,
-    pub created_at: SystemTime,
-    pub last_accessed: SystemTime,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct SessionData {
     pub documents: Arc<Vec<CsvDocument>>,
@@ -55,6 +51,18 @@ pub struct Session {
     pub workflow: WorkflowStage,
 }
 
+impl HasSessionMetadata for Session {
+    fn metadata(&self) -> &SessionMetadata {
+        &self.metadata
+    }
+
+    fn metadata_mut(
+        &mut self,
+    ) -> &mut SessionMetadata {
+        &mut self.metadata
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct StageError {
     pub required: WorkflowStage,
@@ -63,14 +71,8 @@ pub struct StageError {
 
 impl Session {
     pub fn new(id: String) -> Self {
-        let now = SystemTime::now();
-
         Self {
-            metadata: SessionMetadata {
-                id,
-                created_at: now,
-                last_accessed: now,
-            },
+            metadata: SessionMetadata::new(id),
             data: SessionData::default(),
             workflow: WorkflowStage::Uploaded,
         }
@@ -241,6 +243,9 @@ mod tests {
         AnalysisResults,
         BatchRun,
     };
+    use unitprep_core::in_memory_session_store::InMemorySessionStore;
+    use unitprep_core::session::HasSessionMetadata;
+    use unitprep_core::session_store::SessionStore;
 
     fn discovery_result(
     ) -> DiscoveryResult {
@@ -447,6 +452,46 @@ mod tests {
                 .data
                 .analysis
                 .is_some()
+        );
+    }
+
+    /// Proves the real `Session` type — not a synthetic test fixture —
+    /// actually behaves correctly through the generic `InMemorySessionStore`
+    /// engine: its `HasSessionMetadata` impl must correctly expose the
+    /// session's real id, and a real save/get_handle/delete round trip
+    /// must work end to end. The store's own tests (in `unitprep-core`)
+    /// only prove the *mechanism* works against a fake session type; this
+    /// proves the actual wiring between the two is correct, which nothing
+    /// else specifically asserts.
+    #[test]
+    fn session_round_trips_through_generic_store(
+    ) {
+        let store: InMemorySessionStore<Session> =
+            InMemorySessionStore::new();
+
+        let session =
+            Session::new("s1".to_string());
+
+        store.save(session);
+
+        let handle = store
+            .get_handle("s1")
+            .expect(
+                "session should be retrievable immediately after save",
+            );
+
+        assert_eq!(
+            handle.read().metadata().id,
+            "s1"
+        );
+
+        store.delete("s1");
+
+        assert!(
+            store
+                .get_handle("s1")
+                .is_none(),
+            "session should be gone after delete"
         );
     }
 }

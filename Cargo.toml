@@ -1,3 +1,14 @@
+[workspace]
+members = ["core", "unit-group"]
+# This root Cargo.toml is both the workspace manifest and the
+# `unitprep` binary's own package manifest — the binary crate stays at
+# the repo root (unchanged import paths, unchanged build command) while
+# `core` and `unit-group` are separate library crates it will depend on
+# as the migration proceeds. See project docs / CHANGELOG for the
+# rationale (shared engine for session storage + ingestion, reused by
+# every UnitPrep tool, versus each tool's own domain logic kept in its
+# own crate).
+
 [package]
 name = "unitprep"
 version = "1.0.0"
@@ -12,6 +23,9 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/quikstorboris/unitPrep.git"
 
 [dependencies]
+
+# Shared engine: file ingestion/parsing (and, soon, session storage).
+unitprep-core = { path = "core" }
 
 # Core error handling
 anyhow = "1"
@@ -44,11 +58,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Session IDs
 uuid = { version = "1", features = ["v4"] }
-
-# Session locking — panicking while a lock is held releases it instead of
-# poisoning it, so a bug in one request can never permanently wedge session
-# access for every other request.
-parking_lot = "0.12"
 
 # ZIP export generation
 zip = "2"

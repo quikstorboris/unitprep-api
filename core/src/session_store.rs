@@ -3,7 +3,7 @@ use std::sync::Arc;
 use parking_lot::RwLock;
 use serde::Serialize;
 
-use crate::domain::session::Session;
+use crate::session::HasSessionMetadata;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionMetrics {
@@ -16,6 +16,12 @@ pub struct SessionMetrics {
 /// SessionStore is the single abstraction through which all session access flows.
 ///
 /// NO code outside of this module should interact with session storage directly.
+///
+/// Generic over the session type `S` — the store only ever needs `S` to
+/// expose its metadata (see `HasSessionMetadata`); it has no idea what
+/// tool-specific data `S` carries otherwise. Each tool instantiates its own
+/// store with its own concrete session type; two tools' stores never share
+/// data even if both happen to use `InMemorySessionStore`.
 ///
 /// FUTURE: RedisSessionStore will implement this trait exactly as
 /// InMemorySessionStore does. Swapping storage backends will require zero
@@ -46,24 +52,26 @@ pub struct SessionMetrics {
 /// Violating either rule risks a real deadlock once more than one endpoint
 /// touches session state concurrently (e.g. two handlers locking two
 /// sessions in different orders), not just lock contention.
-pub trait SessionStore: Send + Sync {
-    fn save(&self, session: Session);
+pub trait SessionStore<S: HasSessionMetadata>: Send + Sync {
+    fn save(&self, session: S);
 
     fn get_handle(
         &self,
         id: &str,
-    ) -> Option<Arc<RwLock<Session>>>;
+    ) -> Option<Arc<RwLock<S>>>;
 
     fn delete(&self, id: &str);
 
     fn metrics(&self) -> SessionMetrics;
 }
 
-pub trait SessionStoreExt: SessionStore {
+pub trait SessionStoreExt<S: HasSessionMetadata>:
+    SessionStore<S>
+{
     fn with_session<R>(
         &self,
         id: &str,
-        operation: impl FnOnce(&Session) -> R,
+        operation: impl FnOnce(&S) -> R,
     ) -> Option<R> {
         let handle =
             self.get_handle(id)?;
@@ -76,7 +84,7 @@ pub trait SessionStoreExt: SessionStore {
     fn with_session_mut<R>(
         &self,
         id: &str,
-        operation: impl FnOnce(&mut Session) -> R,
+        operation: impl FnOnce(&mut S) -> R,
     ) -> Option<R> {
         let handle =
             self.get_handle(id)?;
@@ -89,8 +97,9 @@ pub trait SessionStoreExt: SessionStore {
     }
 }
 
-impl<T> SessionStoreExt for T
+impl<S, T> SessionStoreExt<S> for T
 where
-    T: SessionStore + ?Sized,
+    S: HasSessionMetadata,
+    T: SessionStore<S> + ?Sized,
 {
 }

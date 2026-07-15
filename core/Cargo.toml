@@ -1,0 +1,29 @@
+[package]
+name = "unitprep-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+csv = "1"
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+
+# Async runtime — the background session-cleanup task
+tokio = { version = "1", features = ["full"] }
+
+# Session locking — panicking while a lock is held releases it instead of
+# poisoning it, so a bug in one request can never permanently wedge session
+# access for every other request.
+parking_lot = "0.12"
+
+# Excel support
+calamine = "0.25"
+
+# Excel 2003 SpreadsheetML (XML) support — some facility export tools
+# label this format with a .xls extension even though it's neither real
+# binary XLS nor OOXML XLSX, which calamine can't open.
+quick-xml = "0.36"
+
+[dev-dependencies]
+zip = "2"

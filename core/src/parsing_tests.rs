@@ -3,11 +3,11 @@ use std::io::{Cursor, Write};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
-use crate::application::session_service::{
+use crate::parsing::{
     parse_csv_document,
     parse_document,
 };
-use crate::domain::uploaded_file::UploadedFile;
+use crate::uploaded_file::UploadedFile;
 
 /// Builds the smallest valid `.xlsx` workbook that satisfies the OOXML
 /// spreadsheet format: one sheet, three rows, inline strings (no shared

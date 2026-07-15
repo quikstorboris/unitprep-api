@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use crate::domain::csv_document::CsvDocument;
+use unitprep_core::csv_document::CsvDocument;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CorrectionKey {

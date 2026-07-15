@@ -3,7 +3,7 @@
 
 use anyhow::Result;
 
-use crate::domain::csv_document::CsvDocument;
+use unitprep_core::csv_document::CsvDocument;
 
 pub fn load_reference_groups_from_document(
     document: &CsvDocument,

@@ -1397,7 +1397,6 @@ dependencies = [
  "chrono",
  "csv",
  "once_cell",
- "parking_lot",
  "quick-xml 0.36.2",
  "regex",
  "serde",
@@ -1407,9 +1406,29 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "unitprep-core",
  "uuid",
  "zip 2.4.2",
 ]
+
+[[package]]
+name = "unitprep-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "calamine",
+ "csv",
+ "parking_lot",
+ "quick-xml 0.36.2",
+ "serde",
+ "tokio",
+ "tracing",
+ "zip 2.4.2",
+]
+
+[[package]]
+name = "unitprep-unit-group"
+version = "0.1.0"
 
 [[package]]
 name = "uuid"

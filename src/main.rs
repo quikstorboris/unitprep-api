@@ -6,8 +6,10 @@ mod infrastructure;
 
 use std::sync::Arc;
 
+use unitprep_core::in_memory_session_store::InMemorySessionStore;
+
 use crate::api::AppState;
-use crate::application::in_memory_session_store::InMemorySessionStore;
+use crate::domain::session::Session;
 
 #[tokio::main]
 async fn main() {
@@ -30,7 +32,7 @@ async fn main() {
 
     let session_store =
         Arc::new(
-            InMemorySessionStore::new(),
+            InMemorySessionStore::<Session>::new(),
         );
 
     session_store

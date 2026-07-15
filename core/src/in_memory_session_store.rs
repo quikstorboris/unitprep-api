@@ -9,11 +9,11 @@ use std::time::{Duration, SystemTime};
 
 use parking_lot::RwLock;
 
-use crate::application::session_store::{
+use crate::session::HasSessionMetadata;
+use crate::session_store::{
     SessionMetrics,
     SessionStore,
 };
-use crate::domain::session::Session;
 
 const SESSION_TIMEOUT: Duration =
     Duration::from_secs(60 * 10);
@@ -25,20 +25,45 @@ struct Metrics {
     expired_sessions: AtomicU64,
 }
 
-#[derive(Clone)]
-pub struct InMemorySessionStore {
+pub struct InMemorySessionStore<S> {
     sessions: Arc<
         RwLock<
             HashMap<
                 String,
-                Arc<RwLock<Session>>,
+                Arc<RwLock<S>>,
             >,
         >,
     >,
     metrics: Arc<Metrics>,
 }
 
-impl InMemorySessionStore {
+// Written by hand instead of `#[derive(Clone)]`: derive would add a
+// `S: Clone` bound that isn't actually needed — every field here is
+// already cheaply `Clone` via `Arc` regardless of what `S` is.
+impl<S> Clone for InMemorySessionStore<S> {
+    fn clone(&self) -> Self {
+        Self {
+            sessions: self
+                .sessions
+                .clone(),
+            metrics: self
+                .metrics
+                .clone(),
+        }
+    }
+}
+
+impl<S: HasSessionMetadata + Send + Sync + 'static> Default
+    for InMemorySessionStore<S>
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<S: HasSessionMetadata + Send + Sync + 'static>
+    InMemorySessionStore<S>
+{
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(
@@ -116,7 +141,7 @@ impl InMemorySessionStore {
     fn cleanup_expired(
         sessions: &mut HashMap<
             String,
-            Arc<RwLock<Session>>,
+            Arc<RwLock<S>>,
         >,
     ) {
         let now = SystemTime::now();
@@ -130,7 +155,7 @@ impl InMemorySessionStore {
                 let expired =
                     match now.duration_since(
                         session
-                            .metadata
+                            .metadata()
                             .last_accessed,
                     ) {
                         Ok(elapsed) => {
@@ -143,7 +168,7 @@ impl InMemorySessionStore {
                     let age_ms = now
                         .duration_since(
                             session
-                                .metadata
+                                .metadata()
                                 .created_at,
                         )
                         .unwrap_or_default()
@@ -162,22 +187,27 @@ impl InMemorySessionStore {
     }
 }
 
-impl SessionStore
-    for InMemorySessionStore
+impl<S: HasSessionMetadata + Send + Sync + 'static>
+    SessionStore<S> for InMemorySessionStore<S>
 {
     fn save(
         &self,
-        mut session: Session,
+        mut session: S,
     ) {
         let mut sessions =
             self.sessions
                 .write();
 
-        session.metadata.last_accessed =
+        session.metadata_mut().last_accessed =
             SystemTime::now();
 
+        let id = session
+            .metadata()
+            .id
+            .clone();
+
         sessions.insert(
-            session.metadata.id.clone(),
+            id,
             Arc::new(
                 RwLock::new(session),
             ),
@@ -194,7 +224,7 @@ impl SessionStore
     fn get_handle(
         &self,
         id: &str,
-    ) -> Option<Arc<RwLock<Session>>> {
+    ) -> Option<Arc<RwLock<S>>> {
         let sessions =
             self.sessions
                 .read();
@@ -207,7 +237,7 @@ impl SessionStore
                 handle
                     .write();
 
-            session.metadata.last_accessed =
+            session.metadata_mut().last_accessed =
                 SystemTime::now();
         }
 
@@ -271,18 +301,39 @@ impl SessionStore
 mod tests {
     use super::*;
 
+    #[derive(Debug, Clone)]
+    struct TestSession {
+        metadata: crate::session::SessionMetadata,
+    }
+
+    impl TestSession {
+        fn new(id: &str) -> Self {
+            Self {
+                metadata: crate::session::SessionMetadata::new(
+                    id.to_string(),
+                ),
+            }
+        }
+    }
+
+    impl HasSessionMetadata for TestSession {
+        fn metadata(&self) -> &crate::session::SessionMetadata {
+            &self.metadata
+        }
+
+        fn metadata_mut(
+            &mut self,
+        ) -> &mut crate::session::SessionMetadata {
+            &mut self.metadata
+        }
+    }
+
     #[test]
     fn save_and_get_handle() {
-        let store =
+        let store: InMemorySessionStore<TestSession> =
             InMemorySessionStore::new();
 
-        let session =
-            Session::new(
-                "test-session"
-                    .to_string(),
-            );
-
-        store.save(session);
+        store.save(TestSession::new("test-session"));
 
         let result =
             store.get_handle(
@@ -296,16 +347,10 @@ mod tests {
 
     #[test]
     fn delete_removes_session() {
-        let store =
+        let store: InMemorySessionStore<TestSession> =
             InMemorySessionStore::new();
 
-        let session =
-            Session::new(
-                "test-session"
-                    .to_string(),
-            );
-
-        store.save(session);
+        store.save(TestSession::new("test-session"));
 
         store.delete(
             "test-session",
@@ -323,16 +368,10 @@ mod tests {
 
     #[test]
     fn get_handle_returns_session() {
-        let store =
+        let store: InMemorySessionStore<TestSession> =
             InMemorySessionStore::new();
 
-        let session =
-            Session::new(
-                "test-session"
-                    .to_string(),
-            );
-
-        store.save(session);
+        store.save(TestSession::new("test-session"));
 
         let handle =
             store.get_handle(
@@ -346,20 +385,11 @@ mod tests {
 
     #[test]
     fn metrics_track_created_sessions() {
-        let store =
+        let store: InMemorySessionStore<TestSession> =
             InMemorySessionStore::new();
 
-        store.save(
-            Session::new(
-                "s1".to_string(),
-            ),
-        );
-
-        store.save(
-            Session::new(
-                "s2".to_string(),
-            ),
-        );
+        store.save(TestSession::new("s1"));
+        store.save(TestSession::new("s2"));
 
         let metrics =
             store.metrics();
@@ -372,15 +402,10 @@ mod tests {
 
     #[test]
     fn metrics_track_deleted_sessions() {
-        let store =
+        let store: InMemorySessionStore<TestSession> =
             InMemorySessionStore::new();
 
-        store.save(
-            Session::new(
-                "s1".to_string(),
-            ),
-        );
-
+        store.save(TestSession::new("s1"));
         store.delete("s1");
 
         let metrics =
@@ -394,20 +419,11 @@ mod tests {
 
     #[test]
     fn metrics_report_active_sessions() {
-        let store =
+        let store: InMemorySessionStore<TestSession> =
             InMemorySessionStore::new();
 
-        store.save(
-            Session::new(
-                "s1".to_string(),
-            ),
-        );
-
-        store.save(
-            Session::new(
-                "s2".to_string(),
-            ),
-        );
+        store.save(TestSession::new("s1"));
+        store.save(TestSession::new("s2"));
 
         let metrics =
             store.metrics();

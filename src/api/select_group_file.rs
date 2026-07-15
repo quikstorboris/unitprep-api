@@ -4,9 +4,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use unitprep_core::session_store::SessionStoreExt;
+
 use crate::{
     api::{session_not_found, AppState},
-    application::session_store::SessionStoreExt,
 };
 
 #[derive(Debug, Deserialize)]
