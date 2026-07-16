@@ -9,6 +9,7 @@ use std::sync::Arc;
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
 
 use crate::api::AppState;
+use crate::application::dedup_session_service::DedupSession;
 use crate::domain::session::Session;
 
 #[tokio::main]
@@ -51,8 +52,23 @@ async fn main() {
     session_store
         .start_cleanup_task();
 
+    // Same timeout policy as unit_group_sessions — no reason for the
+    // two tools' sessions to expire on different schedules today.
+    let dedup_session_store =
+        Arc::new(
+            InMemorySessionStore::<DedupSession>::with_timeout(
+                std::time::Duration::from_secs(
+                    session_timeout_secs,
+                ),
+            ),
+        );
+
+    dedup_session_store
+        .start_cleanup_task();
+
     let state = AppState {
         unit_group_sessions: session_store,
+        dedup_sessions: dedup_session_store,
     };
 
     let app =

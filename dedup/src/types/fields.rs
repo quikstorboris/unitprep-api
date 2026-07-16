@@ -4,11 +4,13 @@
 //! the 2026-07-14 revision: `CompanyName` has its own category, split
 //! out from `name`).
 
+use serde::Serialize;
+
 /// A contact-info category a tenant group can disagree on. Declared in
 /// the exact priority order the reference script uses to pick which
 /// note to show when multiple categories differ at once (first match
 /// in this order wins).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum FieldCategory {
     Phone,
     Email,
@@ -41,7 +43,7 @@ pub enum FieldKind {
 /// Every QMS export column this crate reads. Deliberately a closed enum
 /// (not a raw string) so a typo'd field name is a compile error, not a
 /// silent no-op lookup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum FieldName {
     PhoneNumber,
     PhoneNumberPrefix,

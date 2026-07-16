@@ -1,6 +1,7 @@
 mod analyze;
 mod cancel_session;
 mod correct;
+mod dedup;
 mod discover;
 mod exempt;
 mod export;
@@ -31,6 +32,7 @@ use unitprep_core::session_store::{
     SessionStore,
 };
 
+use crate::application::dedup_session_service::DedupSession;
 use crate::domain::session::Session;
 
 #[derive(Clone)]
@@ -42,6 +44,10 @@ pub struct AppState {
     // `dedup_sessions`) rather than being renamed later under pressure.
     pub unit_group_sessions:
         Arc<dyn SessionStore<Session>>,
+
+    // Additive, per the comment above — a second tool's store, not a
+    // rename of the first.
+    pub dedup_sessions: Arc<dyn SessionStore<DedupSession>>,
 }
 
 /// The one true "your session is gone" response — a session can disappear
@@ -188,6 +194,9 @@ pub fn router(state: AppState) -> Router {
             "/session/cancel",
             post(cancel_session::cancel_session),
         )
+        .route("/dedup/check", post(dedup::check))
+        .route("/dedup/report", post(dedup::report))
+        .route("/dedup/export", post(dedup::export))
         .layer(
             DefaultBodyLimit::max(
                 100 * 1024 * 1024,
@@ -202,6 +211,7 @@ struct HealthResponse {
     status: &'static str,
     version: &'static str,
     sessions: SessionMetrics,
+    dedup_sessions: SessionMetrics,
 }
 
 async fn health(
@@ -218,6 +228,9 @@ async fn health(
         sessions: state
             .unit_group_sessions
             .metrics(),
+        dedup_sessions: state
+            .dedup_sessions
+            .metrics(),
     })
 }
 
@@ -227,7 +240,10 @@ async fn health(
 /// public tuple structs, so this exercises the real handler logic
 /// (session lookup, stage checks, response codes) without needing to
 /// fabricate multipart bodies or spin up a server.
-
 #[cfg(test)]
 #[path = "test_support.rs"]
 pub(crate) mod test_support;
+
+#[cfg(test)]
+#[path = "dedup_test_support.rs"]
+pub(crate) mod dedup_test_support;

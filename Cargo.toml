@@ -27,6 +27,11 @@ repository = "https://github.com/quikstorboris/unitPrep.git"
 # Shared engine: file ingestion/parsing (and, soon, session storage).
 unitprep-core = { path = "core" }
 
+# Duplicate-tenant-check domain logic (grouping/comparison/notes) — the
+# binary owns only session/HTTP orchestration for this tool, same as
+# UnitGroup's domain logic vs. its own orchestration here.
+unitprep-dedup = { path = "dedup" }
+
 # Core error handling
 anyhow = "1"
 

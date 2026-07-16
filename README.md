@@ -77,6 +77,27 @@ the 10-minute idle timeout, or an invalid id) — never a fake zero-value
 success, since those are different situations and the frontend needs to
 tell them apart.
 
+### Duplicate tenant check request flow
+
+A separate, independent tool and session type, tracked the same way
+(`session_id`, same idle timeout). No correction loop — this tool's
+whole job is to identify and list inconsistencies; corrections are made
+by the client the report is prepared for, outside the platform:
+
+1. `POST /dedup/check` — multipart upload of one QMS End Users export
+   CSV. Ingests and runs the full check synchronously (no ambiguity to
+   resolve first, unlike UnitGroup's multi-file/group-file-selection
+   flow), creates a session, and returns `{session_id, report}` — every
+   multi-unit tenant with a contact-info mismatch (grouped by exact
+   `FirtLast` match), and every typo/name-variant candidate surfaced for
+   human confirmation (never auto-merged, regardless of similarity
+   score).
+2. `POST /dedup/report` — re-fetches the same report by `session_id`
+   (e.g. after a page refresh), without re-uploading the file.
+3. `POST /dedup/export` — the same report as a downloadable CSV:
+   flagged groups first (one row per record, note on each group's first
+   row), followed by a typo/name-variant section.
+
 ## Current security posture
 
 **No authentication or authorization exists on any endpoint.** Any
@@ -97,25 +118,39 @@ rationale.
 
 - `src/main.rs` — process entry point, logging setup, server bind.
 - `src/api/` — Axum handlers and routing, one module per endpoint.
-- `src/application/` — `SessionService`, the one piece of session
-  orchestration specific to this tool (parses uploads into a UnitGroup
-  `Session`). The generic storage mechanics it builds on
-  (`SessionStore` trait, `InMemorySessionStore`) live in `unitprep-core`,
-  not here.
-- `src/domain/` — business logic: discovery/validation rules, the
-  analysis/fingerprint-matching engine, domain models. File
+  Includes both UnitGroup's endpoints and the duplicate-tenant-check
+  tool's (`/dedup/check`, `/dedup/report`, `/dedup/export`).
+- `src/application/` — session orchestration, one file per tool:
+  `session_service.rs` (UnitGroup — parses uploads into a `Session`) and
+  `dedup_session_service.rs` (duplicate-tenant-check — parses, ingests,
+  and analyzes a QMS export into a `DedupSession`). The generic storage
+  mechanics both build on (`SessionStore` trait, `InMemorySessionStore`)
+  live in `unitprep-core`, not here.
+- `src/domain/` — UnitGroup's own business logic: discovery/validation
+  rules, the analysis/fingerprint-matching engine, domain models. File
   parsing itself (CSV/XLSX/SpreadsheetML) also moved to `unitprep-core`
   (`core/src/parsing/`), since it's identical regardless of which tool
-  is consuming the data.
-- `src/infrastructure/` — export artifact generation (CSV/JSON/ZIP).
+  is consuming the data. The duplicate-tenant-check tool's own domain
+  logic lives entirely in `dedup/`, not here — see below.
+- `src/infrastructure/` — export artifact generation: `csv_export.rs`
+  (UnitGroup — CSV/JSON/ZIP) and `dedup_csv_export.rs`
+  (duplicate-tenant-check — CSV).
 - `src/ai/` — placeholder seam for future AI-assisted decision support;
-  not wired into the pipeline yet.
+  not wired into the pipeline yet. (A more concrete version of this idea
+  already exists for one specific case — see `dedup/`'s `NoteComposer`
+  trait below.)
 - `core/` — the `unitprep-core` crate: `parsing/` (per-format parsers),
   `csv_document.rs`/`uploaded_file.rs` (source-agnostic document models),
   `session.rs`/`session_store.rs`/`in_memory_session_store.rs` (the
   generic session engine, generic over any tool's own session type).
 - `unit-group/` — an intentionally empty crate stub; the eventual home
   for this binary's domain logic once it's extracted out, not yet done.
+- `dedup/` — the `unitprep-dedup` crate: the duplicate-tenant-check
+  tool's domain logic (grouping, contact-info comparison, note
+  composition, typo/name-variant detection), depending only on
+  `unitprep-core`. No session state, HTTP, or export format — those are
+  the binary's job, wired up in `src/application/dedup_session_service.rs`,
+  `src/api/dedup.rs`, and `src/infrastructure/dedup_csv_export.rs`.
 
 ## Tests
 

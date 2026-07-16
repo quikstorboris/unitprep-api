@@ -3,6 +3,7 @@ use std::sync::Arc;
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
 use unitprep_core::session_store::SessionStore;
 use unitprep_core::csv_document::CsvDocument;
+use crate::application::dedup_session_service::DedupSession;
 use crate::domain::models::{
     AnalysisResults,
     BatchRun,
@@ -17,11 +18,21 @@ use crate::domain::session::{
 
 use super::AppState;
 
+/// Every test builder below needs a dedup session store too, even
+/// though none of these UnitGroup-focused fixtures populate it —
+/// `AppState` just needs the field present. Shared with
+/// `dedup_test_support.rs`, which builds dedup sessions that actually
+/// use one.
+pub(crate) fn empty_dedup_store() -> Arc<dyn SessionStore<DedupSession>> {
+    Arc::new(InMemorySessionStore::<DedupSession>::new())
+}
+
 pub fn empty_state() -> AppState {
     AppState {
         unit_group_sessions: Arc::new(
             InMemorySessionStore::<Session>::new(),
         ),
+        dedup_sessions: empty_dedup_store(),
     }
 }
 
@@ -76,6 +87,7 @@ pub fn uploaded_state(
 
     AppState {
         unit_group_sessions: store,
+        dedup_sessions: empty_dedup_store(),
     }
 }
 
@@ -119,6 +131,7 @@ pub fn discovered_state(
 
     AppState {
         unit_group_sessions: store,
+        dedup_sessions: empty_dedup_store(),
     }
 }
 
@@ -173,6 +186,7 @@ pub fn validated_state(
 
     AppState {
         unit_group_sessions: store,
+        dedup_sessions: empty_dedup_store(),
     }
 }
 
@@ -258,5 +272,6 @@ pub fn analyzed_state_with_errors(
 
     AppState {
         unit_group_sessions: store,
+        dedup_sessions: empty_dedup_store(),
     }
 }

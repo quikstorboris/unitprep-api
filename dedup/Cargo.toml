@@ -9,3 +9,8 @@ edition = "2021"
 unitprep-core = { path = "../core" }
 
 anyhow = "1"
+
+# Result types cross the API boundary directly (same convention as
+# UnitGroup's own domain::models) — this is a data-shape derive, not an
+# I/O dependency, so it doesn't compromise this crate's no-I/O purity.
+serde = { version = "1", features = ["derive"] }
