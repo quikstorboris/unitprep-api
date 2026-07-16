@@ -23,7 +23,6 @@ use std::path::Path;
 use unitprep_core::parsing::parse_document;
 use unitprep_core::uploaded_file::UploadedFile;
 use unitprep_dedup::ingest::records_from_csv_document;
-use unitprep_dedup::notes::NOTE_VERIFY_MATCHES;
 use unitprep_dedup::report::run;
 use unitprep_dedup::similarity::VARIANT_SURFACE_THRESHOLD;
 use unitprep_dedup::types::{FieldCategory, TenantRecord};
@@ -63,7 +62,7 @@ fn no_ka_oi_matches_reference_script() {
     assert_eq!(report.flagged_groups.len(), 1);
     let flagged = &report.flagged_groups[0];
     assert_eq!(unit_numbers(&flagged.group.records), vec!["2008", "2123"]);
-    assert_eq!(flagged.note, "Update email address to match across all units");
+    assert_eq!(flagged.note, "Please update the email address to match across units 2008, 2123.");
     let categories: Vec<FieldCategory> = flagged.mismatches.iter().map(|m| m.category).collect();
     assert!(categories.contains(&FieldCategory::Email));
     assert!(categories.contains(&FieldCategory::AltContact));
@@ -72,15 +71,20 @@ fn no_ka_oi_matches_reference_script() {
     // review-only candidates for this file. Its merge rule is
     // `ratio >= 90% OR contact_info_matches` — not "ratio >= 90%" alone
     // — so two of these three (Paula Bacay ~88%, Barbara Smith ~87%)
-    // are below VARIANT_HIGH_CONFIDENCE_THRESHOLD and were only merged
-    // because their contact info already matched. All three do clear
-    // VARIANT_SURFACE_THRESHOLD and have matching contact info, which is
-    // the actual invariant the reference script's output confirms.
+    // were only merged because their contact info already matched, not
+    // because of a high ratio. This crate doesn't distinguish a
+    // confidence tier at all: all three clear VARIANT_SURFACE_THRESHOLD
+    // and have matching contact info, which is the actual invariant the
+    // reference script's output confirms.
     assert_eq!(report.typo_variant_candidates.len(), 3);
     for candidate in &report.typo_variant_candidates {
         assert!(candidate.ratio >= VARIANT_SURFACE_THRESHOLD);
         assert!(candidate.contact_info_matches);
-        assert_eq!(candidate.note, NOTE_VERIFY_MATCHES);
+        // Composed notes are now per-pair (real names/units filled in),
+        // so assert the template that was selected rather than one
+        // fixed string shared by all three.
+        assert!(candidate.note.contains("may be the same tenant"));
+        assert!(candidate.note.contains("all other contact info matches"));
     }
 }
 
@@ -97,7 +101,10 @@ fn new_castle_matches_reference_script() {
     assert_eq!(report.flagged_groups.len(), 1);
     let flagged = &report.flagged_groups[0];
     assert_eq!(unit_numbers(&flagged.group.records), vec!["F3", "F5"]);
-    assert_eq!(flagged.note, "Update alternate contact to match across all units");
+    assert_eq!(
+        flagged.note,
+        "Please update the alternate contact info to match across units F3, F5."
+    );
     let categories: Vec<FieldCategory> = flagged.mismatches.iter().map(|m| m.category).collect();
     assert_eq!(categories, vec![FieldCategory::AltContact]);
 

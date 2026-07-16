@@ -6,7 +6,7 @@
 
 use crate::comparison::{contact_info_matches, find_differing_categories};
 use crate::grouping::{group_records, multi_unit_groups};
-use crate::notes::{correction_note, NOTE_VERIFY_DIFFERS, NOTE_VERIFY_MATCHES};
+use crate::note_composer::{NoteComposer, TemplateNoteComposer};
 use crate::similarity::{name_similarity, VARIANT_SURFACE_THRESHOLD};
 use crate::types::{FlaggedGroup, TenantGroup, TenantRecord, TypoVariantCandidate};
 
@@ -20,8 +20,17 @@ pub struct DedupReport {
     pub typo_variant_candidates: Vec<TypoVariantCandidate>,
 }
 
-/// Runs the full duplicate-tenant check over `records`.
+/// Runs the full duplicate-tenant check over `records`, composing notes
+/// with the default `TemplateNoteComposer`. See `run_with_composer` to
+/// supply a different one (e.g. a future AI-backed composer).
 pub fn run(records: Vec<TenantRecord>) -> DedupReport {
+    run_with_composer(records, &TemplateNoteComposer)
+}
+
+/// Same as `run`, with an explicit `NoteComposer` — the seam for
+/// swapping how note text gets written without touching any of the
+/// matching/comparison logic above it.
+pub fn run_with_composer(records: Vec<TenantRecord>, composer: &dyn NoteComposer) -> DedupReport {
     let total_rows = records.len();
     let groups = group_records(records);
     let unique_tenants = groups.len();
@@ -32,12 +41,12 @@ pub fn run(records: Vec<TenantRecord>) -> DedupReport {
     // script, which runs `typo_variant_candidates` over the full groups
     // dict, not just the multi-unit subset. Must happen before
     // `multi_unit_groups` consumes `groups`.
-    let typo_variant_candidates = find_typo_variant_candidates(&groups);
+    let typo_variant_candidates = find_typo_variant_candidates(&groups, composer);
 
     let multi = multi_unit_groups(groups);
     let multi_unit_tenants = multi.len();
 
-    let flagged_groups = flag_groups(multi);
+    let flagged_groups = flag_groups(multi, composer);
 
     DedupReport {
         total_rows,
@@ -48,7 +57,7 @@ pub fn run(records: Vec<TenantRecord>) -> DedupReport {
     }
 }
 
-fn flag_groups(groups: Vec<TenantGroup>) -> Vec<FlaggedGroup> {
+fn flag_groups(groups: Vec<TenantGroup>, composer: &dyn NoteComposer) -> Vec<FlaggedGroup> {
     groups
         .into_iter()
         .filter_map(|group| {
@@ -56,7 +65,7 @@ fn flag_groups(groups: Vec<TenantGroup>) -> Vec<FlaggedGroup> {
             if differing.is_empty() {
                 return None;
             }
-            let note = correction_note(&group.records, &differing);
+            let note = composer.compose_group_note(&group, &differing);
             Some(FlaggedGroup {
                 group,
                 mismatches: differing,
@@ -72,7 +81,10 @@ fn flag_groups(groups: Vec<TenantGroup>) -> Vec<FlaggedGroup> {
 /// `classify_variant_pairs`, this never merges groups or writes a
 /// combined row into anything — every candidate above threshold is
 /// returned as-is for a human to confirm (see crate-level docs).
-fn find_typo_variant_candidates(groups: &[TenantGroup]) -> Vec<TypoVariantCandidate> {
+fn find_typo_variant_candidates(
+    groups: &[TenantGroup],
+    composer: &dyn NoteComposer,
+) -> Vec<TypoVariantCandidate> {
     let mut candidates = Vec::new();
     for i in 0..groups.len() {
         for j in (i + 1)..groups.len() {
@@ -99,7 +111,7 @@ fn find_typo_variant_candidates(groups: &[TenantGroup]) -> Vec<TypoVariantCandid
                 key_b: groups[j].key.clone(),
                 ratio,
                 contact_info_matches: matches,
-                note: if matches { NOTE_VERIFY_MATCHES } else { NOTE_VERIFY_DIFFERS }.to_string(),
+                note: composer.compose_variant_note(&groups[i], &groups[j], matches),
             });
         }
     }

@@ -19,10 +19,12 @@ pub mod comparison;
 pub mod grouping;
 pub mod ingest;
 pub mod normalization;
+pub mod note_composer;
 pub mod notes;
 pub mod report;
 pub mod similarity;
 pub mod types;
 
-pub use report::{run, DedupReport};
+pub use note_composer::{NoteComposer, TemplateNoteComposer};
+pub use report::{run, run_with_composer, DedupReport};
 pub use types::TenantRecord;

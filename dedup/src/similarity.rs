@@ -4,18 +4,13 @@
 use std::collections::HashMap;
 
 /// Below this ratio, two names are not considered variant candidates at
-/// all. Matches the reference script's `VARIANT_REVIEW_THRESHOLD`.
+/// all. Matches the reference script's `VARIANT_REVIEW_THRESHOLD`. Every
+/// candidate at/above this is surfaced identically for human
+/// confirmation — no separate confidence tier (deliberately dropped;
+/// the reference script's `VARIANT_MERGE_THRESHOLD` distinction only
+/// mattered for deciding what to auto-merge, which this crate never
+/// does).
 pub const VARIANT_SURFACE_THRESHOLD: f64 = 0.85;
-
-/// The reference script's `VARIANT_MERGE_THRESHOLD` — in the script,
-/// candidates at/above this ratio are auto-merged into output. This
-/// crate never auto-merges, but keeps the constant to tier the
-/// suggested note (high-confidence vs. lower-confidence "verify"),
-/// since that distinction is still useful context for the human doing
-/// the confirming. **Open point to confirm**: is a two-tier "confidence"
-/// label on an always-flagged candidate actually wanted, or should every
-/// candidate above `VARIANT_SURFACE_THRESHOLD` be presented identically?
-pub const VARIANT_HIGH_CONFIDENCE_THRESHOLD: f64 = 0.90;
 
 /// Similarity between two display names: max of a straight
 /// character-sequence ratio (catches spelling typos) and a
