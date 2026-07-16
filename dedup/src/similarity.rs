@@ -97,9 +97,9 @@ fn longest_match(
     let mut best_size = 0;
 
     let mut j2len: HashMap<usize, usize> = HashMap::new();
-    for i in alo..ahi {
+    for (i, &ch) in a.iter().enumerate().take(ahi).skip(alo) {
         let mut new_j2len: HashMap<usize, usize> = HashMap::new();
-        if let Some(js) = b2j.get(&a[i]) {
+        if let Some(js) = b2j.get(&ch) {
             for &j in js {
                 if j < blo {
                     continue;

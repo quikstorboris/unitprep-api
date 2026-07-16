@@ -9,10 +9,13 @@ use unitprep_core::csv_document::CsvDocument;
 
 use crate::types::TenantRecord;
 
+/// A column's setter: writes one parsed field value into a `TenantRecord`.
+type ColumnSetter = fn(&mut TenantRecord, String);
+
 /// QMS export columns this crate reads, and the `TenantRecord` field
 /// each populates. Looked up via `CsvDocument::header_index`, so exact
 /// header spelling/casing/separators in the source file don't matter.
-const COLUMNS: &[(&str, fn(&mut TenantRecord, String))] = &[
+const COLUMNS: &[(&str, ColumnSetter)] = &[
     ("CustNumb", |r, v| r.cust_numb = v),
     ("UnitNumber", |r, v| r.unit_number = v),
     ("FirtLast", |r, v| r.first_last = v),
@@ -47,7 +50,7 @@ pub fn records_from_csv_document(doc: &CsvDocument) -> Result<Vec<TenantRecord>>
     doc.header_index("FirtLast")
         .context("QMS export is missing the required FirtLast column")?;
 
-    let resolved: Vec<(usize, fn(&mut TenantRecord, String))> = COLUMNS
+    let resolved: Vec<(usize, ColumnSetter)> = COLUMNS
         .iter()
         .filter_map(|(header, setter)| {
             doc.header_index(header).map(|idx| (idx, *setter))
