@@ -70,3 +70,12 @@ pub fn parse_document(
         }
     }
 }
+
+#[cfg(test)]
+mod csv_tests;
+
+#[cfg(test)]
+mod excel_tests;
+
+#[cfg(test)]
+mod dispatch_tests;

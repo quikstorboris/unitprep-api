@@ -9,6 +9,3 @@ pub mod parsing;
 pub mod session;
 pub mod session_store;
 pub mod uploaded_file;
-
-#[cfg(test)]
-mod parsing_tests;
