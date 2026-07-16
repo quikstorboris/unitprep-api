@@ -1,5 +1,6 @@
 use axum::{
     extract::{Json, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::{
-    api::{session_not_found, AppState},
+    api::{session_not_found, stage_conflict, ApiErrorBody, AppState},
+    domain::session::{StageError, WorkflowStage},
 };
 
 #[derive(Debug, Deserialize)]
@@ -22,6 +24,13 @@ pub struct SelectGroupFileResponse {
     pub ready: bool,
 }
 
+/// Why selection can't proceed — distinct from "session missing" (404)
+/// and from each other, same pattern as `analyze::AnalyzeNotReady`.
+enum SelectNotReady {
+    Stage(StageError),
+    FileNotDiscovered,
+}
+
 pub async fn select_group_file(
     State(state): State<AppState>,
     Json(request): Json<SelectGroupFileRequest>,
@@ -31,26 +40,21 @@ pub async fn select_group_file(
         .with_session_mut(
             &request.session_id,
             |session| {
-                let discovery =
-                    match session.data.discovery.as_mut()
-                {
-                    Some(d) => d,
-                    None => {
-                        return SelectGroupFileResponse {
-                            success: false,
-                            ready: false,
-                        };
-                    }
-                };
+                session
+                    .require_stage(WorkflowStage::Discovered)
+                    .map_err(SelectNotReady::Stage)?;
+
+                let discovery = session
+                    .data
+                    .discovery
+                    .as_mut()
+                    .expect("Discovered stage guarantees discovery data");
 
                 if !discovery
                     .group_file_names
                     .contains(&request.group_file_name)
                 {
-                    return SelectGroupFileResponse {
-                        success: false,
-                        ready: false,
-                    };
+                    return Err(SelectNotReady::FileNotDiscovered);
                 }
 
                 discovery.selected_group_file_name =
@@ -63,17 +67,27 @@ pub async fn select_group_file(
                 discovery.ready =
                     !discovery.unit_file_names.is_empty();
 
-                SelectGroupFileResponse {
+                Ok(SelectGroupFileResponse {
                     success: true,
-                    ready: true,
-                }
+                    ready: discovery.ready,
+                })
             },
         );
 
     match result {
-        Some(response) => {
-            Json(response).into_response()
-        }
+        Some(Ok(response)) => Json(response).into_response(),
+        Some(Err(SelectNotReady::Stage(err))) => stage_conflict(err),
+        Some(Err(SelectNotReady::FileNotDiscovered)) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorBody {
+                error: "group_file_invalid",
+                message: format!(
+                    "'{}' was not found among this session's discovered group files.",
+                    request.group_file_name
+                ),
+            }),
+        )
+            .into_response(),
         None => session_not_found(),
     }
 }
@@ -152,7 +166,7 @@ mod tests {
 
         assert_eq!(
             response.status(),
-            StatusCode::OK
+            StatusCode::BAD_REQUEST
         );
 
         let bytes = axum::body::to_bytes(
@@ -169,7 +183,27 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            body["success"], false
+            body["error"], "group_file_invalid"
         );
+    }
+
+    #[tokio::test]
+    async fn select_group_file_returns_409_before_discovery_completes() {
+        // `empty_state()`'s session (once one exists) starts at
+        // `Uploaded`, before `Discovered` — the stage this endpoint
+        // actually requires.
+        let state = empty_state();
+        state.unit_group_sessions.save(crate::domain::session::Session::new("s1".to_string()));
+
+        let response = select_group_file(
+            State(state),
+            Json(SelectGroupFileRequest {
+                session_id: "s1".to_string(),
+                group_file_name: "groups.csv".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 }

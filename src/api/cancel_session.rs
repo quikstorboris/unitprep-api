@@ -22,6 +22,14 @@ pub struct CancelSessionRequest {
 #[derive(Debug, Serialize)]
 pub struct CancelSessionResponse {
     pub success: bool,
+
+    /// Whether a session actually existed to delete. Cancel itself stays
+    /// idempotent (always 200, always `success: true`) — deleting an
+    /// already-gone session isn't an error worth surfacing as one — but
+    /// a caller that does care (debugging a "why didn't this work"
+    /// report, say) can still tell the two cases apart instead of both
+    /// looking identically successful.
+    pub deleted: bool,
 }
 
 pub async fn cancel_session(
@@ -49,6 +57,8 @@ pub async fn cancel_session(
             },
         );
 
+    let deleted = age_ms.is_some();
+
     state
         .unit_group_sessions
         .delete(&request.session_id);
@@ -56,10 +66,61 @@ pub async fn cancel_session(
     tracing::info!(
         session_id = %request.session_id,
         age_ms = ?age_ms,
+        deleted,
         "Session cancelled"
     );
 
     Json(CancelSessionResponse {
         success: true,
+        deleted,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+
+    use super::*;
+    use crate::api::test_support::empty_state;
+    use crate::domain::session::Session;
+
+    #[tokio::test]
+    async fn cancel_reports_deleted_true_for_a_real_session() {
+        let state = empty_state();
+        state.unit_group_sessions.save(Session::new("s1".to_string()));
+
+        let response = cancel_session(
+            State(state.clone()),
+            Json(CancelSessionRequest { session_id: "s1".to_string() }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(body["success"], true);
+        assert_eq!(body["deleted"], true);
+        assert!(state.unit_group_sessions.get_handle("s1").is_none());
+    }
+
+    #[tokio::test]
+    async fn cancel_stays_idempotent_but_reports_deleted_false_for_unknown_session() {
+        let response = cancel_session(
+            State(empty_state()),
+            Json(CancelSessionRequest { session_id: "missing".to_string() }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(body["success"], true);
+        assert_eq!(body["deleted"], false);
+    }
 }

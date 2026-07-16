@@ -6,6 +6,20 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Duplicate tenant check — a second, independent tool: `unitprep-dedup`
+  (new workspace crate — grouping/comparison/typo-variant domain logic,
+  depending only on `unitprep-core`, no session/HTTP/export concerns)
+  plus its own session type and three endpoints, `POST /dedup/check`,
+  `POST /dedup/report`, `POST /dedup/export`. Every typo/name-variant
+  candidate is surfaced for human confirmation, never auto-merged.
+  Domain logic verified against real facility exports, byte-for-byte
+  matching an independently-confirmed reference-script run on one of
+  them.
+- CSV parsing now tolerates a trailing unnamed column beyond the
+  header's last field (a real, consistent quirk in some facility
+  export tools) instead of rejecting every row of an affected file.
+
 ### Changed
 - Calling an endpoint before the session has reached the required
   workflow stage (e.g. `/analyze` before `/validate`) now returns
@@ -13,6 +27,16 @@ versioning follows [Semantic Versioning](https://semver.org/).
   a fake all-zero `200` success that looked identical to a real,
   successful "nothing to report" result. Every error response across
   the API now shares this same `{ error, message }` shape.
+- `POST /group-file/select` now returns the same structured error shape
+  as the rest of the API instead of a `200` with `{ success: false }`:
+  `409 Conflict` if called before discovery has completed, `400 Bad
+  Request` (`group_file_invalid`) if the named file wasn't one
+  discovery actually found.
+- `POST /session/cancel` stays intentionally idempotent (always `200`,
+  even for an unknown session id — that's not an error worth surfacing)
+  but its response now includes `deleted: bool`, so a caller that does
+  care can tell "deleted a real session" apart from "there was nothing
+  there," without changing the success contract.
 
 ## [1.0.0] - 2026-07-08
 
