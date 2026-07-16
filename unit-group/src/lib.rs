@@ -1,7 +1,40 @@
-//! UnitPrep's original tool: facility unit-export analysis against a
-//! master UnitGroup catalog (discovery, validation, fingerprint-based
-//! net-new/similar-group analysis, export).
+//! Group Prep's (internally still named "UnitGroup" in code) domain
+//! logic: discovery-result data, per-facility batch building,
+//! exact/fuzzy group-name matching (the fingerprint engine), validation
+//! rules, and manual-correction overlays.
 //!
-//! Not yet populated — this is step 1 of the workspace migration
-//! (empty skeleton, proving the workspace mechanics before any real
-//! code moves).
+//! No session state, HTTP layer, or export format here — those live in
+//! the binary (`unitprep`), the same boundary `unitprep-dedup` already
+//! established: this crate is pure logic and result data, the binary
+//! owns orchestration. `Session`/`WorkflowStage`/`StageError` (the
+//! actual stage machine) stay in the binary's `application/` layer,
+//! not here — only the pure-data pieces they used to carry
+//! (`DiscoveryResult`) moved over, in `models.rs`.
+
+pub mod analysis;
+pub mod corrections;
+pub mod models;
+pub mod validation;
+
+pub use analysis::{
+    analyze_batch,
+    build_batch_from_documents,
+    load_reference_groups_from_document,
+    parse_fingerprint,
+    select_group_document,
+    Climate,
+    GroupFingerprint,
+    Location,
+};
+pub use corrections::{apply_corrections, CorrectionKey, DimensionExemptionKey};
+pub use models::{
+    AdvisoryIssue,
+    AnalysisResults,
+    BatchRun,
+    DiscoveryResult,
+    Facility,
+    Issue,
+    Severity,
+    SimilarityMatch,
+};
+pub use validation::{correctable_fields_for, is_dimension_exemptable, validate_document, ValidationIssue};

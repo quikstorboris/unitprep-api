@@ -22,9 +22,9 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
-use crate::domain::analysis::parse_fingerprint;
+use crate::analysis::parse_fingerprint;
 use unitprep_core::csv_document::CsvDocument;
-use crate::domain::models::Severity;
+use crate::models::Severity;
 
 pub use issues::{
     correctable_fields_for,

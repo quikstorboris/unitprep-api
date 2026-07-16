@@ -1,4 +1,4 @@
-use crate::domain::models::Severity;
+use crate::models::Severity;
 
 // Description strings are named constants — not literals duplicated between
 // the check that raises an issue (mod.rs) and `correctable_fields_for` below

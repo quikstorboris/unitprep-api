@@ -1395,17 +1395,15 @@ dependencies = [
  "axum",
  "chrono",
  "csv",
- "once_cell",
- "regex",
  "serde",
  "serde_json",
- "strsim",
  "tokio",
  "tower-http",
  "tracing",
  "tracing-subscriber",
  "unitprep-core",
  "unitprep-dedup",
+ "unitprep-unit-group",
  "uuid",
  "zip 2.4.2",
 ]
@@ -1437,6 +1435,15 @@ dependencies = [
 [[package]]
 name = "unitprep-unit-group"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "once_cell",
+ "regex",
+ "serde",
+ "strsim",
+ "tracing",
+ "unitprep-core",
+]
 
 [[package]]
 name = "uuid"

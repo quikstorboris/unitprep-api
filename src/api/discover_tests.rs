@@ -105,7 +105,8 @@ async fn discover_classifies_unit_and_group_files(
 /// critically, validation downstream must still be able to find
 /// those same columns (see the equivalent `header_index` tests in
 /// `unitprep-core`'s csv_document tests and
-/// `domain::validation::tests::validate_document_errors_loudly_when_a_supposed_unit_file_has_no_matching_columns`).
+/// `unitprep-unit-group`'s
+/// `validate_document_errors_loudly_when_a_supposed_unit_file_has_no_matching_columns`).
 #[tokio::test]
 async fn discover_classifies_unit_file_with_underscored_headers(
 ) {

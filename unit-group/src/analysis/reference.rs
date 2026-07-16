@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use unitprep_core::csv_document::CsvDocument;
 
-use crate::domain::session::DiscoveryResult;
+use crate::models::DiscoveryResult;
 
 /// Selects which of the session's documents is the master/reference
 /// group file to use for analysis: the explicitly selected file if the

@@ -8,10 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use unitprep_core::session_store::SessionStoreExt;
 
-use crate::{
-    api::{session_not_found, AppState},
-    domain::session::DiscoveryResult,
-};
+use crate::api::{session_not_found, AppState};
+use unitprep_unit_group::DiscoveryResult;
 
 #[derive(Debug, Deserialize)]
 pub struct DiscoverRequest {

@@ -4,3 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# File model (CsvDocument, header_index) — same reuse discipline every
+# tool-specific crate follows.
+unitprep-core = { path = "../core" }
+
+anyhow = "1"
+
+# Result types cross the API boundary directly (same convention as
+# unitprep-dedup's domain types).
+serde = { version = "1", features = ["derive"] }
+
+# Fingerprint matching (net-new/similar group analysis) — moved here
+# from the root Cargo.toml, since these were only ever used by this
+# code.
+regex = "1"
+once_cell = "1"
+strsim = "0.11"
+
+tracing = "0.1"

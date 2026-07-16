@@ -1,18 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crate::domain::corrections::{
-    apply_corrections,
-    CorrectionKey,
-    DimensionExemptionKey,
-};
 use unitprep_core::csv_document::CsvDocument;
 use unitprep_core::session::{
     HasSessionMetadata,
     SessionMetadata,
 };
-use crate::domain::models::{
+use unitprep_unit_group::{
+    apply_corrections,
     AnalysisResults,
+    CorrectionKey,
+    DimensionExemptionKey,
+    DiscoveryResult,
     Severity,
 };
 use serde::Serialize;
@@ -186,15 +185,6 @@ impl Session {
 }
 
 #[derive(Debug, Clone)]
-pub struct DiscoveryResult {
-    pub unit_file_names: Vec<String>,
-    pub group_file_names: Vec<String>,
-    pub selected_group_file_name:
-        Option<String>,
-    pub ready: bool,
-}
-
-#[derive(Debug, Clone)]
 pub struct ValidationResult {
     pub files_checked: usize,
 
@@ -239,7 +229,7 @@ pub struct ValidationIssueSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::models::{
+    use unitprep_unit_group::{
         AnalysisResults,
         BatchRun,
     };

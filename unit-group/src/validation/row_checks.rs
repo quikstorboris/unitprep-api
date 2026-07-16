@@ -6,7 +6,7 @@
 // (see mod.rs) a simple sequence of calls rather than a wall of inline
 // logic.
 
-use crate::domain::analysis::{
+use crate::analysis::{
     Climate,
     GroupFingerprint,
     Location,
@@ -170,7 +170,7 @@ pub(super) fn dimensions_mismatch_group(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::analysis::parse_fingerprint;
+    use crate::analysis::parse_fingerprint;
 
     fn row(values: &[&str]) -> Vec<String> {
         values

@@ -64,3 +64,19 @@ pub struct AnalysisResults {
     pub net_new_groups: Vec<String>,
     pub similar_groups: Vec<SimilarityMatch>,
 }
+
+/// Brought forward from the binary's session-state type rather than
+/// left behind: `analysis::reference::select_group_document` reads
+/// this, and it's pure result data (no stage-machine behavior), not
+/// session-envelope mechanics — the same category as `AnalysisResults`
+/// above, just for an earlier pipeline stage. The session-state parts of
+/// what used to be one `session.rs` (`Session`, `WorkflowStage`,
+/// `StageError`) stay in the binary's `application/` layer, matching
+/// `unitprep-dedup`'s own session boundary.
+#[derive(Debug, Clone)]
+pub struct DiscoveryResult {
+    pub unit_file_names: Vec<String>,
+    pub group_file_names: Vec<String>,
+    pub selected_group_file_name: Option<String>,
+    pub ready: bool,
+}

@@ -9,7 +9,7 @@ use zip::{
     ZipWriter,
 };
 
-use crate::domain::models::{AnalysisResults, Issue};
+use unitprep_unit_group::{AnalysisResults, Issue};
 
 #[derive(Debug, Clone)]
 
@@ -359,7 +359,7 @@ fn generate_advisory_json(
 }
 
 fn generate_batch_json(
-    batch: &crate::domain::models::BatchRun,
+    batch: &unitprep_unit_group::BatchRun,
 ) -> Result<ExportFile> {
     Ok(ExportFile {
         file_name: "batch_run.json"

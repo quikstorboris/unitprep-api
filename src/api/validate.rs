@@ -14,21 +14,19 @@ use crate::{
         stage_conflict,
         AppState,
     },
-    domain::{
-        models::Severity,
-        session::{
-            Session,
-            StageError,
-            ValidationIssueSummary,
-            ValidationResult,
-            WorkflowStage,
-        },
-        validation::{
-            correctable_fields_for,
-            is_dimension_exemptable,
-            validate_document,
-        },
+    domain::session::{
+        Session,
+        StageError,
+        ValidationIssueSummary,
+        ValidationResult,
+        WorkflowStage,
     },
+};
+use unitprep_unit_group::{
+    correctable_fields_for,
+    is_dimension_exemptable,
+    validate_document,
+    Severity,
 };
 
 #[derive(Debug, Deserialize)]
@@ -128,8 +126,8 @@ pub fn run_validation(
 
         for issue in document_issues {
             // Severity comes straight from the check that created the
-            // issue (see domain::validation) — no re-derivation from
-            // `description` text here.
+            // issue (see unitprep_unit_group::validation) — no
+            // re-derivation from `description` text here.
             match issue.severity {
                 Severity::Error => {
                     error_count += 1;

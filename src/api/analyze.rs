@@ -17,22 +17,18 @@ use crate::{
         ApiErrorBody,
         AppState,
     },
-    domain::{
-        analysis::{
-            analyze_batch,
-            build_batch_from_documents,
-            load_reference_groups_from_document,
-            select_group_document,
-        },
-        models::{
-            AdvisoryIssue,
-            SimilarityMatch,
-        },
-        session::{
-            StageError,
-            WorkflowStage,
-        },
+    domain::session::{
+        StageError,
+        WorkflowStage,
     },
+};
+use unitprep_unit_group::{
+    analyze_batch,
+    build_batch_from_documents,
+    load_reference_groups_from_document,
+    select_group_document,
+    AdvisoryIssue,
+    SimilarityMatch,
 };
 
 /// Why `/analyze` isn't ready to run yet — distinct from "session

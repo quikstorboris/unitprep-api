@@ -28,7 +28,7 @@ use strsim::normalized_levenshtein;
 
 use fingerprint::fingerprints_match;
 
-use crate::domain::models::{
+use crate::models::{
     AnalysisResults,
     BatchRun,
     Issue,

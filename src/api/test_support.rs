@@ -4,16 +4,16 @@ use unitprep_core::in_memory_session_store::InMemorySessionStore;
 use unitprep_core::session_store::SessionStore;
 use unitprep_core::csv_document::CsvDocument;
 use crate::application::dedup_session_service::DedupSession;
-use crate::domain::models::{
-    AnalysisResults,
-    BatchRun,
-    Severity,
-};
 use crate::domain::session::{
-    DiscoveryResult,
     Session,
     ValidationIssueSummary,
     ValidationResult,
+};
+use unitprep_unit_group::{
+    AnalysisResults,
+    BatchRun,
+    DiscoveryResult,
+    Severity,
 };
 
 use super::AppState;

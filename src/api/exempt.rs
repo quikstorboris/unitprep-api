@@ -6,15 +6,13 @@ use serde::Deserialize;
 
 use unitprep_core::session_store::SessionStoreExt;
 
-use crate::{
-    api::{
-        session_not_found,
-        stage_conflict,
-        validate::run_validation,
-        AppState,
-    },
-    domain::corrections::DimensionExemptionKey,
+use crate::api::{
+    session_not_found,
+    stage_conflict,
+    validate::run_validation,
+    AppState,
 };
+use unitprep_unit_group::DimensionExemptionKey;
 
 #[derive(Debug, Deserialize)]
 pub struct ExemptDimensionsRequest {
