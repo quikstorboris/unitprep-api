@@ -1,10 +1,25 @@
 # unitprep-api
 
-UnitPrep's backend: a Rust/Axum HTTP API for storage-facility unit-import
-preparation. It compares UnitGroup names discovered in facility unit
-exports against a master/reference Unit Group file, identifies net-new
-groups, flags advisory (non-authoritative) similarity warnings, and
-generates a downloadable ZIP of migration-ready import artifacts.
+UnitPrep is Quikstor's internal platform for preparing self-storage
+facility data during QMS onboarding and migration — a growing set of
+independent tools sharing one backend, one session model, and one
+frontend shell. This repo is that backend: a Rust/Axum HTTP API.
+
+Two tools exist today:
+
+- **Group Prep** — the original tool this project was built around, and
+  the reason the platform is still named "UnitPrep" even though it now
+  covers more than one tool (internally the code still says
+  `unit-group`/`UnitGroup` throughout; the rename is product-facing
+  only so far). Compares UnitGroup names discovered in facility unit
+  exports against a master/reference Unit Group file, identifies
+  net-new groups, flags advisory (non-authoritative) similarity
+  warnings, and generates a downloadable ZIP of migration-ready import
+  artifacts.
+- **Duplicate tenant check** ("dedup") — flags multi-unit tenants whose
+  contact info disagrees across units, and surfaces likely typo/
+  name-variant tenants for human review. Exports a CSV report; no
+  corrective action happens in the platform itself.
 
 This project has no CLI — it is a session-oriented web service. The
 frontend is [`unitprep-ui`](../unitprep-ui) (Next.js).
@@ -33,6 +48,9 @@ to allow real deployed frontend origins instead.
 
 Each browser session is tracked server-side by `session_id` (in-memory,
 10-minute idle timeout by default — override with `SESSION_TIMEOUT_SECS`).
+
+### Group Prep request flow
+
 The pipeline is sequential:
 
 1. `POST /upload` — multipart upload of a folder's files. Creates a
@@ -97,6 +115,42 @@ by the client the report is prepared for, outside the platform:
 3. `POST /dedup/export` — the same report as a downloadable CSV:
    flagged groups first (one row per record, note on each group's first
    row), followed by a typo/name-variant section.
+
+## Platform vision
+
+"UnitPrep" is deliberately becoming a platform name, not a single
+tool's name — the plan is for more tools to arrive over time, all
+sharing this backend and one frontend shell. None of the following is
+built yet; it's recorded here so future work moves toward it rather
+than assuming today's two-tool, no-auth, file-upload-only shape is
+permanent:
+
+- **Client Prep navigation** — rather than a flat list of tools, the
+  frontend's eventual home screen is organized by client/facility: pick
+  a client, then run any available tool against it from tabs, in any
+  order, all optional. Group Prep and dedup would sit side by side
+  under one entry instead of being separate top-level pages.
+- **QMS vs. QSX** — QSX is Quikstor's legacy, desktop-only PMS, being
+  sunset; QMS is the modern cloud/API-capable platform this project is
+  building toward. Every tool is file-upload only today (export a CSV/
+  Excel file from either system, then upload it here). A QMS API
+  integration is planned — reading facility/group/tenant data directly
+  instead of requiring a manual export first — but only for tools whose
+  source data actually lives in QMS. Dedup, which migrates tenants
+  *from* QSX, would stay file-only regardless.
+- **Authentication** — deliberately not built yet (see "Current
+  security posture" below). The trigger is QMS API integration: once
+  this service holds real QMS credentials, the current no-auth internal
+  posture stops being acceptable. Not planned before that.
+- **Persistence** — sessions are in-memory only today; a process
+  restart loses everything (see `SessionStore`'s own doc comments).
+  Real persistence is planned once a concrete feature needs it — most
+  likely a shared "compare this run to a past run" capability serving
+  both dedup's re-check-over-time use case and Group Prep's own
+  cross-run comparison need.
+
+Each of these is meant to land only once a concrete need proves it's
+worth building, not speculatively ahead of that.
 
 ## Current security posture
 
