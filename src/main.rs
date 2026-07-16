@@ -1,7 +1,6 @@
 mod ai;
 mod api;
 mod application;
-mod domain;
 mod infrastructure;
 
 use std::sync::Arc;
@@ -10,7 +9,7 @@ use unitprep_core::in_memory_session_store::InMemorySessionStore;
 
 use crate::api::AppState;
 use crate::application::dedup_session_service::DedupSession;
-use crate::domain::session::Session;
+use crate::application::unit_group_session::Session;
 
 #[tokio::main]
 async fn main() {

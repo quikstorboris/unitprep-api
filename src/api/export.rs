@@ -43,7 +43,7 @@ use crate::{
         ApiErrorBody,
         AppState,
     },
-    domain::session::WorkflowStage,
+    application::unit_group_session::WorkflowStage,
     infrastructure::csv_export,
 };
 

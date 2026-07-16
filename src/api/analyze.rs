@@ -17,7 +17,7 @@ use crate::{
         ApiErrorBody,
         AppState,
     },
-    domain::session::{
+    application::unit_group_session::{
         StageError,
         WorkflowStage,
     },

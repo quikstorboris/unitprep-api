@@ -9,7 +9,8 @@
 //! owns orchestration. `Session`/`WorkflowStage`/`StageError` (the
 //! actual stage machine) stay in the binary's `application/` layer,
 //! not here — only the pure-data pieces they used to carry
-//! (`DiscoveryResult`) moved over, in `models.rs`.
+//! (`DiscoveryResult`, `ValidationResult`, `ValidationIssueSummary`)
+//! moved over, in `models.rs`.
 
 pub mod analysis;
 pub mod corrections;
@@ -36,5 +37,7 @@ pub use models::{
     Issue,
     Severity,
     SimilarityMatch,
+    ValidationIssueSummary,
+    ValidationResult,
 };
 pub use validation::{correctable_fields_for, is_dimension_exemptable, validate_document, ValidationIssue};

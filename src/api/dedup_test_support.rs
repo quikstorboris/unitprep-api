@@ -10,7 +10,7 @@ use unitprep_core::in_memory_session_store::InMemorySessionStore;
 use crate::api::test_support::empty_dedup_store;
 use crate::api::AppState;
 use crate::application::dedup_session_service::DedupSession;
-use crate::domain::session::Session;
+use crate::application::unit_group_session::Session;
 
 /// An `AppState` with one dedup session already populated — what
 /// `/dedup/report` and `/dedup/export` need, since `/dedup/check`

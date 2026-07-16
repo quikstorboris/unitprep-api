@@ -14,11 +14,9 @@ use crate::{
         stage_conflict,
         AppState,
     },
-    domain::session::{
+    application::unit_group_session::{
         Session,
         StageError,
-        ValidationIssueSummary,
-        ValidationResult,
         WorkflowStage,
     },
 };
@@ -27,6 +25,8 @@ use unitprep_unit_group::{
     is_dimension_exemptable,
     validate_document,
     Severity,
+    ValidationIssueSummary,
+    ValidationResult,
 };
 
 #[derive(Debug, Deserialize)]

@@ -21,6 +21,16 @@ versioning follows [Semantic Versioning](https://semver.org/).
   export tools) instead of rejecting every row of an affected file.
 
 ### Changed
+- UnitGroup's own domain logic (discovery-result/validation-result
+  data, batch building, fingerprint matching, validation rules,
+  correction overlays) moved out of the binary's `src/domain/` into the
+  previously-empty `unitprep-unit-group` crate — the same
+  domain/session boundary `unitprep-dedup` established, applied back to
+  the original tool. `Session`/`WorkflowStage`/`StageError` (the stage
+  machine) stay in the binary, in `src/application/unit_group_session.rs`.
+  No behavior change — verified via the full existing test suite (moved
+  intact, none lost) and a live run of the full
+  upload/discover/validate/analyze/export pipeline.
 - Calling an endpoint before the session has reached the required
   workflow stage (e.g. `/analyze` before `/validate`) now returns
   `409 Conflict` with a structured `{ error, message }` body, instead of

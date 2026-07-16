@@ -112,28 +112,27 @@ closed before this is exposed beyond that.
 
 This is a Cargo workspace, not a single crate — `unitprep-core` holds the
 tool-agnostic engine (file ingestion/parsing, session storage) that any
-future UnitPrep tool depends on; this binary holds the UnitGroup-specific
-domain logic and HTTP layer. See `Cargo.toml`'s own comments for the
+UnitPrep tool depends on; each tool's own domain logic lives in its own
+crate (`unit-group/`, `dedup/`); the binary holds only session/HTTP
+orchestration for both. See `Cargo.toml`'s own comments for the
 rationale.
 
 - `src/main.rs` — process entry point, logging setup, server bind.
 - `src/api/` — Axum handlers and routing, one module per endpoint.
-  Includes both UnitGroup's endpoints and the duplicate-tenant-check
-  tool's (`/dedup/check`, `/dedup/report`, `/dedup/export`).
-- `src/application/` — session orchestration, one file per tool:
-  `session_service.rs` (UnitGroup — parses uploads into a `Session`) and
-  `dedup_session_service.rs` (duplicate-tenant-check — parses, ingests,
-  and analyzes a QMS export into a `DedupSession`). The generic storage
-  mechanics both build on (`SessionStore` trait, `InMemorySessionStore`)
-  live in `unitprep-core`, not here.
-- `src/domain/` — UnitGroup's own business logic: discovery/validation
-  rules, the analysis/fingerprint-matching engine, domain models. File
-  parsing itself (CSV/XLSX/SpreadsheetML) also moved to `unitprep-core`
-  (`core/src/parsing/`), since it's identical regardless of which tool
-  is consuming the data. The duplicate-tenant-check tool's own domain
-  logic lives entirely in `dedup/`, not here — see below.
+  Includes both UnitGroup's (internally still named that in code;
+  product-facing name is "Group Prep") endpoints and the
+  duplicate-tenant-check tool's (`/dedup/check`, `/dedup/report`,
+  `/dedup/export`).
+- `src/application/` — session orchestration, one pair of files per
+  tool: `unit_group_session.rs` (the stage machine — `Session`,
+  `WorkflowStage`, `StageError`, `SessionData`) plus
+  `session_service.rs` (parses uploads into a `Session`) for Group Prep;
+  `dedup_session_service.rs` (session envelope and orchestration
+  together, since it's much smaller) for duplicate-tenant-check. The
+  generic storage mechanics both build on (`SessionStore` trait,
+  `InMemorySessionStore`) live in `unitprep-core`, not here.
 - `src/infrastructure/` — export artifact generation: `csv_export.rs`
-  (UnitGroup — CSV/JSON/ZIP) and `dedup_csv_export.rs`
+  (Group Prep — CSV/JSON/ZIP) and `dedup_csv_export.rs`
   (duplicate-tenant-check — CSV).
 - `src/ai/` — placeholder seam for future AI-assisted decision support;
   not wired into the pipeline yet. (A more concrete version of this idea
@@ -143,8 +142,14 @@ rationale.
   `csv_document.rs`/`uploaded_file.rs` (source-agnostic document models),
   `session.rs`/`session_store.rs`/`in_memory_session_store.rs` (the
   generic session engine, generic over any tool's own session type).
-- `unit-group/` — an intentionally empty crate stub; the eventual home
-  for this binary's domain logic once it's extracted out, not yet done.
+- `unit-group/` — the `unitprep-unit-group` crate: Group Prep's own
+  domain logic (discovery-result/validation-result data, batch
+  building, the fingerprint-matching engine, validation rules,
+  manual-correction overlays), depending only on `unitprep-core`. No
+  session state, HTTP, or export format — those are the binary's job,
+  same boundary as `dedup/` below. (No longer an empty stub — this was
+  the original tool, extracted out once `dedup/` had proven the
+  boundary twice over.)
 - `dedup/` — the `unitprep-dedup` crate: the duplicate-tenant-check
   tool's domain logic (grouping, contact-info comparison, note
   composition, typo/name-variant detection), depending only on
@@ -161,7 +166,7 @@ cargo test
 Two layers of coverage:
 
 - Domain-level unit tests alongside the logic they cover — heaviest on
-  the fingerprint-matching engine (`src/domain/analysis/fingerprint.rs`),
+  the fingerprint-matching engine (`unit-group/src/analysis/fingerprint.rs`),
   since every false-positive bug this project has hit came from two
   structurally different groups (by dimensions, location, climate, or
   area code) being fuzzy-matched as the same group.

@@ -82,7 +82,7 @@ mod tests {
 
     use super::*;
     use crate::api::test_support::empty_state;
-    use crate::domain::session::Session;
+    use crate::application::unit_group_session::Session;
 
     #[tokio::test]
     async fn cancel_reports_deleted_true_for_a_real_session() {

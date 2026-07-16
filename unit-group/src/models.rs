@@ -80,3 +80,32 @@ pub struct DiscoveryResult {
     pub selected_group_file_name: Option<String>,
     pub ready: bool,
 }
+
+/// Also brought forward from the binary's session-state type, same
+/// reasoning as `DiscoveryResult` above — pure result data for the
+/// validation stage, not stage-machine mechanics.
+#[derive(Debug, Clone)]
+pub struct ValidationResult {
+    pub files_checked: usize,
+    pub issue_count: usize,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub issues: Vec<ValidationIssueSummary>,
+    pub ready: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ValidationIssueSummary {
+    pub file_name: String,
+    pub severity: Severity,
+    pub description: String,
+    pub affected_units: usize,
+    pub affected_unit_ids: Vec<String>,
+    pub detail: String,
+    pub correctable_fields: Vec<String>,
+
+    /// True only for the "Invalid dimensions" check — offers a way to
+    /// mark a unit as intentionally non-dimensioned (office, apartment,
+    /// etc.) instead of requiring fabricated Width/Length values.
+    pub exemptable: bool,
+}

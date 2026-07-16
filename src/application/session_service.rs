@@ -7,7 +7,7 @@ use unitprep_core::parsing::parse_document;
 use unitprep_core::session_store::SessionStore;
 use unitprep_core::uploaded_file::UploadedFile;
 
-use crate::domain::session::Session;
+use crate::application::unit_group_session::Session;
 
 pub struct SessionService {
     store: Arc<dyn SessionStore<Session>>,

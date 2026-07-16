@@ -9,7 +9,7 @@ use unitprep_core::session_store::SessionStoreExt;
 
 use crate::{
     api::{session_not_found, stage_conflict, ApiErrorBody, AppState},
-    domain::session::{StageError, WorkflowStage},
+    application::unit_group_session::{StageError, WorkflowStage},
 };
 
 #[derive(Debug, Deserialize)]
@@ -193,7 +193,7 @@ mod tests {
         // `Uploaded`, before `Discovered` — the stage this endpoint
         // actually requires.
         let state = empty_state();
-        state.unit_group_sessions.save(crate::domain::session::Session::new("s1".to_string()));
+        state.unit_group_sessions.save(crate::application::unit_group_session::Session::new("s1".to_string()));
 
         let response = select_group_file(
             State(state),

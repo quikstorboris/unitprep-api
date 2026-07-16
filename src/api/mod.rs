@@ -33,7 +33,7 @@ use unitprep_core::session_store::{
 };
 
 use crate::application::dedup_session_service::DedupSession;
-use crate::domain::session::Session;
+use crate::application::unit_group_session::Session;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -91,7 +91,7 @@ pub(crate) struct ApiErrorBody {
 /// above already identifies as the thing to avoid. This closes that same
 /// gap for stage violations.
 pub(crate) fn stage_conflict(
-    err: crate::domain::session::StageError,
+    err: crate::application::unit_group_session::StageError,
 ) -> Response {
     (
         StatusCode::CONFLICT,
