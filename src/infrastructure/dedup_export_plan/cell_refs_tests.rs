@@ -62,7 +62,7 @@ fn note_with_cell_refs_cites_the_right_cells_for_each_distinct_value() {
         "Please update the alternate contact info to match across units D-216, S-31, S-51.",
         &records,
         &[FieldName::AltContactPhoneNumber],
-        7, // first row these 3 records land on in the final CSV
+        7, // first row these 3 records land on in the final file
     );
 
     // AlternateContactPhoneNumber is column T (index 19) in COLUMNS.
@@ -78,4 +78,17 @@ fn note_with_cell_refs_is_a_no_op_without_cite_fields() {
     let records = vec![record("A-1", "555")];
     let note = note_with_cell_refs("Some note.", &records, &[], 2);
     assert_eq!(note, "Some note.");
+}
+
+#[test]
+fn first_cell_ref_picks_the_first_cited_fields_first_row() {
+    assert_eq!(
+        first_cell_ref(&[FieldName::AltContactPhoneNumber, FieldName::AltContactAddressCity], 7),
+        Some("T7".to_string())
+    );
+}
+
+#[test]
+fn first_cell_ref_is_none_without_cite_fields() {
+    assert_eq!(first_cell_ref(&[], 7), None);
 }

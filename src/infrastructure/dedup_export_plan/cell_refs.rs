@@ -1,10 +1,12 @@
 //! Spreadsheet-style cell-reference annotation for correction notes —
-//! a distinct concern from `dedup_csv_export`'s own row/column
+//! a distinct concern from `dedup_export_plan`'s own row/column
 //! structure (write order, blank separators): this module only
 //! answers "which fields should a note cite, and what cell references
-//! do they turn into." Split out once this file crossed the project's
-//! 250-line flag point and it became clear this was a genuinely
-//! separable concept, not just a line-count trim.
+//! do they turn into." Split out once the CSV exporter crossed the
+//! project's 250-line flag point and it became clear this was a
+//! genuinely separable concept, not just a line-count trim; promoted
+//! to a shared module once the xlsx exporter needed the exact same
+//! answer (specifically `first_cell_ref`, for the hyperlink target).
 
 use unitprep_dedup::comparison::find_differing_categories;
 use unitprep_dedup::types::{FieldCategory, FieldMismatch, FieldName, TenantRecord, TypoVariantCandidate};
@@ -42,7 +44,7 @@ pub(super) fn typo_variant_cite_fields(
 
 /// Appends spreadsheet-style cell references to `base_note` — one clause
 /// per cited field, e.g. `"AlternateContactPhoneNumber:
-/// S7=3605525629, S8=(blank)"` — computed from the *output* CSV's own
+/// S7=3605525629, S8=(blank)"` — computed from the *output* file's own
 /// column layout (`COLUMNS`, not the source file's) and the row numbers
 /// these particular records are about to be written at. Mirrors the
 /// reference script's own `note_with_refs` bracket format exactly
@@ -85,6 +87,21 @@ pub(super) fn note_with_cell_refs(
     }
 }
 
+/// The single cell reference (e.g. `"T7"`) that `note_with_cell_refs`
+/// would put first — used as the xlsx hyperlink target. A cell can
+/// only carry one hyperlink, so when a note cites several fields (or a
+/// field with several differing values), this picks one deterministic
+/// destination rather than trying to link every citation
+/// independently. In practice this lands the reader in the right
+/// neighborhood regardless, since every cited cell always belongs to
+/// the same small group of nearby rows.
+pub(super) fn first_cell_ref(cite_fields: &[FieldName], first_row: usize) -> Option<String> {
+    let field = *cite_fields.first()?;
+    let column_name = csv_column_name(field);
+    let column_index = COLUMNS.iter().position(|c| *c == column_name)?;
+    Some(format!("{}{}", col_letter(column_index), first_row))
+}
+
 /// 0-based column index -> spreadsheet column letter(s) (0 -> A, 25 ->
 /// Z, 26 -> AA, ...). Mirrors the reference script's own `col_letter`.
 fn col_letter(index0: usize) -> String {
@@ -98,11 +115,11 @@ fn col_letter(index0: usize) -> String {
     letters
 }
 
-/// Maps this crate's internal `FieldName` to the export CSV's own column
-/// name — they diverge for alternate-contact fields (`AltContact*`
-/// internally vs. `AlternateContact*` in the output header), so this
-/// can't just be `format!("{field:?}")` the way the note-composer's
-/// plain-English detail can.
+/// Maps this crate's internal `FieldName` to the export file's own
+/// column name — they diverge for alternate-contact fields
+/// (`AltContact*` internally vs. `AlternateContact*` in the output
+/// header), so this can't just be `format!("{field:?}")` the way the
+/// note-composer's plain-English detail can.
 fn csv_column_name(field: FieldName) -> &'static str {
     match field {
         FieldName::PhoneNumber => "PhoneNumber",

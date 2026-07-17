@@ -1,6 +1,6 @@
 use super::*;
-use unitprep_dedup::types::{FieldCategory, FieldMismatch, FieldName, FieldValueMismatch};
-use unitprep_dedup::RelatednessSignal;
+use unitprep_dedup::types::{FieldCategory, FieldMismatch, FieldName, FieldValueMismatch, FlaggedGroup, TenantGroup};
+use unitprep_dedup::{RelatedTenantCandidate, RelatednessSignal};
 
 fn record(unit: &str, alt_phone: &str) -> TenantRecord {
     TenantRecord { unit_number: unit.to_string(), alt_contact_phone_number: alt_phone.to_string(), ..Default::default() }
