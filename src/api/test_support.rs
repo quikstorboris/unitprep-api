@@ -172,6 +172,7 @@ pub fn validated_state(
             error_count: 0,
             warning_count: 0,
             issues: Vec::new(),
+            files_errored: Vec::new(),
             ready: true,
         },
     );
@@ -239,6 +240,7 @@ pub fn analyzed_state_with_errors(
                     exemptable: true,
                 },
             ],
+            files_errored: Vec::new(),
             ready: false,
         },
     );

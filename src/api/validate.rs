@@ -24,6 +24,7 @@ use unitprep_unit_group::{
     correctable_fields_for,
     is_dimension_exemptable,
     validate_document,
+    FileValidationError,
     Severity,
     ValidationIssueSummary,
     ValidationResult,
@@ -41,6 +42,7 @@ pub struct ValidateResponse {
     pub error_count: usize,
     pub warning_count: usize,
     pub issues: Vec<ValidationIssueSummary>,
+    pub files_errored: Vec<FileValidationError>,
     pub ready: bool,
 }
 
@@ -87,6 +89,7 @@ pub fn run_validation(
     let mut error_count = 0usize;
     let mut warning_count = 0usize;
     let mut files_checked = 0;
+    let mut files_errored = Vec::new();
 
     let documents =
         session.effective_documents();
@@ -111,11 +114,29 @@ pub fn run_validation(
             ) {
                 Ok(v) => v,
                 Err(err) => {
-                    tracing::warn!(
+                    // Not a data-quality issue — an internal
+                    // inconsistency between discovery's and
+                    // validation's own column lookup (see
+                    // `validate_document`'s `Err` path). Never let
+                    // this look like a clean/absent result: it's
+                    // recorded in `files_errored` below, which
+                    // `ready` factors in, same as an unresolved
+                    // Severity::Error issue does.
+                    tracing::error!(
                         session_id = %session_id,
                         file = %document.file_name,
                         error = %err,
                         "Validation failed for document"
+                    );
+
+                    files_errored.push(
+                        FileValidationError {
+                            file_name: document
+                                .file_name
+                                .clone(),
+                            message: err
+                                .to_string(),
+                        },
                     );
 
                     continue;
@@ -193,7 +214,9 @@ pub fn run_validation(
         error_count,
         warning_count,
         issues: issues.clone(),
-        ready: error_count == 0,
+        ready: error_count == 0
+            && files_errored.is_empty(),
+        files_errored,
     };
 
     session.complete_validation(
@@ -210,6 +233,8 @@ pub fn run_validation(
             validation.error_count,
         warning_count =
             validation.warning_count,
+        files_errored_count =
+            validation.files_errored.len(),
         ready = validation.ready,
         validation_ms =
             started.elapsed().as_millis(),
@@ -226,6 +251,8 @@ pub fn run_validation(
         warning_count: validation
             .warning_count,
         issues: validation.issues,
+        files_errored: validation
+            .files_errored,
         ready: validation.ready,
     })
 }

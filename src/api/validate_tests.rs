@@ -1,4 +1,5 @@
 use axum::http::StatusCode;
+use unitprep_core::csv_document::CsvDocument;
 
 use super::*;
 use crate::api::test_support::{
@@ -128,4 +129,77 @@ async fn validate_reports_invalid_dimensions_as_exemptable(
             ["exemptable"],
         true
     );
+}
+
+/// Regression test for the "aggregate loud-error" gap: if a file
+/// discovery classified as a unit file turns out to be missing its
+/// required columns by the time validation actually opens it (an
+/// internal inconsistency, not a data-quality problem — see
+/// `validate_document`'s `Err` path), the response must not look like
+/// a clean/absent result. `ready` must be false and the file must be
+/// named in `files_errored`, not silently skipped.
+#[tokio::test]
+async fn validate_reports_files_that_error_and_blocks_readiness(
+) {
+    let bad_document = CsvDocument {
+        file_name: "units.csv"
+            .to_string(),
+        headers: vec![
+            "some_other_column"
+                .to_string(),
+        ],
+        rows: vec![vec![
+            "value".to_string(),
+        ]],
+    };
+
+    let state = discovered_state(
+        "s1",
+        vec![bad_document],
+    );
+
+    let response = validate(
+        State(state),
+        Json(ValidateRequest {
+            session_id: "s1"
+                .to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK
+    );
+
+    let body =
+        body_json(response).await;
+
+    assert_eq!(
+        body["files_checked"], 0
+    );
+
+    assert_eq!(body["ready"], false);
+
+    let files_errored = body
+        ["files_errored"]
+        .as_array()
+        .unwrap();
+
+    assert_eq!(
+        files_errored.len(),
+        1
+    );
+
+    assert_eq!(
+        files_errored[0]
+            ["file_name"],
+        "units.csv"
+    );
+
+    assert!(files_errored[0]
+        ["message"]
+        .as_str()
+        .unwrap()
+        .contains("units.csv"));
 }

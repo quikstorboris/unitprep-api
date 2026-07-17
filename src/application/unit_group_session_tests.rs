@@ -36,6 +36,7 @@ fn validation_result(
         error_count: 0,
         warning_count: 0,
         issues: Vec::new(),
+        files_errored: Vec::new(),
         ready: true,
     }
 }

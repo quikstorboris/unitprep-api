@@ -34,6 +34,7 @@ pub use models::{
     BatchRun,
     DiscoveryResult,
     Facility,
+    FileValidationError,
     Issue,
     Severity,
     SimilarityMatch,

@@ -91,7 +91,21 @@ pub struct ValidationResult {
     pub error_count: usize,
     pub warning_count: usize,
     pub issues: Vec<ValidationIssueSummary>,
+    pub files_errored: Vec<FileValidationError>,
     pub ready: bool,
+}
+
+/// One discovered unit file that couldn't be validated at all, due to
+/// an internal inconsistency (see `validate_document`'s `Err` path) —
+/// distinct from a `ValidationIssueSummary`, which describes a real
+/// data-quality problem *found* in a file that was otherwise
+/// successfully checked. This should never look like a clean/absent
+/// result: a file landing here means validation never actually ran on
+/// it, which `ready` must reflect (see `run_validation`).
+#[derive(Debug, Clone, Serialize)]
+pub struct FileValidationError {
+    pub file_name: String,
+    pub message: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
