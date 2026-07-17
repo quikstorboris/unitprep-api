@@ -11,8 +11,10 @@
 use std::collections::{BTreeMap, HashSet};
 
 use crate::notes::{
-    note_template_for_category, NOTE_SEPARATE_TENANTS, NOTE_VERIFY_DIFFERS, NOTE_VERIFY_MATCHES,
+    note_template_for_category, relatedness_template_for_signal, NOTE_SEPARATE_TENANTS,
+    NOTE_VERIFY_DIFFERS, NOTE_VERIFY_MATCHES,
 };
+use crate::relatedness::RelatednessSignal;
 use crate::types::{FieldCategory, FieldMismatch, FieldName, TenantGroup, CATEGORY_PRIORITY};
 
 pub trait NoteComposer {
@@ -27,6 +29,17 @@ pub trait NoteComposer {
         group_a: &TenantGroup,
         group_b: &TenantGroup,
         contact_info_matches: bool,
+    ) -> String;
+
+    /// The note for a related-tenant candidate — two or more tenant
+    /// groups (different name keys) sharing a specific, non-blank
+    /// value (`shared_value`) under `signal`. `groups` always has at
+    /// least 2 entries.
+    fn compose_relatedness_note(
+        &self,
+        groups: &[&TenantGroup],
+        signal: RelatednessSignal,
+        shared_value: &str,
     ) -> String;
 }
 
@@ -80,6 +93,23 @@ impl NoteComposer for TemplateNoteComposer {
             .replace("{units_a}", &unit_list(group_a))
             .replace("{name_b}", &group_b.records[0].display_name())
             .replace("{units_b}", &unit_list(group_b))
+    }
+
+    fn compose_relatedness_note(
+        &self,
+        groups: &[&TenantGroup],
+        signal: RelatednessSignal,
+        shared_value: &str,
+    ) -> String {
+        let names = groups
+            .iter()
+            .map(|g| format!("{} (units {})", g.records[0].display_name(), unit_list(g)))
+            .collect::<Vec<_>>()
+            .join(" and ");
+
+        relatedness_template_for_signal(signal)
+            .replace("{names}", &names)
+            .replace("{value}", shared_value)
     }
 }
 

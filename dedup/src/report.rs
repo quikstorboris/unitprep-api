@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::comparison::{contact_info_matches, find_differing_categories};
 use crate::grouping::{group_records, multi_unit_groups};
 use crate::note_composer::{NoteComposer, TemplateNoteComposer};
+use crate::relatedness::{find_related_tenant_candidates, RelatedTenantCandidate};
 use crate::similarity::{name_similarity, VARIANT_SURFACE_THRESHOLD};
 use crate::types::{FlaggedGroup, TenantGroup, TenantRecord, TypoVariantCandidate};
 
@@ -20,6 +21,7 @@ pub struct DedupReport {
     pub multi_unit_tenants: usize,
     pub flagged_groups: Vec<FlaggedGroup>,
     pub typo_variant_candidates: Vec<TypoVariantCandidate>,
+    pub related_tenant_candidates: Vec<RelatedTenantCandidate>,
 }
 
 /// Runs the full duplicate-tenant check over `records`, composing notes
@@ -37,13 +39,15 @@ pub fn run_with_composer(records: Vec<TenantRecord>, composer: &dyn NoteComposer
     let groups = group_records(records);
     let unique_tenants = groups.len();
 
-    // Typo-variant candidates are found across *every* tenant, including
-    // single-unit ones — two single-unit tenants can still be the same
-    // person recorded under two misspelled keys. Matches the reference
-    // script, which runs `typo_variant_candidates` over the full groups
-    // dict, not just the multi-unit subset. Must happen before
+    // Typo-variant candidates and related-tenant candidates are both
+    // found across *every* tenant, including single-unit ones — a
+    // relationship or a typo/variant can exist between two single-unit
+    // tenants just as easily as multi-unit ones. Matches the reference
+    // script's own typo-variant pass, which runs over the full groups
+    // dict, not just the multi-unit subset. Both must happen before
     // `multi_unit_groups` consumes `groups`.
     let typo_variant_candidates = find_typo_variant_candidates(&groups, composer);
+    let related_tenant_candidates = find_related_tenant_candidates(&groups, composer);
 
     let multi = multi_unit_groups(groups);
     let multi_unit_tenants = multi.len();
@@ -56,6 +60,7 @@ pub fn run_with_composer(records: Vec<TenantRecord>, composer: &dyn NoteComposer
         multi_unit_tenants,
         flagged_groups,
         typo_variant_candidates,
+        related_tenant_candidates,
     }
 }
 

@@ -20,7 +20,7 @@ use csv::Writer;
 
 use unitprep_dedup::grouping::group_records;
 use unitprep_dedup::types::{FlaggedGroup, TenantGroup, TenantRecord, TypoVariantCandidate};
-use unitprep_dedup::DedupReport;
+use unitprep_dedup::{DedupReport, RelatedTenantCandidate};
 
 use cell_refs::{cite_fields_for_mismatches, note_with_cell_refs, typo_variant_cite_fields};
 
@@ -73,6 +73,15 @@ pub fn generate_csv(report: &DedupReport, all_records: &[TenantRecord]) -> Resul
             write_typo_variant_section(
                 &mut writer,
                 &report.typo_variant_candidates,
+                all_records,
+                &mut row_num,
+            )?;
+        }
+
+        if !report.related_tenant_candidates.is_empty() {
+            write_related_tenant_section(
+                &mut writer,
+                &report.related_tenant_candidates,
                 all_records,
                 &mut row_num,
             )?;
@@ -132,6 +141,48 @@ fn write_typo_variant_section(
         let mut wrote_note = false;
         for group in &pair {
             let row_note = if wrote_note { "" } else { note.as_str() };
+            write_group_rows(writer, group, row_note, row_num)?;
+            wrote_note = true;
+        }
+    }
+    Ok(())
+}
+
+/// Unlike the flagged-groups and typo-variant sections, this one has no
+/// per-field cell references — a related-tenant candidate's evidence is
+/// "this literal value matched somewhere among this tenant's fields,"
+/// not a specific differing column the way `FieldMismatch` tracks, so
+/// there's no single well-defined cell to point at. Deliberately out of
+/// scope for now rather than forced to fit a mechanism built for a
+/// different kind of finding.
+fn write_related_tenant_section(
+    writer: &mut Writer<impl Write>,
+    candidates: &[RelatedTenantCandidate],
+    all_records: &[TenantRecord],
+    row_num: &mut usize,
+) -> Result<()> {
+    let groups = group_records(all_records.to_vec());
+    let find = |key: &str| groups.iter().find(|g| g.key == key);
+
+    write_blank_row(writer)?;
+    *row_num += 1;
+    writer.write_record(marker_row(
+        "Possible related tenants (shared contact info, different names) — for your review",
+    ))?;
+    *row_num += 1;
+
+    for (i, candidate) in candidates.iter().enumerate() {
+        if i > 0 {
+            write_blank_row(writer)?;
+            *row_num += 1;
+        }
+
+        let member_groups: Vec<&TenantGroup> =
+            candidate.group_keys.iter().filter_map(|key| find(key)).collect();
+
+        let mut wrote_note = false;
+        for group in &member_groups {
+            let row_note = if wrote_note { "" } else { candidate.note.as_str() };
             write_group_rows(writer, group, row_note, row_num)?;
             wrote_note = true;
         }
