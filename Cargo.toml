@@ -71,3 +71,15 @@ uuid = { version = "1", features = ["v4"] }
 
 # ZIP export generation
 zip = "2"
+
+# XLSX export generation (dedup only) — no existing dependency covers
+# writing; unitprep-core's `calamine` (used for parsing uploaded .xlsx
+# files) is read-only.
+rust_xlsxwriter = "0.96"
+
+[dev-dependencies]
+
+# Reads the xlsx exporter's own output back in its tests, so those
+# tests verify real cell values/structure instead of just "some bytes
+# came out". Same version already pinned in core/Cargo.toml.
+calamine = "0.25"

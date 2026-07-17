@@ -16,11 +16,12 @@ use serde::{Deserialize, Serialize};
 
 use unitprep_core::session_store::SessionStoreExt;
 use unitprep_core::uploaded_file::UploadedFile;
-use unitprep_dedup::DedupReport;
+use unitprep_dedup::{DedupReport, TenantRecord};
 
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::application::dedup_session_service::DedupSessionService;
-use crate::infrastructure::dedup_csv_export;
+use crate::infrastructure::csv_export::{build_zip, ExportFile};
+use crate::infrastructure::{dedup_csv_export, dedup_xlsx_export};
 
 #[derive(Debug, Serialize)]
 pub struct DedupCheckResponse {
@@ -31,6 +32,28 @@ pub struct DedupCheckResponse {
 #[derive(Debug, Deserialize)]
 pub struct DedupSessionRequest {
     pub session_id: String,
+}
+
+/// Which file format(s) `/dedup/export` should return. Defaults to
+/// `Csv` via `#[serde(default)]` on the field below, so an existing
+/// caller that doesn't send this field keeps today's behavior.
+#[derive(Debug, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportFormat {
+    #[default]
+    Csv,
+    Xlsx,
+    /// Both files in one ZIP, reusing the same `build_zip` helper
+    /// Group Prep's own export already uses — one download instead of
+    /// two round trips.
+    Both,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DedupExportRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub format: ExportFormat,
 }
 
 /// Reads the first file field from `multipart` — a duplicate-tenant
@@ -144,11 +167,13 @@ pub async fn report(
     }
 }
 
-/// Exports the full report as CSV — flagged groups first, then any
-/// typo/name-variant candidates. See `dedup_csv_export` for the shape.
+/// Exports the full report as CSV, xlsx, or both (as a ZIP) — flagged
+/// groups first, then typo/name-variant candidates, then related-tenant
+/// candidates. See `dedup_export_plan` for the shape both file formats
+/// share.
 pub async fn export(
     State(state): State<AppState>,
-    Json(request): Json<DedupSessionRequest>,
+    Json(request): Json<DedupExportRequest>,
 ) -> Response {
     let started = Instant::now();
 
@@ -163,35 +188,88 @@ pub async fn export(
 
     let (report, records) = session_data;
 
-    let csv_bytes = match dedup_csv_export::generate_csv(&report, &records) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            tracing::error!(
-                session_id = %request.session_id,
-                error = %err,
-                "Failed generating dedup export CSV"
-            );
-            return internal_error("Failed generating export CSV");
-        }
+    let response = match request.format {
+        ExportFormat::Csv => build_csv_response(&request.session_id, &report, &records),
+        ExportFormat::Xlsx => build_xlsx_response(&request.session_id, &report, &records),
+        ExportFormat::Both => build_zip_response(&request.session_id, &report, &records),
     };
 
     tracing::info!(
         session_id = %request.session_id,
+        format = ?request.format,
         flagged_groups = report.flagged_groups.len(),
         typo_variant_candidates = report.typo_variant_candidates.len(),
-        csv_size_bytes = csv_bytes.len(),
+        related_tenant_candidates = report.related_tenant_candidates.len(),
         export_ms = started.elapsed().as_millis(),
         "Dedup export generated"
     );
 
+    response
+}
+
+fn build_csv_response(session_id: &str, report: &DedupReport, records: &[TenantRecord]) -> Response {
+    match dedup_csv_export::generate_csv(report, records) {
+        Ok(bytes) => file_response(bytes, "text/csv", "duplicate_tenant_check.csv"),
+        Err(err) => {
+            tracing::error!(session_id = %session_id, error = %err, "Failed generating dedup export CSV");
+            internal_error("Failed generating export CSV")
+        }
+    }
+}
+
+fn build_xlsx_response(session_id: &str, report: &DedupReport, records: &[TenantRecord]) -> Response {
+    match dedup_xlsx_export::generate_xlsx(report, records) {
+        Ok(bytes) => file_response(
+            bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "duplicate_tenant_check.xlsx",
+        ),
+        Err(err) => {
+            tracing::error!(session_id = %session_id, error = %err, "Failed generating dedup export xlsx");
+            internal_error("Failed generating export xlsx")
+        }
+    }
+}
+
+fn build_zip_response(session_id: &str, report: &DedupReport, records: &[TenantRecord]) -> Response {
+    let csv_bytes = match dedup_csv_export::generate_csv(report, records) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            tracing::error!(session_id = %session_id, error = %err, "Failed generating dedup export CSV");
+            return internal_error("Failed generating export CSV");
+        }
+    };
+
+    let xlsx_bytes = match dedup_xlsx_export::generate_xlsx(report, records) {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            tracing::error!(session_id = %session_id, error = %err, "Failed generating dedup export xlsx");
+            return internal_error("Failed generating export xlsx");
+        }
+    };
+
+    let files = vec![
+        ExportFile { file_name: "duplicate_tenant_check.csv".to_string(), bytes: csv_bytes },
+        ExportFile { file_name: "duplicate_tenant_check.xlsx".to_string(), bytes: xlsx_bytes },
+    ];
+
+    match build_zip(files) {
+        Ok(bytes) => file_response(bytes, "application/zip", "duplicate_tenant_check.zip"),
+        Err(err) => {
+            tracing::error!(session_id = %session_id, error = %err, "Failed zipping dedup export files");
+            internal_error("Failed generating export ZIP")
+        }
+    }
+}
+
+fn file_response(bytes: Vec<u8>, content_type: &str, file_name: &str) -> Response {
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "text/csv".parse().unwrap());
+    headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
     headers.insert(
         header::CONTENT_DISPOSITION,
-        "attachment; filename=\"duplicate_tenant_check.csv\"".parse().unwrap(),
+        format!("attachment; filename=\"{file_name}\"").parse().unwrap(),
     );
-
-    (headers, csv_bytes).into_response()
+    (headers, bytes).into_response()
 }
 
 #[cfg(test)]
