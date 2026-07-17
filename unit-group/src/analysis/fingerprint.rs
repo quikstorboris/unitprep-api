@@ -455,6 +455,32 @@ mod tests {
     }
 
     #[test]
+    fn first_floor_access_and_first_floor_do_not_match() {
+        // "first floor" is a literal substring of "first floor access" —
+        // FloorAccess::ALIASES deliberately checks the longer alias
+        // first so this doesn't collapse into one variant. Nothing else
+        // in this test module actually proves that ordering matters;
+        // this is the regression test for it (if the alias order is
+        // ever changed, this is what would catch it).
+        let a =
+            parse_fingerprint(
+                "5x10 Inside Climate First Floor Access",
+            );
+
+        let b =
+            parse_fingerprint(
+                "5x10 Inside Climate First Floor",
+            );
+
+        assert!(
+            !fingerprints_match(
+                &a,
+                &b,
+            )
+        );
+    }
+
+    #[test]
     fn first_floor_access_does_not_leave_dangling_remainder_token() {
         let fp =
             parse_fingerprint(
