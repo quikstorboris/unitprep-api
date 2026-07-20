@@ -6,6 +6,8 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-20
+
 ### Added
 - Duplicate tenant check — a second, independent tool: `unitprep-dedup`
   (new workspace crate — grouping/comparison/typo-variant domain logic,
@@ -119,5 +121,6 @@ versioning follows [Semantic Versioning](https://semver.org/).
   derived value (Width × Length), not an independent fact worth
   validating or correcting on its own.
 
-[Unreleased]: https://github.com/quikstorboris/unitPrep/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/quikstorboris/unitPrep/releases/tag/v1.0.0
+[Unreleased]: https://github.com/quikstorboris/unitprep-api/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/quikstorboris/unitprep-api/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/quikstorboris/unitprep-api/releases/tag/v1.0.0
