@@ -48,6 +48,23 @@ versioning follows [Semantic Versioning](https://semver.org/).
   care can tell "deleted a real session" apart from "there was nothing
   there," without changing the success contract.
 
+### Fixed
+- `/discover` no longer gets permanently stuck when zero master group
+  files are found — the exact shape of a net-new client with nothing
+  in QMS yet to cross-reference against. `ready` previously required
+  `group_files.len() == 1`, so zero candidates was treated the same as
+  "ambiguous, needs selection," except with no candidates to select
+  from — a real dead end with no way to proceed. Analysis already
+  handled a missing reference set correctly (every discovered group
+  becomes net-new); only the discovery-readiness gate was wrong. Zero
+  or one candidate is now ready; only *more than one* still requires
+  `/group-file/select`. `DiscoverResponse` also now includes
+  `discovered_group_names` — the distinct UnitGroup values found across
+  the discovered unit files (reusing `build_batch_from_documents`) — so
+  the UI can show the user what was actually found before they commit
+  to validate/export, most useful exactly when there's no master file
+  to cross-check against yet.
+
 ## [1.0.0] - 2026-07-08
 
 ### Added

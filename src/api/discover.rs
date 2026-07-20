@@ -9,7 +9,10 @@ use serde::{Deserialize, Serialize};
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{session_not_found, AppState};
-use unitprep_unit_group::DiscoveryResult;
+use unitprep_unit_group::{
+    build_batch_from_documents,
+    DiscoveryResult,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct DiscoverRequest {
@@ -26,6 +29,15 @@ pub struct DiscoverResponse {
     pub requires_group_selection:
         bool,
     pub ready: bool,
+    /// Distinct UnitGroup values found across the discovered unit
+    /// files, sorted for stable display. Recomputed on every call
+    /// rather than stored on `DiscoveryResult` — nothing downstream in
+    /// the pipeline consumes it, it exists purely so the UI can show
+    /// the user what it found before they commit to validate/export
+    /// (most useful exactly when there's no master file to cross-check
+    /// against yet).
+    pub discovered_group_names:
+        Vec<String>,
 }
 
 pub async fn discover(
@@ -40,6 +52,9 @@ pub async fn discover(
             &request.session_id,
             |session| {
                 let mut unit_files =
+                    Vec::new();
+
+                let mut unit_documents =
                     Vec::new();
 
                 let mut group_files =
@@ -57,6 +72,9 @@ pub async fn discover(
                                 .file_name
                                 .clone(),
                         );
+
+                        unit_documents
+                            .push(document);
                     } else if is_group_document(document) {
                         group_files.push(
                             document
@@ -78,11 +96,31 @@ pub async fn discover(
                         None
                     };
 
+                // Zero candidate master group files is a legitimate,
+                // ready-to-proceed state (a net-new client with nothing
+                // in QMS yet to cross-reference against) — analysis
+                // already handles a `None` reference set by treating
+                // every discovered group as net-new. Only *more than
+                // one* candidate is actually ambiguous and needs
+                // `/group-file/select` before proceeding.
                 let ready =
                     !unit_files.is_empty()
-                        && !group_files.is_empty()
                         && group_files.len()
-                            == 1;
+                            <= 1;
+
+                let mut discovered_group_names: Vec<String> =
+                    build_batch_from_documents(
+                        unit_documents,
+                    )
+                    .map(|batch| {
+                        batch
+                            .global_groups
+                            .into_keys()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                discovered_group_names.sort();
 
                 let discovery =
                     DiscoveryResult {
@@ -150,6 +188,7 @@ pub async fn discover(
                             > 1,
                     ready:
                         discovery.ready,
+                    discovered_group_names,
                 }
             },
         );
