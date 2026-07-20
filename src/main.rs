@@ -91,14 +91,32 @@ async fn main() {
 
     let addr = format!("{host}:{port}");
 
-    let listener =
-        tokio::net::TcpListener::bind(
-            &addr,
-        )
-        .await
-        .unwrap();
+    // A plain `.unwrap()` here used to panic with just "Address already
+    // in use" and no next step — the actually useful information (which
+    // *other* process is holding the port) isn't something this process
+    // can look up about itself, so the fix is pointing at the command
+    // that finds it, not trying to embed a PID we don't have.
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(listener) => listener,
+        Err(err)
+            if err.kind()
+                == std::io::ErrorKind::AddrInUse =>
+        {
+            eprintln!(
+                "Failed to start: {addr} is already in use — another unitprep instance is likely still running.\nFind it with `ss -ltnp | grep :{port}` (or `lsof -i :{port}`) and stop it before starting a new one."
+            );
+
+            std::process::exit(1);
+        }
+        Err(err) => {
+            panic!(
+                "Failed to bind to {addr}: {err}"
+            );
+        }
+    };
 
     tracing::info!(
+        pid = std::process::id(),
         "UnitPrep API listening on http://{addr}"
     );
 

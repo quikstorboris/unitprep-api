@@ -19,6 +19,9 @@ versioning follows [Semantic Versioning](https://semver.org/).
 - CSV parsing now tolerates a trailing unnamed column beyond the
   header's last field (a real, consistent quirk in some facility
   export tools) instead of rejecting every row of an affected file.
+- Startup log now includes the process's PID, so a specific running
+  instance can be identified from its own log output without a
+  separate `ps`/`ss` lookup.
 
 ### Changed
 - UnitGroup's own domain logic (discovery-result/validation-result
@@ -64,6 +67,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
   the UI can show the user what was actually found before they commit
   to validate/export, most useful exactly when there's no master file
   to cross-check against yet.
+- Starting a second instance against an already-bound port used to
+  panic with a bare "Address already in use" and no next step. It now
+  exits cleanly with a message pointing at the command to find the
+  other process (`ss -ltnp | grep :PORT` or `lsof -i :PORT`) — the
+  actually useful fact (which *other* process holds the port) isn't
+  something this process can look up about itself, so the fix points at
+  how to find it rather than guessing at a PID.
 
 ## [1.0.0] - 2026-07-08
 
