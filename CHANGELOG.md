@@ -24,6 +24,12 @@ versioning follows [Semantic Versioning](https://semver.org/).
   reading, and clearing (session_cookie.rs). Deliberately unsigned and
   unencrypted -- the cookie carries an opaque random token that is only
   ever trusted after a database round-trip, never decoded as a claim.
+- AuthenticatedUser, an axum extractor resolving the session cookie
+  into a verified user id and role via resolve_session(), plus
+  begin_rls_transaction for handlers that need to run further
+  RLS-scoped queries under that identity. GET /health/whoami exercises
+  the whole chain end to end for now, since no real protected endpoint
+  exists yet to exercise it through.
 
 ## [1.1.0] - 2026-07-20
 

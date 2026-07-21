@@ -187,6 +187,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/health/db", get(health_db))
+        .route("/health/whoami", get(whoami))
         .route("/upload", post(upload::upload))
         .route("/discover", post(discover::discover))
         .route("/validate", post(validate::validate))
@@ -285,6 +286,25 @@ async fn health_db(
             )
         }
     }
+}
+
+#[derive(Serialize)]
+struct WhoamiResponse {
+    user_id: String,
+    role: &'static str,
+}
+
+/// Manual/diagnostic verification that the whole cookie -> resolve_session
+/// -> identity chain actually works end to end -- exercises
+/// AuthenticatedUser the same way any future protected endpoint will,
+/// without yet having a real protected endpoint to exercise it through.
+async fn whoami(
+    user: crate::auth::AuthenticatedUser,
+) -> Json<WhoamiResponse> {
+    Json(WhoamiResponse {
+        user_id: user.user_id.to_string(),
+        role: user.role.as_db_text(),
+    })
 }
 
 /// Shared session-construction helpers for endpoint-level tests. Handlers
