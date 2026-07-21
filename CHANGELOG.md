@@ -19,6 +19,11 @@ versioning follows [Semantic Versioning](https://semver.org/).
   way the existing session stores are -- no HTTP endpoints call it yet,
   this is the interface and one implementation behind it, per the
   standing interface-first design rule.
+- Session cookie plumbing: opaque token generation and hashing
+  (session_token.rs) and httpOnly/Secure/SameSite cookie issuance,
+  reading, and clearing (session_cookie.rs). Deliberately unsigned and
+  unencrypted -- the cookie carries an opaque random token that is only
+  ever trusted after a database round-trip, never decoded as a claim.
 
 ## [1.1.0] - 2026-07-20
 

@@ -89,9 +89,51 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres",
 # main.rs) -- not required in a deployed environment, where real env
 # vars are injected directly instead.
 dotenvy = "0.15"
+
+# Passkey/WebAuthn registration and authentication -- see src/auth.
+# danger-allow-state-serialisation is needed because the ceremony
+# state returned between the begin and finish steps of a registration
+# or authentication must be persisted across two separate HTTP
+# requests; without this feature those state types are not
+# serializable at all. Pulls in an OpenSSL system dependency via its
+# default-on attestation feature -- unrelated to sqlx's own tls-rustls
+# choice above, just a second, independent dependency tree, needed
+# for attestation certificate-chain verification.
 webauthn-rs = { version = "0.5.5", features = ["danger-allow-state-serialisation"] }
+
+# Used for AuthError (src/auth/mod.rs) -- ergonomic #[error(...)] derive
+# rather than hand-writing Display impls.
 thiserror = "2.0.19"
+
+# Only used to construct the rp_origin Url the webauthn-rs builder
+# requires (see WebauthnRsBackend::new) -- already in the dependency
+# tree transitively, added explicitly since our own code references it
+# directly.
 url = "2.5.8"
+
+# CookieJar extractor for the session cookie (src/auth/session_cookie.rs)
+# -- deliberately the plain (unsigned, unencrypted) cookie feature only,
+# not cookie-private/cookie-signed: the session token itself is opaque
+# random data, verified via a database round-trip (resolve_session),
+# not a claim we would ever trust from the cookie value directly, so
+# there is nothing here worth encrypting or signing.
+axum-extra = { version = "0.12.6", features = ["cookie"] }
+
+# Hashes the raw session token before it is ever persisted (see
+# sessions.token_hash) -- src/auth/session_token.rs.
+sha2 = "0.11.0"
+
+# Encodes the raw random session token into a cookie-safe string.
+base64 = "0.22.1"
+
+# Cookie max-age duration type, required by axum-extra's Cookie builder.
+time = "0.3.54"
+
+# Fills the raw session token's random bytes from the OS CSPRNG --
+# lower-level than the rand crate and sufficient on its own for this
+# one use (no need for rand's broader RNG abstraction just to fill a
+# byte buffer).
+getrandom = { version = "0.4.3", features = ["std"] }
 
 [dev-dependencies]
 
