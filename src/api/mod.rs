@@ -48,6 +48,11 @@ pub struct AppState {
     // Additive, per the comment above — a second tool's store, not a
     // rename of the first.
     pub dedup_sessions: Arc<dyn SessionStore<DedupSession>>,
+
+    // The app_service-authenticated connection pool -- see db.rs for
+    // why it is built lazily rather than blocking startup on Postgres
+    // being reachable.
+    pub db: sqlx::PgPool,
 }
 
 /// The one true "your session is gone" response — a session can disappear
@@ -176,6 +181,7 @@ pub fn router(state: AppState) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/health/db", get(health_db))
         .route("/upload", post(upload::upload))
         .route("/discover", post(discover::discover))
         .route("/validate", post(validate::validate))
@@ -232,6 +238,48 @@ async fn health(
             .dedup_sessions
             .metrics(),
     })
+}
+
+#[derive(Serialize)]
+struct DbHealthResponse {
+    status: &'static str,
+    connected_as: String,
+}
+
+/// Confirms the database pool is actually reachable and -- just as
+/// importantly -- authenticating as the expected app_service role, not
+/// the migration/owner role. Pasting the wrong connection string into
+/// DATABASE_URL (e.g. the owner's direct URL instead of app_service's)
+/// would otherwise silently bypass every RLS policy in the schema while
+/// still working from the app's point of view, so this check is
+/// deliberately more than a bare SELECT 1.
+async fn health_db(
+    State(state): State<AppState>,
+) -> Response {
+    match sqlx::query_scalar::<_, String>(
+        "SELECT current_user",
+    )
+    .fetch_one(&state.db)
+    .await
+    {
+        Ok(connected_as) => (
+            StatusCode::OK,
+            Json(DbHealthResponse {
+                status: "ok",
+                connected_as,
+            }),
+        )
+            .into_response(),
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                "database health check failed"
+            );
+            internal_error(
+                "Database connectivity check failed",
+            )
+        }
+    }
 }
 
 /// Shared session-construction helpers for endpoint-level tests. Handlers

@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Postgres connectivity via sqlx, connecting as a dedicated
+  app_service role rather than the migration/owner role, so row-level
+  security actually applies to application traffic. DATABASE_URL
+  configures the connection pool, built lazily so a missing or
+  incorrect credential does not block application startup. GET
+  /health/db reports connectivity and confirms which role the pool is
+  actually authenticating as.
+
 ## [1.1.0] - 2026-07-20
 
 ### Added

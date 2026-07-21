@@ -25,12 +25,23 @@ pub(crate) fn empty_dedup_store() -> Arc<dyn SessionStore<DedupSession>> {
     Arc::new(InMemorySessionStore::<DedupSession>::new())
 }
 
+// A pool that never actually connects -- connect_lazy only validates
+// the URL is well-formed, so this is safe for every fixture below,
+// none of which touch state.db yet. Add a real pool here only once a
+// test actually needs to hit Postgres.
+pub(crate) fn test_db_pool() -> sqlx::PgPool {
+    sqlx::postgres::PgPoolOptions::new()
+        .connect_lazy("postgres://test:test@localhost/test")
+        .expect("connect_lazy should never fail for a well-formed URL")
+}
+
 pub fn empty_state() -> AppState {
     AppState {
         unit_group_sessions: Arc::new(
             InMemorySessionStore::<Session>::new(),
         ),
         dedup_sessions: empty_dedup_store(),
+        db: test_db_pool(),
     }
 }
 
@@ -86,6 +97,7 @@ pub fn uploaded_state(
     AppState {
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
+        db: test_db_pool(),
     }
 }
 
@@ -130,6 +142,7 @@ pub fn discovered_state(
     AppState {
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
+        db: test_db_pool(),
     }
 }
 
@@ -186,6 +199,7 @@ pub fn validated_state(
     AppState {
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
+        db: test_db_pool(),
     }
 }
 
@@ -273,5 +287,6 @@ pub fn analyzed_state_with_errors(
     AppState {
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
+        db: test_db_pool(),
     }
 }

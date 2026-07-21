@@ -77,6 +77,19 @@ zip = "2"
 # files) is read-only.
 rust_xlsxwriter = "0.96"
 
+# Database access -- Postgres via Neon, connecting as the app_service
+# role (see scripts/setup_app_service_role.sql and db.rs). tls-rustls
+# is a pure-Rust TLS backend, avoiding an OpenSSL system dependency;
+# Neon requires TLS regardless of which backend provides it. uuid,
+# chrono, ipnetwork, and json enable the column-type mappings the auth
+# schema actually uses (UUID PKs, TIMESTAMPTZ, INET, JSONB).
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "ipnetwork", "json"] }
+
+# Loads .env.local into the process environment at startup (see
+# main.rs) -- not required in a deployed environment, where real env
+# vars are injected directly instead.
+dotenvy = "0.15"
+
 [dev-dependencies]
 
 # Reads the xlsx exporter's own output back in its tests, so those

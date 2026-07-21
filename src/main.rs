@@ -1,6 +1,7 @@
 mod ai;
 mod api;
 mod application;
+mod db;
 mod infrastructure;
 
 use std::sync::Arc;
@@ -13,6 +14,18 @@ use crate::application::unit_group_session::Session;
 
 #[tokio::main]
 async fn main() {
+    // Loaded first, before anything else reads an env var -- a missing
+    // file is fine (a deployed environment injects real env vars
+    // directly instead), but a parse failure is worth a visible warning
+    // rather than silently ignoring whatever did parse.
+    match dotenvy::from_filename(".env.local") {
+        Ok(_) => {}
+        Err(dotenvy::Error::Io(_)) => {}
+        Err(err) => {
+            eprintln!("Warning: failed to parse .env.local: {err}");
+        }
+    }
+
     // Defaults to `info` (aggregate summaries only) when RUST_LOG isn't
     // set. Deep per-request tracing is still available on demand via
     // `RUST_LOG=unitprep=debug` — it's just no longer forced on by
@@ -65,9 +78,16 @@ async fn main() {
     dedup_session_store
         .start_cleanup_task();
 
+    // See db.rs -- deliberately non-blocking (connect_lazy), since most
+    // existing endpoints do not touch Postgres at all yet.
+    let db_pool = db::connect().unwrap_or_else(|err| {
+        panic!("Failed to configure the database pool: {err}");
+    });
+
     let state = AppState {
         unit_group_sessions: session_store,
         dedup_sessions: dedup_session_store,
+        db: db_pool,
     };
 
     let app =
