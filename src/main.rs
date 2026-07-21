@@ -1,6 +1,7 @@
 mod ai;
 mod api;
 mod application;
+mod auth;
 mod db;
 mod infrastructure;
 
@@ -84,10 +85,27 @@ async fn main() {
         panic!("Failed to configure the database pool: {err}");
     });
 
+    // WEBAUTHN_RP_ID must be a valid domain suffix of WEBAUTHN_RP_ORIGIN
+    // (e.g. "example.com" with "https://app.example.com") -- defaults
+    // match local frontend dev, same as CORS_ALLOWED_ORIGINS below.
+    let rp_id = std::env::var("WEBAUTHN_RP_ID")
+        .unwrap_or_else(|_| "localhost".to_string());
+
+    let rp_origin = std::env::var("WEBAUTHN_RP_ORIGIN")
+        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+
+    let auth_backend: Arc<dyn auth::AuthBackend> = Arc::new(
+        auth::WebauthnRsBackend::new(&rp_id, &rp_origin)
+            .unwrap_or_else(|err| {
+                panic!("Failed to configure the WebAuthn backend: {err}");
+            }),
+    );
+
     let state = AppState {
         unit_group_sessions: session_store,
         dedup_sessions: dedup_session_store,
         db: db_pool,
+        auth_backend,
     };
 
     let app =

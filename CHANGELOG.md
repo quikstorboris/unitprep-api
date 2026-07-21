@@ -14,6 +14,11 @@ versioning follows [Semantic Versioning](https://semver.org/).
   incorrect credential does not block application startup. GET
   /health/db reports connectivity and confirms which role the pool is
   actually authenticating as.
+- AuthBackend trait plus a webauthn-rs-backed implementation
+  (WebauthnRsBackend), stored in AppState behind Arc<dyn ...> the same
+  way the existing session stores are -- no HTTP endpoints call it yet,
+  this is the interface and one implementation behind it, per the
+  standing interface-first design rule.
 
 ## [1.1.0] - 2026-07-20
 

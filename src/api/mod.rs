@@ -53,6 +53,11 @@ pub struct AppState {
     // why it is built lazily rather than blocking startup on Postgres
     // being reachable.
     pub db: sqlx::PgPool,
+
+    // See auth/mod.rs for the AuthBackend trait -- Arc<dyn ...>, same
+    // pattern as the session stores above, so a future backend swap is
+    // a new impl, not a rewrite of every call site.
+    pub auth_backend: Arc<dyn crate::auth::AuthBackend>,
 }
 
 /// The one true "your session is gone" response — a session can disappear

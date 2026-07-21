@@ -9,6 +9,7 @@ use unitprep_core::in_memory_session_store::InMemorySessionStore;
 
 use crate::api::test_support::empty_dedup_store;
 use crate::api::test_support::test_db_pool;
+use crate::api::test_support::test_auth_backend;
 use crate::api::AppState;
 use crate::application::dedup_session_service::DedupSession;
 use crate::application::unit_group_session::Session;
@@ -30,5 +31,6 @@ pub fn dedup_state_with_report(
         unit_group_sessions: Arc::new(InMemorySessionStore::<Session>::new()),
         dedup_sessions: store,
         db: test_db_pool(),
+        auth_backend: test_auth_backend(),
     }
 }

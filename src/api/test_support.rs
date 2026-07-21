@@ -35,6 +35,17 @@ pub(crate) fn test_db_pool() -> sqlx::PgPool {
         .expect("connect_lazy should never fail for a well-formed URL")
 }
 
+// A real WebauthnRsBackend, not a mock -- constructing one is pure
+// computation (URL parsing + local struct setup), no I/O, so there is
+// nothing to fake here. Safe for every fixture below, none of which
+// exercise a real registration/authentication ceremony yet.
+pub(crate) fn test_auth_backend() -> std::sync::Arc<dyn crate::auth::AuthBackend> {
+    std::sync::Arc::new(
+        crate::auth::WebauthnRsBackend::new("localhost", "http://localhost:3000")
+            .expect("hardcoded localhost webauthn config should always be valid"),
+    )
+}
+
 pub fn empty_state() -> AppState {
     AppState {
         unit_group_sessions: Arc::new(
@@ -42,6 +53,7 @@ pub fn empty_state() -> AppState {
         ),
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
+        auth_backend: test_auth_backend(),
     }
 }
 
@@ -98,6 +110,7 @@ pub fn uploaded_state(
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
+        auth_backend: test_auth_backend(),
     }
 }
 
@@ -143,6 +156,7 @@ pub fn discovered_state(
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
+        auth_backend: test_auth_backend(),
     }
 }
 
@@ -200,6 +214,7 @@ pub fn validated_state(
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
+        auth_backend: test_auth_backend(),
     }
 }
 
@@ -288,5 +303,6 @@ pub fn analyzed_state_with_errors(
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
+        auth_backend: test_auth_backend(),
     }
 }

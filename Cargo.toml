@@ -89,6 +89,9 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres",
 # main.rs) -- not required in a deployed environment, where real env
 # vars are injected directly instead.
 dotenvy = "0.15"
+webauthn-rs = { version = "0.5.5", features = ["danger-allow-state-serialisation"] }
+thiserror = "2.0.19"
+url = "2.5.8"
 
 [dev-dependencies]
 
