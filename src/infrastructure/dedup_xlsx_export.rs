@@ -14,6 +14,7 @@ use rust_xlsxwriter::{Color, Format, Url, Workbook};
 use unitprep_dedup::types::TenantRecord;
 use unitprep_dedup::DedupReport;
 
+use crate::infrastructure::csv_safety::sanitize_cell;
 use crate::infrastructure::dedup_export_plan::{build_export_plan, PlannedRow, COLUMNS};
 
 const SHEET_NAME: &str = "Duplicate Tenant Check";
@@ -51,11 +52,12 @@ pub fn generate_xlsx(report: &DedupReport, all_records: &[TenantRecord]) -> Resu
 
                 for (col, value) in record_values(record).into_iter().enumerate() {
                     if col as u16 != NOTE_COLUMN {
-                        worksheet.write_string_with_format(excel_row, col as u16, value, &format)?;
+                        worksheet.write_string_with_format(excel_row, col as u16, value.as_str(), &format)?;
                     }
                 }
 
-                write_note_cell(worksheet, excel_row, note, hyperlink_target.as_deref(), &format)?;
+                let note = sanitize_cell(note);
+                write_note_cell(worksheet, excel_row, &note, hyperlink_target.as_deref(), &format)?;
             }
         }
     }
@@ -91,34 +93,35 @@ fn write_note_cell(
 /// empty placeholder at the `CorrectionNote` position — that column is
 /// always written separately via `write_note_cell`, since it may need
 /// to become a hyperlink rather than a plain string.
-fn record_values(record: &TenantRecord) -> [&str; 25] {
+fn record_values(record: &TenantRecord) -> [String; 25] {
     [
-        &record.cust_numb,
-        &record.unit_number,
+        record.cust_numb.as_str(),
+        record.unit_number.as_str(),
         "",
-        &record.first_last,
-        &record.first_name,
-        &record.last_name,
-        &record.company_name,
-        &record.phone_number_prefix,
-        &record.phone_number,
-        &record.email,
-        &record.address_street1,
-        &record.address_street2,
-        &record.address_city,
-        &record.address_state,
-        &record.address_postal_code,
-        &record.alt_contact_first_name,
-        &record.alt_contact_last_name,
-        &record.alt_contact_email,
-        &record.alt_contact_phone_number_prefix,
-        &record.alt_contact_phone_number,
-        &record.alt_contact_address_street1,
-        &record.alt_contact_address_street2,
-        &record.alt_contact_address_city,
-        &record.alt_contact_address_state,
-        &record.alt_contact_address_postal_code,
+        record.first_last.as_str(),
+        record.first_name.as_str(),
+        record.last_name.as_str(),
+        record.company_name.as_str(),
+        record.phone_number_prefix.as_str(),
+        record.phone_number.as_str(),
+        record.email.as_str(),
+        record.address_street1.as_str(),
+        record.address_street2.as_str(),
+        record.address_city.as_str(),
+        record.address_state.as_str(),
+        record.address_postal_code.as_str(),
+        record.alt_contact_first_name.as_str(),
+        record.alt_contact_last_name.as_str(),
+        record.alt_contact_email.as_str(),
+        record.alt_contact_phone_number_prefix.as_str(),
+        record.alt_contact_phone_number.as_str(),
+        record.alt_contact_address_street1.as_str(),
+        record.alt_contact_address_street2.as_str(),
+        record.alt_contact_address_city.as_str(),
+        record.alt_contact_address_state.as_str(),
+        record.alt_contact_address_postal_code.as_str(),
     ]
+    .map(sanitize_cell)
 }
 
 #[cfg(test)]

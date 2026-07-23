@@ -10,6 +10,7 @@ use csv::Writer;
 use unitprep_dedup::types::TenantRecord;
 use unitprep_dedup::DedupReport;
 
+use crate::infrastructure::csv_safety::sanitize_cell;
 use crate::infrastructure::dedup_export_plan::{build_export_plan, PlannedRow, COLUMNS};
 
 pub fn generate_csv(report: &DedupReport, all_records: &[TenantRecord]) -> Result<Vec<u8>> {
@@ -29,6 +30,8 @@ pub fn generate_csv(report: &DedupReport, all_records: &[TenantRecord]) -> Resul
                     writer.write_record(std::iter::repeat_n("", COLUMNS.len()))?;
                 }
                 PlannedRow::Marker(text) => {
+                    // Markers are fixed app-defined strings, never derived
+                    // from uploaded data, so they don't need sanitizing.
                     let mut row = vec![*text];
                     row.extend(std::iter::repeat_n("", COLUMNS.len() - 1));
                     writer.write_record(row)?;
@@ -41,34 +44,37 @@ pub fn generate_csv(report: &DedupReport, all_records: &[TenantRecord]) -> Resul
     Ok(buffer)
 }
 
-fn record_row<'a>(record: &'a TenantRecord, note: &'a str) -> Vec<&'a str> {
-    vec![
-        &record.cust_numb,
-        &record.unit_number,
+fn record_row(record: &TenantRecord, note: &str) -> Vec<String> {
+    [
+        record.cust_numb.as_str(),
+        record.unit_number.as_str(),
         note,
-        &record.first_last,
-        &record.first_name,
-        &record.last_name,
-        &record.company_name,
-        &record.phone_number_prefix,
-        &record.phone_number,
-        &record.email,
-        &record.address_street1,
-        &record.address_street2,
-        &record.address_city,
-        &record.address_state,
-        &record.address_postal_code,
-        &record.alt_contact_first_name,
-        &record.alt_contact_last_name,
-        &record.alt_contact_email,
-        &record.alt_contact_phone_number_prefix,
-        &record.alt_contact_phone_number,
-        &record.alt_contact_address_street1,
-        &record.alt_contact_address_street2,
-        &record.alt_contact_address_city,
-        &record.alt_contact_address_state,
-        &record.alt_contact_address_postal_code,
+        record.first_last.as_str(),
+        record.first_name.as_str(),
+        record.last_name.as_str(),
+        record.company_name.as_str(),
+        record.phone_number_prefix.as_str(),
+        record.phone_number.as_str(),
+        record.email.as_str(),
+        record.address_street1.as_str(),
+        record.address_street2.as_str(),
+        record.address_city.as_str(),
+        record.address_state.as_str(),
+        record.address_postal_code.as_str(),
+        record.alt_contact_first_name.as_str(),
+        record.alt_contact_last_name.as_str(),
+        record.alt_contact_email.as_str(),
+        record.alt_contact_phone_number_prefix.as_str(),
+        record.alt_contact_phone_number.as_str(),
+        record.alt_contact_address_street1.as_str(),
+        record.alt_contact_address_street2.as_str(),
+        record.alt_contact_address_city.as_str(),
+        record.alt_contact_address_state.as_str(),
+        record.alt_contact_address_postal_code.as_str(),
     ]
+    .into_iter()
+    .map(sanitize_cell)
+    .collect()
 }
 
 #[cfg(test)]

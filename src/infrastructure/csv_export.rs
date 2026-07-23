@@ -11,6 +11,8 @@ use zip::{
 
 use unitprep_unit_group::{AnalysisResults, Issue};
 
+use crate::infrastructure::csv_safety::sanitize_cell;
+
 #[derive(Debug, Clone)]
 
 /// Represents a single export artifact generated entirely
@@ -145,9 +147,10 @@ fn generate_net_new_groups_csv(
         rows.sort();
 
         for group in rows {
+            let group = sanitize_cell(&group);
             writer.write_record([
-                &group,
-                &group,
+                group.as_str(),
+                group.as_str(),
                 "Yes",
             ])?;
         }
@@ -220,16 +223,16 @@ fn generate_facility_assignments_csv(
                     };
 
                 writer.write_record([
-                    &facility.name,
-                    &facility.source_files.join(
+                    sanitize_cell(&facility.name),
+                    sanitize_cell(&facility.source_files.join(
                         ";",
-                    ),
-                    group,
-                    &count.to_string(),
-                    &exists
+                    )),
+                    sanitize_cell(group),
+                    count.to_string(),
+                    exists
                         .map(|v| v.to_string())
                         .unwrap_or_default(),
-                    &net_new
+                    net_new
                         .map(|v| v.to_string())
                         .unwrap_or_default(),
                 ])?;
@@ -289,8 +292,8 @@ fn generate_facility_group_lookup_csv(
 
                 if is_net_new {
                     writer.write_record([
-                        facility.name.as_str(),
-                        group.as_str(),
+                        sanitize_cell(&facility.name),
+                        sanitize_cell(group),
                     ])?;
                 }
             }
@@ -324,9 +327,9 @@ fn generate_advisory_csv(
 
         for issue in advisory_issues {
             writer.write_record([
-                &issue.source,
-                &issue.issue,
-                &format!(
+                sanitize_cell(&issue.source),
+                sanitize_cell(&issue.issue),
+                format!(
                     "{:?}",
                     issue.severity
                 ),
