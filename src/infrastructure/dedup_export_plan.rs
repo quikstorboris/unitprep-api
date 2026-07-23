@@ -16,6 +16,14 @@ use cell_refs::{cite_fields_for_mismatches, first_cell_ref, note_with_cell_refs,
 
 mod cell_refs;
 
+// Re-exported at this module's level rather than left `pub(crate)` only
+// inside the private `cell_refs` submodule — a private `mod cell_refs;`
+// means the submodule path itself isn't nameable from outside
+// `dedup_export_plan`, regardless of the item's own visibility. `api::
+// dedup_view` needs this to attach real cell references to on-screen
+// note bullets (see its own doc comment for why).
+pub(crate) use cell_refs::field_cell_refs;
+
 pub const COLUMNS: &[&str] = &[
     "CustNumb",
     "UnitNumber",

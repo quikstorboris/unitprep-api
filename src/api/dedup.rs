@@ -18,6 +18,7 @@ use unitprep_core::session_store::SessionStoreExt;
 use unitprep_core::uploaded_file::UploadedFile;
 use unitprep_dedup::{DedupReport, TenantRecord};
 
+use crate::api::dedup_view::{build_report_view, DedupReportView};
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::application::dedup_session_service::DedupSessionService;
 use crate::infrastructure::csv_export::{build_zip, ExportFile};
@@ -26,7 +27,7 @@ use crate::infrastructure::{dedup_csv_export, dedup_xlsx_export};
 #[derive(Debug, Serialize)]
 pub struct DedupCheckResponse {
     pub session_id: String,
-    pub report: DedupReport,
+    pub report: DedupReportView,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,7 +74,7 @@ async fn first_uploaded_file(
         let bytes = field.bytes().await?.to_vec();
 
         if result.is_none() {
-            result = Some(UploadedFile { file_name, relative_path, bytes });
+            result = Some(UploadedFile { file_name, relative_path, bytes, modified_at: None });
         } else {
             tracing::warn!(
                 file = %file_name,
@@ -137,9 +138,9 @@ pub async fn check(State(state): State<AppState>, mut multipart: Multipart) -> R
         }
     };
 
-    let report = state
+    let (report, records) = state
         .dedup_sessions
-        .with_session(&session_id, |session| session.report.clone())
+        .with_session(&session_id, |session| (session.report.clone(), session.records.clone()))
         .expect("session was just created and saved");
 
     tracing::info!(
@@ -151,6 +152,8 @@ pub async fn check(State(state): State<AppState>, mut multipart: Multipart) -> R
         "Dedup check complete"
     );
 
+    let report = build_report_view(&report, &records);
+
     Json(DedupCheckResponse { session_id, report }).into_response()
 }
 
@@ -160,9 +163,11 @@ pub async fn report(
     State(state): State<AppState>,
     Json(request): Json<DedupSessionRequest>,
 ) -> Response {
-    match state.dedup_sessions.with_session(&request.session_id, |session| session.report.clone())
+    match state
+        .dedup_sessions
+        .with_session(&request.session_id, |session| (session.report.clone(), session.records.clone()))
     {
-        Some(report) => Json(report).into_response(),
+        Some((report, records)) => Json(build_report_view(&report, &records)).into_response(),
         None => session_not_found(),
     }
 }

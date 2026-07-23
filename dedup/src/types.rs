@@ -85,17 +85,38 @@ impl TenantRecord {
         }
     }
 
-    /// `display_name` from the reference script: "FirstName LastName",
-    /// falling back to `FirtLast` when both name parts are blank.
+    /// "FirstName LastName" (falling back to `FirtLast` when both name
+    /// parts are blank), Title Cased for display — the reference
+    /// script's own version uppercases this, which reads as shouting in
+    /// a note meant for a non-technical facility manager to read.
     pub fn display_name(&self) -> String {
         let name = format!("{} {}", self.first_name.trim(), self.last_name.trim());
         let name = name.trim();
         if name.is_empty() {
-            self.first_last.trim().to_uppercase()
+            title_case(self.first_last.trim())
         } else {
-            name.to_uppercase()
+            title_case(name)
         }
     }
+}
+
+/// Capitalizes the first letter of each whitespace-separated word,
+/// lowercasing the rest — good enough for tenant names (which arrive
+/// with inconsistent casing across a real export) without needing a
+/// full locale-aware title-casing dependency.
+fn title_case(s: &str) -> String {
+    s.split_whitespace()
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => {
+                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// One field that differed within a group, and the actual values
@@ -160,4 +181,36 @@ pub struct TypoVariantCandidate {
     /// crate always surfaces every candidate above threshold, every
     /// candidate gets a note.
     pub note: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(first: &str, last: &str, first_last: &str) -> TenantRecord {
+        TenantRecord {
+            first_name: first.to_string(),
+            last_name: last.to_string(),
+            first_last: first_last.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn display_name_title_cases_first_and_last_name() {
+        let r = record("JOHN", "hawkins", "");
+        assert_eq!(r.display_name(), "John Hawkins");
+    }
+
+    #[test]
+    fn display_name_falls_back_to_title_cased_first_last_when_name_parts_are_blank() {
+        let r = record("", "", "WILLIAMS OIL");
+        assert_eq!(r.display_name(), "Williams Oil");
+    }
+
+    #[test]
+    fn display_name_handles_already_mixed_case_input() {
+        let r = record("Michelle", "Rodgers", "");
+        assert_eq!(r.display_name(), "Michelle Rodgers");
+    }
 }

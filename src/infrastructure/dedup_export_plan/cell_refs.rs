@@ -87,6 +87,28 @@ pub(super) fn note_with_cell_refs(
     }
 }
 
+/// The structured counterpart to `note_with_cell_refs` — the cell
+/// references for one field across a cluster of `record_count` records
+/// starting at `first_row`, without the flat-string bracket formatting.
+/// Used to attach real cell references to the on-screen note bullets
+/// the API returns (see `api::dedup_view`), computed from the exact same
+/// column layout (`COLUMNS`) and row-numbering convention as the actual
+/// exported file, so an on-screen reference always points at the same
+/// cell the export would put it in. Returns an empty `Vec` if `field`
+/// isn't one of the export's own columns (shouldn't happen for any
+/// `FieldName` this crate defines, but this stays a lookup rather than
+/// an assumption, matching `note_with_cell_refs`'s own `?`-based
+/// lookup above).
+pub(crate) fn field_cell_refs(field: FieldName, first_row: usize, record_count: usize) -> Vec<String> {
+    let column_name = csv_column_name(field);
+    let Some(column_index) = COLUMNS.iter().position(|c| *c == column_name) else {
+        return Vec::new();
+    };
+    let letter = col_letter(column_index);
+
+    (0..record_count).map(|i| format!("{letter}{}", first_row + i)).collect()
+}
+
 /// The single cell reference (e.g. `"T7"`) that `note_with_cell_refs`
 /// would put first — used as the xlsx hyperlink target. A cell can
 /// only carry one hyperlink, so when a note cites several fields (or a

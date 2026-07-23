@@ -29,8 +29,8 @@ fn shared_phone_across_different_names_is_surfaced() {
     assert_eq!(candidates[0].signal, RelatednessSignal::SharedPhone);
     assert_eq!(candidates[0].shared_value, "5551234");
     assert_eq!(candidates[0].group_keys, vec!["janedoe".to_string(), "johnsmith".to_string()]);
-    assert!(candidates[0].note.contains("JOHN SMITH"));
-    assert!(candidates[0].note.contains("JANE DOE"));
+    assert!(candidates[0].note.contains("John Smith"));
+    assert!(candidates[0].note.contains("Jane Doe"));
     assert!(candidates[0].note.contains("same phone number"));
 }
 

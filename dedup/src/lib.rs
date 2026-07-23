@@ -26,7 +26,7 @@ pub mod report;
 pub mod similarity;
 pub mod types;
 
-pub use note_composer::{NoteComposer, TemplateNoteComposer};
+pub use note_composer::{group_units, human_label, units_phrase, NoteComposer, TemplateNoteComposer};
 pub use relatedness::{RelatedTenantCandidate, RelatednessSignal};
 pub use report::{run, run_with_composer, DedupReport};
 pub use types::TenantRecord;

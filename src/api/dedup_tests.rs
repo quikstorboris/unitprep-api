@@ -43,10 +43,15 @@ async fn report_returns_the_stored_report() {
     let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
     assert_eq!(body["flagged_groups"].as_array().unwrap().len(), 1);
-    assert!(body["flagged_groups"][0]["note"]
+    assert_eq!(body["flagged_groups"][0]["display_name"], "John Smith");
+    assert_eq!(
+        body["flagged_groups"][0]["units"],
+        serde_json::json!(["101", "204"])
+    );
+    assert!(body["flagged_groups"][0]["bullets"][0]["sentence"]
         .as_str()
         .unwrap()
-        .contains("units 101, 204"));
+        .contains("unit 101"));
 }
 
 #[tokio::test]
@@ -91,7 +96,7 @@ async fn export_produces_csv_containing_the_flagged_group() {
     let csv = String::from_utf8(bytes.to_vec()).unwrap();
 
     assert!(csv.contains("CustNumb,UnitNumber,CorrectionNote"));
-    assert!(csv.contains("units 101, 204"));
+    assert!(csv.contains("units 101 and 204"));
 }
 
 #[tokio::test]

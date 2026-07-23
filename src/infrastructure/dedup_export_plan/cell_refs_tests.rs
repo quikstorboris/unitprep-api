@@ -92,3 +92,17 @@ fn first_cell_ref_picks_the_first_cited_fields_first_row() {
 fn first_cell_ref_is_none_without_cite_fields() {
     assert_eq!(first_cell_ref(&[], 7), None);
 }
+
+#[test]
+fn field_cell_refs_lists_one_ref_per_record_in_the_cluster() {
+    // PhoneNumber is column I (index 8) in COLUMNS.
+    assert_eq!(
+        field_cell_refs(FieldName::PhoneNumber, 22, 4),
+        vec!["I22", "I23", "I24", "I25"]
+    );
+}
+
+#[test]
+fn field_cell_refs_is_a_single_cell_for_a_one_record_cluster() {
+    assert_eq!(field_cell_refs(FieldName::Email, 7, 1), vec!["J7"]);
+}

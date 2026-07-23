@@ -38,7 +38,7 @@ fn load_records_from_env(env_var: &str) -> Vec<TenantRecord> {
         .unwrap()
         .to_string_lossy()
         .to_string();
-    let uploaded = UploadedFile { file_name, relative_path: String::new(), bytes };
+    let uploaded = UploadedFile { file_name, relative_path: String::new(), bytes, modified_at: None };
     let document = parse_document(&uploaded).expect("fixture must parse as CSV");
     records_from_csv_document(&document).expect("fixture must have a FirtLast column")
 }
@@ -62,7 +62,14 @@ fn no_ka_oi_matches_reference_script() {
     assert_eq!(report.flagged_groups.len(), 1);
     let flagged = &report.flagged_groups[0];
     assert_eq!(unit_numbers(&flagged.group.records), vec!["2008", "2123"]);
-    assert_eq!(flagged.note, "Please update the email address to match across units 2008, 2123.");
+    // Only the lead sentence's units phrase is asserted here (updated
+    // for the "unit"/"units" number-agreement fix) — the exact detail
+    // text appended after it depends on this file's real field values,
+    // which isn't captured in this repo; re-run against the real
+    // fixture to refresh a full exact-match if that's ever needed.
+    assert!(flagged
+        .note
+        .starts_with("Please update the email address to match across units 2008 and 2123."));
     let categories: Vec<FieldCategory> = flagged.mismatches.iter().map(|m| m.category).collect();
     assert!(categories.contains(&FieldCategory::Email));
     assert!(categories.contains(&FieldCategory::AltContact));
@@ -101,10 +108,12 @@ fn new_castle_matches_reference_script() {
     assert_eq!(report.flagged_groups.len(), 1);
     let flagged = &report.flagged_groups[0];
     assert_eq!(unit_numbers(&flagged.group.records), vec!["F3", "F5"]);
-    assert_eq!(
-        flagged.note,
-        "Please update the alternate contact info to match across units F3, F5."
-    );
+    // See the comment on the equivalent assertion above — units phrase
+    // only, not a full exact match of the (unverifiable without the
+    // real file) detail text.
+    assert!(flagged
+        .note
+        .starts_with("Please update the alternate contact info to match across units F3 and F5."));
     let categories: Vec<FieldCategory> = flagged.mismatches.iter().map(|m| m.category).collect();
     assert_eq!(categories, vec![FieldCategory::AltContact]);
 
