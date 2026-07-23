@@ -1,8 +1,8 @@
-use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 
 /// Builds the application database connection pool from DATABASE_URL.
 ///
-/// Uses connect_lazy rather than connect deliberately: this pool must
+/// Uses connect_lazy_with rather than connect deliberately: this pool must
 /// not block application startup on Postgres being reachable, since most
 /// of UnitPrep's existing endpoints (upload/discover/validate/etc.) do
 /// not touch the database at all yet, and the app_service credential may
@@ -19,7 +19,14 @@ pub fn connect() -> Result<PgPool, sqlx::Error> {
         "DATABASE_URL must be set -- see .env.local",
     );
 
-    PgPoolOptions::new()
+    // Every auth table/type/function lives in the `auth` schema now,
+    // not `public` -- every unqualified name in application queries
+    // (users, resolve_session, etc.) resolves through this. `public`
+    // stays on the path behind it for shared extension types (citext).
+    let connect_options: PgConnectOptions = database_url.parse()?;
+    let connect_options = connect_options.options([("search_path", "auth,public")]);
+
+    Ok(PgPoolOptions::new()
         .max_connections(5)
-        .connect_lazy(&database_url)
+        .connect_lazy_with(connect_options))
 }

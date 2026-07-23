@@ -1,8 +1,14 @@
--- One-time, per-branch/per-environment setup. Not part of sqlx's tracked
+-- Per-branch/per-environment setup. Not part of sqlx's tracked
 -- migrations (deliberately -- CREATE ROLE is cluster-level, not scoped to
--- one database/schema the way table migrations are). Run manually, once,
+-- one database/schema the way table migrations are). Run manually
 -- against each Neon branch that will serve real application traffic
--- (dev: done 2026-07-21; prod: before go-live).
+-- (dev: done 2026-07-21; re-run 2026-07-23 for the auth schema grants;
+-- prod: before go-live).
+--
+-- Every statement here is safe to re-run: CREATE ROLE is guarded by an
+-- existence check, and the GRANT/ALTER DEFAULT PRIVILEGES/REVOKE lines
+-- are all idempotent. Re-run the whole file rather than picking out
+-- just the new lines.
 --
 -- Creates a non-owner role for the running application to connect as, so
 -- RLS policies actually apply (table owners bypass RLS by default). Run
@@ -33,6 +39,15 @@ $$;
 GRANT USAGE ON SCHEMA public TO app_service;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_service;
 ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA public
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service;
+
+-- The auth tables live in their own schema (see the
+-- move_auth_objects_to_auth_schema migration) -- table-level grants
+-- above survive a schema move on their own, but schema-level USAGE
+-- does not, so it's granted here same as for public.
+GRANT USAGE ON SCHEMA auth TO app_service;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA auth TO app_service;
+ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA auth
     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service;
 
 -- The app never needs sqlx's own migration-tracking table -- only
