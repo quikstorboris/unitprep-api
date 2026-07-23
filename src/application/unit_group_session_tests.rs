@@ -25,6 +25,23 @@ fn discovery_result(
                     .to_string(),
             ),
         ready: true,
+        unit_file_candidates: vec![
+            unitprep_unit_group::UnitFileCandidate {
+                file_name: "units.csv".to_string(),
+                modified_at: None,
+                detected_vendor: "QSX".to_string(),
+            },
+        ],
+        selected_unit_file_name: Some(
+            "units.csv".to_string(),
+        ),
+        requires_unit_file_selection: false,
+        requires_format_resolution: false,
+        detected_vendor_name: Some(
+            "QSX".to_string(),
+        ),
+        source_headers: Vec::new(),
+        suggested_mapping: Vec::new(),
     }
 }
 

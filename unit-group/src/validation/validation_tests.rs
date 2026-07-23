@@ -4,6 +4,7 @@ use unitprep_core::csv_document::CsvDocument;
 #[test]
 fn detects_duplicate_unit_numbers() {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -43,6 +44,7 @@ fn detects_duplicate_unit_numbers() {
 fn rare_group_is_a_warning_not_an_error(
 ) {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -83,6 +85,7 @@ fn rare_group_is_a_warning_not_an_error(
 fn blank_unitgroup_is_an_error_not_a_warning(
 ) {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -121,6 +124,7 @@ fn blank_unitgroup_is_an_error_not_a_warning(
 #[test]
 fn detects_invalid_dimensions() {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -155,6 +159,7 @@ fn detects_invalid_dimensions() {
 fn exempted_unit_is_not_flagged_for_invalid_dimensions(
 ) {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -190,6 +195,7 @@ fn exempted_unit_is_not_flagged_for_invalid_dimensions(
 #[test]
 fn detects_climate_mismatch() {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -222,6 +228,7 @@ fn detects_climate_mismatch() {
 #[test]
 fn detects_locality_mismatch() {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -254,6 +261,7 @@ fn detects_locality_mismatch() {
 fn detects_unitgroup_dimension_mismatch(
 ) {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -287,6 +295,7 @@ fn detects_unitgroup_dimension_mismatch(
 #[test]
 fn detects_single_unit_group() {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -316,6 +325,7 @@ fn detects_single_unit_group() {
 #[test]
 fn detects_rare_group() {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -345,6 +355,7 @@ fn detects_rare_group() {
 #[test]
 fn detects_casing_mismatch() {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "test.csv"
             .to_string(),
         headers: vec![
@@ -389,6 +400,7 @@ fn detects_casing_mismatch() {
 fn validate_document_errors_loudly_when_a_supposed_unit_file_has_no_matching_columns(
 ) {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "units.csv"
             .to_string(),
         headers: vec![
@@ -421,6 +433,7 @@ fn validate_document_errors_loudly_when_a_supposed_unit_file_has_no_matching_col
 fn validates_a_unit_file_with_an_underscored_unitgroup_header(
 ) {
     let document = CsvDocument {
+            modified_at: None,
         file_name: "units.csv"
             .to_string(),
         headers: vec![

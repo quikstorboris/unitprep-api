@@ -23,4 +23,12 @@ pub struct UploadedFile {
     /// Raw file bytes as received from the browser.
     /// Passed to the CSV parser during ingestion and not retained after CsvDocument is built.
     pub bytes: Vec<u8>,
+
+    /// The original file's last-modified time (`File.lastModified`, epoch
+    /// milliseconds), threaded through from the browser via an upload
+    /// sidecar field rather than any server-side receipt time. `None` when
+    /// the sidecar didn't include this file (older clients, tests). Used to
+    /// tell apart multiple candidate pulls of the same facility's unit list
+    /// discovered in one session — see `unit-group`'s format-resolution flow.
+    pub modified_at: Option<i64>,
 }

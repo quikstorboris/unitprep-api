@@ -65,6 +65,29 @@ pub struct AnalysisResults {
     pub similar_groups: Vec<SimilarityMatch>,
 }
 
+/// One (target field, source header) pairing shown to the user as a
+/// pre-fill suggestion in the manual-mapping UI — always fully resolved
+/// (both sides present), unlike the mapping the user actually submits,
+/// where a target can be left unmapped.
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldMappingEntry {
+    pub target: String,
+    pub source: String,
+}
+
+/// A single discovered file that matched a known vendor's header
+/// signature (see `crate::format::detect_vendor`) — a candidate to become
+/// the session's one selected unit file. Carries its modified-at time
+/// (when the browser sent one) specifically so the UI can help a user
+/// pick the right file when a folder contains more than one candidate,
+/// e.g. several dated re-pulls of the same facility's export.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnitFileCandidate {
+    pub file_name: String,
+    pub modified_at: Option<i64>,
+    pub detected_vendor: String,
+}
+
 /// Brought forward from the binary's session-state type rather than
 /// left behind: `analysis::reference::select_group_document` reads
 /// this, and it's pure result data (no stage-machine behavior), not
@@ -73,12 +96,50 @@ pub struct AnalysisResults {
 /// what used to be one `session.rs` (`Session`, `WorkflowStage`,
 /// `StageError`) stay in the binary's `application/` layer, matching
 /// `unitprep-dedup`'s own session boundary.
+///
+/// A discovery session is scoped to one facility: any time more than one
+/// candidate unit file is found, that's always redundant/duplicate pulls
+/// of that one facility (e.g. repeated exports on different dates), never
+/// intentionally-distinct facilities — so exactly one must be selected
+/// before anything downstream (format resolution, validation, analysis)
+/// can run against it.
 #[derive(Debug, Clone)]
 pub struct DiscoveryResult {
+    /// At most one entry once resolved — kept as a `Vec` for backward
+    /// display compatibility with the "unit files found" count; derived
+    /// from `unit_file_candidates`/`selected_unit_file_name` rather than
+    /// tracked independently.
     pub unit_file_names: Vec<String>,
     pub group_file_names: Vec<String>,
     pub selected_group_file_name: Option<String>,
     pub ready: bool,
+
+    /// Every raw discovered file matching a known vendor signature.
+    pub unit_file_candidates: Vec<UnitFileCandidate>,
+
+    /// Set once the user picks one (or discovery found exactly one to
+    /// begin with).
+    pub selected_unit_file_name: Option<String>,
+
+    /// `unit_file_candidates.len() > 1` and nothing selected yet.
+    pub requires_unit_file_selection: bool,
+
+    /// Exactly one unit file selected, but it has no entry yet in
+    /// `Session::format_resolutions` — the confirm-or-map step hasn't run.
+    pub requires_format_resolution: bool,
+
+    /// The vendor detected for the selected file, if any.
+    pub detected_vendor_name: Option<String>,
+
+    /// The selected file's own headers, exposed only while
+    /// `requires_format_resolution` is true — what the manual-mapping
+    /// UI's per-target dropdowns are built from.
+    pub source_headers: Vec<String>,
+
+    /// The detected vendor's preset mapping, for pre-filling the manual
+    /// mapping UI's dropdowns (still fully overridable). Empty when no
+    /// vendor was detected for the selected file.
+    pub suggested_mapping: Vec<FieldMappingEntry>,
 }
 
 /// Also brought forward from the binary's session-state type, same

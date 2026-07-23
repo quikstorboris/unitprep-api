@@ -7,6 +7,7 @@ fn unsupported_file_fails() {
         file_name: "test.json".to_string(),
         relative_path: String::new(),
         bytes: b"{}".to_vec(),
+        modified_at: None,
     };
 
     assert!(

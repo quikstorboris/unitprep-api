@@ -14,6 +14,7 @@
 
 pub mod analysis;
 pub mod corrections;
+pub mod format;
 pub mod models;
 pub mod validation;
 
@@ -28,16 +29,28 @@ pub use analysis::{
     Location,
 };
 pub use corrections::{apply_corrections, CorrectionKey, DimensionExemptionKey};
+pub use format::{
+    detect_vendor,
+    mapping_from_vendor,
+    apply_field_mapping,
+    FieldMapping,
+    VendorFormat,
+    CANONICAL_TARGET_FIELDS,
+    REQUIRED_TARGET_FIELDS,
+    VENDOR_FORMATS,
+};
 pub use models::{
     AdvisoryIssue,
     AnalysisResults,
     BatchRun,
     DiscoveryResult,
     Facility,
+    FieldMappingEntry,
     FileValidationError,
     Issue,
     Severity,
     SimilarityMatch,
+    UnitFileCandidate,
     ValidationIssueSummary,
     ValidationResult,
 };

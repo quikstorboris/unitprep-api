@@ -308,6 +308,7 @@ pub fn parse_spreadsheetml_document(
             file.file_name.clone(),
         headers,
         rows,
+        modified_at: file.modified_at,
     })
 }
 
@@ -351,6 +352,7 @@ mod tests {
             bytes: contents
                 .as_bytes()
                 .to_vec(),
+            modified_at: None,
         }
     }
 

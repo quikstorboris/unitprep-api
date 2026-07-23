@@ -2,10 +2,13 @@ mod analyze;
 mod cancel_session;
 mod correct;
 mod dedup;
-mod discover;
+mod dedup_view;
+pub(crate) mod discover;
 mod exempt;
 mod export;
+mod resolve_unit_format;
 mod select_group_file;
+pub(crate) mod select_unit_file;
 mod upload;
 pub(crate) mod validate;
 
@@ -201,6 +204,14 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/group-file/select",
             post(select_group_file::select_group_file),
+        )
+        .route(
+            "/unit-file/select",
+            post(select_unit_file::select_unit_file),
+        )
+        .route(
+            "/unit-file/resolve-format",
+            post(resolve_unit_format::resolve_unit_format),
         )
         .route(
             "/session/cancel",

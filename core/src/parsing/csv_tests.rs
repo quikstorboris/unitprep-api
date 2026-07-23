@@ -8,6 +8,7 @@ fn csv_parser_normalizes_headers() {
         relative_path: String::new(),
         bytes: b"Number,UnitGroup\nA01,10x10 Climate\n"
             .to_vec(),
+        modified_at: None,
     };
 
     let document =
@@ -45,6 +46,7 @@ fn csv_parser_trims_values() {
         relative_path: String::new(),
         bytes: b"Number,UnitGroup\n A01 , 10x10 Climate \n"
             .to_vec(),
+        modified_at: None,
     };
 
     let document =
@@ -69,6 +71,7 @@ fn csv_parser_preserves_leading_zeroes() {
         relative_path: String::new(),
         bytes: b"Number,UnitGroup\n0001,10x10 Climate\n0002,10x10 Climate\n"
             .to_vec(),
+        modified_at: None,
     };
 
     let document =
@@ -97,6 +100,7 @@ fn csv_parser_tolerates_trailing_empty_column_not_in_header() {
         relative_path: String::new(),
         bytes: b"Number,UnitGroup\nA01,10x10 Climate,\nA02,10x10 Climate,\n"
             .to_vec(),
+        modified_at: None,
     };
 
     let document =
@@ -121,6 +125,7 @@ fn csv_parser_pads_short_rows() {
         relative_path: String::new(),
         bytes: b"Number,UnitGroup,Notes\nA01,10x10 Climate\n"
             .to_vec(),
+        modified_at: None,
     };
 
     let document =

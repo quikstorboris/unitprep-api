@@ -92,6 +92,7 @@ mod tests {
 
     fn document() -> CsvDocument {
         CsvDocument {
+            modified_at: None,
             file_name: "units.csv"
                 .to_string(),
             headers: vec![

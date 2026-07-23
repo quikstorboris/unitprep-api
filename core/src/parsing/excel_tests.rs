@@ -88,6 +88,7 @@ fn xlsx_parser_extracts_headers_and_rows() {
         file_name: "test.xlsx".to_string(),
         relative_path: String::new(),
         bytes: minimal_xlsx_bytes(),
+        modified_at: None,
     };
 
     let document =
@@ -128,6 +129,7 @@ fn xlsx_dispatch_is_case_insensitive() {
         file_name: "TEST.XLSX".to_string(),
         relative_path: String::new(),
         bytes: minimal_xlsx_bytes(),
+        modified_at: None,
     };
 
     let document =
@@ -150,6 +152,7 @@ fn xls_extension_dispatches_to_excel_parser_not_csv() {
         relative_path: String::new(),
         bytes: b"not a real workbook"
             .to_vec(),
+        modified_at: None,
     };
 
     let err = parse_document(&file)

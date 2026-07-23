@@ -142,6 +142,7 @@ async fn validate_reports_invalid_dimensions_as_exemptable(
 async fn validate_reports_files_that_error_and_blocks_readiness(
 ) {
     let bad_document = CsvDocument {
+            modified_at: None,
         file_name: "units.csv"
             .to_string(),
         headers: vec![

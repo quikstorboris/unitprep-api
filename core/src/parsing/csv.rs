@@ -54,5 +54,6 @@ pub fn parse_csv_document(
             file.file_name.clone(),
         headers,
         rows,
+        modified_at: file.modified_at,
     })
 }

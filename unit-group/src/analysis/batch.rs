@@ -90,6 +90,7 @@ mod tests {
 
     fn document(headers: Vec<&str>, rows: Vec<Vec<&str>>) -> CsvDocument {
         CsvDocument {
+            modified_at: None,
             file_name: "units.csv".to_string(),
             headers: headers.into_iter().map(str::to_string).collect(),
             rows: rows

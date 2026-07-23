@@ -21,6 +21,10 @@ pub struct CsvDocument {
 
     /// All data rows. Each row is a Vec<String> aligned to headers by index.
     pub rows: Vec<Vec<String>>,
+
+    /// Carried straight through from `UploadedFile::modified_at` — see its
+    /// doc comment. `None` when the browser didn't send it.
+    pub modified_at: Option<i64>,
 }
 
 impl CsvDocument {
@@ -70,6 +74,7 @@ mod tests {
                 "number".to_string(),
             ],
             rows: Vec::new(),
+            modified_at: None,
         };
 
         // A caller looking up "UnitGroup" (no separator) must still find
@@ -89,6 +94,7 @@ mod tests {
             file_name: "test.csv".to_string(),
             headers: vec!["number".to_string()],
             rows: Vec::new(),
+            modified_at: None,
         };
 
         assert_eq!(

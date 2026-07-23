@@ -18,10 +18,12 @@ use unitprep_core::session::{
 };
 use unitprep_unit_group::{
     apply_corrections,
+    apply_field_mapping,
     AnalysisResults,
     CorrectionKey,
     DimensionExemptionKey,
     DiscoveryResult,
+    FieldMapping,
     ValidationResult,
 };
 
@@ -50,6 +52,12 @@ pub struct SessionData {
     pub analysis: Option<AnalysisResults>,
     pub corrections: HashMap<CorrectionKey, String>,
     pub dimension_exemptions: HashSet<DimensionExemptionKey>,
+
+    /// One resolved vendor-format mapping per file, keyed by file name —
+    /// set by `/unit-file/resolve-format` once the user confirms a
+    /// detected vendor or manually maps fields. Ephemeral, session-only
+    /// (no persistence layer for reusable vendor profiles yet).
+    pub format_resolutions: HashMap<String, FieldMapping>,
 }
 
 #[derive(Debug, Clone)]
@@ -86,11 +94,15 @@ impl Session {
         }
     }
 
-    /// The session's parsed documents with any manual corrections applied.
+    /// The session's parsed documents with any resolved vendor-format
+    /// mapping and manual corrections applied, in that order — a file
+    /// must be normalized into canonical columns (`Number`/`UnitGroup`/
+    /// etc.) before per-cell corrections, which are keyed by the
+    /// canonical "number" column, can find anything to match against.
     /// Validation and analysis should read through this instead of
-    /// `self.data.documents` directly, so a correction made after the
-    /// initial upload is reflected without needing to reparse or re-upload
-    /// anything.
+    /// `self.data.documents` directly, so both a format resolution and a
+    /// correction made after the initial upload are reflected without
+    /// needing to reparse or re-upload anything.
     pub fn effective_documents(
         &self,
     ) -> Vec<CsvDocument> {
@@ -98,8 +110,20 @@ impl Session {
             .documents
             .iter()
             .map(|document| {
+                match self
+                    .data
+                    .format_resolutions
+                    .get(&document.file_name)
+                {
+                    Some(mapping) => {
+                        apply_field_mapping(document, mapping)
+                    }
+                    None => document.clone(),
+                }
+            })
+            .map(|document| {
                 apply_corrections(
-                    document,
+                    &document,
                     &self.data.corrections,
                 )
             })

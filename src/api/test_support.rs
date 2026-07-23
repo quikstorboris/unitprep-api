@@ -65,6 +65,7 @@ pub fn unit_document(
     rows: Vec<[&str; 4]>,
 ) -> CsvDocument {
     CsvDocument {
+        modified_at: None,
         file_name: file_name
             .to_string(),
         headers: vec![
@@ -125,7 +126,7 @@ pub fn discovered_state(
         session_id.to_string(),
     );
 
-    let unit_file_names = documents
+    let unit_file_names: Vec<String> = documents
         .iter()
         .map(|d| {
             d.file_name.clone()
@@ -137,6 +138,23 @@ pub fn discovered_state(
 
     session.complete_discovery(
         DiscoveryResult {
+            unit_file_candidates:
+                unit_file_names
+                    .iter()
+                    .map(|name| unitprep_unit_group::UnitFileCandidate {
+                        file_name: name.clone(),
+                        modified_at: None,
+                        detected_vendor: "QSX".to_string(),
+                    })
+                    .collect(),
+            selected_unit_file_name:
+                unit_file_names.first().cloned(),
+            requires_unit_file_selection: false,
+            requires_format_resolution: false,
+            detected_vendor_name:
+                Some("QSX".to_string()),
+            source_headers: Vec::new(),
+            suggested_mapping: Vec::new(),
             unit_file_names,
             group_file_names:
                 Vec::new(),
@@ -171,7 +189,7 @@ pub fn validated_state(
         session_id.to_string(),
     );
 
-    let unit_file_names = documents
+    let unit_file_names: Vec<String> = documents
         .iter()
         .map(|d| {
             d.file_name.clone()
@@ -183,6 +201,23 @@ pub fn validated_state(
 
     session.complete_discovery(
         DiscoveryResult {
+            unit_file_candidates:
+                unit_file_names
+                    .iter()
+                    .map(|name| unitprep_unit_group::UnitFileCandidate {
+                        file_name: name.clone(),
+                        modified_at: None,
+                        detected_vendor: "QSX".to_string(),
+                    })
+                    .collect(),
+            selected_unit_file_name:
+                unit_file_names.first().cloned(),
+            requires_unit_file_selection: false,
+            requires_format_resolution: false,
+            detected_vendor_name:
+                Some("QSX".to_string()),
+            source_headers: Vec::new(),
+            suggested_mapping: Vec::new(),
             unit_file_names,
             group_file_names:
                 Vec::new(),
@@ -230,7 +265,7 @@ pub fn analyzed_state_with_errors(
         session_id.to_string(),
     );
 
-    let unit_file_names = documents
+    let unit_file_names: Vec<String> = documents
         .iter()
         .map(|d| {
             d.file_name.clone()
@@ -242,6 +277,23 @@ pub fn analyzed_state_with_errors(
 
     session.complete_discovery(
         DiscoveryResult {
+            unit_file_candidates:
+                unit_file_names
+                    .iter()
+                    .map(|name| unitprep_unit_group::UnitFileCandidate {
+                        file_name: name.clone(),
+                        modified_at: None,
+                        detected_vendor: "QSX".to_string(),
+                    })
+                    .collect(),
+            selected_unit_file_name:
+                unit_file_names.first().cloned(),
+            requires_unit_file_selection: false,
+            requires_format_resolution: false,
+            detected_vendor_name:
+                Some("QSX".to_string()),
+            source_headers: Vec::new(),
+            suggested_mapping: Vec::new(),
             unit_file_names,
             group_file_names:
                 Vec::new(),
