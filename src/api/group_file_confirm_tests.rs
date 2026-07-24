@@ -6,7 +6,6 @@ use crate::api::group_file_upload::apply_group_file_upload;
 use crate::api::resolve_unit_format::{resolve_unit_format, ResolveAction, ResolveUnitFormatRequest};
 use crate::api::test_support::{discovered_state, empty_state};
 use unitprep_core::csv_document::CsvDocument;
-use unitprep_core::session_store::SessionStoreExt;
 
 fn document(file_name: &str, headers: Vec<&str>) -> CsvDocument {
     CsvDocument {

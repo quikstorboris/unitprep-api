@@ -3,7 +3,6 @@ use axum::http::StatusCode;
 use super::*;
 use crate::api::test_support::{discovered_state, empty_state};
 use unitprep_core::csv_document::CsvDocument;
-use unitprep_core::session_store::SessionStoreExt;
 
 fn document(file_name: &str, headers: Vec<&str>) -> CsvDocument {
     CsvDocument {
