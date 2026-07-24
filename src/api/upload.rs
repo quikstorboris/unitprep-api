@@ -4,12 +4,13 @@ use std::time::Instant;
 
 use axum::{
     extract::{Multipart, State},
-    response::IntoResponse,
+    http::StatusCode,
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::Serialize;
 
-use crate::api::AppState;
+use crate::api::{ApiErrorBody, AppState};
 use crate::application::session_service::SessionService;
 use unitprep_core::uploaded_file::UploadedFile;
 
@@ -32,7 +33,7 @@ pub struct UploadResponse {
 pub async fn upload(
     State(state): State<AppState>,
     mut multipart: Multipart,
-) -> impl IntoResponse {
+) -> Response {
     let started = Instant::now();
 
     let mut uploaded_files: Vec<UploadedFile> =
@@ -195,6 +196,24 @@ pub async fn upload(
     let files_uploaded =
         uploaded_files.len();
 
+    if files_uploaded == 0 {
+        tracing::warn!(
+            field_count,
+            files_failed,
+            multipart_errors,
+            "Upload rejected — no files were successfully uploaded"
+        );
+
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorBody {
+                error: "no_file_uploaded",
+                message: "No file was uploaded".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
     let session_id =
         SessionService::new(
             Arc::clone(
@@ -223,4 +242,5 @@ pub async fn upload(
         files_failed,
         multipart_errors,
     })
+    .into_response()
 }
