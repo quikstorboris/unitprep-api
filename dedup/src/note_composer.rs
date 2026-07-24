@@ -261,7 +261,7 @@ fn describe_field(group: &TenantGroup, field: FieldName) -> String {
 /// Groups `group`'s records by their raw value for `field`, returning
 /// (value, sorted units) pairs — blank last, then alphabetical, mirroring
 /// the reference script's own console-summary convention.
-fn units_by_value<'a>(group: &'a TenantGroup, field: FieldName) -> Vec<(String, Vec<&'a str>)> {
+fn units_by_value(group: &TenantGroup, field: FieldName) -> Vec<(String, Vec<&str>)> {
     let mut units_by_value: BTreeMap<String, Vec<&str>> = BTreeMap::new();
     for record in &group.records {
         let raw = record.field(field).trim();
