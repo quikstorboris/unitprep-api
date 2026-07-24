@@ -95,11 +95,18 @@ pub async fn correct_group(
         .with_session_mut(
             &request.session_id,
             |session| {
-                session
-                    .require_stage(
-                        crate::application::unit_group_session::WorkflowStage::Discovered,
-                    )
-                    .map_err(CorrectGroupNotReady::Stage)?;
+                if let Err(err) = session.require_stage(
+                    crate::application::unit_group_session::WorkflowStage::Discovered,
+                ) {
+                    tracing::warn!(
+                        session_id = %request.session_id,
+                        required = ?err.required,
+                        current = ?err.current,
+                        "Correct-group called before discovery completed"
+                    );
+
+                    return Err(CorrectGroupNotReady::Stage(err));
+                }
 
                 let discovery = session
                     .data
@@ -168,6 +175,12 @@ pub async fn correct_group(
                 }
 
                 if !matched_any {
+                    tracing::warn!(
+                        session_id = %request.session_id,
+                        group_name = %request.group_name,
+                        "Correct-group rejected — no unit currently has that UnitGroup value"
+                    );
+
                     return Err(
                         CorrectGroupNotReady::UnknownGroup,
                     );

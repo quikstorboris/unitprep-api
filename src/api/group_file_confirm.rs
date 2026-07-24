@@ -34,9 +34,16 @@ pub async fn confirm_group_file(
     Json(request): Json<ConfirmGroupFileRequest>,
 ) -> Response {
     let result = state.unit_group_sessions.with_session_mut(&request.session_id, |session| {
-        session
-            .require_stage(WorkflowStage::Discovered)
-            .map_err(ConfirmNotReady::Stage)?;
+        if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
+            tracing::warn!(
+                session_id = %request.session_id,
+                required = ?err.required,
+                current = ?err.current,
+                "Group-file confirm called before discovery completed"
+            );
+
+            return Err(ConfirmNotReady::Stage(err));
+        }
 
         let discovery = session
             .data
@@ -45,6 +52,11 @@ pub async fn confirm_group_file(
             .expect("Discovered stage guarantees discovery data");
 
         if discovery.selected_group_file_name.is_none() {
+            tracing::warn!(
+                session_id = %request.session_id,
+                "Group-file confirm rejected — no master group file selected yet"
+            );
+
             return Err(ConfirmNotReady::NoFileSelected);
         }
 
@@ -64,6 +76,12 @@ pub async fn confirm_group_file(
             .expect("a selected group file name always names a document that was actually discovered");
 
         if !crate::api::discover::is_group_document(document) {
+            tracing::warn!(
+                session_id = %request.session_id,
+                file_name = %file_name,
+                "Group-file confirm rejected — selected file's format is invalid"
+            );
+
             return Err(ConfirmNotReady::InvalidFormat);
         }
 

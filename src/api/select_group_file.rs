@@ -37,9 +37,16 @@ pub async fn select_group_file(
     Json(request): Json<SelectGroupFileRequest>,
 ) -> Response {
     let result = state.unit_group_sessions.with_session_mut(&request.session_id, |session| {
-        session
-            .require_stage(WorkflowStage::Discovered)
-            .map_err(SelectNotReady::Stage)?;
+        if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
+            tracing::warn!(
+                session_id = %request.session_id,
+                required = ?err.required,
+                current = ?err.current,
+                "Group-file select called before discovery completed"
+            );
+
+            return Err(SelectNotReady::Stage(err));
+        }
 
         let is_known_candidate = session
             .data
@@ -50,6 +57,12 @@ pub async fn select_group_file(
             .contains(&request.group_file_name);
 
         if !is_known_candidate {
+            tracing::warn!(
+                session_id = %request.session_id,
+                group_file_name = %request.group_file_name,
+                "Group-file select rejected — not one of the discovered candidates"
+            );
+
             return Err(SelectNotReady::UnknownCandidate);
         }
 

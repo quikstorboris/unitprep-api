@@ -46,11 +46,23 @@ pub async fn select_unit_file(
         .with_session_mut(
             &request.session_id,
             |session| {
-                session
-                    .require_stage(WorkflowStage::Discovered)
-                    .map_err(SelectNotReady::Stage)?;
+                if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
+                    tracing::warn!(
+                        session_id = %request.session_id,
+                        required = ?err.required,
+                        current = ?err.current,
+                        "Unit-file select called before discovery completed"
+                    );
+
+                    return Err(SelectNotReady::Stage(err));
+                }
 
                 if request.unit_file_names.is_empty() {
+                    tracing::warn!(
+                        session_id = %request.session_id,
+                        "Unit-file select rejected — empty selection"
+                    );
+
                     return Err(SelectNotReady::EmptySelection);
                 }
 
@@ -66,6 +78,12 @@ pub async fn select_unit_file(
                         .iter()
                         .any(|c| &c.file_name == name)
                     {
+                        tracing::warn!(
+                            session_id = %request.session_id,
+                            file = %name,
+                            "Unit-file select rejected — file was not discovered"
+                        );
+
                         return Err(SelectNotReady::FileNotDiscovered(name.clone()));
                     }
                 }

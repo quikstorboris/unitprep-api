@@ -77,9 +77,16 @@ pub async fn resolve_unit_format(
         .with_session_mut(
             &request.session_id,
             |session| {
-                session
-                    .require_stage(WorkflowStage::Discovered)
-                    .map_err(ResolveNotReady::Stage)?;
+                if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
+                    tracing::warn!(
+                        session_id = %request.session_id,
+                        required = ?err.required,
+                        current = ?err.current,
+                        "Resolve-unit-format called before discovery completed"
+                    );
+
+                    return Err(ResolveNotReady::Stage(err));
+                }
 
                 // Handled before looking up "the current file to resolve"
                 // -- unlike Confirm/Map, Reset is meant to run exactly
@@ -118,9 +125,17 @@ pub async fn resolve_unit_format(
                     return Ok(compute_discovery(session));
                 }
 
-                let file_name =
-                    current_unit_file_to_resolve(session)
-                        .ok_or(ResolveNotReady::NoFileSelected)?;
+                let file_name = match current_unit_file_to_resolve(session) {
+                    Some(name) => name,
+                    None => {
+                        tracing::warn!(
+                            session_id = %request.session_id,
+                            "Resolve-unit-format called with no unit file selected"
+                        );
+
+                        return Err(ResolveNotReady::NoFileSelected);
+                    }
+                };
 
                 let document = session
                     .data
@@ -138,8 +153,18 @@ pub async fn resolve_unit_format(
                     }
 
                     ResolveAction::Confirm => {
-                        let vendor = detect_vendor(&document)
-                            .ok_or(ResolveNotReady::VendorNotDetected)?;
+                        let vendor = match detect_vendor(&document) {
+                            Some(vendor) => vendor,
+                            None => {
+                                tracing::warn!(
+                                    session_id = %request.session_id,
+                                    file = %file_name,
+                                    "Confirm requested but vendor could not be detected"
+                                );
+
+                                return Err(ResolveNotReady::VendorNotDetected);
+                            }
+                        };
 
                         let selected_unit_file_names = session
                             .data
@@ -159,6 +184,12 @@ pub async fn resolve_unit_format(
                         let mismatched = find_header_mismatches(&selected_documents);
 
                         if !mismatched.is_empty() {
+                            tracing::warn!(
+                                session_id = %request.session_id,
+                                mismatched_files = ?mismatched,
+                                "Bulk-confirm rejected — selected unit files don't share the same headers"
+                            );
+
                             return Err(ResolveNotReady::HeaderMismatch(mismatched));
                         }
 
@@ -216,7 +247,18 @@ pub async fn resolve_unit_format(
                     }
 
                     ResolveAction::Map { mapping } => {
-                        let mapping = validate_manual_mapping(&document, &mapping)?;
+                        let mapping = match validate_manual_mapping(&document, &mapping) {
+                            Ok(mapping) => mapping,
+                            Err(err) => {
+                                tracing::warn!(
+                                    session_id = %request.session_id,
+                                    file = %file_name,
+                                    "Manual unit-file mapping rejected"
+                                );
+
+                                return Err(err);
+                            }
+                        };
 
                         session
                             .data
