@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::models::Severity;
 
 // Description strings are named constants — not literals duplicated between
@@ -5,7 +7,7 @@ use crate::models::Severity;
 // — so a typo in one copy can't silently desync a check from its
 // correctable-fields entry.
 pub const BLANK_UNITGROUP: &str = "Blank UnitGroup values";
-pub const SUSPICIOUS_UNITGROUP: &str = "Suspicious UnitGroup values";
+pub const ODD_UNITGROUP: &str = "Odd UnitGroup values";
 pub const DUPLICATE_UNITS: &str = "Duplicate unit numbers";
 pub const INVALID_DIMENSIONS: &str = "Invalid dimensions";
 pub const CLIMATE_MISMATCH: &str = "Climate status does not match UnitGroup";
@@ -13,8 +15,21 @@ pub const LOCALITY_MISMATCH: &str = "Locality does not match UnitGroup";
 pub const UNITGROUP_DIMENSION_MISMATCH: &str =
     "UnitGroup dimensions do not match Width/Length";
 pub const RARE_GROUP: &str = "Rare UnitGroup detected";
-pub const SINGLE_UNIT_GROUP: &str = "UnitGroup contains only one unit";
 pub const INCONSISTENT_CASING: &str = "Inconsistent unit-number casing";
+
+/// Group names a user has explicitly accepted "as is" for one of the two
+/// per-group checks (Odd/Rare) -- distinct from `excluded_groups`
+/// (`Session`/`corrections.rs`): an acknowledged group's units stay in
+/// the data exactly as uploaded (nothing removed, nothing renamed), just
+/// stops being flagged under *that one check*. A group both odd and rare
+/// needs its own acknowledgment per check -- accepting it as "odd" (a
+/// legitimately non-standard name) says nothing about whether its low
+/// occurrence count is also fine.
+#[derive(Debug, Clone, Default)]
+pub struct GroupCheckAcknowledgments {
+    pub odd: HashSet<String>,
+    pub rare: HashSet<String>,
+}
 
 /// Which columns a given issue description can be fixed by editing a single
 /// value in, for the inline-correction feature — empty means review-only
@@ -40,8 +55,10 @@ pub fn correctable_fields_for(
             &["width", "length"]
         }
 
-        BLANK_UNITGROUP
-        | SUSPICIOUS_UNITGROUP => {
+        // Not `ODD_UNITGROUP` -- that's a per-group check now (see
+        // `flagged_are_group_names`), fixed via `/correct-group`, not a
+        // single-unit `/correct` field swap.
+        BLANK_UNITGROUP => {
             &["unitgroup"]
         }
 
@@ -74,29 +91,46 @@ pub fn is_dimension_exemptable(
 #[derive(Debug, Clone)]
 pub struct ValidationIssue {
     /// Unit numbers for per-unit checks; group names for the two
-    /// per-group checks (rare/single-unit groups). Reused across both
-    /// because callers only ever surface the count today (see
-    /// api::validate's `affected_units`), not the identifiers
-    /// themselves — if that changes, this should split into a proper
-    /// `enum FlaggedValues { Units(Vec<String>), Groups(Vec<String>) }`.
+    /// per-group checks (rare/odd groups) — see
+    /// `flagged_are_group_names`, which says which.
     pub flagged_values: Vec<String>,
     pub description: String,
     pub severity: Severity,
+
+    /// True only for the two per-group checks (rare/odd groups), where
+    /// `flagged_values` holds group names directly rather than unit
+    /// numbers — lets a caller (see `api::validate::run_validation`)
+    /// resolve "which UnitGroup(s) does this issue concern" without
+    /// guessing from `description` text, same reasoning as why severity
+    /// is assigned here instead of inferred downstream.
+    pub flagged_are_group_names: bool,
+
+    /// (group name, occurrence count) pairs -- populated only for
+    /// `RARE_GROUP`, where the actual count (anywhere from 1 up to the
+    /// rare-group threshold) is meaningful to show next to each name.
+    /// Empty for every other check. Kept separate from `flagged_values`
+    /// rather than encoded into the string itself, since that string is
+    /// also the literal group name `/correct-group` matches units
+    /// against -- baking "(3)" into it would break that lookup.
+    pub group_occurrence_counts: Vec<(String, usize)>,
 }
 
-/// Turns a fixed list of (flagged values, description, severity)
-/// candidates into the issues that actually have something to report —
-/// i.e. drops any candidate whose list came back empty.
+/// Turns a fixed list of (flagged values, description, severity, flagged
+/// values are group names) candidates into the issues that actually have
+/// something to report — i.e. drops any candidate whose list came back
+/// empty. `group_occurrence_counts` defaults empty; set it on the
+/// returned `RARE_GROUP` issue afterward if needed (see mod.rs).
 pub(super) fn build<const N: usize>(
     candidates: [(
         Vec<String>,
         &str,
         Severity,
+        bool,
     ); N],
 ) -> Vec<ValidationIssue> {
     candidates
         .into_iter()
-        .filter(|(flagged_values, _, _)| {
+        .filter(|(flagged_values, _, _, _)| {
             !flagged_values.is_empty()
         })
         .map(
@@ -104,6 +138,7 @@ pub(super) fn build<const N: usize>(
                 flagged_values,
                 description,
                 severity,
+                flagged_are_group_names,
             )| {
                 ValidationIssue {
                     flagged_values,
@@ -111,6 +146,9 @@ pub(super) fn build<const N: usize>(
                         description
                             .to_string(),
                     severity,
+                    flagged_are_group_names,
+                    group_occurrence_counts:
+                        Vec::new(),
                 }
             },
         )

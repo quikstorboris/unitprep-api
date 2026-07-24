@@ -233,11 +233,6 @@ async fn discover_is_ready_with_zero_group_files_once_format_is_confirmed(
     );
 
     assert_eq!(
-        body["requires_group_selection"],
-        false
-    );
-
-    assert_eq!(
         body["selected_group_file_name"],
         serde_json::Value::Null
     );
@@ -447,5 +442,134 @@ async fn discover_detects_door_swap_and_confirm_maps_unit_type_to_unitgroup(
     assert_eq!(
         body["discovered_group_names"],
         serde_json::json!(["10x10 Non-Climate Controlled (10 x 10 x 8)"])
+    );
+}
+
+/// Group names that don't look like real storage-unit dimensions (no
+/// parseable NxN, or apartment/office-style listings that occasionally
+/// end up in a real export) are surfaced separately as a review hint.
+#[tokio::test]
+async fn uncommon_group_names_are_surfaced_separately() {
+    let unit_doc = CsvDocument {
+        modified_at: None,
+        file_name: "units.csv".to_string(),
+        headers: vec![
+            "number".to_string(),
+            "unitgroup".to_string(),
+            "category".to_string(),
+        ],
+        rows: vec![
+            vec!["101".to_string(), "10x10".to_string(), "Standard".to_string()],
+            vec!["102".to_string(), "1 bd, 1 ba".to_string(), "Standard".to_string()],
+            vec!["103".to_string(), "165 sq ft".to_string(), "Standard".to_string()],
+        ],
+    };
+
+    let state = uploaded_state("s1", vec![unit_doc]);
+
+    discover(
+        State(state.clone()),
+        Json(DiscoverRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    let response = resolve_unit_format(
+        State(state),
+        Json(ResolveUnitFormatRequest {
+            session_id: "s1".to_string(),
+            action: ResolveAction::Confirm,
+        }),
+    )
+    .await;
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(
+        body["discovered_group_names"],
+        serde_json::json!(["1 bd, 1 ba", "10x10", "165 sq ft"])
+    );
+
+    assert_eq!(
+        body["uncommon_group_names"],
+        serde_json::json!(["1 bd, 1 ba", "165 sq ft"])
+    );
+}
+
+/// The point of decoupling group-name extraction from the full `ready`
+/// gate: it must show up as soon as the unit files are settled, even
+/// while the master group file step still needs attention (here, two
+/// group file candidates requiring a selection).
+#[tokio::test]
+async fn discovered_group_names_are_populated_before_group_file_is_resolved() {
+    let unit_doc = CsvDocument {
+        modified_at: None,
+        file_name: "units.csv".to_string(),
+        headers: vec![
+            "number".to_string(),
+            "unitgroup".to_string(),
+            "category".to_string(),
+        ],
+        rows: vec![vec![
+            "101".to_string(),
+            "10x10".to_string(),
+            "Standard".to_string(),
+        ]],
+    };
+
+    let group_doc_a = CsvDocument {
+        modified_at: None,
+        file_name: "groups_a.csv".to_string(),
+        headers: vec![
+            "name".to_string(),
+            "description".to_string(),
+            "assignedto".to_string(),
+            "status".to_string(),
+            "lastupdated".to_string(),
+        ],
+        rows: Vec::new(),
+    };
+
+    let group_doc_b = CsvDocument {
+        modified_at: None,
+        file_name: "groups_b.csv".to_string(),
+        headers: group_doc_a.headers.clone(),
+        rows: Vec::new(),
+    };
+
+    let state = uploaded_state("s1", vec![unit_doc, group_doc_a, group_doc_b]);
+
+    discover(
+        State(state.clone()),
+        Json(DiscoverRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    let response = resolve_unit_format(
+        State(state),
+        Json(ResolveUnitFormatRequest {
+            session_id: "s1".to_string(),
+            action: ResolveAction::Confirm,
+        }),
+    )
+    .await;
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    // Two ambiguous candidates, neither selected/confirmed yet.
+    assert_eq!(body["selected_group_file_name"], serde_json::Value::Null);
+    assert_eq!(body["ready"], false);
+    assert_eq!(
+        body["discovered_group_names"],
+        serde_json::json!(["10x10"])
     );
 }

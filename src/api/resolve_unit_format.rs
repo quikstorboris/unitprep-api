@@ -9,7 +9,12 @@ use unitprep_core::session_store::SessionStoreExt;
 
 use crate::{
     api::{
-        discover::compute_discovery,
+        discover::{
+            compute_discovery,
+            current_unit_file_to_resolve,
+            find_header_mismatches,
+            normalized_headers,
+        },
         session_not_found,
         stage_conflict,
         ApiErrorBody,
@@ -36,6 +41,14 @@ pub struct MappingEntryInput {
 pub enum ResolveAction {
     Confirm,
     Map { mapping: Vec<MappingEntryInput> },
+    /// Clears the stored resolution for every currently-selected unit
+    /// file, undoing a previous "confirm" or "map" -- the only way back
+    /// into the confirm/map screen once every selected file is already
+    /// resolved (see the frontend's "Change Vendor" button). Unlike
+    /// `Confirm`/`Map`, this doesn't act on "the current file to
+    /// resolve" -- there isn't one once everything's resolved, which is
+    /// exactly the state this exists to undo.
+    Reset,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,6 +62,7 @@ enum ResolveNotReady {
     Stage(StageError),
     NoFileSelected,
     VendorNotDetected,
+    HeaderMismatch(Vec<String>),
     UnknownTargetField(String),
     UnknownSourceHeader { target: String, source: String },
     MissingRequiredFields(Vec<String>),
@@ -67,12 +81,46 @@ pub async fn resolve_unit_format(
                     .require_stage(WorkflowStage::Discovered)
                     .map_err(ResolveNotReady::Stage)?;
 
-                let file_name = session
-                    .data
-                    .discovery
-                    .as_ref()
-                    .and_then(|d| d.selected_unit_file_name.clone())
-                    .ok_or(ResolveNotReady::NoFileSelected)?;
+                // Handled before looking up "the current file to resolve"
+                // -- unlike Confirm/Map, Reset is meant to run exactly
+                // when there isn't one (every selected file is already
+                // resolved), so it operates on the whole selected set
+                // instead.
+                if matches!(request.action, ResolveAction::Reset) {
+                    let selected_unit_file_names = session
+                        .data
+                        .discovery
+                        .as_ref()
+                        .expect("Discovered stage guarantees discovery data")
+                        .selected_unit_file_names
+                        .clone();
+
+                    for name in &selected_unit_file_names {
+                        session.data.format_resolutions.remove(name);
+                    }
+
+                    for file_name in
+                        &selected_unit_file_names
+                    {
+                        tracing::info!(
+                            session_id = %request.session_id,
+                            file = %file_name,
+                            "Unit file format resolution reset"
+                        );
+                    }
+
+                    tracing::info!(
+                        session_id = %request.session_id,
+                        reset_file_count = selected_unit_file_names.len(),
+                        "Unit file format reset complete"
+                    );
+
+                    return Ok(compute_discovery(session));
+                }
+
+                let file_name =
+                    current_unit_file_to_resolve(session)
+                        .ok_or(ResolveNotReady::NoFileSelected)?;
 
                 let document = session
                     .data
@@ -80,33 +128,108 @@ pub async fn resolve_unit_format(
                     .iter()
                     .find(|d| d.file_name == file_name)
                     .expect(
-                        "a selected unit file name always names a document that was actually discovered",
+                        "the current unit file to resolve always names a document that was actually discovered",
                     )
                     .clone();
 
-                let mapping: FieldMapping = match request.action {
+                match request.action {
+                    ResolveAction::Reset => {
+                        unreachable!("Reset is handled above, before file_name is resolved")
+                    }
+
                     ResolveAction::Confirm => {
                         let vendor = detect_vendor(&document)
                             .ok_or(ResolveNotReady::VendorNotDetected)?;
 
-                        mapping_from_vendor(vendor)
+                        let selected_unit_file_names = session
+                            .data
+                            .discovery
+                            .as_ref()
+                            .expect("Discovered stage guarantees discovery data")
+                            .selected_unit_file_names
+                            .clone();
+
+                        let selected_documents: Vec<_> = session
+                            .data
+                            .documents
+                            .iter()
+                            .filter(|d| selected_unit_file_names.contains(&d.file_name))
+                            .collect();
+
+                        let mismatched = find_header_mismatches(&selected_documents);
+
+                        if !mismatched.is_empty() {
+                            return Err(ResolveNotReady::HeaderMismatch(mismatched));
+                        }
+
+                        // Every confirmed file shares this file's exact header
+                        // shape (guaranteed by the mismatch check above), so one
+                        // vendor confirmation resolves all of them at once
+                        // instead of requiring a click per file. Re-checking
+                        // each file's own headers here too (rather than just
+                        // trusting the aggregate result) costs nothing and
+                        // means a future bug in the aggregate check can't
+                        // silently resolve a file it shouldn't.
+                        let mapping = mapping_from_vendor(vendor);
+                        let current_headers = normalized_headers(&document);
+                        let mut resolved_files = Vec::new();
+
+                        for name in &selected_unit_file_names {
+                            if session.data.format_resolutions.contains_key(name) {
+                                continue;
+                            }
+
+                            let same_shape = session
+                                .data
+                                .documents
+                                .iter()
+                                .find(|d| &d.file_name == name)
+                                .is_some_and(|d| normalized_headers(d) == current_headers);
+
+                            if same_shape {
+                                session
+                                    .data
+                                    .format_resolutions
+                                    .insert(name.clone(), mapping.clone());
+
+                                resolved_files.push(name.clone());
+                            }
+                        }
+
+                        for file_name in
+                            &resolved_files
+                        {
+                            tracing::info!(
+                                session_id = %request.session_id,
+                                vendor = vendor.name,
+                                file = %file_name,
+                                "Unit file format resolved (bulk-confirmed)"
+                            );
+                        }
+
+                        tracing::info!(
+                            session_id = %request.session_id,
+                            vendor = vendor.name,
+                            resolved_file_count = resolved_files.len(),
+                            "Unit file format bulk-confirm complete"
+                        );
                     }
 
                     ResolveAction::Map { mapping } => {
-                        validate_manual_mapping(&document, &mapping)?
+                        let mapping = validate_manual_mapping(&document, &mapping)?;
+
+                        session
+                            .data
+                            .format_resolutions
+                            .insert(file_name.clone(), mapping);
+
+                        tracing::info!(
+                            session_id = %request.session_id,
+                            file_name = %file_name,
+                            "Unit file format resolved (manual mapping)"
+                        );
                     }
-                };
-
-                session
-                    .data
-                    .format_resolutions
-                    .insert(file_name.clone(), mapping);
-
-                tracing::info!(
-                    session_id = %request.session_id,
-                    file_name = %file_name,
-                    "Unit file format resolved"
-                );
+                }
 
                 Ok(compute_discovery(session))
             },
@@ -131,6 +254,18 @@ pub async fn resolve_unit_format(
             Json(ApiErrorBody {
                 error: "vendor_not_detected",
                 message: "The selected file doesn't match a known vendor format — use \"map\" instead of \"confirm\".".to_string(),
+            }),
+        )
+            .into_response(),
+
+        Some(Err(ResolveNotReady::HeaderMismatch(files))) => (
+            StatusCode::CONFLICT,
+            Json(ApiErrorBody {
+                error: "unit_file_header_mismatch",
+                message: format!(
+                    "The confirmed unit files don't all share the same columns, so they can't be confirmed as one vendor together. Files that don't match the rest: {}. Return to Unit Files Selection and remove them, or map each file's columns manually.",
+                    files.join(", ")
+                ),
             }),
         )
             .into_response(),

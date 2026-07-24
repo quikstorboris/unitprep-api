@@ -5,7 +5,7 @@
 // See Session::effective_documents, which is what validation/analysis/export
 // should read through instead of `session.data.documents` directly.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use unitprep_core::csv_document::CsvDocument;
 
@@ -25,6 +25,20 @@ pub struct CorrectionKey {
 pub struct DimensionExemptionKey {
     pub file_name: String,
     pub unit_number: String,
+}
+
+/// A UnitGroup name explicitly accepted "as is" for one specific check
+/// (`check` holds the issue description, e.g. `ODD_UNITGROUP` or
+/// `RARE_GROUP`) -- not scoped to a file, since a group name is a
+/// session-wide concept the same way `excluded_groups` is. Distinct from
+/// `DimensionExemptionKey`: that suppresses one row-level check for one
+/// unit; this suppresses one group-level check for a whole group, with
+/// no effect on any *other* check the same group might also be flagged
+/// under.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GroupCheckAcknowledgmentKey {
+    pub check: String,
+    pub group_name: String,
 }
 
 /// Returns `document` with any matching corrections applied to their cells.
@@ -82,6 +96,41 @@ pub fn apply_corrections(
             }
         }
     }
+
+    result
+}
+
+/// Drops every row whose (already-corrected) UnitGroup value is in
+/// `excluded_groups` -- a whole-group exclusion, not a single-cell
+/// correction: the group and every unit in it are treated as if they
+/// were never in the source file at all, downstream of this point
+/// (validation, analysis, export). Applied after `apply_corrections` in
+/// `Session::effective_documents` so a group renamed via a correction is
+/// matched -- and can be excluded -- under its new name.
+pub fn filter_excluded_groups(
+    document: &CsvDocument,
+    excluded_groups: &HashSet<String>,
+) -> CsvDocument {
+    if excluded_groups.is_empty() {
+        return document.clone();
+    }
+
+    let Some(unit_group_index) =
+        document.header_index("unitgroup")
+    else {
+        return document.clone();
+    };
+
+    let mut result = document.clone();
+
+    result.rows.retain(|row| {
+        let group = row
+            .get(unit_group_index)
+            .map(|v| v.trim())
+            .unwrap_or("");
+
+        !excluded_groups.contains(group)
+    });
 
     result
 }
@@ -195,6 +244,62 @@ mod tests {
 
         assert_eq!(
             corrected.rows,
+            document().rows
+        );
+    }
+
+    #[test]
+    fn filter_excluded_groups_drops_every_row_in_an_excluded_group(
+    ) {
+        let mut excluded =
+            HashSet::new();
+        excluded.insert(
+            "10x10 Inside Climate"
+                .to_string(),
+        );
+
+        let filtered =
+            filter_excluded_groups(
+                &document(),
+                &excluded,
+            );
+
+        assert!(filtered.rows.is_empty());
+    }
+
+    #[test]
+    fn filter_excluded_groups_leaves_other_groups_untouched(
+    ) {
+        let mut excluded =
+            HashSet::new();
+        excluded.insert(
+            "some other group"
+                .to_string(),
+        );
+
+        let filtered =
+            filter_excluded_groups(
+                &document(),
+                &excluded,
+            );
+
+        assert_eq!(
+            filtered.rows,
+            document().rows
+        );
+    }
+
+    #[test]
+    fn filter_excluded_groups_is_a_noop_for_an_empty_set(
+    ) {
+        let filtered =
+            filter_excluded_groups(
+                &document(),
+                &HashSet::new(),
+            );
+
+        assert_eq!(
+            filtered.rows,
             document().rows
         );
     }

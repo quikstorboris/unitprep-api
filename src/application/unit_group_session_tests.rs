@@ -4,9 +4,26 @@ use unitprep_unit_group::{
     BatchRun,
     ValidationResult,
 };
+use unitprep_core::csv_document::CsvDocument;
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
 use unitprep_core::session::HasSessionMetadata;
 use unitprep_core::session_store::SessionStore;
+
+fn document(
+    file_name: &str,
+    headers: Vec<&str>,
+) -> CsvDocument {
+    CsvDocument {
+        modified_at: None,
+        file_name: file_name
+            .to_string(),
+        headers: headers
+            .into_iter()
+            .map(|h| h.to_string())
+            .collect(),
+        rows: Vec::new(),
+    }
+}
 
 fn discovery_result(
 ) -> DiscoveryResult {
@@ -32,11 +49,13 @@ fn discovery_result(
                 detected_vendor: "QSX".to_string(),
             },
         ],
-        selected_unit_file_name: Some(
+        selected_unit_file_names: vec![
             "units.csv".to_string(),
-        ),
+        ],
         requires_unit_file_selection: false,
         requires_format_resolution: false,
+        current_unit_file_name: None,
+        pending_unit_file_names: Vec::new(),
         detected_vendor_name: Some(
             "QSX".to_string(),
         ),
@@ -231,6 +250,102 @@ fn full_pipeline_progression_reaches_exported(
             .data
             .analysis
             .is_some()
+    );
+}
+
+#[test]
+fn upsert_document_appends_a_new_file(
+) {
+    let mut session =
+        Session::new(
+            "s1".to_string(),
+        );
+
+    session.upsert_document(
+        document(
+            "a.csv",
+            vec!["number"],
+        ),
+    );
+
+    assert_eq!(
+        session.data.documents.len(),
+        1
+    );
+
+    assert_eq!(
+        session.data.documents[0]
+            .file_name,
+        "a.csv"
+    );
+}
+
+#[test]
+fn upsert_document_replaces_an_existing_file_by_name(
+) {
+    let mut session =
+        Session::new(
+            "s1".to_string(),
+        );
+
+    session.upsert_document(
+        document(
+            "a.csv",
+            vec!["number"],
+        ),
+    );
+
+    session.upsert_document(
+        document(
+            "a.csv",
+            vec![
+                "number",
+                "unitgroup",
+            ],
+        ),
+    );
+
+    assert_eq!(
+        session.data.documents.len(),
+        1,
+        "should replace, not duplicate"
+    );
+
+    assert_eq!(
+        session.data.documents[0]
+            .headers,
+        vec![
+            "number".to_string(),
+            "unitgroup".to_string()
+        ]
+    );
+}
+
+#[test]
+fn upsert_document_leaves_other_documents_untouched(
+) {
+    let mut session =
+        Session::new(
+            "s1".to_string(),
+        );
+
+    session.upsert_document(
+        document(
+            "a.csv",
+            vec!["number"],
+        ),
+    );
+
+    session.upsert_document(
+        document(
+            "b.csv",
+            vec!["unitgroup"],
+        ),
+    );
+
+    assert_eq!(
+        session.data.documents.len(),
+        2
     );
 }
 

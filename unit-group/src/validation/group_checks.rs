@@ -5,19 +5,61 @@
 
 use std::collections::HashMap;
 
-/// Group names that appear on exactly one unit in this file.
-///
-/// Feeds both the "rare group" and "single-unit group" issues in mod.rs
-/// — those are the same underlying fact surfaced as two distinct
-/// user-facing messages, so the set is computed once here rather than
-/// accumulated twice during the row scan.
-pub(super) fn single_occurrence_groups(
+use crate::analysis::{
+    has_malformed_dimension_attempt,
+    is_uncommon_group_name,
+};
+
+/// Group names appearing on `max_occurrences` units or fewer in this
+/// file, paired with their actual count — small enough that a
+/// data-entry mistake (a typo, a wrong dimension) could easily be
+/// lurking undetected among so few units of that type.
+pub(super) fn rare_groups(
+    group_counts: &HashMap<String, usize>,
+    max_occurrences: usize,
+) -> Vec<(String, usize)> {
+    group_counts
+        .iter()
+        .filter(|(_, &count)| count <= max_occurrences)
+        .map(|(group, &count)| (group.clone(), count))
+        .collect()
+}
+
+/// A comma-merged value (usually a sign two group names got combined),
+/// or, per `is_uncommon_group_name`, a name with no parseable
+/// width/length dimension at all (or a degenerate 0x0) — pure
+/// descriptive text, not a botched attempt at a dimension.
+/// `is_uncommon_group_name` alone isn't quite this: it also returns true
+/// for a name that *tried* to express a dimension and botched it ("10x",
+/// missing its second number), since its strict regex simply fails to
+/// match either way. `has_malformed_dimension_attempt` is the check that
+/// actually distinguishes "tried and failed" from "never tried" (see its
+/// own doc comment) — excluding that case here is what's needed so a
+/// name is never both Odd and Invalid Dimensions (see `validation::mod`
+/// for the other half of that rule). `is_uncommon_group_name` itself
+/// stays untouched, since discovery's own "Uncommon Group Names" review
+/// list calls it directly and the two pages' counts are meant to agree.
+pub(super) fn is_odd_group_name(
+    group: &str,
+) -> bool {
+    (group.contains(',')
+        || is_uncommon_group_name(group))
+        && !has_malformed_dimension_attempt(
+            group,
+        )
+}
+
+/// Distinct group names in this file that read as "odd" — see
+/// `is_odd_group_name`.
+pub(super) fn odd_group_names(
     group_counts: &HashMap<String, usize>,
 ) -> Vec<String> {
     group_counts
-        .iter()
-        .filter(|(_, &count)| count == 1)
-        .map(|(group, _)| group.clone())
+        .keys()
+        .filter(|group| {
+            is_odd_group_name(group)
+        })
+        .cloned()
         .collect()
 }
 
@@ -75,21 +117,60 @@ mod tests {
     }
 
     #[test]
-    fn single_occurrence_groups_excludes_groups_seen_more_than_once() {
+    fn rare_groups_includes_everything_at_or_under_the_threshold() {
         let group_counts = counts(&[
-            ("rare-group", 1),
-            ("common-group", 5),
+            ("one-unit", 1),
+            ("four-units", 4),
+            ("five-units", 5),
         ]);
 
-        let result =
-            single_occurrence_groups(
+        let mut result =
+            rare_groups(
                 &group_counts,
+                4,
             );
+
+        result.sort();
 
         assert_eq!(
             result,
             vec![
-                "rare-group".to_string()
+                (
+                    "four-units"
+                        .to_string(),
+                    4
+                ),
+                (
+                    "one-unit"
+                        .to_string(),
+                    1
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn odd_group_names_flags_comma_merged_and_dimensionless_names() {
+        let group_counts = counts(&[
+            ("10x10, 10x20", 1),
+            ("Hertz Office Space", 3),
+            ("10x10 Inside Climate", 5),
+        ]);
+
+        let mut result =
+            odd_group_names(
+                &group_counts,
+            );
+
+        result.sort();
+
+        assert_eq!(
+            result,
+            vec![
+                "10x10, 10x20"
+                    .to_string(),
+                "Hertz Office Space"
+                    .to_string(),
             ]
         );
     }

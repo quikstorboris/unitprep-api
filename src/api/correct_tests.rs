@@ -77,24 +77,34 @@ async fn correct_returns_409_when_called_before_discovery(
 }
 
 #[tokio::test]
-async fn correct_clears_invalid_dimensions_error(
+async fn correct_clears_invalid_dimensions_warning(
 ) {
-    // UnitGroup deliberately doesn't parse as a "WxL"-style name —
-    // see the comment on the equivalent validate.rs test for why.
+    // UnitGroup must actually parse as a real dimension — an odd/
+    // non-dimensioned name like "1200 sq ft" is now excluded from this
+    // check entirely regardless of its actual columns (see the comment
+    // on the equivalent validate.rs test for why).
     let state = discovered_state(
         "s1",
         vec![unit_document(
             "units.csv",
-            vec![[
-                "Office",
-                "1200 sq ft",
-                "",
-                "",
-            ]],
+            vec![
+                [
+                    "Office",
+                    "10x10 Inside Climate",
+                    "",
+                    "",
+                ],
+                [
+                    "Office2",
+                    "10x10 Inside Climate",
+                    "10",
+                    "10",
+                ],
+            ],
         )],
     );
 
-    // Fix width first — length is still blank, so the error should
+    // Fix width first — length is still blank, so the warning should
     // still be present until both are corrected.
     let response = correct(
         State(state.clone()),
@@ -126,11 +136,16 @@ async fn correct_clears_invalid_dimensions_error(
         )
         .unwrap();
 
-    assert_eq!(
-        body["error_count"], 1
-    );
+    let issues = body["issues"]
+        .as_array()
+        .unwrap();
 
-    // Now fix length too — the error should clear entirely.
+    assert!(issues.iter().any(|i| {
+        i["description"]
+            == "Invalid dimensions"
+    }));
+
+    // Now fix length too — the warning should clear entirely.
     let response = correct(
         State(state),
         Json(CorrectRequest {

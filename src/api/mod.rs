@@ -1,11 +1,18 @@
+mod acknowledge_group_warnings;
 mod analyze;
 mod cancel_session;
 mod correct;
+mod correct_group;
 mod dedup;
 mod dedup_view;
 pub(crate) mod discover;
+mod exclude_group;
+mod exclude_groups;
 mod exempt;
 mod export;
+mod group_file_confirm;
+mod group_file_upload;
+mod manual_file_upload;
 mod resolve_unit_format;
 mod select_group_file;
 pub(crate) mod select_unit_file;
@@ -196,15 +203,29 @@ pub fn router(state: AppState) -> Router {
         .route("/validate", post(validate::validate))
         .route("/correct", post(correct::correct))
         .route(
+            "/correct-group",
+            post(correct_group::correct_group),
+        )
+        .route(
             "/exempt-dimensions",
             post(exempt::exempt_dimensions),
         )
+        .route(
+            "/exclude-group",
+            post(exclude_group::exclude_group),
+        )
+        .route(
+            "/exclude-groups",
+            post(exclude_groups::exclude_groups),
+        )
+        .route(
+            "/acknowledge-group-warnings",
+            post(
+                acknowledge_group_warnings::acknowledge_group_warnings,
+            ),
+        )
         .route("/analyze", post(analyze::analyze))
         .route("/export", post(export::export))
-        .route(
-            "/group-file/select",
-            post(select_group_file::select_group_file),
-        )
         .route(
             "/unit-file/select",
             post(select_unit_file::select_unit_file),
@@ -212,6 +233,18 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/unit-file/resolve-format",
             post(resolve_unit_format::resolve_unit_format),
+        )
+        .route(
+            "/group-file/upload",
+            post(group_file_upload::upload_group_file),
+        )
+        .route(
+            "/group-file/confirm",
+            post(group_file_confirm::confirm_group_file),
+        )
+        .route(
+            "/group-file/select",
+            post(select_group_file::select_group_file),
         )
         .route(
             "/session/cancel",

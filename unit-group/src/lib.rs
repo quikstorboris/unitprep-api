@@ -21,6 +21,8 @@ pub mod validation;
 pub use analysis::{
     analyze_batch,
     build_batch_from_documents,
+    has_malformed_dimension_attempt,
+    is_uncommon_group_name,
     load_reference_groups_from_document,
     parse_fingerprint,
     select_group_document,
@@ -28,7 +30,13 @@ pub use analysis::{
     GroupFingerprint,
     Location,
 };
-pub use corrections::{apply_corrections, CorrectionKey, DimensionExemptionKey};
+pub use corrections::{
+    apply_corrections,
+    filter_excluded_groups,
+    CorrectionKey,
+    DimensionExemptionKey,
+    GroupCheckAcknowledgmentKey,
+};
 pub use format::{
     detect_vendor,
     mapping_from_vendor,
@@ -54,4 +62,12 @@ pub use models::{
     ValidationIssueSummary,
     ValidationResult,
 };
-pub use validation::{correctable_fields_for, is_dimension_exemptable, validate_document, ValidationIssue};
+pub use validation::{
+    correctable_fields_for,
+    is_dimension_exemptable,
+    validate_document,
+    GroupCheckAcknowledgments,
+    ValidationIssue,
+    ODD_UNITGROUP,
+    RARE_GROUP,
+};

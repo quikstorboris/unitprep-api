@@ -12,12 +12,14 @@ use crate::analysis::{
     Location,
 };
 
-/// How the UnitGroup value on a row reads at a glance.
+/// How the UnitGroup value on a row reads at a glance. "Odd" values
+/// (comma-merged, or no parseable dimension) are a group-level property,
+/// not a per-row one -- see `group_checks::odd_group_names`, which
+/// checks each distinct group name once rather than every row that
+/// happens to carry it.
 pub(super) enum GroupValue {
     Ok,
     Blank,
-    /// Contains a comma — usually a sign two group names got merged.
-    Suspicious,
 }
 
 pub(super) fn classify_group_value(
@@ -25,8 +27,6 @@ pub(super) fn classify_group_value(
 ) -> GroupValue {
     if group.is_empty() {
         GroupValue::Blank
-    } else if group.contains(',') {
-        GroupValue::Suspicious
     } else {
         GroupValue::Ok
     }
@@ -180,17 +180,10 @@ mod tests {
     }
 
     #[test]
-    fn classifies_blank_and_suspicious_and_ok_group_values() {
+    fn classifies_blank_and_ok_group_values() {
         assert!(matches!(
             classify_group_value(""),
             GroupValue::Blank
-        ));
-
-        assert!(matches!(
-            classify_group_value(
-                "10x10, 10x20"
-            ),
-            GroupValue::Suspicious
         ));
 
         assert!(matches!(

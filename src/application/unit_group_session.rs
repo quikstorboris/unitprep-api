@@ -19,11 +19,13 @@ use unitprep_core::session::{
 use unitprep_unit_group::{
     apply_corrections,
     apply_field_mapping,
+    filter_excluded_groups,
     AnalysisResults,
     CorrectionKey,
     DimensionExemptionKey,
     DiscoveryResult,
     FieldMapping,
+    GroupCheckAcknowledgmentKey,
     ValidationResult,
 };
 
@@ -58,6 +60,29 @@ pub struct SessionData {
     /// detected vendor or manually maps fields. Ephemeral, session-only
     /// (no persistence layer for reusable vendor profiles yet).
     pub format_resolutions: HashMap<String, FieldMapping>,
+
+    /// Explicit user confirmation that the currently selected master
+    /// group file (auto-detected or manually uploaded) is the right one
+    /// — set only by `/group-file/confirm`. Selecting a *different* file
+    /// (`/group-file/upload`) resets this back to `false`; a fresh
+    /// selection always needs its own confirmation.
+    pub group_file_confirmed: bool,
+
+    /// UnitGroup names to drop entirely from every stage downstream of
+    /// `effective_documents` (validation, analysis, export) — set by
+    /// `/exclude-group`. Distinct from a correction (which rewrites a
+    /// value) or a dimension exemption (which suppresses one check for
+    /// one unit): this removes the units as if they were never in the
+    /// source file at all.
+    pub excluded_groups: HashSet<String>,
+
+    /// (check, group name) pairs a user has accepted "as is" — set by
+    /// `/acknowledge-group-warnings`. Unlike `excluded_groups`, this
+    /// changes nothing about the data itself; it only suppresses that
+    /// one check's flag on that one group going forward. See
+    /// `GroupCheckAcknowledgmentKey`.
+    pub group_check_acknowledgments:
+        HashSet<GroupCheckAcknowledgmentKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,7 +152,37 @@ impl Session {
                     &self.data.corrections,
                 )
             })
+            .map(|document| {
+                filter_excluded_groups(
+                    &document,
+                    &self.data.excluded_groups,
+                )
+            })
             .collect()
+    }
+
+    /// Adds a document, replacing any existing one with the same file
+    /// name -- used by the manual-file-upload endpoints (see
+    /// `api::unit_file_upload` / `api::group_file_upload`), which let a
+    /// user designate a specific file as the unit/group file regardless
+    /// of how discovery classified anything already uploaded.
+    pub fn upsert_document(
+        &mut self,
+        document: CsvDocument,
+    ) {
+        let documents =
+            Arc::make_mut(&mut self.data.documents);
+
+        match documents.iter_mut().find(|d| {
+            d.file_name == document.file_name
+        }) {
+            Some(existing) => {
+                *existing = document;
+            }
+            None => {
+                documents.push(document);
+            }
+        }
     }
 
     pub fn add_correction(
@@ -149,6 +204,24 @@ impl Session {
             .insert(key);
     }
 
+    pub fn exclude_group(
+        &mut self,
+        group_name: String,
+    ) {
+        self.data
+            .excluded_groups
+            .insert(group_name);
+    }
+
+    pub fn include_group(
+        &mut self,
+        group_name: &str,
+    ) {
+        self.data
+            .excluded_groups
+            .remove(group_name);
+    }
+
     /// Unit numbers exempted from the "Invalid dimensions" check for one
     /// specific file — what `validate_document` should skip that check
     /// for.
@@ -164,6 +237,54 @@ impl Session {
             })
             .map(|key| {
                 key.unit_number.clone()
+            })
+            .collect()
+    }
+
+    pub fn acknowledge_group_check(
+        &mut self,
+        check: String,
+        group_name: String,
+    ) {
+        self.data
+            .group_check_acknowledgments
+            .insert(
+                GroupCheckAcknowledgmentKey {
+                    check,
+                    group_name,
+                },
+            );
+    }
+
+    pub fn unacknowledge_group_check(
+        &mut self,
+        check: &str,
+        group_name: &str,
+    ) {
+        self.data
+            .group_check_acknowledgments
+            .retain(|key| {
+                !(key.check == check
+                    && key.group_name
+                        == group_name)
+            });
+    }
+
+    /// Group names accepted "as is" for one specific check (`ODD_UNITGROUP`
+    /// or `RARE_GROUP`) — session-wide, not per-file, since a group name is
+    /// already a session-wide concept the same way `excluded_groups` is.
+    pub fn acknowledged_groups_for(
+        &self,
+        check: &str,
+    ) -> HashSet<String> {
+        self.data
+            .group_check_acknowledgments
+            .iter()
+            .filter(|key| {
+                key.check == check
+            })
+            .map(|key| {
+                key.group_name.clone()
             })
             .collect()
     }

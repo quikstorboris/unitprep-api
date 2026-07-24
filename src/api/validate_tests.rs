@@ -79,21 +79,33 @@ async fn validate_returns_409_when_called_before_discovery(
 #[tokio::test]
 async fn validate_reports_invalid_dimensions_as_exemptable(
 ) {
-    // UnitGroup deliberately doesn't parse as a "WxL"-style name
-    // (like the real "1200 sq ft" office repro) — a dimensioned name
-    // such as "10x10 Inside Climate" would also trip the *separate*
-    // "UnitGroup dimensions do not match Width/Length" check against
-    // blank actual values, which isn't what this test is about.
+    // UnitGroup must actually parse as a real "WxL" dimension -- an odd/
+    // non-dimensioned name like "1200 sq ft" is now excluded from this
+    // check entirely regardless of its actual Width/Length columns (see
+    // mod.rs's no-overlap-with-Odd rule), which would make this test
+    // pass for the wrong reason. This incidentally also trips the
+    // separate "UnitGroup dimensions do not match Width/Length" check
+    // against the blank actual values -- fine, this test only checks
+    // that "Invalid dimensions" itself is present and exemptable, not
+    // that it's the only issue.
     let state = discovered_state(
         "s1",
         vec![unit_document(
             "units.csv",
-            vec![[
-                "Office",
-                "1200 sq ft",
-                "",
-                "",
-            ]],
+            vec![
+                [
+                    "Office",
+                    "10x10 Inside Climate",
+                    "",
+                    "",
+                ],
+                [
+                    "Office2",
+                    "10x10 Inside Climate",
+                    "10",
+                    "10",
+                ],
+            ],
         )],
     );
 
@@ -114,19 +126,28 @@ async fn validate_reports_invalid_dimensions_as_exemptable(
     let body =
         body_json(response).await;
 
+    let issues =
+        body["issues"]
+            .as_array()
+            .unwrap();
+
+    let issue = issues
+        .iter()
+        .find(|i| {
+            i["description"]
+                == "Invalid dimensions"
+        })
+        .expect(
+            "expected an invalid-dimensions issue",
+        );
+
     assert_eq!(
-        body["error_count"], 1
+        issue["severity"],
+        "Warning"
     );
 
     assert_eq!(
-        body["issues"][0]
-            ["description"],
-        "Invalid dimensions"
-    );
-
-    assert_eq!(
-        body["issues"][0]
-            ["exemptable"],
+        issue["exemptable"],
         true
     );
 }

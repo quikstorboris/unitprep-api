@@ -39,7 +39,10 @@ pub struct VendorFormat {
 /// The union of every known vendor's real, distinct raw headers — QSX
 /// first (its headers already equal today's canonical names, since QSX is
 /// the format the canonical vocabulary was originally bootstrapped from),
-/// then DoorSwap's additional fields. No overlap between the two lists.
+/// then Storage Commander's two extra fields (`MonitoringEnabled`,
+/// `SmartLockEnabled` — otherwise identical to QSX aside from renaming
+/// `InsideOutside` to `Locality`), then DoorSwap's additional fields. No
+/// overlap between the lists.
 pub const CANONICAL_TARGET_FIELDS: &[&str] = &[
     "Number",
     "UnitGroup",
@@ -68,6 +71,8 @@ pub const CANONICAL_TARGET_FIELDS: &[&str] = &[
     "Area",
     "DoorCount",
     "ConversionType",
+    "MonitoringEnabled",
+    "SmartLockEnabled",
     "Unit",
     "Status",
     "Unit Type",
@@ -119,6 +124,50 @@ pub const QSX: VendorFormat = VendorFormat {
     ],
 };
 
+/// Same shape as QSX aside from two differences (confirmed against a real
+/// export, "Absolute Storage of Franklin Park"): `InsideOutside` is named
+/// `Locality` instead, and two extra columns (`MonitoringEnabled`,
+/// `SmartLockEnabled`) are appended. `Locality` is required in the
+/// signature specifically so this is checked (see `VENDOR_FORMATS`'
+/// ordering) — and matches — before the plain QSX signature, which lacks
+/// it entirely and would otherwise false-positive on this export too
+/// (all three of its own signature headers are a subset of this one's).
+pub const STORAGE_COMMANDER: VendorFormat = VendorFormat {
+    name: "Storage Commander",
+    signature_headers: &["UnitGroup", "Number", "Category", "Locality"],
+    default_mapping: &[
+        ("Number", "Number"),
+        ("UnitGroup", "UnitGroup"),
+        ("Category", "Category"),
+        ("StandardRate", "StandardRate"),
+        ("Active", "Active"),
+        ("Damaged", "Damaged"),
+        ("Width", "Width"),
+        ("Length", "Length"),
+        ("Height", "Height"),
+        ("InsideOutside", "Locality"),
+        ("Covered", "Covered"),
+        ("DoorType", "DoorType"),
+        ("DoorWidth", "DoorWidth"),
+        ("DoorHeight", "DoorHeight"),
+        ("NearElevator", "NearElevator"),
+        ("BottleCapacity", "BottleCapacity"),
+        ("Floor", "Floor"),
+        ("ClimateControlled", "ClimateControlled"),
+        ("Class", "Class"),
+        ("Power", "Power"),
+        ("Alarm", "Alarm"),
+        ("DriveUpAccess", "DriveUpAccess"),
+        ("Furnished", "Furnished"),
+        ("Lighting", "Lighting"),
+        ("Area", "Area"),
+        ("DoorCount", "DoorCount"),
+        ("ConversionType", "ConversionType"),
+        ("MonitoringEnabled", "MonitoringEnabled"),
+        ("SmartLockEnabled", "SmartLockEnabled"),
+    ],
+};
+
 pub const DOOR_SWAP: VendorFormat = VendorFormat {
     name: "DoorSwap",
     signature_headers: &["Unit", "Unit Type", "Status", "Customer"],
@@ -136,7 +185,11 @@ pub const DOOR_SWAP: VendorFormat = VendorFormat {
     ],
 };
 
-pub const VENDOR_FORMATS: &[VendorFormat] = &[QSX, DOOR_SWAP];
+// Storage Commander before QSX: `detect_vendor` returns the first match,
+// and Storage Commander's signature is a strict superset of QSX's own —
+// checking QSX first would misclassify every Storage Commander export as
+// QSX (see `STORAGE_COMMANDER`'s doc comment).
+pub const VENDOR_FORMATS: &[VendorFormat] = &[STORAGE_COMMANDER, QSX, DOOR_SWAP];
 
 /// A resolved field mapping: one entry per canonical target field, with
 /// the source header (exact spelling as it appears in the document being

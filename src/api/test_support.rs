@@ -147,10 +147,12 @@ pub fn discovered_state(
                         detected_vendor: "QSX".to_string(),
                     })
                     .collect(),
-            selected_unit_file_name:
-                unit_file_names.first().cloned(),
+            selected_unit_file_names:
+                unit_file_names.clone(),
             requires_unit_file_selection: false,
             requires_format_resolution: false,
+            current_unit_file_name: None,
+            pending_unit_file_names: Vec::new(),
             detected_vendor_name:
                 Some("QSX".to_string()),
             source_headers: Vec::new(),
@@ -210,10 +212,12 @@ pub fn validated_state(
                         detected_vendor: "QSX".to_string(),
                     })
                     .collect(),
-            selected_unit_file_name:
-                unit_file_names.first().cloned(),
+            selected_unit_file_names:
+                unit_file_names.clone(),
             requires_unit_file_selection: false,
             requires_format_resolution: false,
+            current_unit_file_name: None,
+            pending_unit_file_names: Vec::new(),
             detected_vendor_name:
                 Some("QSX".to_string()),
             source_headers: Vec::new(),
@@ -286,10 +290,12 @@ pub fn analyzed_state_with_errors(
                         detected_vendor: "QSX".to_string(),
                     })
                     .collect(),
-            selected_unit_file_name:
-                unit_file_names.first().cloned(),
+            selected_unit_file_names:
+                unit_file_names.clone(),
             requires_unit_file_selection: false,
             requires_format_resolution: false,
+            current_unit_file_name: None,
+            pending_unit_file_names: Vec::new(),
             detected_vendor_name:
                 Some("QSX".to_string()),
             source_headers: Vec::new(),
@@ -319,6 +325,9 @@ pub fn analyzed_state_with_errors(
                     detail: "1 unit: A01".to_string(),
                     correctable_fields: vec!["width".to_string(), "length".to_string()],
                     exemptable: true,
+                    affected_group_names: vec!["10x10 Inside Climate".to_string()],
+                    flagged_are_group_names: false,
+                    group_occurrence_counts: Vec::new(),
                 },
             ],
             files_errored: Vec::new(),

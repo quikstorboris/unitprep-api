@@ -22,14 +22,20 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
-use crate::analysis::parse_fingerprint;
+use crate::analysis::{
+    has_malformed_dimension_attempt,
+    parse_fingerprint,
+};
 use unitprep_core::csv_document::CsvDocument;
 use crate::models::Severity;
 
 pub use issues::{
     correctable_fields_for,
     is_dimension_exemptable,
+    GroupCheckAcknowledgments,
     ValidationIssue,
+    ODD_UNITGROUP,
+    RARE_GROUP,
 };
 
 struct ColumnIndices {
@@ -73,6 +79,7 @@ impl ColumnIndices {
 pub fn validate_document(
     document: &CsvDocument,
     dimension_exempt_units: &HashSet<String>,
+    group_check_acknowledgments: &GroupCheckAcknowledgments,
 ) -> Result<Vec<ValidationIssue>> {
     // Discovery already classified this file as a unit file (that's the
     // only way it reaches `validate_document` at all — see
@@ -94,7 +101,6 @@ pub fn validate_document(
     };
 
     let mut blank = Vec::new();
-    let mut odd = Vec::new();
     let mut bad_dimensions = Vec::new();
     let mut climate_mismatches =
         Vec::new();
@@ -154,19 +160,35 @@ pub fn validate_document(
             row_checks::GroupValue::Blank => {
                 blank.push(unit.clone());
             }
-
-            row_checks::GroupValue::Suspicious => {
-                odd.push(unit.clone());
-            }
         }
 
-        if !dimension_exempt_units
-            .contains(&unit)
-            && row_checks::has_bad_dimensions(
-                row,
-                indices.width,
-                indices.length,
-            )
+        // A malformed dimension *attempt* in the group name itself
+        // ("10x", "aXb", a bare "10") is always Invalid, regardless of
+        // what the row's own Width/Length columns say -- the name is
+        // the problem. A group with no dimension attempt at all (an
+        // office, a single letter, "sq ft") is Odd instead (see
+        // `odd_group_names` below) and is deliberately *not* also
+        // flagged here just because its Width/Length columns are
+        // blank -- that's expected for a non-dimensioned group, not a
+        // data-quality problem. Only a group whose name looks like a
+        // real, valid dimension falls through to the original check:
+        // do the row's *own* declared Width/Length columns actually
+        // agree there's a real, positive value there.
+        let group_is_malformed =
+            has_malformed_dimension_attempt(group);
+
+        // `is_odd_group_name` already excludes malformed attempts on
+        // its own (see its doc comment) -- no need to repeat that
+        // exclusion here.
+        if group_is_malformed
+            || (!group_checks::is_odd_group_name(group)
+                && !dimension_exempt_units
+                    .contains(&unit)
+                && row_checks::has_bad_dimensions(
+                    row,
+                    indices.width,
+                    indices.length,
+                ))
         {
             bad_dimensions
                 .push(unit.clone());
@@ -204,10 +226,43 @@ pub fn validate_document(
         }
     }
 
-    let rare_and_single_unit_groups =
-        group_checks::single_occurrence_groups(
+    // A handful of units of the same type is exactly the situation
+    // where a typo or a wrong dimension can hide undetected -- Boris's
+    // call, replacing the earlier "exactly one" threshold. A group the
+    // user has explicitly accepted "as is" (see
+    // `GroupCheckAcknowledgments`) is filtered out here, before
+    // `issues::build` ever sees it -- its units stay in the data
+    // unchanged, they just stop being flagged under this one check.
+    let rare_pairs: Vec<(String, usize)> =
+        group_checks::rare_groups(
             &group_counts,
-        );
+            RARE_GROUP_MAX_OCCURRENCES,
+        )
+        .into_iter()
+        .filter(|(name, _)| {
+            !group_check_acknowledgments
+                .rare
+                .contains(name)
+        })
+        .collect();
+
+    let rare_group_names: Vec<String> =
+        rare_pairs
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+
+    let odd_group_names: Vec<String> =
+        group_checks::odd_group_names(
+            &group_counts,
+        )
+        .into_iter()
+        .filter(|name| {
+            !group_check_acknowledgments
+                .odd
+                .contains(name)
+        })
+        .collect();
 
     let casing_issues =
         group_checks::casing_inconsistencies(
@@ -219,65 +274,109 @@ pub fn validate_document(
             unit_counts,
         );
 
-    // (flagged values, description, severity) — severity lives right
-    // next to the description it belongs to, so the two can never drift
-    // apart the way they could when severity was reconstructed
-    // elsewhere by matching against this same description text.
-    Ok(issues::build([
+    // (flagged values, description, severity, flagged values are group
+    // names) — severity lives right next to the description it belongs
+    // to, so the two can never drift apart the way they could when
+    // severity was reconstructed elsewhere by matching against this
+    // same description text. Only the two per-group checks (rare/odd
+    // groups) set the last field true — every other check's flagged
+    // values are unit numbers.
+    //
+    // Dimension/climate/locality mismatches and invalid dimensions are
+    // Warning, not Error: a UnitGroup that doesn't fit the standard
+    // width×length storage-unit shape (an office, a boat slip, an
+    // apartment) legitimately has nothing to cross-check against, so
+    // these can't reliably distinguish "real data problem" from
+    // "non-standard but correct" — blocking export on them would punish
+    // every odd-but-valid group along with genuine typos.
+    //
+    // Odd and Invalid Dimensions are deliberately mutually exclusive: a
+    // group with no dimension attempt at all (an office, "sq ft", a
+    // single letter) is Odd only, even though its actual Width/Length
+    // columns are typically also blank -- that's expected for a
+    // non-dimensioned group, not a second, separate data-quality
+    // problem. A group whose name *attempts* a dimension but botches it
+    // ("10x", "aXb", a bare "10") is Invalid Dimensions only, regardless
+    // of its actual columns.
+    let mut issues = issues::build([
         (
             blank,
             issues::BLANK_UNITGROUP,
             Severity::Error,
+            false,
         ),
         (
-            odd,
-            issues::SUSPICIOUS_UNITGROUP,
+            odd_group_names,
+            issues::ODD_UNITGROUP,
             Severity::Warning,
+            true,
         ),
         (
             duplicate_units,
             issues::DUPLICATE_UNITS,
             Severity::Error,
+            false,
         ),
         (
             bad_dimensions,
             issues::INVALID_DIMENSIONS,
-            Severity::Error,
+            Severity::Warning,
+            false,
         ),
         (
             climate_mismatches,
             issues::CLIMATE_MISMATCH,
-            Severity::Error,
+            Severity::Warning,
+            false,
         ),
         (
             locality_mismatches,
             issues::LOCALITY_MISMATCH,
-            Severity::Error,
+            Severity::Warning,
+            false,
         ),
         (
             unitgroup_dimension_mismatches,
             issues::UNITGROUP_DIMENSION_MISMATCH,
-            Severity::Error,
+            Severity::Warning,
+            false,
         ),
         (
-            rare_and_single_unit_groups
-                .clone(),
+            rare_group_names,
             issues::RARE_GROUP,
             Severity::Warning,
-        ),
-        (
-            rare_and_single_unit_groups,
-            issues::SINGLE_UNIT_GROUP,
-            Severity::Warning,
+            true,
         ),
         (
             casing_issues,
             issues::INCONSISTENT_CASING,
             Severity::Warning,
+            false,
         ),
-    ]))
+    ]);
+
+    // `rare_pairs` carries each flagged group's actual occurrence count
+    // (1 up to `RARE_GROUP_MAX_OCCURRENCES`) -- attached after `build`
+    // rather than threading a 5th tuple field through every candidate
+    // above, since every other check leaves this empty.
+    for issue in &mut issues {
+        if issue.description == issues::RARE_GROUP {
+            issue.group_occurrence_counts =
+                rare_pairs.clone();
+        }
+    }
+
+    Ok(issues)
 }
 
+/// A UnitGroup appearing on this many units or fewer in a file counts as
+/// "rare" -- a handful of units of one type is exactly the situation
+/// where a typo or a wrong dimension could be hiding undetected. Chosen
+/// deliberately wider than "exactly one" (the previous, since-removed
+/// "UnitGroup contains only one unit" check's own threshold) after real
+/// test data showed genuinely unremarkable small groups being flagged
+/// at that narrower cutoff.
+const RARE_GROUP_MAX_OCCURRENCES: usize = 4;
 
 #[cfg(test)]
 #[path = "validation_tests.rs"]

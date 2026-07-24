@@ -97,48 +97,62 @@ pub struct UnitFileCandidate {
 /// `StageError`) stay in the binary's `application/` layer, matching
 /// `unitprep-dedup`'s own session boundary.
 ///
-/// A discovery session is scoped to one facility: any time more than one
-/// candidate unit file is found, that's always redundant/duplicate pulls
-/// of that one facility (e.g. repeated exports on different dates), never
-/// intentionally-distinct facilities — so exactly one must be selected
-/// before anything downstream (format resolution, validation, analysis)
-/// can run against it.
+/// A discovery session can span several facilities at once — a folder
+/// full of candidate unit files is normal (each facility contributes its
+/// own), not necessarily duplicate re-pulls of a single facility.
+/// `build_batch_from_documents` already treats every unit document as its
+/// own `Facility`, aggregating distinct group names both per-facility and
+/// globally — so discovery's job is to let the user confirm *which*
+/// subset of candidates to process (defaulting to all of them), not to
+/// force a single winner the way an earlier version of this struct did.
 #[derive(Debug, Clone)]
 pub struct DiscoveryResult {
-    /// At most one entry once resolved — kept as a `Vec` for backward
-    /// display compatibility with the "unit files found" count; derived
-    /// from `unit_file_candidates`/`selected_unit_file_name` rather than
-    /// tracked independently.
+    /// The unit files that will actually be validated/analyzed —
+    /// always equal to `selected_unit_file_names`, exposed under its own
+    /// name since that's what validate/analyze read.
     pub unit_file_names: Vec<String>,
     pub group_file_names: Vec<String>,
     pub selected_group_file_name: Option<String>,
     pub ready: bool,
 
-    /// Every raw discovered file matching a known vendor signature.
+    /// Every raw discovered file matching a known vendor signature — the
+    /// full candidate list the user confirms a subset (or all) of.
     pub unit_file_candidates: Vec<UnitFileCandidate>,
 
-    /// Set once the user picks one (or discovery found exactly one to
-    /// begin with).
-    pub selected_unit_file_name: Option<String>,
+    /// The confirmed set of unit files to process — set once the user
+    /// confirms a selection, or auto-set when discovery found exactly one
+    /// candidate to begin with (nothing to choose between).
+    pub selected_unit_file_names: Vec<String>,
 
-    /// `unit_file_candidates.len() > 1` and nothing selected yet.
+    /// `unit_file_candidates.len() > 1` and nothing confirmed yet.
     pub requires_unit_file_selection: bool,
 
-    /// Exactly one unit file selected, but it has no entry yet in
-    /// `Session::format_resolutions` — the confirm-or-map step hasn't run.
+    /// At least one file in `selected_unit_file_names` has no entry yet
+    /// in `Session::format_resolutions` — the confirm-or-map step hasn't
+    /// finished for all of them.
     pub requires_format_resolution: bool,
 
-    /// The vendor detected for the selected file, if any.
+    /// Which confirmed file the confirm-or-map UI is currently working
+    /// on — the first (by name) still missing a format resolution.
+    /// `None` once every selected file is resolved.
+    pub current_unit_file_name: Option<String>,
+
+    /// Every confirmed file still awaiting resolution, in the order
+    /// they'll be resolved — always starts with `current_unit_file_name`.
+    /// Lets the UI show progress ("file 2 of 5") without re-deriving it.
+    pub pending_unit_file_names: Vec<String>,
+
+    /// The vendor detected for `current_unit_file_name`, if any.
     pub detected_vendor_name: Option<String>,
 
-    /// The selected file's own headers, exposed only while
+    /// `current_unit_file_name`'s own headers, exposed only while
     /// `requires_format_resolution` is true — what the manual-mapping
     /// UI's per-target dropdowns are built from.
     pub source_headers: Vec<String>,
 
-    /// The detected vendor's preset mapping, for pre-filling the manual
-    /// mapping UI's dropdowns (still fully overridable). Empty when no
-    /// vendor was detected for the selected file.
+    /// The detected vendor's preset mapping for `current_unit_file_name`,
+    /// for pre-filling the manual mapping UI's dropdowns (still fully
+    /// overridable). Empty when no vendor was detected.
     pub suggested_mapping: Vec<FieldMappingEntry>,
 }
 
@@ -183,4 +197,25 @@ pub struct ValidationIssueSummary {
     /// mark a unit as intentionally non-dimensioned (office, apartment,
     /// etc.) instead of requiring fabricated Width/Length values.
     pub exemptable: bool,
+
+    /// Distinct UnitGroup names this issue concerns — the flagged group
+    /// names themselves for the two per-group checks (rare/odd groups),
+    /// or the resolved UnitGroup of each affected unit for every other
+    /// (per-unit) check. Lets the UI offer a group-wide fix (rename via
+    /// `/correct-group`, or exclude entirely via `/exclude-group`)
+    /// instead of only a per-unit one. Empty if a per-unit issue's
+    /// units' UnitGroup couldn't be resolved (should not happen in
+    /// practice).
+    pub affected_group_names: Vec<String>,
+
+    /// True for the two per-group checks (see `affected_group_names`) —
+    /// tells the UI whether `affected_unit_ids` are real unit numbers
+    /// worth listing individually, or (for these checks) just an
+    /// implementation detail that happens to equal the group names.
+    pub flagged_are_group_names: bool,
+
+    /// (group name, occurrence count) pairs — populated only for "Rare
+    /// UnitGroup detected", where the actual count (up to the rare-group
+    /// threshold) is meaningful to show next to each name.
+    pub group_occurrence_counts: Vec<(String, usize)>,
 }

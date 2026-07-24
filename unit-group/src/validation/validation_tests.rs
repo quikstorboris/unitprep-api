@@ -29,6 +29,7 @@ fn detects_duplicate_unit_numbers() {
         validate_document(
             &document,
             &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
         )
         .unwrap();
 
@@ -62,6 +63,7 @@ fn rare_group_is_a_warning_not_an_error(
         validate_document(
             &document,
             &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
         )
         .unwrap();
 
@@ -102,6 +104,7 @@ fn blank_unitgroup_is_an_error_not_a_warning(
         validate_document(
             &document,
             &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
         )
         .unwrap();
 
@@ -146,17 +149,82 @@ fn detects_invalid_dimensions() {
         validate_document(
             &document,
             &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
         )
         .unwrap();
 
-    assert!(issues.iter().any(|i| {
+    let issue = issues
+        .iter()
+        .find(|i| {
+            i.description
+                == "Invalid dimensions"
+        })
+        .expect(
+            "expected an invalid-dimensions issue",
+        );
+
+    // Warning, not Error: a unit with no dimensions is often a
+    // legitimately non-standard group (office, apartment), not
+    // necessarily bad data -- see the doc comment on `issues::build`'s
+    // call site in mod.rs.
+    assert_eq!(
+        issue.severity,
+        Severity::Warning
+    );
+}
+
+#[test]
+fn exempted_unit_is_not_flagged_for_invalid_dimensions(
+) {
+    // The group name must actually parse as a real dimension ("1200 sq
+    // ft" would not) -- an odd/non-dimensioned name is now excluded from
+    // this check entirely regardless of exemption (see mod.rs's
+    // no-overlap-with-Odd rule), which would make this test pass for
+    // the wrong reason.
+    let document = CsvDocument {
+            modified_at: None,
+        file_name: "test.csv"
+            .to_string(),
+        headers: vec![
+            "number".to_string(),
+            "unitgroup".to_string(),
+            "width".to_string(),
+            "length".to_string(),
+        ],
+        rows: vec![vec![
+            "Office".to_string(),
+            "10x10 Inside Climate"
+                .to_string(),
+            "".to_string(),
+            "".to_string(),
+        ]],
+    };
+
+    let mut exempt = HashSet::new();
+    exempt.insert(
+        "Office".to_string(),
+    );
+
+    let issues = validate_document(
+        &document,
+        &exempt,
+        &GroupCheckAcknowledgments::default(),
+    )
+    .unwrap();
+
+    assert!(!issues.iter().any(|i| {
         i.description
             == "Invalid dimensions"
     }));
 }
 
+/// The core no-overlap rule: a group with no dimension attempt at all
+/// (an office, an apartment) is Odd only, even though its actual
+/// Width/Length columns are blank -- that's expected for a
+/// non-dimensioned group, not a second, separate "Invalid dimensions"
+/// problem.
 #[test]
-fn exempted_unit_is_not_flagged_for_invalid_dimensions(
+fn a_group_with_no_dimension_attempt_is_odd_only_not_also_invalid(
 ) {
     let document = CsvDocument {
             modified_at: None,
@@ -170,25 +238,71 @@ fn exempted_unit_is_not_flagged_for_invalid_dimensions(
         ],
         rows: vec![vec![
             "Office".to_string(),
-            "1200 sq ft".to_string(),
+            "Hertz Office Space"
+                .to_string(),
             "".to_string(),
             "".to_string(),
         ]],
     };
 
-    let mut exempt = HashSet::new();
-    exempt.insert(
-        "Office".to_string(),
-    );
-
     let issues = validate_document(
-        &document, &exempt,
+        &document,
+        &HashSet::new(),
+        &GroupCheckAcknowledgments::default(),
     )
     .unwrap();
+
+    assert!(issues.iter().any(|i| {
+        i.description
+            == "Odd UnitGroup values"
+    }));
 
     assert!(!issues.iter().any(|i| {
         i.description
             == "Invalid dimensions"
+    }));
+}
+
+/// The other half of the no-overlap rule: a group name that *attempts* a
+/// dimension but botches it ("10x", missing its second number) is
+/// Invalid Dimensions, regardless of what the row's own actual
+/// Width/Length columns say -- and is never also Odd.
+#[test]
+fn a_malformed_dimension_attempt_is_invalid_dimensions_only_not_odd(
+) {
+    let document = CsvDocument {
+            modified_at: None,
+        file_name: "test.csv"
+            .to_string(),
+        headers: vec![
+            "number".to_string(),
+            "unitgroup".to_string(),
+            "width".to_string(),
+            "length".to_string(),
+        ],
+        rows: vec![vec![
+            "A01".to_string(),
+            "10x".to_string(),
+            "10".to_string(),
+            "10".to_string(),
+        ]],
+    };
+
+    let issues = validate_document(
+        &document,
+        &HashSet::new(),
+        &GroupCheckAcknowledgments::default(),
+    )
+    .unwrap();
+
+    assert!(issues.iter().any(|i| {
+        i.description
+            == "Invalid dimensions"
+    }));
+
+    assert!(!issues.iter().any(|i| {
+        i.description
+            == "Odd UnitGroup values"
     }));
 }
 
@@ -216,13 +330,24 @@ fn detects_climate_mismatch() {
         validate_document(
             &document,
             &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
         )
         .unwrap();
 
-    assert!(issues.iter().any(|i| {
-        i.description
-            == "Climate status does not match UnitGroup"
-    }));
+    let issue = issues
+        .iter()
+        .find(|i| {
+            i.description
+                == "Climate status does not match UnitGroup"
+        })
+        .expect(
+            "expected a climate-mismatch issue",
+        );
+
+    assert_eq!(
+        issue.severity,
+        Severity::Warning
+    );
 }
 
 #[test]
@@ -248,13 +373,24 @@ fn detects_locality_mismatch() {
         validate_document(
             &document,
             &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
         )
         .unwrap();
 
-    assert!(issues.iter().any(|i| {
-        i.description
-            == "Locality does not match UnitGroup"
-    }));
+    let issue = issues
+        .iter()
+        .find(|i| {
+            i.description
+                == "Locality does not match UnitGroup"
+        })
+        .expect(
+            "expected a locality-mismatch issue",
+        );
+
+    assert_eq!(
+        issue.severity,
+        Severity::Warning
+    );
 }
 
 #[test]
@@ -283,43 +419,24 @@ fn detects_unitgroup_dimension_mismatch(
         validate_document(
             &document,
             &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
         )
         .unwrap();
 
-    assert!(issues.iter().any(|i| {
-        i.description
-            == "UnitGroup dimensions do not match Width/Length"
-    }));
-}
+    let issue = issues
+        .iter()
+        .find(|i| {
+            i.description
+                == "UnitGroup dimensions do not match Width/Length"
+        })
+        .expect(
+            "expected a dimension-mismatch issue",
+        );
 
-#[test]
-fn detects_single_unit_group() {
-    let document = CsvDocument {
-            modified_at: None,
-        file_name: "test.csv"
-            .to_string(),
-        headers: vec![
-            "number".to_string(),
-            "unitgroup".to_string(),
-        ],
-        rows: vec![vec![
-            "A01".to_string(),
-            "10x17 Climate"
-                .to_string(),
-        ]],
-    };
-
-    let issues =
-        validate_document(
-            &document,
-            &HashSet::new(),
-        )
-        .unwrap();
-
-    assert!(issues.iter().any(|i| {
-        i.description
-            == "UnitGroup contains only one unit"
-    }));
+    assert_eq!(
+        issue.severity,
+        Severity::Warning
+    );
 }
 
 #[test]
@@ -343,6 +460,7 @@ fn detects_rare_group() {
         validate_document(
             &document,
             &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
         )
         .unwrap();
 
@@ -350,6 +468,101 @@ fn detects_rare_group() {
         i.description
             == "Rare UnitGroup detected"
     }));
+}
+
+#[test]
+fn rare_group_flags_group_names_not_unit_numbers(
+) {
+    let document = CsvDocument {
+            modified_at: None,
+        file_name: "test.csv"
+            .to_string(),
+        headers: vec![
+            "number".to_string(),
+            "unitgroup".to_string(),
+        ],
+        rows: vec![vec![
+            "A01".to_string(),
+            "10x17 Climate"
+                .to_string(),
+        ]],
+    };
+
+    let issues =
+        validate_document(
+            &document,
+            &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
+        )
+        .unwrap();
+
+    let rare = issues
+        .iter()
+        .find(|i| {
+            i.description
+                == "Rare UnitGroup detected"
+        })
+        .expect(
+            "expected a rare-group issue",
+        );
+
+    assert!(
+        rare.flagged_are_group_names
+    );
+    assert_eq!(
+        rare.flagged_values,
+        vec!["10x17 Climate".to_string()]
+    );
+}
+
+#[test]
+fn invalid_dimensions_flags_unit_numbers_not_group_names(
+) {
+    let document = CsvDocument {
+            modified_at: None,
+        file_name: "test.csv"
+            .to_string(),
+        headers: vec![
+            "number".to_string(),
+            "unitgroup".to_string(),
+            "width".to_string(),
+            "length".to_string(),
+        ],
+        rows: vec![vec![
+            "A01".to_string(),
+            "10x10 Inside Climate"
+                .to_string(),
+            "0".to_string(),
+            "10".to_string(),
+        ]],
+    };
+
+    let issues =
+        validate_document(
+            &document,
+            &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
+        )
+        .unwrap();
+
+    let invalid = issues
+        .iter()
+        .find(|i| {
+            i.description
+                == "Invalid dimensions"
+        })
+        .expect(
+            "expected an invalid-dimensions issue",
+        );
+
+    assert!(
+        !invalid
+            .flagged_are_group_names
+    );
+    assert_eq!(
+        invalid.flagged_values,
+        vec!["A01".to_string()]
+    );
 }
 
 #[test]
@@ -380,6 +593,7 @@ fn detects_casing_mismatch() {
         validate_document(
             &document,
             &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
         )
         .unwrap();
 
@@ -415,6 +629,7 @@ fn validate_document_errors_loudly_when_a_supposed_unit_file_has_no_matching_col
     let err = validate_document(
         &document,
         &HashSet::new(),
+        &GroupCheckAcknowledgments::default(),
     )
     .unwrap_err();
 
@@ -452,6 +667,7 @@ fn validates_a_unit_file_with_an_underscored_unitgroup_header(
         validate_document(
             &document,
             &HashSet::new(),
+            &GroupCheckAcknowledgments::default(),
         )
         .unwrap();
 

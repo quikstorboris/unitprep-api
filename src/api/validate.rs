@@ -25,9 +25,12 @@ use unitprep_unit_group::{
     is_dimension_exemptable,
     validate_document,
     FileValidationError,
+    GroupCheckAcknowledgments,
     Severity,
     ValidationIssueSummary,
     ValidationResult,
+    ODD_UNITGROUP,
+    RARE_GROUP,
 };
 
 #[derive(Debug, Deserialize)]
@@ -94,6 +97,21 @@ pub fn run_validation(
     let documents =
         session.effective_documents();
 
+    // Session-wide, not per-file (a group name is already a session-wide
+    // concept the same way `excluded_groups` is) — built once outside the
+    // loop rather than per document.
+    let group_check_acknowledgments =
+        GroupCheckAcknowledgments {
+            odd: session
+                .acknowledged_groups_for(
+                    ODD_UNITGROUP,
+                ),
+            rare: session
+                .acknowledged_groups_for(
+                    RARE_GROUP,
+                ),
+        };
+
     for document in documents.iter() {
         if !discovery
             .unit_file_names
@@ -107,10 +125,39 @@ pub fn run_validation(
                 &document.file_name,
             );
 
+        // Cheap per-document lookup, built once regardless of how many
+        // issues reference it -- lets a per-unit issue's flagged unit
+        // numbers be resolved back to the UnitGroup they belong to (see
+        // `affected_group_names` below), without `validate_document`
+        // itself needing to carry that mapping through its own return
+        // type.
+        let unit_to_group: std::collections::HashMap<String, String> =
+            match (
+                document.header_index("number"),
+                document.header_index("unitgroup"),
+            ) {
+                (Some(unit_idx), Some(group_idx)) => document
+                    .rows
+                    .iter()
+                    .filter_map(|row| {
+                        let unit = row.get(unit_idx)?.clone();
+                        let group = row.get(group_idx)?.trim().to_string();
+
+                        if unit.is_empty() {
+                            None
+                        } else {
+                            Some((unit, group))
+                        }
+                    })
+                    .collect(),
+                _ => std::collections::HashMap::new(),
+            };
+
         let document_issues =
             match validate_document(
                 document,
                 &exempt_units,
+                &group_check_acknowledgments,
             ) {
                 Ok(v) => v,
                 Err(err) => {
@@ -161,6 +208,31 @@ pub fn run_validation(
                 Severity::Info => {}
             }
 
+            let mut affected_group_names: Vec<String> =
+                if issue.flagged_are_group_names {
+                    issue.flagged_values.clone()
+                } else {
+                    issue
+                        .flagged_values
+                        .iter()
+                        .filter_map(|unit| {
+                            unit_to_group.get(unit).cloned()
+                        })
+                        .filter(|group| !group.is_empty())
+                        .collect()
+                };
+
+            affected_group_names.sort();
+            affected_group_names.dedup();
+
+            let flagged_are_group_names =
+                issue.flagged_are_group_names;
+
+            let group_occurrence_counts =
+                issue
+                    .group_occurrence_counts
+                    .clone();
+
             let affected_unit_ids =
                 issue.flagged_values;
 
@@ -203,6 +275,9 @@ pub fn run_validation(
                     detail,
                     correctable_fields,
                     exemptable,
+                    affected_group_names,
+                    flagged_are_group_names,
+                    group_occurrence_counts,
                 },
             );
         }

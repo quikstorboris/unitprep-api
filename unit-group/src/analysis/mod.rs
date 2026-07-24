@@ -11,6 +11,8 @@ mod reference;
 
 pub use batch::build_batch_from_documents;
 pub use fingerprint::{
+    has_malformed_dimension_attempt,
+    is_uncommon_group_name,
     parse_fingerprint,
     Climate,
     GroupFingerprint,

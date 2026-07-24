@@ -21,14 +21,20 @@ use crate::{
 #[derive(Debug, Deserialize)]
 pub struct SelectUnitFileRequest {
     pub session_id: String,
-    pub unit_file_name: String,
+    /// The confirmed set of unit files to process -- every discovered
+    /// unit file candidate that survived the user's checkbox selection
+    /// (defaults to all of them). Replaces any previous confirmation
+    /// wholesale, so calling this again (e.g. via "Return to Unit Files
+    /// Selection") is how a changed selection takes effect.
+    pub unit_file_names: Vec<String>,
 }
 
 /// Why selection can't proceed — same pattern as `select_group_file`'s
 /// `SelectNotReady`.
 enum SelectNotReady {
     Stage(StageError),
-    FileNotDiscovered,
+    EmptySelection,
+    FileNotDiscovered(String),
 }
 
 pub async fn select_unit_file(
@@ -44,29 +50,52 @@ pub async fn select_unit_file(
                     .require_stage(WorkflowStage::Discovered)
                     .map_err(SelectNotReady::Stage)?;
 
+                if request.unit_file_names.is_empty() {
+                    return Err(SelectNotReady::EmptySelection);
+                }
+
                 let discovery = session
                     .data
                     .discovery
                     .as_ref()
                     .expect("Discovered stage guarantees discovery data");
 
-                if !discovery
-                    .unit_file_candidates
-                    .iter()
-                    .any(|c| c.file_name == request.unit_file_name)
-                {
-                    return Err(SelectNotReady::FileNotDiscovered);
+                for name in &request.unit_file_names {
+                    if !discovery
+                        .unit_file_candidates
+                        .iter()
+                        .any(|c| &c.file_name == name)
+                    {
+                        return Err(SelectNotReady::FileNotDiscovered(name.clone()));
+                    }
                 }
 
                 let mut discovery = discovery.clone();
-                discovery.selected_unit_file_name =
-                    Some(request.unit_file_name.clone());
+                discovery.selected_unit_file_names =
+                    request.unit_file_names.clone();
                 session.complete_discovery(discovery);
+
+                // One line per file rather than the whole Vec crammed
+                // into a single `unit_file_names=[...]` field -- a real
+                // multi-facility folder can select a dozen-plus files at
+                // once, each with a long path, and a single-line dump of
+                // all of them is unreadable in the raw log. The summary
+                // line right after keeps the total greppable/gawkable on
+                // its own too.
+                for file_name in
+                    &request.unit_file_names
+                {
+                    tracing::info!(
+                        session_id = %request.session_id,
+                        file = %file_name,
+                        "Unit file selected"
+                    );
+                }
 
                 tracing::info!(
                     session_id = %request.session_id,
-                    unit_file_name = %request.unit_file_name,
-                    "Unit file selected"
+                    unit_file_count = request.unit_file_names.len(),
+                    "Unit file selection complete"
                 );
 
                 Ok(compute_discovery(session))
@@ -76,13 +105,20 @@ pub async fn select_unit_file(
     match result {
         Some(Ok(response)) => Json(response).into_response(),
         Some(Err(SelectNotReady::Stage(err))) => stage_conflict(err),
-        Some(Err(SelectNotReady::FileNotDiscovered)) => (
+        Some(Err(SelectNotReady::EmptySelection)) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorBody {
+                error: "unit_file_selection_empty",
+                message: "At least one unit file must be selected.".to_string(),
+            }),
+        )
+            .into_response(),
+        Some(Err(SelectNotReady::FileNotDiscovered(name))) => (
             StatusCode::BAD_REQUEST,
             Json(ApiErrorBody {
                 error: "unit_file_invalid",
                 message: format!(
-                    "'{}' was not found among this session's discovered unit file candidates.",
-                    request.unit_file_name
+                    "'{name}' was not found among this session's discovered unit file candidates."
                 ),
             }),
         )

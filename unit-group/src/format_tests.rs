@@ -34,6 +34,67 @@ fn detects_qsx_by_its_real_export_headers() {
     assert_eq!(detect_vendor(&doc).map(|v| v.name), Some("QSX"));
 }
 
+/// Storage Commander's signature (`UnitGroup`/`Number`/`Category`) is a
+/// strict subset of QSX's own -- without the extra `Locality` header this
+/// vendor requires, this exact fixture (the real "Absolute Storage of
+/// Franklin Park" export, trimmed to its distinguishing columns) would
+/// misclassify as QSX.
+#[test]
+fn detects_storage_commander_by_its_real_export_headers() {
+    let doc = document(
+        vec![
+            "Number",
+            "UnitGroup",
+            "Category",
+            "StandardRate",
+            "Active",
+            "Damaged",
+            "Width",
+            "Length",
+            "Height",
+            "Locality",
+            "MonitoringEnabled",
+            "SmartLockEnabled",
+        ],
+        vec![],
+    );
+
+    assert_eq!(
+        detect_vendor(&doc).map(|v| v.name),
+        Some("Storage Commander")
+    );
+}
+
+#[test]
+fn storage_commander_default_mapping_translates_locality_to_inside_outside() {
+    let mapping = mapping_from_vendor(&STORAGE_COMMANDER);
+
+    let inside_outside_source = mapping
+        .iter()
+        .find(|(target, _)| target == "InsideOutside")
+        .and_then(|(_, source)| source.clone());
+
+    assert_eq!(inside_outside_source, Some("Locality".to_string()));
+}
+
+/// A true QSX export (no `Locality` column at all) must still detect as
+/// QSX, not Storage Commander -- Storage Commander's extra required header
+/// is what keeps the two apart in both directions.
+#[test]
+fn a_true_qsx_export_without_locality_still_detects_as_qsx() {
+    let doc = document(
+        vec![
+            "Number",
+            "UnitGroup",
+            "Category",
+            "InsideOutside",
+        ],
+        vec![],
+    );
+
+    assert_eq!(detect_vendor(&doc).map(|v| v.name), Some("QSX"));
+}
+
 #[test]
 fn detects_door_swap_by_its_real_export_headers() {
     let doc = document(
