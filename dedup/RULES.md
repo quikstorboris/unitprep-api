@@ -134,20 +134,34 @@ supporting context in a human summary, never as its own trigger.
 
 **Implements**: `normalization.rs`.
 
-## Export (CSV) — presentation, not detection
+## Export (CSV/XLSX) — presentation, not detection
 
-The exported CSV has three sections, in this order, each blank-row
-separated: flagged groups (rule 2), typo/name variants (rule 3),
-related tenants (rule 4). Flagged-group and typo-variant notes also
-get spreadsheet-style cell references appended (`"AlternateContact
-PhoneNumber: T7=..., T8=..."`) computed from the CSV's own column
-layout — related-tenant notes don't get this, since their evidence
-("this value matched somewhere among this tenant's fields") doesn't
-point at one well-defined cell the way a field mismatch does.
+Both exported formats have the same three sections, in this order,
+each blank-row separated: flagged groups (rule 2), typo/name variants
+(rule 3), related tenants (rule 4). Flagged-group and typo-variant
+notes also get spreadsheet-style cell references appended
+(`"AlternateContactPhoneNumber: T7=..., T8=..."`) computed from the
+source document's own column layout — related-tenant notes don't get
+this, since their evidence ("this value matched somewhere among this
+tenant's fields") doesn't point at one well-defined cell the way a
+field mismatch does.
 
-**Implements**: `src/infrastructure/dedup_csv_export.rs` and its
-`cell_refs` submodule (in the binary, not this crate — export format
-is deliberately an API-layer concern, not domain logic).
+CSV and XLSX are two independent *writers* over one shared, format-
+agnostic **export plan** — this exists specifically so the two formats
+can never silently drift apart the way two independent row/column
+implementations would. The plan (row ordering, which row carries the
+note, cell references, cluster boundaries for XLSX's background-color
+coding) is computed once and handed to both writers unchanged.
+
+**Implements** (all in the binary, not this crate — export format is
+deliberately an API-layer concern, not domain logic):
+- `src/infrastructure/dedup_export_plan.rs` — the shared plan (`PlannedRow`,
+  `build_export_plan`) and its `cell_refs` submodule (col-letter math,
+  `first_cell_ref` for XLSX's hyperlink target).
+- `src/infrastructure/dedup_csv_export.rs` — CSV writer over the plan.
+- `src/infrastructure/dedup_xlsx_export.rs` — XLSX writer over the same
+  plan; adds per-cluster background color and a clickable hyperlink on
+  each note to its first cited cell.
 
 ## Explicitly considered and NOT implemented
 
@@ -185,7 +199,10 @@ scratch — each was a real idea, each has a concrete reason it's not
    a genuinely different note shape, don't bypass the trait with a
    one-off formatting function.
 3. Wire it into `DedupReport` (`report.rs`) and, if it should appear
-   in the CSV, into `dedup_csv_export.rs` (the binary side).
+   in the export, into `dedup_export_plan.rs` — the shared plan both
+   `dedup_csv_export.rs` and `dedup_xlsx_export.rs` consume (the binary
+   side). Wiring it into just one writer directly would silently leave
+   it out of the other format.
 4. Update this file, in the same change, not after.
 5. Thresholds/caps are Rust constants declared next to the logic that
    uses them (see `VARIANT_SURFACE_THRESHOLD` in `similarity.rs`,
