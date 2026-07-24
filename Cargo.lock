@@ -293,6 +293,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "58785077b99914cfa7aa07b7203b1d5eb91efcd7d5ffd0f51a98b95c36112ef4"
 dependencies = [
  "byteorder",
+ "chrono",
  "codepage",
  "encoding_rs",
  "log",
@@ -328,6 +329,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -2698,6 +2700,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "calamine",
+ "chrono",
  "csv",
  "parking_lot",
  "quick-xml 0.36.2",

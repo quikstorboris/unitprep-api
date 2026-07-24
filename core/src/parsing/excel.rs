@@ -5,6 +5,7 @@ use calamine::{
     Data,
     Reader,
 };
+use chrono::NaiveTime;
 
 use crate::csv_document::CsvDocument;
 use crate::uploaded_file::UploadedFile;
@@ -29,11 +30,9 @@ pub fn parse_excel_document(
     let mut workbook =
         open_workbook_auto_from_rs(cursor)?;
 
-    let sheet_names =
-        workbook.sheet_names().to_vec();
-
     let first_sheet =
-        sheet_names
+        workbook
+            .sheet_names()
             .first()
             .cloned()
             .ok_or_else(|| {
@@ -114,9 +113,19 @@ fn cell_to_string(
             }
         }
 
-        Data::DateTime(v) => {
-            v.to_string()
-        }
+        Data::DateTime(v) => match v.as_datetime() {
+            // Cells with no time-of-day component (the common case for a
+            // plain date column) render as a bare date, not
+            // midnight-suffixed noise.
+            Some(dt) if dt.time() == NaiveTime::MIN => {
+                dt.format("%Y-%m-%d").to_string()
+            }
+            Some(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+            // `as_datetime()` can return `None` on overflow (see calamine's
+            // own doc comment) — fall back to the raw serial number rather
+            // than panicking or dropping the cell's value entirely.
+            None => v.to_string(),
+        },
 
         Data::DateTimeIso(v) => {
             v.clone()
@@ -129,5 +138,54 @@ fn cell_to_string(
         Data::Error(v) => {
             v.to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use calamine::{ExcelDateTime, ExcelDateTimeType};
+
+    use super::*;
+
+    #[test]
+    fn date_only_cell_formats_as_plain_date() {
+        // Excel serial 45292 = 2024-01-01 (no time-of-day component).
+        let cell = Data::DateTime(ExcelDateTime::new(
+            45292.0,
+            ExcelDateTimeType::DateTime,
+            false,
+        ));
+
+        assert_eq!(cell_to_string(&cell), "2024-01-01");
+    }
+
+    #[test]
+    fn datetime_cell_with_time_formats_with_time() {
+        // 45292.5 = 2024-01-01 12:00:00.
+        let cell = Data::DateTime(ExcelDateTime::new(
+            45292.5,
+            ExcelDateTimeType::DateTime,
+            false,
+        ));
+
+        assert_eq!(
+            cell_to_string(&cell),
+            "2024-01-01 12:00:00"
+        );
+    }
+
+    #[test]
+    fn non_date_cell_types_are_unaffected() {
+        assert_eq!(cell_to_string(&Data::Int(42)), "42");
+        assert_eq!(
+            cell_to_string(&Data::Float(10.0)),
+            "10"
+        );
+        assert_eq!(
+            cell_to_string(&Data::String(
+                "hello".to_string()
+            )),
+            "hello"
+        );
     }
 }

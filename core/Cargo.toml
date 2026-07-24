@@ -17,8 +17,13 @@ tokio = { version = "1", features = ["full"] }
 # access for every other request.
 parking_lot = "0.12"
 
-# Excel support
-calamine = "0.25"
+# Excel support. "dates" enables ExcelDateTime::as_datetime() — without it,
+# date/datetime-typed cells silently stringify to their raw serial-number
+# float instead of a real date. calamine depends on chrono for this
+# internally, but that doesn't make chrono usable here — it must be a
+# direct dependency of this crate too to format the resulting NaiveDateTime.
+calamine = { version = "0.25", features = ["dates"] }
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 
 # Excel 2003 SpreadsheetML (XML) support — some facility export tools
 # label this format with a .xls extension even though it's neither real
