@@ -237,14 +237,25 @@ pub async fn export(
     //
     // Tiny mutation scope.
     //
-    let _ = state
+    if state
         .unit_group_sessions
         .with_session_mut(
             &request.session_id,
             |session| {
                 session.complete_export();
             },
+        )
+        .is_none()
+    {
+        // Same narrow race as analyze.rs: the session vanished between
+        // the read lock above and this write-back. The ZIP is already
+        // built and returned regardless — this just makes the race
+        // observable rather than changing the response.
+        tracing::warn!(
+            session_id = %request.session_id,
+            "Session no longer exists — export stage could not be recorded"
         );
+    }
 
     tracing::info!(
         session_id = %request.session_id,

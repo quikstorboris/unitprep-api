@@ -220,7 +220,7 @@ pub async fn analyze(
         }
     };
 
-    let _ = state
+    if state
         .unit_group_sessions
         .with_session_mut(
             &request.session_id,
@@ -229,7 +229,20 @@ pub async fn analyze(
                     results.clone(),
                 );
             },
+        )
+        .is_none()
+    {
+        // The session was deleted/expired in the narrow window between
+        // the read lock above and this write-back. The analysis itself
+        // is already complete and valid — there's nothing to recover by
+        // erroring here, since no later call could have used the
+        // advanced stage anyway. This just makes a previously-silent
+        // race observable instead of changing the response.
+        tracing::warn!(
+            session_id = %request.session_id,
+            "Session no longer exists — analysis stage could not be recorded"
         );
+    }
 
     tracing::info!(
         session_id = %request.session_id,
