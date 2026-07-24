@@ -99,9 +99,17 @@ fn find_typo_variant_candidates(
             // creates an empty one.
             let a = groups[i].records[0].display_name();
             let b = groups[j].records[0].display_name();
-            if a.is_empty() || b.is_empty() || a == b {
+            if a.is_empty() || b.is_empty() {
                 continue;
             }
+            // NOTE: two *different* group keys (distinct `FirtLast`
+            // spellings/formatting) can still produce an identical
+            // display name — e.g. "Smith, John" vs. "John  Smith" both
+            // display as "John Smith" but never collapse into one
+            // `group_key`. That's exactly the strongest duplicate-tenant
+            // signal there is, so it must NOT be skipped here; a 100%
+            // `name_similarity` ratio surfaces it through the normal
+            // threshold check below like any other high-similarity pair.
             let ratio = name_similarity(&a, &b);
             if ratio < VARIANT_SURFACE_THRESHOLD {
                 continue;
@@ -124,4 +132,86 @@ fn find_typo_variant_candidates(
     }
     candidates.sort_by(|a, b| b.ratio.partial_cmp(&a.ratio).unwrap());
     candidates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::TenantRecord;
+
+    fn record(
+        first_last: &str,
+        first_name: &str,
+        last_name: &str,
+        unit: &str,
+    ) -> TenantRecord {
+        TenantRecord {
+            first_last: first_last.to_string(),
+            first_name: first_name.to_string(),
+            last_name: last_name.to_string(),
+            unit_number: unit.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn identical_display_names_under_different_keys_are_surfaced() {
+        // Two different `FirtLast` spellings/formats ("Smith, John" vs.
+        // "John  Smith") never share a group_key, but both display as
+        // "John Smith" — exactly the strongest duplicate-tenant signal
+        // there is. This must NOT be silently skipped.
+        let groups = vec![
+            TenantGroup {
+                key: "smith, john".to_string(),
+                records: vec![record(
+                    "Smith, John",
+                    "John",
+                    "Smith",
+                    "A1",
+                )],
+            },
+            TenantGroup {
+                key: "john  smith".to_string(),
+                records: vec![record(
+                    "John  Smith",
+                    "John",
+                    "Smith",
+                    "B2",
+                )],
+            },
+        ];
+
+        let candidates = find_typo_variant_candidates(
+            &groups,
+            &TemplateNoteComposer,
+        );
+
+        assert_eq!(candidates.len(), 1);
+        assert!(
+            (candidates[0].ratio - 1.0).abs() < 1e-9,
+            "expected a perfect-match ratio, got {}",
+            candidates[0].ratio
+        );
+    }
+
+    #[test]
+    fn blank_display_names_are_still_skipped() {
+        let groups = vec![
+            TenantGroup {
+                key: "a".to_string(),
+                records: vec![record("", "", "", "A1")],
+            },
+            TenantGroup {
+                key: "b".to_string(),
+                records: vec![record("", "", "", "B2")],
+            },
+        ];
+
+        let candidates = find_typo_variant_candidates(
+            &groups,
+            &TemplateNoteComposer,
+        );
+
+        assert!(candidates.is_empty());
+    }
 }
