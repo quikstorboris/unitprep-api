@@ -128,14 +128,18 @@ fn values_for_signal(group: &TenantGroup, signal: RelatednessSignal) -> Vec<Stri
 /// Both the primary and alternate-contact phone number count as "this
 /// tenant's known phone numbers" — the signal is "this literal number
 /// connects two tenants somehow," not which specific field it came
-/// from.
+/// from. Normalized as `FieldKind::Phone` (digits only) so two
+/// differently-formatted renderings of the same number ("(831)
+/// 555-1234" vs. "8315551234") are still recognized as the same shared
+/// value, matching how `comparison.rs` now normalizes these same
+/// fields via `FIELD_SPECS`.
 fn phone_values(group: &TenantGroup) -> Vec<String> {
     group
         .records
         .iter()
         .flat_map(|r| [r.phone_number.as_str(), r.alt_contact_phone_number.as_str()])
         .filter(|v| !is_empty(v))
-        .map(|v| normalize_value(FieldKind::Plain, v))
+        .map(|v| normalize_value(FieldKind::Phone, v))
         .collect()
 }
 

@@ -106,4 +106,14 @@ mod tests {
         let differing = find_differing_categories(&group);
         assert!(differing.iter().all(|m| m.category != FieldCategory::Email));
     }
+
+    #[test]
+    fn differently_formatted_phone_numbers_are_not_reported_as_differing() {
+        let group = vec![
+            TenantRecord { phone_number: "(555) 123-4567".to_string(), ..Default::default() },
+            TenantRecord { phone_number: "555-123-4567".to_string(), ..Default::default() },
+        ];
+        let differing = find_differing_categories(&group);
+        assert!(differing.iter().all(|m| m.category != FieldCategory::Phone));
+    }
 }

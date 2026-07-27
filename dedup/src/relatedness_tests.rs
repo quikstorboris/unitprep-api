@@ -34,6 +34,40 @@ fn shared_phone_across_different_names_is_surfaced() {
     assert!(candidates[0].note.contains("same phone number"));
 }
 
+/// Regression test: phone values used to be normalized as plain
+/// case/whitespace-only strings, so the exact same number written with
+/// different formatting on each tenant's record would fail to register
+/// as shared at all.
+#[test]
+fn shared_phone_is_surfaced_despite_different_formatting() {
+    let a = group(
+        "johnsmith",
+        "A1",
+        TenantRecord {
+            first_name: "John".into(),
+            last_name: "Smith".into(),
+            phone_number: "(555) 123-4567".into(),
+            ..blank()
+        },
+    );
+    let b = group(
+        "janedoe",
+        "B2",
+        TenantRecord {
+            first_name: "Jane".into(),
+            last_name: "Doe".into(),
+            phone_number: "555-123-4567".into(),
+            ..blank()
+        },
+    );
+
+    let candidates = find_related_tenant_candidates(&[a, b], &TemplateNoteComposer);
+
+    assert_eq!(candidates.len(), 1);
+    assert_eq!(candidates[0].signal, RelatednessSignal::SharedPhone);
+    assert_eq!(candidates[0].shared_value, "5551234567");
+}
+
 #[test]
 fn shared_email_across_different_names_is_surfaced() {
     let a = group(
