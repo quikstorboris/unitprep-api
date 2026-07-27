@@ -44,7 +44,8 @@ pub fn is_empty(value: &str) -> bool {
 
 /// Case-insensitive normalization; `FieldKind::Address` values are
 /// further normalized (period-stripped, punctuation-stripped, each
-/// token run through the street-suffix table).
+/// token run through the street-suffix table); `FieldKind::Phone`
+/// values are reduced to digits only.
 pub fn normalize_value(kind: FieldKind, value: &str) -> String {
     if is_empty(value) {
         return String::new();
@@ -52,12 +53,23 @@ pub fn normalize_value(kind: FieldKind, value: &str) -> String {
     let v = value.trim().to_lowercase();
     match kind {
         FieldKind::Address => normalize_address(&v),
+        FieldKind::Phone => normalize_phone(&v),
         FieldKind::Plain => collapse_whitespace(&v),
     }
 }
 
 fn collapse_whitespace(v: &str) -> String {
     v.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Reduces a phone number to its digits only, so formatting differences
+/// alone ("(831) 555-1234" vs. "831-555-1234" vs. "8315551234") never
+/// register as either a real mismatch (comparison.rs) or a missed
+/// shared-value relationship (relatedness.rs) — both previously
+/// compared these as plain case/whitespace-normalized strings, meaning
+/// only an exact-formatting match would agree.
+fn normalize_phone(v: &str) -> String {
+    v.chars().filter(|c| c.is_ascii_digit()).collect()
 }
 
 fn normalize_address(v: &str) -> String {
@@ -117,5 +129,32 @@ mod tests {
     fn blank_and_whitespace_only_are_empty() {
         assert_eq!(normalize_value(FieldKind::Address, ""), "");
         assert_eq!(normalize_value(FieldKind::Address, "   "), "");
+    }
+
+    #[test]
+    fn phone_formatting_differences_normalize_equal() {
+        assert_eq!(
+            normalize_value(FieldKind::Phone, "(831) 555-1234"),
+            normalize_value(FieldKind::Phone, "831-555-1234")
+        );
+        assert_eq!(
+            normalize_value(FieldKind::Phone, "831.555.1234"),
+            normalize_value(FieldKind::Phone, "8315551234")
+        );
+        assert_eq!(normalize_value(FieldKind::Phone, "(831) 555-1234"), "8315551234");
+    }
+
+    #[test]
+    fn phone_normalization_still_treats_blank_as_empty() {
+        assert_eq!(normalize_value(FieldKind::Phone, ""), "");
+        assert_eq!(normalize_value(FieldKind::Phone, "   "), "");
+    }
+
+    #[test]
+    fn genuinely_different_phone_numbers_stay_different() {
+        assert_ne!(
+            normalize_value(FieldKind::Phone, "(831) 555-1234"),
+            normalize_value(FieldKind::Phone, "(831) 555-9999")
+        );
     }
 }

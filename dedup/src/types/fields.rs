@@ -32,12 +32,15 @@ pub const CATEGORY_PRIORITY: [FieldCategory; 6] = [
 ];
 
 /// Whether a field's value needs address-specific normalization
-/// (street-suffix/direction lookup, period-stripping) or just
-/// case/whitespace normalization.
+/// (street-suffix/direction lookup, period-stripping), phone-specific
+/// normalization (strip everything but digits, so formatting
+/// differences like "(831) 555-1234" vs. "8315551234" compare equal),
+/// or just case/whitespace normalization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldKind {
     Plain,
     Address,
+    Phone,
 }
 
 /// Every QMS export column this crate reads. Deliberately a closed enum
@@ -81,8 +84,8 @@ pub struct FieldSpec {
 /// normalization — mirrors the union of `FIELD_CATEGORIES["address"]`
 /// and the alt-contact address fields in `ADDRESS_FIELDS`.
 pub const FIELD_SPECS: &[FieldSpec] = &[
-    FieldSpec { name: FieldName::PhoneNumber, category: FieldCategory::Phone, kind: FieldKind::Plain },
-    FieldSpec { name: FieldName::PhoneNumberPrefix, category: FieldCategory::Phone, kind: FieldKind::Plain },
+    FieldSpec { name: FieldName::PhoneNumber, category: FieldCategory::Phone, kind: FieldKind::Phone },
+    FieldSpec { name: FieldName::PhoneNumberPrefix, category: FieldCategory::Phone, kind: FieldKind::Phone },
     FieldSpec { name: FieldName::Email, category: FieldCategory::Email, kind: FieldKind::Plain },
     FieldSpec { name: FieldName::AddressStreet1, category: FieldCategory::Address, kind: FieldKind::Address },
     FieldSpec { name: FieldName::AddressStreet2, category: FieldCategory::Address, kind: FieldKind::Address },
@@ -92,8 +95,8 @@ pub const FIELD_SPECS: &[FieldSpec] = &[
     FieldSpec { name: FieldName::AltContactFirstName, category: FieldCategory::AltContact, kind: FieldKind::Plain },
     FieldSpec { name: FieldName::AltContactLastName, category: FieldCategory::AltContact, kind: FieldKind::Plain },
     FieldSpec { name: FieldName::AltContactEmail, category: FieldCategory::AltContact, kind: FieldKind::Plain },
-    FieldSpec { name: FieldName::AltContactPhoneNumber, category: FieldCategory::AltContact, kind: FieldKind::Plain },
-    FieldSpec { name: FieldName::AltContactPhoneNumberPrefix, category: FieldCategory::AltContact, kind: FieldKind::Plain },
+    FieldSpec { name: FieldName::AltContactPhoneNumber, category: FieldCategory::AltContact, kind: FieldKind::Phone },
+    FieldSpec { name: FieldName::AltContactPhoneNumberPrefix, category: FieldCategory::AltContact, kind: FieldKind::Phone },
     FieldSpec { name: FieldName::AltContactAddressStreet1, category: FieldCategory::AltContact, kind: FieldKind::Address },
     FieldSpec { name: FieldName::AltContactAddressStreet2, category: FieldCategory::AltContact, kind: FieldKind::Address },
     FieldSpec { name: FieldName::AltContactAddressCity, category: FieldCategory::AltContact, kind: FieldKind::Address },
