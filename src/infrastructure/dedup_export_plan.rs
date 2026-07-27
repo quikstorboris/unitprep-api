@@ -104,6 +104,15 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
     let mut row_num = 2usize; // row 1 is the header
     let mut cluster = 0usize;
 
+    // Shared by the typo-variant and related-tenant sections below —
+    // both need to re-derive groups from the original records, since
+    // TypoVariantCandidate/RelatedTenantCandidate only carry group keys,
+    // not the records themselves. Computed once here rather than once
+    // per section (each still involves a full clone of `all_records`,
+    // but that duplicated cost is now paid once, not twice).
+    let groups = group_records(all_records.to_vec());
+    let find = |key: &str| groups.iter().find(|g| g.key == key);
+
     for (i, flagged) in report.flagged_groups.iter().enumerate() {
         if i > 0 {
             plan.push(PlannedRow::Blank);
@@ -123,9 +132,6 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
         row_num += 1;
         plan.push(PlannedRow::Marker("Possible name/typo variants — for your review"));
         row_num += 1;
-
-        let groups = group_records(all_records.to_vec());
-        let find = |key: &str| groups.iter().find(|g| g.key == key);
 
         for (i, candidate) in report.typo_variant_candidates.iter().enumerate() {
             if i > 0 {
@@ -158,9 +164,6 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
             "Possible related tenants (shared contact info, different names) — for your review",
         ));
         row_num += 1;
-
-        let groups = group_records(all_records.to_vec());
-        let find = |key: &str| groups.iter().find(|g| g.key == key);
 
         for (i, candidate) in report.related_tenant_candidates.iter().enumerate() {
             if i > 0 {
