@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 
 use super::*;
+use crate::api::exclude_group::{exclude_group, ExcludeGroupRequest};
 use crate::api::resolve_unit_format::{resolve_unit_format, ResolveAction, ResolveUnitFormatRequest};
 use crate::api::test_support::{
     empty_state,
@@ -571,5 +572,78 @@ async fn discovered_group_names_are_populated_before_group_file_is_resolved() {
     assert_eq!(
         body["discovered_group_names"],
         serde_json::json!(["10x10"])
+    );
+}
+
+/// Regression test: `discovered_group_names` used to be computed by a
+/// hand-rolled block that duplicated `Session::effective_documents()`'s
+/// format-mapping/correction steps but omitted its exclusion filter, so
+/// a group the user had already excluded via `/exclude-group` could
+/// still show up in this display-only list even though every other
+/// stage of the pipeline (validation, analysis, export) had already
+/// dropped it.
+#[tokio::test]
+async fn discovered_group_names_excludes_a_group_the_user_has_excluded() {
+    let unit_doc = CsvDocument {
+        modified_at: None,
+        file_name: "units.csv".to_string(),
+        headers: vec![
+            "number".to_string(),
+            "unitgroup".to_string(),
+            "category".to_string(),
+        ],
+        rows: vec![
+            vec!["101".to_string(), "10x10".to_string(), "Standard".to_string()],
+            vec!["102".to_string(), "5x5".to_string(), "Standard".to_string()],
+        ],
+    };
+
+    let state = uploaded_state("s1", vec![unit_doc]);
+
+    let before = discover(
+        State(state.clone()),
+        Json(DiscoverRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    let bytes = axum::body::to_bytes(before.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let before_body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(
+        before_body["discovered_group_names"],
+        serde_json::json!(["10x10", "5x5"])
+    );
+
+    exclude_group(
+        State(state.clone()),
+        Json(ExcludeGroupRequest {
+            session_id: "s1".to_string(),
+            group_name: "5x5".to_string(),
+            excluded: true,
+        }),
+    )
+    .await;
+
+    let after = discover(
+        State(state),
+        Json(DiscoverRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    let bytes = axum::body::to_bytes(after.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let after_body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(
+        after_body["discovered_group_names"],
+        serde_json::json!(["10x10"]),
+        "an excluded group must not still appear in discovered_group_names"
     );
 }
