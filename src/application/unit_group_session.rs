@@ -19,7 +19,9 @@ use unitprep_core::session::{
 use unitprep_unit_group::{
     apply_corrections,
     apply_field_mapping,
+    detect_vendor,
     filter_excluded_groups,
+    mapping_from_vendor,
     AnalysisResults,
     CorrectionKey,
     DimensionExemptionKey,
@@ -128,6 +130,13 @@ impl Session {
     /// `self.data.documents` directly, so both a format resolution and a
     /// correction made after the initial upload are reflected without
     /// needing to reparse or re-upload anything.
+    ///
+    /// A file with no *stored* format resolution yet still gets
+    /// auto-detected and mapped on the fly rather than passed through
+    /// unmapped — this is the single canonical source for "the effective
+    /// view of a document," so every caller (including discovery's own
+    /// display-only group-name computation) gets the same fallback
+    /// instead of each reimplementing it slightly differently.
     pub fn effective_documents(
         &self,
     ) -> Vec<CsvDocument> {
@@ -143,7 +152,13 @@ impl Session {
                     Some(mapping) => {
                         apply_field_mapping(document, mapping)
                     }
-                    None => document.clone(),
+                    None => match detect_vendor(document) {
+                        Some(vendor) => apply_field_mapping(
+                            document,
+                            &mapping_from_vendor(vendor),
+                        ),
+                        None => document.clone(),
+                    },
                 }
             })
             .map(|document| {

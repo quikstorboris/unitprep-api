@@ -388,3 +388,76 @@ fn session_round_trips_through_generic_store(
         "session should be gone after delete"
     );
 }
+
+#[test]
+fn effective_documents_auto_detects_vendor_when_no_stored_resolution_exists() {
+    let mut session =
+        Session::new("s1".to_string());
+
+    // DoorSwap's real signature headers -- no format_resolutions entry
+    // is stored for this file, so the fallback must auto-detect the
+    // vendor and map it into canonical columns itself, rather than
+    // passing the raw DoorSwap headers through unmapped.
+    session.upsert_document(document(
+        "units.csv",
+        vec![
+            "Unit",
+            "Unit Type",
+            "Status",
+            "Customer",
+        ],
+    ));
+
+    let effective =
+        session.effective_documents();
+
+    assert_eq!(effective.len(), 1);
+    assert_eq!(
+        effective[0].headers,
+        vec![
+            "Number".to_string(),
+            "UnitGroup".to_string(),
+            "Status".to_string(),
+            "Customer".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn effective_documents_prefers_a_stored_resolution_over_auto_detection() {
+    let mut session =
+        Session::new("s1".to_string());
+
+    session.upsert_document(document(
+        "units.csv",
+        vec![
+            "Unit",
+            "Unit Type",
+            "Status",
+            "Customer",
+        ],
+    ));
+
+    // A manual mapping stored for this file should win over
+    // auto-detection, even though the file also happens to match
+    // DoorSwap's signature.
+    session
+        .data
+        .format_resolutions
+        .insert(
+            "units.csv".to_string(),
+            vec![(
+                "Number".to_string(),
+                Some("Customer".to_string()),
+            )],
+        );
+
+    let effective =
+        session.effective_documents();
+
+    assert_eq!(effective.len(), 1);
+    assert_eq!(
+        effective[0].headers,
+        vec!["Number".to_string()]
+    );
+}
