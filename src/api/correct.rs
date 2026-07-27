@@ -1,14 +1,13 @@
 use axum::{
     extract::{Json, State},
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use serde::Deserialize;
 
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{
-    session_not_found,
-    stage_conflict,
+    respond,
     validate::run_validation,
     AppState,
 };
@@ -69,17 +68,7 @@ pub async fn correct(
             },
         );
 
-    match response {
-        Some(Ok(response)) => {
-            Json(response).into_response()
-        }
-
-        Some(Err(err)) => {
-            stage_conflict(err)
-        }
-
-        None => session_not_found(),
-    }
+    respond(response)
 }
 
 

@@ -126,6 +126,30 @@ pub(crate) fn stage_conflict(
         .into_response()
 }
 
+/// Shared response shape for the common "stage-gated mutation" pattern:
+/// `Some(Ok(_))` → 200 with the JSON body, `Some(Err(_))` → 409
+/// (`stage_conflict`), `None` → 404 (`session_not_found`). Several
+/// handlers (correct, exempt, exclude-group(s), acknowledge-group-
+/// warnings) shared this exact three-arm match as their own separately
+/// written copy — this collapses each into one call. Handlers whose
+/// inner error type carries more than a bare `StageError` (e.g.
+/// `correct_group`'s `UnknownGroup` variant) keep their own custom match
+/// instead of forcing an unrelated variant through this shape.
+pub(crate) fn respond<T: Serialize>(
+    result: Option<
+        Result<
+            T,
+            crate::application::unit_group_session::StageError,
+        >,
+    >,
+) -> Response {
+    match result {
+        Some(Ok(body)) => Json(body).into_response(),
+        Some(Err(err)) => stage_conflict(err),
+        None => session_not_found(),
+    }
+}
+
 /// A genuine internal failure while processing an otherwise-valid
 /// request (not a data-quality or stage problem) — a 500. `context`
 /// should be a short, safe-to-display description; the real error detail
