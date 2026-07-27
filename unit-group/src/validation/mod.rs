@@ -47,6 +47,134 @@ struct ColumnIndices {
     climate_controlled: Option<usize>,
 }
 
+/// Everything the single pass over `document.rows` accumulates, bundled
+/// into one struct rather than eight independent locals threaded through
+/// the loop below — `record_row` reads as "update the scan" instead of
+/// eight separately-synced mutations that all have to stay in step by
+/// convention alone.
+#[derive(Default)]
+struct RowScan {
+    blank: Vec<String>,
+    bad_dimensions: Vec<String>,
+    climate_mismatches: Vec<String>,
+    locality_mismatches: Vec<String>,
+    unitgroup_dimension_mismatches: Vec<String>,
+    unit_counts: HashMap<String, usize>,
+    group_counts: HashMap<String, usize>,
+    casing_map: HashMap<String, Vec<String>>,
+}
+
+impl RowScan {
+    fn record_row(
+        &mut self,
+        row: &[String],
+        indices: &ColumnIndices,
+        dimension_exempt_units: &HashSet<String>,
+    ) {
+        let unit = row
+            .get(indices.number)
+            .cloned()
+            .unwrap_or_default();
+
+        let group = row
+            .get(indices.unit_group)
+            .map(|v| v.trim())
+            .unwrap_or("");
+
+        if !group.is_empty() {
+            *self
+                .group_counts
+                .entry(group.to_string())
+                .or_insert(0) += 1;
+        }
+
+        if !unit.is_empty() {
+            *self
+                .unit_counts
+                .entry(unit.clone())
+                .or_insert(0) += 1;
+
+            self.casing_map
+                .entry(unit.to_lowercase())
+                .or_default()
+                .push(unit.clone());
+        }
+
+        match row_checks::classify_group_value(
+            group,
+        ) {
+            row_checks::GroupValue::Ok => {}
+
+            row_checks::GroupValue::Blank => {
+                self.blank.push(unit.clone());
+            }
+        }
+
+        // A malformed dimension *attempt* in the group name itself
+        // ("10x", "aXb", a bare "10") is always Invalid, regardless of
+        // what the row's own Width/Length columns say -- the name is
+        // the problem. A group with no dimension attempt at all (an
+        // office, a single letter, "sq ft") is Odd instead (see
+        // `odd_group_names` below) and is deliberately *not* also
+        // flagged here just because its Width/Length columns are
+        // blank -- that's expected for a non-dimensioned group, not a
+        // data-quality problem. Only a group whose name looks like a
+        // real, valid dimension falls through to the original check:
+        // do the row's *own* declared Width/Length columns actually
+        // agree there's a real, positive value there.
+        let group_is_malformed =
+            has_malformed_dimension_attempt(group);
+
+        // `is_odd_group_name` already excludes malformed attempts on
+        // its own (see its doc comment) -- no need to repeat that
+        // exclusion here.
+        if group_is_malformed
+            || (!group_checks::is_odd_group_name(group)
+                && !dimension_exempt_units
+                    .contains(&unit)
+                && row_checks::has_bad_dimensions(
+                    row,
+                    indices.width,
+                    indices.length,
+                ))
+        {
+            self.bad_dimensions
+                .push(unit.clone());
+        }
+
+        let fingerprint =
+            parse_fingerprint(group);
+
+        if row_checks::climate_mismatches_group(
+            row,
+            indices.climate_controlled,
+            &fingerprint,
+        ) {
+            self.climate_mismatches
+                .push(unit.clone());
+        }
+
+        if row_checks::locality_mismatches_group(
+            row,
+            indices.locality,
+            &fingerprint,
+        ) {
+            self.locality_mismatches
+                .push(unit.clone());
+        }
+
+        if row_checks::dimensions_mismatch_group(
+            row,
+            indices.width,
+            indices.length,
+            &fingerprint,
+        ) {
+            self.unitgroup_dimension_mismatches
+                .push(unit.clone());
+        }
+    }
+}
+
 impl ColumnIndices {
     /// `None` if the two columns every other check depends on
     /// (UnitGroup, Number) aren't present — the rest are optional,
@@ -100,130 +228,14 @@ pub fn validate_document(
         );
     };
 
-    let mut blank = Vec::new();
-    let mut bad_dimensions = Vec::new();
-    let mut climate_mismatches =
-        Vec::new();
-    let mut locality_mismatches =
-        Vec::new();
-    let mut unitgroup_dimension_mismatches =
-        Vec::new();
-
-    let mut unit_counts: HashMap<
-        String,
-        usize,
-    > = HashMap::new();
-
-    let mut group_counts: HashMap<
-        String,
-        usize,
-    > = HashMap::new();
-
-    let mut casing_map: HashMap<
-        String,
-        Vec<String>,
-    > = HashMap::new();
+    let mut scan = RowScan::default();
 
     for row in &document.rows {
-        let unit = row
-            .get(indices.number)
-            .cloned()
-            .unwrap_or_default();
-
-        let group = row
-            .get(indices.unit_group)
-            .map(|v| v.trim())
-            .unwrap_or("");
-
-        if !group.is_empty() {
-            *group_counts
-                .entry(group.to_string())
-                .or_insert(0) += 1;
-        }
-
-        if !unit.is_empty() {
-            *unit_counts
-                .entry(unit.clone())
-                .or_insert(0) += 1;
-
-            casing_map
-                .entry(unit.to_lowercase())
-                .or_default()
-                .push(unit.clone());
-        }
-
-        match row_checks::classify_group_value(
-            group,
-        ) {
-            row_checks::GroupValue::Ok => {}
-
-            row_checks::GroupValue::Blank => {
-                blank.push(unit.clone());
-            }
-        }
-
-        // A malformed dimension *attempt* in the group name itself
-        // ("10x", "aXb", a bare "10") is always Invalid, regardless of
-        // what the row's own Width/Length columns say -- the name is
-        // the problem. A group with no dimension attempt at all (an
-        // office, a single letter, "sq ft") is Odd instead (see
-        // `odd_group_names` below) and is deliberately *not* also
-        // flagged here just because its Width/Length columns are
-        // blank -- that's expected for a non-dimensioned group, not a
-        // data-quality problem. Only a group whose name looks like a
-        // real, valid dimension falls through to the original check:
-        // do the row's *own* declared Width/Length columns actually
-        // agree there's a real, positive value there.
-        let group_is_malformed =
-            has_malformed_dimension_attempt(group);
-
-        // `is_odd_group_name` already excludes malformed attempts on
-        // its own (see its doc comment) -- no need to repeat that
-        // exclusion here.
-        if group_is_malformed
-            || (!group_checks::is_odd_group_name(group)
-                && !dimension_exempt_units
-                    .contains(&unit)
-                && row_checks::has_bad_dimensions(
-                    row,
-                    indices.width,
-                    indices.length,
-                ))
-        {
-            bad_dimensions
-                .push(unit.clone());
-        }
-
-        let fingerprint =
-            parse_fingerprint(group);
-
-        if row_checks::climate_mismatches_group(
+        scan.record_row(
             row,
-            indices.climate_controlled,
-            &fingerprint,
-        ) {
-            climate_mismatches
-                .push(unit.clone());
-        }
-
-        if row_checks::locality_mismatches_group(
-            row,
-            indices.locality,
-            &fingerprint,
-        ) {
-            locality_mismatches
-                .push(unit.clone());
-        }
-
-        if row_checks::dimensions_mismatch_group(
-            row,
-            indices.width,
-            indices.length,
-            &fingerprint,
-        ) {
-            unitgroup_dimension_mismatches
-                .push(unit.clone());
-        }
+            &indices,
+            dimension_exempt_units,
+        );
     }
 
     // A handful of units of the same type is exactly the situation
@@ -235,7 +247,7 @@ pub fn validate_document(
     // unchanged, they just stop being flagged under this one check.
     let rare_pairs: Vec<(String, usize)> =
         group_checks::rare_groups(
-            &group_counts,
+            &scan.group_counts,
             RARE_GROUP_MAX_OCCURRENCES,
         )
         .into_iter()
@@ -254,7 +266,7 @@ pub fn validate_document(
 
     let odd_group_names: Vec<String> =
         group_checks::odd_group_names(
-            &group_counts,
+            &scan.group_counts,
         )
         .into_iter()
         .filter(|name| {
@@ -266,12 +278,12 @@ pub fn validate_document(
 
     let casing_issues =
         group_checks::casing_inconsistencies(
-            casing_map,
+            scan.casing_map,
         );
 
     let duplicate_units =
         group_checks::duplicate_units(
-            unit_counts,
+            scan.unit_counts,
         );
 
     // (flagged values, description, severity, flagged values are group
@@ -300,7 +312,7 @@ pub fn validate_document(
     // of its actual columns.
     let mut issues = issues::build([
         (
-            blank,
+            scan.blank,
             issues::BLANK_UNITGROUP,
             Severity::Error,
             false,
@@ -318,25 +330,25 @@ pub fn validate_document(
             false,
         ),
         (
-            bad_dimensions,
+            scan.bad_dimensions,
             issues::INVALID_DIMENSIONS,
             Severity::Warning,
             false,
         ),
         (
-            climate_mismatches,
+            scan.climate_mismatches,
             issues::CLIMATE_MISMATCH,
             Severity::Warning,
             false,
         ),
         (
-            locality_mismatches,
+            scan.locality_mismatches,
             issues::LOCALITY_MISMATCH,
             Severity::Warning,
             false,
         ),
         (
-            unitgroup_dimension_mismatches,
+            scan.unitgroup_dimension_mismatches,
             issues::UNITGROUP_DIMENSION_MISMATCH,
             Severity::Warning,
             false,
