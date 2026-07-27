@@ -153,97 +153,12 @@ pub async fn resolve_unit_format(
                     }
 
                     ResolveAction::Confirm => {
-                        let vendor = match detect_vendor(&document) {
-                            Some(vendor) => vendor,
-                            None => {
-                                tracing::warn!(
-                                    session_id = %request.session_id,
-                                    file = %file_name,
-                                    "Confirm requested but vendor could not be detected"
-                                );
-
-                                return Err(ResolveNotReady::VendorNotDetected);
-                            }
-                        };
-
-                        let selected_unit_file_names = session
-                            .data
-                            .discovery
-                            .as_ref()
-                            .expect("Discovered stage guarantees discovery data")
-                            .selected_unit_file_names
-                            .clone();
-
-                        let selected_documents: Vec<_> = session
-                            .data
-                            .documents
-                            .iter()
-                            .filter(|d| selected_unit_file_names.contains(&d.file_name))
-                            .collect();
-
-                        let mismatched = find_header_mismatches(&selected_documents);
-
-                        if !mismatched.is_empty() {
-                            tracing::warn!(
-                                session_id = %request.session_id,
-                                mismatched_files = ?mismatched,
-                                "Bulk-confirm rejected — selected unit files don't share the same headers"
-                            );
-
-                            return Err(ResolveNotReady::HeaderMismatch(mismatched));
-                        }
-
-                        // Every confirmed file shares this file's exact header
-                        // shape (guaranteed by the mismatch check above), so one
-                        // vendor confirmation resolves all of them at once
-                        // instead of requiring a click per file. Re-checking
-                        // each file's own headers here too (rather than just
-                        // trusting the aggregate result) costs nothing and
-                        // means a future bug in the aggregate check can't
-                        // silently resolve a file it shouldn't.
-                        let mapping = mapping_from_vendor(vendor);
-                        let current_headers = normalized_headers(&document);
-                        let mut resolved_files = Vec::new();
-
-                        for name in &selected_unit_file_names {
-                            if session.data.format_resolutions.contains_key(name) {
-                                continue;
-                            }
-
-                            let same_shape = session
-                                .data
-                                .documents
-                                .iter()
-                                .find(|d| &d.file_name == name)
-                                .is_some_and(|d| normalized_headers(d) == current_headers);
-
-                            if same_shape {
-                                session
-                                    .data
-                                    .format_resolutions
-                                    .insert(name.clone(), mapping.clone());
-
-                                resolved_files.push(name.clone());
-                            }
-                        }
-
-                        for file_name in
-                            &resolved_files
-                        {
-                            tracing::info!(
-                                session_id = %request.session_id,
-                                vendor = vendor.name,
-                                file = %file_name,
-                                "Unit file format resolved (bulk-confirmed)"
-                            );
-                        }
-
-                        tracing::info!(
-                            session_id = %request.session_id,
-                            vendor = vendor.name,
-                            resolved_file_count = resolved_files.len(),
-                            "Unit file format bulk-confirm complete"
-                        );
+                        resolve_confirm_action(
+                            session,
+                            &request.session_id,
+                            &file_name,
+                            &document,
+                        )?;
                     }
 
                     ResolveAction::Map { mapping } => {
@@ -348,6 +263,105 @@ pub async fn resolve_unit_format(
 
         None => session_not_found(),
     }
+}
+
+/// Bulk-confirms a detected vendor across every currently-selected unit
+/// file that shares `document`'s exact header shape -- one confirmation
+/// resolves all of them at once instead of requiring a click per file
+/// (see `find_header_mismatches`, which guarantees every selected file
+/// shares this shape before this is ever called). Re-checking each
+/// file's own headers here too (rather than just trusting that aggregate
+/// result) costs nothing and means a future bug in the aggregate check
+/// can't silently resolve a file it shouldn't.
+fn resolve_confirm_action(
+    session: &mut crate::application::unit_group_session::Session,
+    session_id: &str,
+    file_name: &str,
+    document: &unitprep_core::csv_document::CsvDocument,
+) -> Result<(), ResolveNotReady> {
+    let vendor = match detect_vendor(document) {
+        Some(vendor) => vendor,
+        None => {
+            tracing::warn!(
+                session_id = %session_id,
+                file = %file_name,
+                "Confirm requested but vendor could not be detected"
+            );
+
+            return Err(ResolveNotReady::VendorNotDetected);
+        }
+    };
+
+    let selected_unit_file_names = session
+        .data
+        .discovery
+        .as_ref()
+        .expect("Discovered stage guarantees discovery data")
+        .selected_unit_file_names
+        .clone();
+
+    let selected_documents: Vec<_> = session
+        .data
+        .documents
+        .iter()
+        .filter(|d| selected_unit_file_names.contains(&d.file_name))
+        .collect();
+
+    let mismatched = find_header_mismatches(&selected_documents);
+
+    if !mismatched.is_empty() {
+        tracing::warn!(
+            session_id = %session_id,
+            mismatched_files = ?mismatched,
+            "Bulk-confirm rejected — selected unit files don't share the same headers"
+        );
+
+        return Err(ResolveNotReady::HeaderMismatch(mismatched));
+    }
+
+    let mapping = mapping_from_vendor(vendor);
+    let current_headers = normalized_headers(document);
+    let mut resolved_files = Vec::new();
+
+    for name in &selected_unit_file_names {
+        if session.data.format_resolutions.contains_key(name) {
+            continue;
+        }
+
+        let same_shape = session
+            .data
+            .documents
+            .iter()
+            .find(|d| &d.file_name == name)
+            .is_some_and(|d| normalized_headers(d) == current_headers);
+
+        if same_shape {
+            session
+                .data
+                .format_resolutions
+                .insert(name.clone(), mapping.clone());
+
+            resolved_files.push(name.clone());
+        }
+    }
+
+    for file_name in &resolved_files {
+        tracing::info!(
+            session_id = %session_id,
+            vendor = vendor.name,
+            file = %file_name,
+            "Unit file format resolved (bulk-confirmed)"
+        );
+    }
+
+    tracing::info!(
+        session_id = %session_id,
+        vendor = vendor.name,
+        resolved_file_count = resolved_files.len(),
+        "Unit file format bulk-confirm complete"
+    );
+
+    Ok(())
 }
 
 /// Validates a user-submitted manual mapping against the selected file's
