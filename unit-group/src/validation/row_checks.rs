@@ -159,11 +159,27 @@ pub(super) fn dimensions_mismatch_group(
             Some(actual_width),
             Some(actual_length),
         ) => {
-            fp_width != actual_width
-                || fp_length
-                    != actual_length
+            dimension_values_differ(fp_width, actual_width)
+                || dimension_values_differ(fp_length, actual_length)
         }
         _ => false,
+    }
+}
+
+/// Compares two dimension strings numerically when both parse as a
+/// number (so "10" and "10.0" agree, instead of the raw string equality
+/// this function used before), falling back to a literal string
+/// comparison only when either side isn't a plain number.
+fn dimension_values_differ(
+    a: &str,
+    b: &str,
+) -> bool {
+    match (
+        a.parse::<f64>(),
+        b.parse::<f64>(),
+    ) {
+        (Ok(a), Ok(b)) => a != b,
+        _ => a != b,
     }
 }
 
@@ -301,6 +317,41 @@ mod tests {
         assert!(
             !dimensions_mismatch_group(
                 &correct,
+                Some(1),
+                Some(2),
+                &fingerprint
+            )
+        );
+    }
+
+    #[test]
+    fn dimensions_mismatch_ignores_pure_formatting_differences() {
+        let fingerprint = parse_fingerprint(
+            "10x20 Inside Climate",
+        );
+
+        // "10.0"/"20.0" are numerically identical to the fingerprint's
+        // "10"/"20" — this must not be flagged as a real mismatch.
+        let differently_formatted =
+            row(&["A01", "10.0", "20.0"]);
+
+        assert!(
+            !dimensions_mismatch_group(
+                &differently_formatted,
+                Some(1),
+                Some(2),
+                &fingerprint
+            )
+        );
+
+        // A genuinely different value must still be flagged even when
+        // both sides parse as numbers.
+        let really_wrong =
+            row(&["A01", "10.5", "20"]);
+
+        assert!(
+            dimensions_mismatch_group(
+                &really_wrong,
                 Some(1),
                 Some(2),
                 &fingerprint
