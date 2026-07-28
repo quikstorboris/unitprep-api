@@ -31,6 +31,48 @@ versioning follows [Semantic Versioning](https://semver.org/).
   the whole chain end to end for now, since no real protected endpoint
   exists yet to exercise it through.
 
+## [1.1.4] - 2026-07-28
+
+Closes out the two file splits and two concurrency gaps this pass's own
+prior audits had deferred, plus the remaining flagged test-coverage
+gaps and a dead code-path removal. No new functionality.
+
+### Fixed
+- Session-cleanup sweep held the entire session map's write lock for
+  its full O(n) scan, blocking every concurrent `save`/`get_handle`/
+  `delete` call for the whole sweep, not just the sessions actually
+  being removed. Now scans for expired candidates under a read lock,
+  then takes the write lock only to remove them, re-verifying each is
+  still expired immediately before removal.
+- `cancel_session`'s concurrent-mutation race (previously only logged,
+  not fixed, in 1.1.3): a concurrent handler already holding its own
+  handle to a session could still complete a mutation on it after
+  `cancel_session` removed it from the map, with no way for any future
+  caller to ever observe that write. Fixed with a `cancelled` flag set
+  under the session's own write lock before removal; every generic
+  session-access method now treats a cancelled session exactly like a
+  nonexistent one, mirroring the existing owner-mismatch gate -- no
+  individual handler needed changes.
+- Removed the `acknowledge_errors` export override -- dead code with
+  no reachable UI path (the frontend's own "Continue" button is
+  disabled until every issue, not just Errors, is already resolved, so
+  the override could never fire). Every real `Severity::Error` issue
+  type already has inline correction UI; the one condition that stays
+  unconditionally blocking, a file that failed to parse, correctly
+  should.
+
+### Changed
+- Split `api/validate.rs`'s summary-building logic into
+  `validate/summary.rs` (285 -> 211 lines).
+- Split `discover/compute.rs`'s selection logic into
+  `discover/selection.rs` (335 -> 176 lines).
+
+### Added
+- Regression tests for both concurrency fixes above, a Unicode/
+  diacritic name-matching test, two smallest-input pipeline tests (1
+  and 2 fabricated records), an error-shape sweep test across several
+  endpoints, and an oversized-request-body test.
+
 ## [1.1.3] - 2026-07-28
 
 12 real bugs found via a 6-agent adversarial review (core parsers, dedup,
