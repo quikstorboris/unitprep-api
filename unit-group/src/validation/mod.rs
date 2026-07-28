@@ -135,10 +135,19 @@ impl RowScan {
         // `is_odd_group_name` already excludes malformed attempts on
         // its own (see its doc comment) -- no need to repeat that
         // exclusion here.
-        if group_is_malformed
-            || (!is_odd_group
-                && !dimension_exempt_units.contains(&unit)
-                && row_checks::has_bad_dimensions(row, indices.width, indices.length))
+        //
+        // An exempted unit must never be flagged for ANY reason this
+        // check would otherwise flag it for -- exemption means "stop
+        // checking this unit's dimensions entirely," not "stop checking
+        // unless the group name also happens to be malformed." The
+        // exemption test used to sit only on the numeric-columns branch,
+        // so a unit whose UnitGroup was itself a malformed dimension
+        // attempt (e.g. "10x", "aXb") stayed flagged even after being
+        // exempted -- the exemption silently did nothing for that case.
+        if !dimension_exempt_units.contains(&unit)
+            && (group_is_malformed
+                || (!is_odd_group
+                    && row_checks::has_bad_dimensions(row, indices.width, indices.length)))
         {
             self.bad_dimensions.push(unit.clone());
         }

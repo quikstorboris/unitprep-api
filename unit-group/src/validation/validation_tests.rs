@@ -146,6 +146,41 @@ fn exempted_unit_is_not_flagged_for_invalid_dimensions() {
         .any(|i| { i.description == "Invalid dimensions" }));
 }
 
+/// Regression test: exempting a unit whose UnitGroup itself is a
+/// malformed dimension attempt ("10x", missing its second number) must
+/// actually clear the Invalid Dimensions flag -- the exemption check used
+/// to sit only on the numeric-columns branch of the `||`, so a malformed
+/// group name kept the unit flagged even after being exempted.
+#[test]
+fn exempting_a_unit_with_a_malformed_group_name_clears_invalid_dimensions() {
+    let document = CsvDocument {
+        modified_at: None,
+        file_name: "test.csv".to_string(),
+        headers: vec![
+            "number".to_string(),
+            "unitgroup".to_string(),
+            "width".to_string(),
+            "length".to_string(),
+        ],
+        rows: vec![vec![
+            "Office".to_string(),
+            "10x".to_string(),
+            "".to_string(),
+            "".to_string(),
+        ]],
+    };
+
+    let mut exempt = HashSet::new();
+    exempt.insert("Office".to_string());
+
+    let issues =
+        validate_document(&document, &exempt, &GroupCheckAcknowledgments::default()).unwrap();
+
+    assert!(!issues
+        .iter()
+        .any(|i| { i.description == "Invalid dimensions" }));
+}
+
 /// The core no-overlap rule: a group with no dimension attempt at all
 /// (an office, an apartment) is Odd only, even though its actual
 /// Width/Length columns are blank -- that's expected for a
