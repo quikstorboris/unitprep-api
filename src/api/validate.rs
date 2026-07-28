@@ -13,10 +13,13 @@ use crate::{
     application::unit_group_session::{Session, StageError, WorkflowStage},
 };
 use unitprep_unit_group::{
-    correctable_fields_for, is_dimension_exemptable, validate_document, FileValidationError,
-    GroupCheckAcknowledgments, Severity, ValidationIssueSummary, ValidationResult, ODD_UNITGROUP,
-    RARE_GROUP,
+    validate_document, FileValidationError, GroupCheckAcknowledgments, Severity,
+    ValidationIssueSummary, ValidationResult, ODD_UNITGROUP, RARE_GROUP,
 };
+
+use summary::{build_unit_to_group_map, issue_to_summary};
+
+mod summary;
 
 #[derive(Debug, Deserialize)]
 pub struct ValidateRequest {
@@ -91,37 +94,7 @@ pub fn run_validation(
     for document in documents.iter() {
         let exempt_units = session.dimension_exemptions_for(&document.file_name);
 
-        // Cheap per-document lookup, built once regardless of how many
-        // issues reference it -- lets a per-unit issue's flagged unit
-        // numbers be resolved back to the UnitGroup they belong to (see
-        // `affected_group_names` below), without `validate_document`
-        // itself needing to carry that mapping through its own return
-        // type.
-        let unit_to_group: std::collections::HashMap<String, String> = match (
-            document.header_index("number"),
-            document.header_index("unitgroup"),
-        ) {
-            (Some(unit_idx), Some(group_idx)) => document
-                .rows
-                .iter()
-                .filter_map(|row| {
-                    // Trimmed to match how the unit number is read
-                    // everywhere else it's used as an identifier (see
-                    // validation's `record_row`) -- otherwise a stray
-                    // leading/trailing space here would fail to resolve a
-                    // flagged unit back to its UnitGroup.
-                    let unit = row.get(unit_idx)?.trim().to_string();
-                    let group = row.get(group_idx)?.trim().to_string();
-
-                    if unit.is_empty() {
-                        None
-                    } else {
-                        Some((unit, group))
-                    }
-                })
-                .collect(),
-            _ => std::collections::HashMap::new(),
-        };
+        let unit_to_group = build_unit_to_group_map(document);
 
         let document_issues =
             match validate_document(document, &exempt_units, &group_check_acknowledgments) {
@@ -169,54 +142,7 @@ pub fn run_validation(
                 Severity::Info => {}
             }
 
-            let mut affected_group_names: Vec<String> = if issue.flagged_are_group_names {
-                issue.flagged_values.clone()
-            } else {
-                issue
-                    .flagged_values
-                    .iter()
-                    .filter_map(|unit| unit_to_group.get(unit).cloned())
-                    .filter(|group| !group.is_empty())
-                    .collect()
-            };
-
-            affected_group_names.sort();
-            affected_group_names.dedup();
-
-            let flagged_are_group_names = issue.flagged_are_group_names;
-
-            let group_occurrence_counts = issue.group_occurrence_counts.clone();
-
-            let affected_unit_ids = issue.flagged_values;
-
-            let detail = format!(
-                "{} unit{}: {}",
-                affected_unit_ids.len(),
-                if affected_unit_ids.len() == 1 {
-                    ""
-                } else {
-                    "s"
-                },
-                affected_unit_ids.join(", "),
-            );
-
-            let correctable_fields = correctable_fields_for(&issue.description);
-
-            let exemptable = is_dimension_exemptable(&issue.description);
-
-            issues.push(ValidationIssueSummary {
-                file_name: document.file_name.clone(),
-                severity: issue.severity,
-                description: issue.description,
-                affected_units: affected_unit_ids.len(),
-                affected_unit_ids,
-                detail,
-                correctable_fields,
-                exemptable,
-                affected_group_names,
-                flagged_are_group_names,
-                group_occurrence_counts,
-            });
+            issues.push(issue_to_summary(&document.file_name, issue, &unit_to_group));
         }
     }
 
