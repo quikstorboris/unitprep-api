@@ -19,6 +19,28 @@ pub(crate) fn is_spreadsheetml(bytes: &[u8]) -> bool {
     head.starts_with("<?xml") && head.contains("urn:schemas-microsoft-com:office:spreadsheet")
 }
 
+/// Excel's own real column limit (`XFD`, column 16384) — used to bound
+/// `ss:Index`/`ss:MergeAcross` before they ever reach `Vec::resize`. These
+/// two attributes come straight from untrusted uploaded XML with no
+/// existing bound: a single crafted cell (e.g. `ss:Index="99999999999999"`)
+/// would otherwise attempt an astronomical allocation and abort the whole
+/// process — not a `panic!` the catch-panic middleware could intercept,
+/// an allocator abort. Found via property-testing `place_spreadsheetml_cell`
+/// with arbitrary usize values.
+const MAX_SPREADSHEETML_COLUMN: usize = 16_384;
+
+/// Parses a column-index-shaped XML attribute value, rejecting anything
+/// outside `1..=MAX_SPREADSHEETML_COLUMN` as if the attribute were absent
+/// -- `ss:Index`/`ss:MergeAcross` are 1-based per the SpreadsheetML spec
+/// (a 0 would otherwise underflow `col - 1` in `place_spreadsheetml_cell`),
+/// and no real spreadsheet needs more columns than Excel itself supports.
+fn parse_bounded_column(value: &str) -> Option<usize> {
+    value
+        .parse::<usize>()
+        .ok()
+        .filter(|&n| (1..=MAX_SPREADSHEETML_COLUMN).contains(&n))
+}
+
 fn xml_attr(element: &BytesStart, name: &[u8]) -> Option<String> {
     element
         .attributes()
@@ -44,21 +66,30 @@ fn place_spreadsheetml_cell(
     value: String,
     merge_across: usize,
 ) {
-    let col = index.unwrap_or(*next_col);
+    // Defense in depth: callers are expected to have already bounded
+    // `index`/`merge_across` via `parse_bounded_column` before reaching
+    // here, but this function does its own clamping too rather than
+    // trusting that -- an unbounded `col`/`end_col` feeding `Vec::resize`
+    // is an allocator abort waiting to happen, not just a bad value.
+    let col = index.unwrap_or(*next_col).min(MAX_SPREADSHEETML_COLUMN);
 
     if row.len() < col {
         row.resize(col, String::new());
     }
 
-    row[col - 1] = value;
+    if col >= 1 {
+        row[col - 1] = value;
+    }
 
-    let end_col = col + merge_across;
+    let end_col = col
+        .saturating_add(merge_across)
+        .min(MAX_SPREADSHEETML_COLUMN);
 
     if row.len() < end_col {
         row.resize(end_col, String::new());
     }
 
-    *next_col = end_col + 1;
+    *next_col = end_col.saturating_add(1);
 }
 
 /// Parses Excel 2003 SpreadsheetML XML (`Workbook > Worksheet > Table >
@@ -113,10 +144,10 @@ pub fn parse_spreadsheetml_document(file: &UploadedFile) -> anyhow::Result<CsvDo
                 }
 
                 b"Cell" if in_first_worksheet => {
-                    cell_index = xml_attr(&e, b"ss:Index").and_then(|v| v.parse().ok());
+                    cell_index = xml_attr(&e, b"ss:Index").and_then(|v| parse_bounded_column(&v));
 
                     cell_merge_across = xml_attr(&e, b"ss:MergeAcross")
-                        .and_then(|v| v.parse().ok())
+                        .and_then(|v| parse_bounded_column(&v))
                         .unwrap_or(0);
 
                     cell_text = String::new();
@@ -132,10 +163,10 @@ pub fn parse_spreadsheetml_document(file: &UploadedFile) -> anyhow::Result<CsvDo
 
             Event::Empty(e) => {
                 if in_first_worksheet && e.name().as_ref() == b"Cell" {
-                    let index = xml_attr(&e, b"ss:Index").and_then(|v| v.parse().ok());
+                    let index = xml_attr(&e, b"ss:Index").and_then(|v| parse_bounded_column(&v));
 
                     let merge_across = xml_attr(&e, b"ss:MergeAcross")
-                        .and_then(|v| v.parse().ok())
+                        .and_then(|v| parse_bounded_column(&v))
                         .unwrap_or(0);
 
                     place_spreadsheetml_cell(
@@ -225,6 +256,8 @@ pub fn parse_spreadsheetml_document(file: &UploadedFile) -> anyhow::Result<CsvDo
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::parsing::parse_document;
 
@@ -301,5 +334,59 @@ mod tests {
         let doc = parse_document(&file_with("companySummary.xls", SAMPLE_SPREADSHEETML)).unwrap();
 
         assert_eq!(doc.headers, vec!["number", "unitgroup", "", "width",]);
+    }
+
+    /// Regression test for a crafted-file DoS this session's fuzz testing
+    /// found: an absurd `ss:Index` used to reach `Vec::resize` completely
+    /// unbounded. A file this small should never do more than fail to
+    /// parse cleanly.
+    #[test]
+    fn absurd_index_attribute_does_not_abort_the_process() {
+        let xml = SAMPLE_SPREADSHEETML.replace(
+            r#"<Cell ss:Index="4">"#,
+            r#"<Cell ss:Index="99999999999999">"#,
+        );
+
+        let doc = parse_spreadsheetml_document(&file_with("evil.xls", &xml)).unwrap();
+
+        // The out-of-range index is treated as absent (falls back to
+        // positional placement) rather than honored literally.
+        assert!(doc.headers.len() <= MAX_SPREADSHEETML_COLUMN);
+    }
+
+    proptest! {
+        /// `place_spreadsheetml_cell` does raw index arithmetic against a
+        /// growable `Vec`, fed by two attributes parsed straight from
+        /// untrusted uploaded XML. Any combination of index/merge_across
+        /// -- including values right at `usize::MAX` -- must be handled
+        /// without an overflow panic or an astronomical allocation.
+        #[test]
+        fn place_cell_never_overflows_or_allocates_unboundedly(
+            index in proptest::option::of(any::<usize>()),
+            merge_across in any::<usize>(),
+        ) {
+            let mut row: Vec<String> = Vec::new();
+            let mut next_col: usize = 1;
+
+            place_spreadsheetml_cell(&mut row, &mut next_col, index, "x".to_string(), merge_across);
+
+            prop_assert!(row.len() <= MAX_SPREADSHEETML_COLUMN);
+            prop_assert!(next_col <= MAX_SPREADSHEETML_COLUMN + 1);
+        }
+
+        /// Whole-document fuzz: parsing must never panic or hang on
+        /// arbitrary bytes under a `.xls`/SpreadsheetML-shaped name,
+        /// whether or not they happen to be well-formed XML.
+        #[test]
+        fn never_panics_on_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
+            let file = UploadedFile {
+                file_name: "fuzz.xls".to_string(),
+                relative_path: String::new(),
+                bytes,
+                modified_at: None,
+            };
+
+            let _ = parse_spreadsheetml_document(&file);
+        }
     }
 }

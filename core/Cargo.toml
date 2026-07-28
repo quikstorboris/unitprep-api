@@ -41,3 +41,8 @@ quick-xml = "0.41"
 
 [dev-dependencies]
 zip = "2"
+
+# Property-based/fuzz-style testing for the file parsers (csv, excel,
+# spreadsheetml) -- these read arbitrary user-uploaded bytes, so generated
+# adversarial input is a better fit than hand-picked examples alone.
+proptest = "1"

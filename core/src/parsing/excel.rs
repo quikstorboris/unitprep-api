@@ -76,17 +76,29 @@ fn cell_to_string(cell: &Data) -> String {
             }
         }
 
-        Data::DateTime(v) => match v.as_datetime() {
-            // Cells with no time-of-day component (the common case for a
-            // plain date column) render as a bare date, not
-            // midnight-suffixed noise.
-            Some(dt) if dt.time() == NaiveTime::MIN => dt.format("%Y-%m-%d").to_string(),
-            Some(dt) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
-            // `as_datetime()` can return `None` on overflow (see calamine's
-            // own doc comment) — fall back to the raw serial number rather
-            // than panicking or dropping the cell's value entirely.
-            None => v.to_string(),
-        },
+        Data::DateTime(v) => {
+            // calamine's own doc comment says `as_datetime()` returns
+            // `None` on overflow, but property testing found that isn't
+            // the whole story: some out-of-range serial values (e.g. a
+            // corrupted cell with a wildly large float) make it panic
+            // instead, inside chrono's own TimeDelta construction, not
+            // ours to fix. `catch_unwind` treats that the same as `None`
+            // -- fall back to the raw serial number rather than a 500 for
+            // what is, from the caller's perspective, just one bad cell
+            // in an otherwise-readable file. Safe here: no `panic = "abort"`
+            // profile is set, and `ExcelDateTime`'s own read is side-effect
+            // free, so there's nothing left in a torn state to unwind past.
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| v.as_datetime()));
+
+            match result {
+                // Cells with no time-of-day component (the common case for
+                // a plain date column) render as a bare date, not
+                // midnight-suffixed noise.
+                Ok(Some(dt)) if dt.time() == NaiveTime::MIN => dt.format("%Y-%m-%d").to_string(),
+                Ok(Some(dt)) => dt.format("%Y-%m-%d %H:%M:%S").to_string(),
+                Ok(None) | Err(_) => v.to_string(),
+            }
+        }
 
         Data::DateTimeIso(v) => v.clone(),
 
@@ -99,6 +111,7 @@ fn cell_to_string(cell: &Data) -> String {
 #[cfg(test)]
 mod tests {
     use calamine::{ExcelDateTime, ExcelDateTimeType};
+    use proptest::prelude::*;
 
     use super::*;
 
@@ -131,5 +144,34 @@ mod tests {
         assert_eq!(cell_to_string(&Data::Int(42)), "42");
         assert_eq!(cell_to_string(&Data::Float(10.0)), "10");
         assert_eq!(cell_to_string(&Data::String("hello".to_string())), "hello");
+    }
+
+    proptest! {
+        /// This is the exact function that once silently stringified a
+        /// date-typed cell to its raw serial-number float instead of a
+        /// real date (see the "Parse Excel date/datetime cells" fix).
+        /// Any f64 a workbook could conceivably contain -- including the
+        /// NaN/infinite/negative/huge values `as_datetime()` is documented
+        /// to reject via `None` -- must produce *some* string without
+        /// panicking, whether that's a formatted date or the raw-number
+        /// fallback.
+        #[test]
+        fn datetime_cell_never_panics_for_any_serial_value(serial in proptest::num::f64::ANY) {
+            let cell = Data::DateTime(ExcelDateTime::new(
+                serial,
+                ExcelDateTimeType::DateTime,
+                false,
+            ));
+
+            let _ = cell_to_string(&cell);
+        }
+
+        /// Same robustness property for Float cells (the other numeric
+        /// variant with a fract()-based branch that could misbehave on
+        /// NaN/infinity).
+        #[test]
+        fn float_cell_never_panics_for_any_value(value in proptest::num::f64::ANY) {
+            let _ = cell_to_string(&Data::Float(value));
+        }
     }
 }

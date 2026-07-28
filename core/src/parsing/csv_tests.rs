@@ -1,3 +1,5 @@
+use proptest::prelude::*;
+
 use crate::parsing::parse_csv_document;
 use crate::uploaded_file::UploadedFile;
 
@@ -85,4 +87,52 @@ fn csv_parser_pads_short_rows() {
     let document = parse_csv_document(&file).unwrap();
 
     assert_eq!(document.rows[0], vec!["A01", "10x10 Climate", ""]);
+}
+
+fn file_with_bytes(bytes: Vec<u8>) -> UploadedFile {
+    UploadedFile {
+        file_name: "fuzz.csv".to_string(),
+        relative_path: String::new(),
+        bytes,
+        modified_at: None,
+    }
+}
+
+proptest! {
+    /// Regardless of how ragged the input rows are (some too short, some
+    /// too long, some exactly matching), every parsed row must come out
+    /// exactly `headers.len()` fields wide -- the resize/pad invariant
+    /// this parser exists to guarantee for every downstream consumer.
+    #[test]
+    fn every_row_is_padded_or_truncated_to_header_width(
+        header_count in 1usize..8,
+        row_field_counts in proptest::collection::vec(0usize..12, 0..20),
+        field_value in "[a-zA-Z0-9 ,\"\\n]{0,12}",
+    ) {
+        let headers: Vec<String> = (0..header_count).map(|i| format!("h{i}")).collect();
+
+        let mut writer = csv::WriterBuilder::new().flexible(true).from_writer(vec![]);
+        writer.write_record(&headers).unwrap();
+        for field_count in &row_field_counts {
+            let row: Vec<&str> = (0..*field_count).map(|_| field_value.as_str()).collect();
+            writer.write_record(&row).unwrap();
+        }
+        let bytes = writer.into_inner().unwrap();
+
+        let document = parse_csv_document(&file_with_bytes(bytes)).unwrap();
+
+        prop_assert_eq!(document.rows.len(), row_field_counts.len());
+        for row in &document.rows {
+            prop_assert_eq!(row.len(), header_count);
+        }
+    }
+
+    /// Fuzz-style robustness check: parsing must never panic, no matter
+    /// what bytes a client uploads under a `.csv` name -- including bytes
+    /// that are not valid UTF-8 at all. A parse failure should surface as
+    /// an `Err` (which callers already handle), never a crash.
+    #[test]
+    fn never_panics_on_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..256)) {
+        let _ = parse_csv_document(&file_with_bytes(bytes));
+    }
 }
