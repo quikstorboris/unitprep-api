@@ -69,7 +69,15 @@ fn cell_to_string(cell: &Data) -> String {
         Data::Int(v) => v.to_string(),
 
         Data::Float(v) => {
-            if v.fract() == 0.0 {
+            // The `as i64` cast saturates (not UB, but silently wrong) for
+            // any whole-number value outside i64's range -- e.g. 1e30
+            // became the string "9223372036854775807" with no error,
+            // indistinguishable from a real value that size. Only take the
+            // integer-formatting fast path when the value actually fits;
+            // an out-of-range whole number falls back to the same
+            // to_string() the non-whole branch already uses, which prints
+            // the real digits instead of a wrong sentinel.
+            if v.fract() == 0.0 && *v >= i64::MIN as f64 && *v <= i64::MAX as f64 {
                 (*v as i64).to_string()
             } else {
                 v.to_string()
@@ -137,6 +145,33 @@ mod tests {
         ));
 
         assert_eq!(cell_to_string(&cell), "2024-01-01 12:00:00");
+    }
+
+    /// Regression test: a whole-number float outside i64's range used to
+    /// silently saturate via `as i64` (1e30 became "9223372036854775807",
+    /// -1e30 became i64::MIN's string) with no error -- indistinguishable
+    /// from a real value that size. The real digits (or at least a value
+    /// of the right magnitude) must come through instead.
+    #[test]
+    fn huge_whole_number_float_does_not_silently_saturate_to_i64_bounds() {
+        let huge = 1e30_f64;
+        let result = cell_to_string(&Data::Float(huge));
+
+        assert_ne!(result, i64::MAX.to_string());
+
+        let round_tripped: f64 = result.parse().expect("should still parse as a number");
+        assert!((round_tripped - huge).abs() / huge < 1e-9);
+    }
+
+    #[test]
+    fn negative_huge_whole_number_float_does_not_silently_saturate_to_i64_bounds() {
+        let huge = -1e30_f64;
+        let result = cell_to_string(&Data::Float(huge));
+
+        assert_ne!(result, i64::MIN.to_string());
+
+        let round_tripped: f64 = result.parse().expect("should still parse as a number");
+        assert!((round_tripped - huge).abs() / huge.abs() < 1e-9);
     }
 
     #[test]
