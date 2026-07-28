@@ -1,0 +1,16 @@
+# cargo-audit config -- accepted, non-reachable advisories only.
+
+[advisories]
+ignore = [
+    # RSA "Marvin Attack" timing side-channel (rsa 0.9.10). No fixed
+    # upgrade exists in the rsa crate itself (per the advisory). Confirmed
+    # via `cargo tree -i rsa --target all` that this crate is NOT part of
+    # this workspace's actual compiled dependency graph at all -- it's an
+    # optional dependency of sqlx-mysql, which Cargo.lock still lists
+    # (sqlx's own Cargo.toml structure resolves it into the lockfile
+    # regardless), but this workspace only enables sqlx's "postgres"
+    # feature, never "mysql". No RSA code from this crate is ever
+    # compiled into the binary. Revisit if sqlx's "mysql" feature is ever
+    # enabled, or if a fixed rsa release ships.
+    "RUSTSEC-2023-0071",
+]
