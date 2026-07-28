@@ -32,3 +32,6 @@ UnitPrep_Output/
 test-output/
 
 *.zip
+
+# Documentation
+REFACTOR.md
