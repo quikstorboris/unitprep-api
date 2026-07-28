@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use parking_lot::RwLock;
 use serde::Serialize;
+use uuid::Uuid;
 
 use crate::session::HasSessionMetadata;
 
@@ -75,6 +76,47 @@ pub trait SessionStoreExt<S: HasSessionMetadata>: SessionStore<S> {
         let handle = self.get_handle(id)?;
 
         let mut session = handle.write();
+
+        Some(operation(&mut session))
+    }
+
+    /// Like `with_session`, but only runs `operation` if the session is
+    /// owned by `owner_id`. A session that exists but belongs to someone
+    /// else returns `None` -- exactly the same result as a session that
+    /// doesn't exist at all -- so a session ID belonging to another user
+    /// can never be distinguished from a stale/unknown one by whoever's
+    /// probing with it.
+    fn with_owned_session<R>(
+        &self,
+        id: &str,
+        owner_id: Uuid,
+        operation: impl FnOnce(&S) -> R,
+    ) -> Option<R> {
+        let handle = self.get_handle(id)?;
+
+        let session = handle.read();
+
+        if session.metadata().owner_id != Some(owner_id) {
+            return None;
+        }
+
+        Some(operation(&session))
+    }
+
+    /// Mutable counterpart to `with_owned_session` -- see its doc comment.
+    fn with_owned_session_mut<R>(
+        &self,
+        id: &str,
+        owner_id: Uuid,
+        operation: impl FnOnce(&mut S) -> R,
+    ) -> Option<R> {
+        let handle = self.get_handle(id)?;
+
+        let mut session = handle.write();
+
+        if session.metadata().owner_id != Some(owner_id) {
+            return None;
+        }
 
         Some(operation(&mut session))
     }

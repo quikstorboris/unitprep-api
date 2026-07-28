@@ -1,3 +1,7 @@
+use uuid::Uuid;
+
+use crate::session_store::SessionStoreExt;
+
 use super::*;
 
 #[derive(Debug, Clone)]
@@ -8,7 +12,13 @@ struct TestSession {
 impl TestSession {
     fn new(id: &str) -> Self {
         Self {
-            metadata: crate::session::SessionMetadata::new(id.to_string()),
+            metadata: crate::session::SessionMetadata::new(id.to_string(), None),
+        }
+    }
+
+    fn owned_by(id: &str, owner_id: Uuid) -> Self {
+        Self {
+            metadata: crate::session::SessionMetadata::new(id.to_string(), Some(owner_id)),
         }
     }
 }
@@ -180,4 +190,80 @@ fn cleanup_expired_honors_a_custom_timeout() {
     InMemorySessionStore::<TestSession>::cleanup_expired(&mut sessions, Duration::from_secs(1));
 
     assert!(sessions.is_empty());
+}
+
+/// `with_owned_session` must succeed when the caller actually owns the
+/// session — the normal case once auth is wired in.
+#[test]
+fn with_owned_session_succeeds_for_the_matching_owner() {
+    let store: InMemorySessionStore<TestSession> = InMemorySessionStore::new();
+    let owner = Uuid::new_v4();
+
+    store.save(TestSession::owned_by("s1", owner));
+
+    let result = store.with_owned_session("s1", owner, |_| "ok");
+
+    assert_eq!(result, Some("ok"));
+}
+
+/// The core of the whole mechanism: a session that exists but belongs to
+/// someone else must come back exactly like a nonexistent one -- `None`,
+/// not a distinct "forbidden" result -- so a caller can never use it to
+/// tell the difference between "not yours" and "doesn't exist."
+#[test]
+fn with_owned_session_returns_none_for_a_mismatched_owner() {
+    let store: InMemorySessionStore<TestSession> = InMemorySessionStore::new();
+
+    store.save(TestSession::owned_by("s1", Uuid::new_v4()));
+
+    let result = store.with_owned_session("s1", Uuid::new_v4(), |_| "ok");
+
+    assert_eq!(result, None);
+}
+
+/// Same `None` result for a session id that was never saved at all --
+/// matching `with_owned_session_returns_none_for_a_mismatched_owner`
+/// above, confirming the two cases are genuinely indistinguishable.
+#[test]
+fn with_owned_session_returns_none_for_a_nonexistent_session() {
+    let store: InMemorySessionStore<TestSession> = InMemorySessionStore::new();
+
+    let result = store.with_owned_session("nonexistent", Uuid::new_v4(), |_| "ok");
+
+    assert_eq!(result, None);
+}
+
+/// A session created without an owner (`None` -- every real session
+/// today, since no endpoint has an authenticated caller yet) must not be
+/// claimable by any caller-supplied id -- `Some(owner) != None` should
+/// never accidentally compare equal to anything.
+#[test]
+fn with_owned_session_returns_none_when_the_session_has_no_owner() {
+    let store: InMemorySessionStore<TestSession> = InMemorySessionStore::new();
+
+    store.save(TestSession::new("s1"));
+
+    let result = store.with_owned_session("s1", Uuid::new_v4(), |_| "ok");
+
+    assert_eq!(result, None);
+}
+
+/// Mutable counterpart -- same ownership gate, but through
+/// `with_owned_session_mut`, proving the write path enforces it too.
+#[test]
+fn with_owned_session_mut_only_applies_the_mutation_for_the_matching_owner() {
+    let store: InMemorySessionStore<TestSession> = InMemorySessionStore::new();
+    let owner = Uuid::new_v4();
+
+    store.save(TestSession::owned_by("s1", owner));
+
+    let wrong_owner_result = store.with_owned_session_mut("s1", Uuid::new_v4(), |session| {
+        session.metadata_mut().last_accessed = SystemTime::now();
+    });
+
+    assert_eq!(wrong_owner_result, None);
+
+    let right_owner_result = store.with_owned_session_mut("s1", owner, |_| "ok");
+
+    assert_eq!(right_owner_result, Some("ok"));
 }

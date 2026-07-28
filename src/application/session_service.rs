@@ -18,12 +18,16 @@ impl SessionService {
         Self { store }
     }
 
-    pub fn create_session(&self, uploaded_files: Vec<UploadedFile>) -> String {
+    pub fn create_session(
+        &self,
+        uploaded_files: Vec<UploadedFile>,
+        owner_id: Option<Uuid>,
+    ) -> String {
         tracing::info!(uploaded_files = uploaded_files.len(), "Creating session");
 
         let session_id = Uuid::new_v4().to_string();
 
-        let mut session = Session::new(session_id.clone());
+        let mut session = Session::new(session_id.clone(), owner_id);
 
         let mut documents: Vec<CsvDocument> = Vec::new();
 

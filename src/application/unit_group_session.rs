@@ -11,6 +11,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use uuid::Uuid;
+
 use unitprep_core::csv_document::CsvDocument;
 use unitprep_core::session::{HasSessionMetadata, SessionMetadata};
 use unitprep_unit_group::{
@@ -33,7 +35,12 @@ pub struct SessionData {
     pub documents: Arc<Vec<CsvDocument>>,
     pub discovery: Option<DiscoveryResult>,
     pub validation: Option<ValidationResult>,
-    pub analysis: Option<AnalysisResults>,
+    // Arc, not an owned value -- mirrors `documents` above. Analysis
+    // results get cloned twice on the natural analyze -> export path
+    // (once to store here, once when export.rs reads them back out);
+    // wrapping in Arc turns both into a cheap refcount bump instead of
+    // deep-cloning the batch's facilities/groups/issues each time.
+    pub analysis: Option<Arc<AnalysisResults>>,
     pub corrections: HashMap<CorrectionKey, String>,
     pub dimension_exemptions: HashSet<DimensionExemptionKey>,
 
@@ -90,9 +97,9 @@ pub struct StageError {
 }
 
 impl Session {
-    pub fn new(id: String) -> Self {
+    pub fn new(id: String, owner_id: Option<Uuid>) -> Self {
         Self {
-            metadata: SessionMetadata::new(id),
+            metadata: SessionMetadata::new(id, owner_id),
             data: SessionData::default(),
             workflow: WorkflowStage::Uploaded,
         }
@@ -115,9 +122,29 @@ impl Session {
     /// display-only group-name computation) gets the same fallback
     /// instead of each reimplementing it slightly differently.
     pub fn effective_documents(&self) -> Vec<CsvDocument> {
+        self.effective_documents_matching(|_| true)
+    }
+
+    /// Same as `effective_documents`, but filtered to just the named
+    /// documents *before* running the mapping/correction/exclusion
+    /// pipeline, instead of transforming every document in the session
+    /// (including ones the caller is about to discard, e.g. the master
+    /// group file during a unit-file-only operation) and filtering the
+    /// result afterward. Every existing caller that filters post hoc
+    /// (`analyze.rs`, `validate.rs`, `discover/compute.rs`) can call this
+    /// with `discovery.unit_file_names` instead.
+    pub fn effective_documents_for(&self, names: &[String]) -> Vec<CsvDocument> {
+        self.effective_documents_matching(|document| names.contains(&document.file_name))
+    }
+
+    fn effective_documents_matching(
+        &self,
+        predicate: impl Fn(&CsvDocument) -> bool,
+    ) -> Vec<CsvDocument> {
         self.data
             .documents
             .iter()
+            .filter(|document| predicate(document))
             .map(
                 |document| match self.data.format_resolutions.get(&document.file_name) {
                     Some(mapping) => apply_field_mapping(document, mapping),
@@ -133,10 +160,10 @@ impl Session {
     }
 
     /// Adds a document, replacing any existing one with the same file
-    /// name -- used by the manual-file-upload endpoints (see
-    /// `api::unit_file_upload` / `api::group_file_upload`), which let a
-    /// user designate a specific file as the unit/group file regardless
-    /// of how discovery classified anything already uploaded.
+    /// name -- used by the manual-file-upload endpoint (see
+    /// `api::group_file_upload`), which lets a user designate a specific
+    /// file as the group file regardless of how discovery classified
+    /// anything already uploaded.
     pub fn upsert_document(&mut self, document: CsvDocument) {
         let documents = Arc::make_mut(&mut self.data.documents);
 
@@ -226,7 +253,7 @@ impl Session {
         self.workflow = WorkflowStage::Validated;
     }
 
-    pub fn complete_analysis(&mut self, result: AnalysisResults) {
+    pub fn complete_analysis(&mut self, result: Arc<AnalysisResults>) {
         self.data.analysis = Some(result);
         self.workflow = WorkflowStage::Analyzed;
     }

@@ -63,7 +63,7 @@ fn analysis_results() -> AnalysisResults {
 
 #[test]
 fn new_session_starts_uploaded() {
-    let session = Session::new("s1".to_string());
+    let session = Session::new("s1".to_string(), None);
 
     assert_eq!(session.workflow, WorkflowStage::Uploaded);
 
@@ -85,7 +85,7 @@ fn stage_ordering_is_pipeline_order() {
 
 #[test]
 fn complete_discovery_advances_stage_and_stores_data() {
-    let mut session = Session::new("s1".to_string());
+    let mut session = Session::new("s1".to_string(), None);
 
     session.complete_discovery(discovery_result());
 
@@ -96,7 +96,7 @@ fn complete_discovery_advances_stage_and_stores_data() {
 
 #[test]
 fn require_stage_reports_current_stage_on_failure() {
-    let mut session = Session::new("s1".to_string());
+    let mut session = Session::new("s1".to_string(), None);
 
     session.complete_discovery(discovery_result());
 
@@ -109,13 +109,13 @@ fn require_stage_reports_current_stage_on_failure() {
 
 #[test]
 fn full_pipeline_progression_reaches_exported() {
-    let mut session = Session::new("s1".to_string());
+    let mut session = Session::new("s1".to_string(), None);
 
     session.complete_discovery(discovery_result());
 
     session.complete_validation(validation_result());
 
-    session.complete_analysis(analysis_results());
+    session.complete_analysis(Arc::new(analysis_results()));
 
     session.complete_export();
 
@@ -130,7 +130,7 @@ fn full_pipeline_progression_reaches_exported() {
 
 #[test]
 fn upsert_document_appends_a_new_file() {
-    let mut session = Session::new("s1".to_string());
+    let mut session = Session::new("s1".to_string(), None);
 
     session.upsert_document(document("a.csv", vec!["number"]));
 
@@ -141,7 +141,7 @@ fn upsert_document_appends_a_new_file() {
 
 #[test]
 fn upsert_document_replaces_an_existing_file_by_name() {
-    let mut session = Session::new("s1".to_string());
+    let mut session = Session::new("s1".to_string(), None);
 
     session.upsert_document(document("a.csv", vec!["number"]));
 
@@ -161,7 +161,7 @@ fn upsert_document_replaces_an_existing_file_by_name() {
 
 #[test]
 fn upsert_document_leaves_other_documents_untouched() {
-    let mut session = Session::new("s1".to_string());
+    let mut session = Session::new("s1".to_string(), None);
 
     session.upsert_document(document("a.csv", vec!["number"]));
 
@@ -182,7 +182,7 @@ fn upsert_document_leaves_other_documents_untouched() {
 fn session_round_trips_through_generic_store() {
     let store: InMemorySessionStore<Session> = InMemorySessionStore::new();
 
-    let session = Session::new("s1".to_string());
+    let session = Session::new("s1".to_string(), None);
 
     store.save(session);
 
@@ -202,7 +202,7 @@ fn session_round_trips_through_generic_store() {
 
 #[test]
 fn effective_documents_auto_detects_vendor_when_no_stored_resolution_exists() {
-    let mut session = Session::new("s1".to_string());
+    let mut session = Session::new("s1".to_string(), None);
 
     // DoorSwap's real signature headers -- no format_resolutions entry
     // is stored for this file, so the fallback must auto-detect the
@@ -229,7 +229,7 @@ fn effective_documents_auto_detects_vendor_when_no_stored_resolution_exists() {
 
 #[test]
 fn effective_documents_prefers_a_stored_resolution_over_auto_detection() {
-    let mut session = Session::new("s1".to_string());
+    let mut session = Session::new("s1".to_string(), None);
 
     session.upsert_document(document(
         "units.csv",

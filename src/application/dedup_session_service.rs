@@ -56,9 +56,14 @@ impl HasSessionMetadata for DedupSession {
 }
 
 impl DedupSession {
-    pub fn new(id: String, records: Vec<TenantRecord>, report: DedupReport) -> Self {
+    pub fn new(
+        id: String,
+        owner_id: Option<Uuid>,
+        records: Vec<TenantRecord>,
+        report: DedupReport,
+    ) -> Self {
         Self {
-            metadata: SessionMetadata::new(id),
+            metadata: SessionMetadata::new(id, owner_id),
             records,
             report,
             stage: DedupStage::Analyzed,
@@ -80,13 +85,17 @@ impl DedupSessionService {
     /// (which tolerates and skips unparseable files), this is a single
     /// QMS export file — a parse/ingest failure here is a real error to
     /// surface to the caller, not something to silently skip.
-    pub fn create_session(&self, file: UploadedFile) -> anyhow::Result<String> {
+    pub fn create_session(
+        &self,
+        file: UploadedFile,
+        owner_id: Option<Uuid>,
+    ) -> anyhow::Result<String> {
         let document = parse_document(&file)?;
         let records = records_from_csv_document(&document)?;
         let dedup_report = report::run(records.clone());
 
         let session_id = Uuid::new_v4().to_string();
-        let session = DedupSession::new(session_id.clone(), records, dedup_report);
+        let session = DedupSession::new(session_id.clone(), owner_id, records, dedup_report);
 
         tracing::info!(
             session_id = %session_id,

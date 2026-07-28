@@ -126,7 +126,9 @@ pub async fn check(State(state): State<AppState>, mut multipart: Multipart) -> R
     let file_name = file.file_name.clone();
 
     let session_id = match DedupSessionService::new(Arc::clone(&state.dedup_sessions))
-        .create_session(file)
+        // No authenticated caller exists yet -- see
+        // SessionMetadata::owner_id's doc comment.
+        .create_session(file, None)
     {
         Ok(id) => id,
         Err(err) => {

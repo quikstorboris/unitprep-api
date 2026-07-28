@@ -187,8 +187,12 @@ pub async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> 
             .into_response();
     }
 
-    let session_id =
-        SessionService::new(Arc::clone(&state.unit_group_sessions)).create_session(uploaded_files);
+    let session_id = SessionService::new(Arc::clone(&state.unit_group_sessions)).create_session(
+        uploaded_files,
+        // No authenticated caller exists yet -- see
+        // SessionMetadata::owner_id's doc comment.
+        None,
+    );
 
     tracing::info!(
         session_id = %session_id,
@@ -210,3 +214,7 @@ pub async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> 
     })
     .into_response()
 }
+
+#[cfg(test)]
+#[path = "upload_tests.rs"]
+mod tests;
