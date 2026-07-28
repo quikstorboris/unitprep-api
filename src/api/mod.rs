@@ -372,3 +372,12 @@ pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "dedup_test_support.rs"]
 pub(crate) mod dedup_test_support;
+
+/// Real HTTP-level tests, complementing (not replacing) the direct-call
+/// style above. Some bugs only exist at the router/middleware layer --
+/// the CORS credentials gap this suite regression-tests was invisible to
+/// every direct handler call, since `CorsLayer` never runs at all unless
+/// a request actually goes through the real `Router`.
+#[cfg(test)]
+#[path = "http_integration_tests.rs"]
+mod http_integration_tests;

@@ -143,3 +143,10 @@ getrandom = { version = "0.4.3", features = ["std"] }
 # tests verify real cell values/structure instead of just "some bytes
 # came out". Same version already pinned in core/Cargo.toml.
 calamine = "0.36"
+
+# A real HTTP client for the integration tests in
+# src/api/http_integration_tests.rs -- these bind the actual router to a
+# real loopback port and make real requests, since some bugs (the CORS
+# credentials gap) only ever show up at the router/middleware layer, not
+# from calling a handler function directly.
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
