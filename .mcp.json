@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "om": {
+      "command": "node",
+      "args": ["/mnt/c/Users/bmaksimov/my-vault/.claude/scripts/om-mcp.mjs"]
+    }
+  }
+}
