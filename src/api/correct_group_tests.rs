@@ -1,12 +1,7 @@
 use axum::http::StatusCode;
 
 use super::*;
-use crate::api::test_support::{
-    discovered_state,
-    empty_state,
-    unit_document,
-    uploaded_state,
-};
+use crate::api::test_support::{discovered_state, empty_state, unit_document, uploaded_state};
 
 async fn body_json(response: axum::response::Response) -> serde_json::Value {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -35,12 +30,7 @@ fn request(
 async fn returns_404_for_missing_session() {
     let response = correct_group(
         State(empty_state()),
-        Json(request(
-            "Hertz Office Space",
-            Some("10"),
-            Some("15"),
-            None,
-        )),
+        Json(request("Hertz Office Space", Some("10"), Some("15"), None)),
     )
     .await;
 
@@ -59,12 +49,7 @@ async fn returns_409_before_discovery_completes() {
 
     let response = correct_group(
         State(state),
-        Json(request(
-            "Hertz Office Space",
-            Some("10"),
-            Some("15"),
-            None,
-        )),
+        Json(request("Hertz Office Space", Some("10"), Some("15"), None)),
     )
     .await;
 
@@ -83,12 +68,7 @@ async fn rejects_a_group_name_that_matches_no_unit() {
 
     let response = correct_group(
         State(state),
-        Json(request(
-            "Not A Real Group",
-            Some("10"),
-            Some("15"),
-            None,
-        )),
+        Json(request("Not A Real Group", Some("10"), Some("15"), None)),
     )
     .await;
 
@@ -113,12 +93,7 @@ async fn renames_using_width_and_length_only() {
 
     let response = correct_group(
         State(state),
-        Json(request(
-            "Hertz Office Space",
-            Some("10"),
-            Some("15"),
-            None,
-        )),
+        Json(request("Hertz Office Space", Some("10"), Some("15"), None)),
     )
     .await;
 
@@ -224,12 +199,7 @@ async fn renames_every_unit_sharing_the_group_name() {
     // the original name now matches nothing.
     let response = correct_group(
         State(state),
-        Json(request(
-            "Hertz Office Space",
-            None,
-            None,
-            None,
-        )),
+        Json(request("Hertz Office Space", None, None, None)),
     )
     .await;
 

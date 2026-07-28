@@ -57,11 +57,8 @@ mod tests {
     #[test]
     fn issued_cookie_reads_back_the_same_token() {
         let jar = CookieJar::new();
-        let jar = issue_session_cookie(
-            jar,
-            "raw-token-value".to_string(),
-            time::Duration::hours(1),
-        );
+        let jar =
+            issue_session_cookie(jar, "raw-token-value".to_string(), time::Duration::hours(1));
 
         assert_eq!(
             read_session_cookie(&jar),
@@ -78,11 +75,8 @@ mod tests {
     #[test]
     fn cleared_cookie_no_longer_reads_back() {
         let jar = CookieJar::new();
-        let jar = issue_session_cookie(
-            jar,
-            "raw-token-value".to_string(),
-            time::Duration::hours(1),
-        );
+        let jar =
+            issue_session_cookie(jar, "raw-token-value".to_string(), time::Duration::hours(1));
         let jar = clear_session_cookie(jar);
 
         assert_eq!(read_session_cookie(&jar), None);

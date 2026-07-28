@@ -55,9 +55,11 @@ async fn resolve_unit_format_returns_404_for_missing_session() {
 #[tokio::test]
 async fn resolve_unit_format_returns_409_before_discovery_completes() {
     let state = empty_state();
-    state.unit_group_sessions.save(
-        crate::application::unit_group_session::Session::new("s1".to_string()),
-    );
+    state
+        .unit_group_sessions
+        .save(crate::application::unit_group_session::Session::new(
+            "s1".to_string(),
+        ));
 
     let response = resolve_unit_format(
         State(state),
@@ -73,10 +75,7 @@ async fn resolve_unit_format_returns_409_before_discovery_completes() {
 
 #[tokio::test]
 async fn resolve_unit_format_rejects_when_no_file_is_selected_yet() {
-    let state = uploaded_state(
-        "s1",
-        vec![qsx_document("a.csv"), qsx_document("b.csv")],
-    );
+    let state = uploaded_state("s1", vec![qsx_document("a.csv"), qsx_document("b.csv")]);
 
     discover(
         State(state.clone()),
@@ -277,10 +276,7 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
 /// actually call them: select, then resolve.
 #[tokio::test]
 async fn select_then_confirm_a_single_candidate() {
-    let state = uploaded_state(
-        "s1",
-        vec![qsx_document("a.csv"), qsx_document("b.csv")],
-    );
+    let state = uploaded_state("s1", vec![qsx_document("a.csv"), qsx_document("b.csv")]);
 
     discover(
         State(state.clone()),
@@ -433,10 +429,7 @@ async fn confirm_rejects_a_confirmed_set_with_mismatched_headers() {
 /// before they confirmed.
 #[tokio::test]
 async fn reset_reopens_format_resolution_after_everything_was_confirmed() {
-    let state = uploaded_state(
-        "s1",
-        vec![qsx_document("a.csv"), qsx_document("b.csv")],
-    );
+    let state = uploaded_state("s1", vec![qsx_document("a.csv"), qsx_document("b.csv")]);
 
     discover(
         State(state.clone()),

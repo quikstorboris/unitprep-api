@@ -39,11 +39,8 @@ impl CsvDocument {
     /// check and then fail every lookup validation did afterward,
     /// silently producing zero validation issues for a file discovery
     /// had just confirmed was a real unit file.
-    pub fn normalize_header_name(
-        name: &str,
-    ) -> String {
-        name.to_lowercase()
-            .replace(['_', ' '], "")
+    pub fn normalize_header_name(name: &str) -> String {
+        name.to_lowercase().replace(['_', ' '], "")
     }
 
     /// Returns the index of a header by name — case- and separator-
@@ -55,9 +52,7 @@ impl CsvDocument {
         let target = Self::normalize_header_name(name);
         self.headers
             .iter()
-            .position(|h| {
-                Self::normalize_header_name(h) == target
-            })
+            .position(|h| Self::normalize_header_name(h) == target)
     }
 }
 
@@ -69,10 +64,7 @@ mod tests {
     fn header_index_ignores_spaces_and_underscores() {
         let document = CsvDocument {
             file_name: "test.csv".to_string(),
-            headers: vec![
-                "unit_group".to_string(),
-                "number".to_string(),
-            ],
+            headers: vec!["unit_group".to_string(), "number".to_string()],
             rows: Vec::new(),
             modified_at: None,
         };
@@ -82,10 +74,7 @@ mod tests {
         // that let a discovered unit file silently produce zero
         // validation issues (discovery's normalizer stripped the
         // separator; the old `header_index` didn't).
-        assert_eq!(
-            document.header_index("UnitGroup"),
-            Some(0)
-        );
+        assert_eq!(document.header_index("UnitGroup"), Some(0));
     }
 
     #[test]
@@ -97,9 +86,6 @@ mod tests {
             modified_at: None,
         };
 
-        assert_eq!(
-            document.header_index("unitgroup"),
-            None
-        );
+        assert_eq!(document.header_index("unitgroup"), None);
     }
 }

@@ -57,9 +57,11 @@ async fn returns_404_for_missing_session() {
 async fn returns_409_before_discovery_completes() {
     let state = empty_state();
 
-    state.unit_group_sessions.save(
-        crate::application::unit_group_session::Session::new("s1".to_string()),
-    );
+    state
+        .unit_group_sessions
+        .save(crate::application::unit_group_session::Session::new(
+            "s1".to_string(),
+        ));
 
     let response = select_group_file(
         State(state),
@@ -108,10 +110,7 @@ async fn selects_one_of_several_auto_discovered_candidates() {
 
     let body = body_json(response).await;
 
-    assert_eq!(
-        body["selected_group_file_name"],
-        "wave_root_groups.csv"
-    );
+    assert_eq!(body["selected_group_file_name"], "wave_root_groups.csv");
     assert_eq!(body["group_file_confirmed"], false);
 }
 
@@ -198,8 +197,5 @@ async fn selection_survives_a_subsequent_discovery_recompute() {
 
     let body = body_json(recomputed).await;
 
-    assert_eq!(
-        body["selected_group_file_name"],
-        "facility_a_groups.csv"
-    );
+    assert_eq!(body["selected_group_file_name"], "facility_a_groups.csv");
 }

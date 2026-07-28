@@ -27,7 +27,11 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
 
 #[tokio::test]
 async fn returns_404_for_missing_session() {
-    let response = apply_group_file_upload(&empty_state(), "missing", document("groups.csv", vec!["Name"]));
+    let response = apply_group_file_upload(
+        &empty_state(),
+        "missing",
+        document("groups.csv", vec!["Name"]),
+    );
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
@@ -36,9 +40,11 @@ async fn returns_404_for_missing_session() {
 async fn returns_409_before_discovery_completes() {
     let state = empty_state();
 
-    state.unit_group_sessions.save(
-        crate::application::unit_group_session::Session::new("s1".to_string()),
-    );
+    state
+        .unit_group_sessions
+        .save(crate::application::unit_group_session::Session::new(
+            "s1".to_string(),
+        ));
 
     let response = apply_group_file_upload(&state, "s1", document("groups.csv", vec!["Name"]));
 
@@ -82,13 +88,7 @@ async fn manually_uploaded_file_with_conforming_headers_is_valid() {
         "s1",
         document(
             "master_groups.csv",
-            vec![
-                "Name",
-                "Description",
-                "AssignedTo",
-                "Status",
-                "LastUpdated",
-            ],
+            vec!["Name", "Description", "AssignedTo", "Status", "LastUpdated"],
         ),
     );
 
@@ -106,10 +106,7 @@ async fn manually_uploaded_file_with_minimal_headers_is_valid() {
     let response = apply_group_file_upload(
         &state,
         "s1",
-        document(
-            "master_groups.csv",
-            vec!["Name", "Description", "Active"],
-        ),
+        document("master_groups.csv", vec!["Name", "Description", "Active"]),
     );
 
     let body = body_json(response).await;
@@ -127,10 +124,7 @@ async fn reuploading_a_different_file_resets_confirmation() {
     apply_group_file_upload(
         &state,
         "s1",
-        document(
-            "master_groups.csv",
-            vec!["Name", "Description", "Active"],
-        ),
+        document("master_groups.csv", vec!["Name", "Description", "Active"]),
     );
 
     crate::api::group_file_confirm::confirm_group_file(

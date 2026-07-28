@@ -15,9 +15,8 @@ use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 /// the owner/direct one -- connecting as the table owner bypasses every
 /// row-level security policy in the schema silently.
 pub fn connect() -> Result<PgPool, sqlx::Error> {
-    let database_url = std::env::var("DATABASE_URL").expect(
-        "DATABASE_URL must be set -- see .env.local",
-    );
+    let database_url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL must be set -- see .env.local");
 
     // Every auth table/type/function lives in the `auth` schema now,
     // not `public` -- every unqualified name in application queries

@@ -2,43 +2,27 @@ use axum::http::StatusCode;
 use unitprep_core::csv_document::CsvDocument;
 
 use super::*;
-use crate::api::test_support::{
-    discovered_state,
-    empty_state,
-    unit_document,
-    uploaded_state,
-};
+use crate::api::test_support::{discovered_state, empty_state, unit_document, uploaded_state};
 
-async fn body_json(
-    response: Response,
-) -> serde_json::Value {
-    let bytes = axum::body::to_bytes(
-        response.into_body(),
-        usize::MAX,
-    )
-    .await
-    .unwrap();
+async fn body_json(response: Response) -> serde_json::Value {
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
 
-    serde_json::from_slice(&bytes)
-        .unwrap()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 #[tokio::test]
-async fn validate_returns_404_for_missing_session(
-) {
+async fn validate_returns_404_for_missing_session() {
     let response = validate(
         State(empty_state()),
         Json(ValidateRequest {
-            session_id: "missing"
-                .to_string(),
+            session_id: "missing".to_string(),
         }),
     )
     .await;
 
-    assert_eq!(
-        response.status(),
-        StatusCode::NOT_FOUND
-    );
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 /// Regression test for the stage/error inconsistency fix: calling
@@ -46,39 +30,28 @@ async fn validate_returns_404_for_missing_session(
 /// fake all-zero 200 success this used to return (indistinguishable
 /// from "discovered and genuinely found nothing to validate").
 #[tokio::test]
-async fn validate_returns_409_when_called_before_discovery(
-) {
+async fn validate_returns_409_when_called_before_discovery() {
     let state = uploaded_state(
         "s1",
         vec![unit_document(
             "units.csv",
-            vec![[
-                "A01",
-                "10x10 Inside Climate",
-                "10",
-                "10",
-            ]],
+            vec![["A01", "10x10 Inside Climate", "10", "10"]],
         )],
     );
 
     let response = validate(
         State(state),
         Json(ValidateRequest {
-            session_id: "s1"
-                .to_string(),
+            session_id: "s1".to_string(),
         }),
     )
     .await;
 
-    assert_eq!(
-        response.status(),
-        StatusCode::CONFLICT
-    );
+    assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
-async fn validate_reports_invalid_dimensions_as_exemptable(
-) {
+async fn validate_reports_invalid_dimensions_as_exemptable() {
     // UnitGroup must actually parse as a real "WxL" dimension -- an odd/
     // non-dimensioned name like "1200 sq ft" is now excluded from this
     // check entirely regardless of its actual Width/Length columns (see
@@ -93,18 +66,8 @@ async fn validate_reports_invalid_dimensions_as_exemptable(
         vec![unit_document(
             "units.csv",
             vec![
-                [
-                    "Office",
-                    "10x10 Inside Climate",
-                    "",
-                    "",
-                ],
-                [
-                    "Office2",
-                    "10x10 Inside Climate",
-                    "10",
-                    "10",
-                ],
+                ["Office", "10x10 Inside Climate", "", ""],
+                ["Office2", "10x10 Inside Climate", "10", "10"],
             ],
         )],
     );
@@ -112,44 +75,25 @@ async fn validate_reports_invalid_dimensions_as_exemptable(
     let response = validate(
         State(state),
         Json(ValidateRequest {
-            session_id: "s1"
-                .to_string(),
+            session_id: "s1".to_string(),
         }),
     )
     .await;
 
-    assert_eq!(
-        response.status(),
-        StatusCode::OK
-    );
+    assert_eq!(response.status(), StatusCode::OK);
 
-    let body =
-        body_json(response).await;
+    let body = body_json(response).await;
 
-    let issues =
-        body["issues"]
-            .as_array()
-            .unwrap();
+    let issues = body["issues"].as_array().unwrap();
 
     let issue = issues
         .iter()
-        .find(|i| {
-            i["description"]
-                == "Invalid dimensions"
-        })
-        .expect(
-            "expected an invalid-dimensions issue",
-        );
+        .find(|i| i["description"] == "Invalid dimensions")
+        .expect("expected an invalid-dimensions issue");
 
-    assert_eq!(
-        issue["severity"],
-        "Warning"
-    );
+    assert_eq!(issue["severity"], "Warning");
 
-    assert_eq!(
-        issue["exemptable"],
-        true
-    );
+    assert_eq!(issue["exemptable"], true);
 }
 
 /// Regression test for the "aggregate loud-error" gap: if a file
@@ -160,67 +104,39 @@ async fn validate_reports_invalid_dimensions_as_exemptable(
 /// a clean/absent result. `ready` must be false and the file must be
 /// named in `files_errored`, not silently skipped.
 #[tokio::test]
-async fn validate_reports_files_that_error_and_blocks_readiness(
-) {
+async fn validate_reports_files_that_error_and_blocks_readiness() {
     let bad_document = CsvDocument {
-            modified_at: None,
-        file_name: "units.csv"
-            .to_string(),
-        headers: vec![
-            "some_other_column"
-                .to_string(),
-        ],
-        rows: vec![vec![
-            "value".to_string(),
-        ]],
+        modified_at: None,
+        file_name: "units.csv".to_string(),
+        headers: vec!["some_other_column".to_string()],
+        rows: vec![vec!["value".to_string()]],
     };
 
-    let state = discovered_state(
-        "s1",
-        vec![bad_document],
-    );
+    let state = discovered_state("s1", vec![bad_document]);
 
     let response = validate(
         State(state),
         Json(ValidateRequest {
-            session_id: "s1"
-                .to_string(),
+            session_id: "s1".to_string(),
         }),
     )
     .await;
 
-    assert_eq!(
-        response.status(),
-        StatusCode::OK
-    );
+    assert_eq!(response.status(), StatusCode::OK);
 
-    let body =
-        body_json(response).await;
+    let body = body_json(response).await;
 
-    assert_eq!(
-        body["files_checked"], 0
-    );
+    assert_eq!(body["files_checked"], 0);
 
     assert_eq!(body["ready"], false);
 
-    let files_errored = body
-        ["files_errored"]
-        .as_array()
-        .unwrap();
+    let files_errored = body["files_errored"].as_array().unwrap();
 
-    assert_eq!(
-        files_errored.len(),
-        1
-    );
+    assert_eq!(files_errored.len(), 1);
 
-    assert_eq!(
-        files_errored[0]
-            ["file_name"],
-        "units.csv"
-    );
+    assert_eq!(files_errored[0]["file_name"], "units.csv");
 
-    assert!(files_errored[0]
-        ["message"]
+    assert!(files_errored[0]["message"]
         .as_str()
         .unwrap()
         .contains("units.csv"));

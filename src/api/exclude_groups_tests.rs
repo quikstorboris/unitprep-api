@@ -1,12 +1,7 @@
 use axum::http::StatusCode;
 
 use super::*;
-use crate::api::test_support::{
-    discovered_state,
-    empty_state,
-    unit_document,
-    uploaded_state,
-};
+use crate::api::test_support::{discovered_state, empty_state, unit_document, uploaded_state};
 
 async fn body_json(response: axum::response::Response) -> serde_json::Value {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -74,10 +69,7 @@ async fn excluding_multiple_groups_removes_all_of_their_units() {
         State(state),
         Json(ExcludeGroupsRequest {
             session_id: "s1".to_string(),
-            group_names: vec![
-                "Hertz Office Space".to_string(),
-                "Boat Slip".to_string(),
-            ],
+            group_names: vec!["Hertz Office Space".to_string(), "Boat Slip".to_string()],
             excluded: true,
         }),
     )
@@ -121,10 +113,7 @@ async fn including_multiple_groups_again_restores_all_of_their_units() {
         State(state.clone()),
         Json(ExcludeGroupsRequest {
             session_id: "s1".to_string(),
-            group_names: vec![
-                "Hertz Office Space".to_string(),
-                "Boat Slip".to_string(),
-            ],
+            group_names: vec!["Hertz Office Space".to_string(), "Boat Slip".to_string()],
             excluded: true,
         }),
     )
@@ -134,10 +123,7 @@ async fn including_multiple_groups_again_restores_all_of_their_units() {
         State(state),
         Json(ExcludeGroupsRequest {
             session_id: "s1".to_string(),
-            group_names: vec![
-                "Hertz Office Space".to_string(),
-                "Boat Slip".to_string(),
-            ],
+            group_names: vec!["Hertz Office Space".to_string(), "Boat Slip".to_string()],
             excluded: false,
         }),
     )

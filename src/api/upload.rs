@@ -30,21 +30,16 @@ pub struct UploadResponse {
     pub multipart_errors: usize,
 }
 
-pub async fn upload(
-    State(state): State<AppState>,
-    mut multipart: Multipart,
-) -> Response {
+pub async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Response {
     let started = Instant::now();
 
-    let mut uploaded_files: Vec<UploadedFile> =
-        Vec::new();
+    let mut uploaded_files: Vec<UploadedFile> = Vec::new();
 
     // Populated from the `file_modified_times` sidecar field (see
     // `MODIFIED_TIMES_FIELD`'s doc comment) and applied onto
     // `uploaded_files` once the whole stream has been read — the sidecar
     // isn't guaranteed to arrive before the file parts it describes.
-    let mut modified_times: HashMap<String, i64> =
-        HashMap::new();
+    let mut modified_times: HashMap<String, i64> = HashMap::new();
 
     let mut field_count = 0usize;
     let mut files_failed = 0usize;
@@ -55,29 +50,21 @@ pub async fn upload(
             Ok(Some(field)) => {
                 field_count += 1;
 
-                if field.name()
-                    == Some(MODIFIED_TIMES_FIELD)
-                {
+                if field.name() == Some(MODIFIED_TIMES_FIELD) {
                     match field.text().await {
-                        Ok(text) => {
-                            match serde_json::from_str::<
-                                Vec<(String, i64)>,
-                            >(&text)
-                            {
-                                Ok(pairs) => {
-                                    modified_times
-                                        .extend(pairs);
-                                }
-
-                                Err(err) => {
-                                    tracing::warn!(
-                                        field_count,
-                                        error = %err,
-                                        "Failed parsing file_modified_times sidecar — proceeding without modified-at timestamps"
-                                    );
-                                }
+                        Ok(text) => match serde_json::from_str::<Vec<(String, i64)>>(&text) {
+                            Ok(pairs) => {
+                                modified_times.extend(pairs);
                             }
-                        }
+
+                            Err(err) => {
+                                tracing::warn!(
+                                    field_count,
+                                    error = %err,
+                                    "Failed parsing file_modified_times sidecar — proceeding without modified-at timestamps"
+                                );
+                            }
+                        },
 
                         Err(err) => {
                             tracing::warn!(
@@ -91,60 +78,49 @@ pub async fn upload(
                     continue;
                 }
 
-                let file_name =
-                    match field.file_name() {
-                        Some(name) => {
-                            name.to_string()
-                        }
-                        None => {
-                            files_failed += 1;
+                let file_name = match field.file_name() {
+                    Some(name) => name.to_string(),
+                    None => {
+                        files_failed += 1;
 
-                            tracing::warn!(
-                                field_count,
-                                failed_count = files_failed,
-                                "Multipart field missing filename"
-                            );
+                        tracing::warn!(
+                            field_count,
+                            failed_count = files_failed,
+                            "Multipart field missing filename"
+                        );
 
-                            continue;
-                        }
-                    };
+                        continue;
+                    }
+                };
 
-                let relative_path = field
-                    .name()
-                    .unwrap_or(&file_name)
-                    .to_string();
+                let relative_path = field.name().unwrap_or(&file_name).to_string();
 
-                let bytes =
-                    match field.bytes().await {
-                        Ok(bytes) => {
-                            bytes.to_vec()
-                        }
+                let bytes = match field.bytes().await {
+                    Ok(bytes) => bytes.to_vec(),
 
-                        Err(err) => {
-                            files_failed += 1;
+                    Err(err) => {
+                        files_failed += 1;
 
-                            tracing::error!(
-                                field_count,
-                                file = %file_name,
-                                failed_count = files_failed,
-                                error = %err,
-                                "Failed reading file bytes"
-                            );
+                        tracing::error!(
+                            field_count,
+                            file = %file_name,
+                            failed_count = files_failed,
+                            error = %err,
+                            "Failed reading file bytes"
+                        );
 
-                            continue;
-                        }
-                    };
+                        continue;
+                    }
+                };
 
-                uploaded_files.push(
-                    UploadedFile {
-                        file_name,
-                        relative_path,
-                        bytes,
-                        // Patched in below once the whole stream (and
-                        // thus the sidecar field) has been read.
-                        modified_at: None,
-                    },
-                );
+                uploaded_files.push(UploadedFile {
+                    file_name,
+                    relative_path,
+                    bytes,
+                    // Patched in below once the whole stream (and
+                    // thus the sidecar field) has been read.
+                    modified_at: None,
+                });
             }
 
             Ok(None) => {
@@ -186,15 +162,12 @@ pub async fn upload(
     );
 
     for uploaded in uploaded_files.iter_mut() {
-        if let Some(&ms) =
-            modified_times.get(&uploaded.file_name)
-        {
+        if let Some(&ms) = modified_times.get(&uploaded.file_name) {
             uploaded.modified_at = Some(ms);
         }
     }
 
-    let files_uploaded =
-        uploaded_files.len();
+    let files_uploaded = uploaded_files.len();
 
     if files_uploaded == 0 {
         tracing::warn!(
@@ -215,14 +188,7 @@ pub async fn upload(
     }
 
     let session_id =
-        SessionService::new(
-            Arc::clone(
-                &state.unit_group_sessions,
-            ),
-        )
-        .create_session(
-            uploaded_files,
-        );
+        SessionService::new(Arc::clone(&state.unit_group_sessions)).create_session(uploaded_files);
 
     tracing::info!(
         session_id = %session_id,

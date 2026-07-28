@@ -8,11 +8,7 @@ use serde::Deserialize;
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{
-    session_not_found,
-    stage_conflict,
-    validate::run_validation,
-    ApiErrorBody,
-    AppState,
+    session_not_found, stage_conflict, validate::run_validation, ApiErrorBody, AppState,
 };
 use crate::application::unit_group_session::StageError;
 use unitprep_unit_group::CorrectionKey;
@@ -40,9 +36,7 @@ enum CorrectGroupNotReady {
     UnknownGroup,
 }
 
-fn build_new_group_name(
-    request: &CorrectGroupRequest,
-) -> String {
+fn build_new_group_name(request: &CorrectGroupRequest) -> String {
     let base = request
         .width
         .as_deref()
@@ -55,18 +49,10 @@ fn build_new_group_name(
                 .map(str::trim)
                 .filter(|s| !s.is_empty()),
         )
-        .map(|(width, length)| {
-            format!("{width}x{length}")
-        })
-        .unwrap_or_else(|| {
-            request.group_name.clone()
-        });
+        .map(|(width, length)| format!("{width}x{length}"))
+        .unwrap_or_else(|| request.group_name.clone());
 
-    match request
-        .additional_properties
-        .as_deref()
-        .map(str::trim)
-    {
+    match request.additional_properties.as_deref().map(str::trim) {
         Some(extra) if !extra.is_empty() => {
             format!("{base} {extra}")
         }
@@ -87,134 +73,102 @@ pub async fn correct_group(
     State(state): State<AppState>,
     Json(request): Json<CorrectGroupRequest>,
 ) -> Response {
-    let new_group_name =
-        build_new_group_name(&request);
+    let new_group_name = build_new_group_name(&request);
 
     let result = state
         .unit_group_sessions
-        .with_session_mut(
-            &request.session_id,
-            |session| {
-                if let Err(err) = session.require_stage(
-                    crate::application::unit_group_session::WorkflowStage::Discovered,
-                ) {
-                    tracing::warn!(
-                        session_id = %request.session_id,
-                        required = ?err.required,
-                        current = ?err.current,
-                        "Correct-group called before discovery completed"
-                    );
-
-                    return Err(CorrectGroupNotReady::Stage(err));
-                }
-
-                let discovery = session
-                    .data
-                    .discovery
-                    .clone()
-                    .expect(
-                        "Discovered stage guarantees discovery data",
-                    );
-
-                let effective =
-                    session.effective_documents();
-
-                let mut matched_any = false;
-
-                for document in effective.iter() {
-                    if !discovery
-                        .unit_file_names
-                        .contains(&document.file_name)
-                    {
-                        continue;
-                    }
-
-                    let Some(unit_group_index) =
-                        document.header_index("unitgroup")
-                    else {
-                        continue;
-                    };
-
-                    let Some(number_index) =
-                        document.header_index("number")
-                    else {
-                        continue;
-                    };
-
-                    for row in &document.rows {
-                        let group = row
-                            .get(unit_group_index)
-                            .map(|v| v.trim())
-                            .unwrap_or("");
-
-                        if group != request.group_name {
-                            continue;
-                        }
-
-                        let Some(unit_number) =
-                            row.get(number_index)
-                        else {
-                            continue;
-                        };
-
-                        matched_any = true;
-
-                        session.add_correction(
-                            CorrectionKey {
-                                file_name: document
-                                    .file_name
-                                    .clone(),
-                                unit_number:
-                                    unit_number.clone(),
-                                field: "unitgroup"
-                                    .to_string(),
-                            },
-                            new_group_name.clone(),
-                        );
-                    }
-                }
-
-                if !matched_any {
-                    tracing::warn!(
-                        session_id = %request.session_id,
-                        group_name = %request.group_name,
-                        "Correct-group rejected — no unit currently has that UnitGroup value"
-                    );
-
-                    return Err(
-                        CorrectGroupNotReady::UnknownGroup,
-                    );
-                }
-
-                tracing::info!(
+        .with_session_mut(&request.session_id, |session| {
+            if let Err(err) = session
+                .require_stage(crate::application::unit_group_session::WorkflowStage::Discovered)
+            {
+                tracing::warn!(
                     session_id = %request.session_id,
-                    group_name = %request.group_name,
-                    new_group_name = %new_group_name,
-                    "Renamed UnitGroup across every matching unit"
+                    required = ?err.required,
+                    current = ?err.current,
+                    "Correct-group called before discovery completed"
                 );
 
-                run_validation(
-                    session,
-                    &request.session_id,
-                )
-                .map_err(CorrectGroupNotReady::Stage)
-            },
-        );
+                return Err(CorrectGroupNotReady::Stage(err));
+            }
+
+            let discovery = session
+                .data
+                .discovery
+                .clone()
+                .expect("Discovered stage guarantees discovery data");
+
+            let effective = session.effective_documents();
+
+            let mut matched_any = false;
+
+            for document in effective.iter() {
+                if !discovery.unit_file_names.contains(&document.file_name) {
+                    continue;
+                }
+
+                let Some(unit_group_index) = document.header_index("unitgroup") else {
+                    continue;
+                };
+
+                let Some(number_index) = document.header_index("number") else {
+                    continue;
+                };
+
+                for row in &document.rows {
+                    let group = row.get(unit_group_index).map(|v| v.trim()).unwrap_or("");
+
+                    if group != request.group_name {
+                        continue;
+                    }
+
+                    let Some(unit_number) = row.get(number_index) else {
+                        continue;
+                    };
+
+                    matched_any = true;
+
+                    session.add_correction(
+                        CorrectionKey {
+                            file_name: document.file_name.clone(),
+                            unit_number: unit_number.clone(),
+                            field: "unitgroup".to_string(),
+                        },
+                        new_group_name.clone(),
+                    );
+                }
+            }
+
+            if !matched_any {
+                tracing::warn!(
+                    session_id = %request.session_id,
+                    group_name = %request.group_name,
+                    "Correct-group rejected — no unit currently has that UnitGroup value"
+                );
+
+                return Err(CorrectGroupNotReady::UnknownGroup);
+            }
+
+            tracing::info!(
+                session_id = %request.session_id,
+                group_name = %request.group_name,
+                new_group_name = %new_group_name,
+                "Renamed UnitGroup across every matching unit"
+            );
+
+            run_validation(session, &request.session_id).map_err(CorrectGroupNotReady::Stage)
+        });
 
     match result {
-        Some(Ok(response)) => {
-            Json(response).into_response()
-        }
+        Some(Ok(response)) => Json(response).into_response(),
 
-        Some(Err(CorrectGroupNotReady::Stage(err))) => {
-            stage_conflict(err)
-        }
+        Some(Err(CorrectGroupNotReady::Stage(err))) => stage_conflict(err),
 
         Some(Err(CorrectGroupNotReady::UnknownGroup)) => (
             StatusCode::BAD_REQUEST,
             Json(ApiErrorBody {
                 error: "unknown_group",
-                message: "No unit in the selected files currently has that UnitGroup value.".to_string(),
+                message: "No unit in the selected files currently has that UnitGroup value."
+                    .to_string(),
             }),
         )
             .into_response(),

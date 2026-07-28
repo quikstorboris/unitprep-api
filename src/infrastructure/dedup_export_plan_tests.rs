@@ -1,13 +1,22 @@
 use super::*;
-use unitprep_dedup::types::{FieldCategory, FieldMismatch, FieldName, FieldValueMismatch, FlaggedGroup};
+use unitprep_dedup::types::{
+    FieldCategory, FieldMismatch, FieldName, FieldValueMismatch, FlaggedGroup,
+};
 
 fn record(unit: &str, alt_phone: &str) -> TenantRecord {
-    TenantRecord { unit_number: unit.to_string(), alt_contact_phone_number: alt_phone.to_string(), ..Default::default() }
+    TenantRecord {
+        unit_number: unit.to_string(),
+        alt_contact_phone_number: alt_phone.to_string(),
+        ..Default::default()
+    }
 }
 
 fn flagged_group(key: &str, records: Vec<TenantRecord>, units: &str) -> FlaggedGroup {
     FlaggedGroup {
-        group: TenantGroup { key: key.to_string(), records },
+        group: TenantGroup {
+            key: key.to_string(),
+            records,
+        },
         mismatches: vec![FieldMismatch {
             category: FieldCategory::AltContact,
             fields: vec![FieldValueMismatch {
@@ -22,7 +31,12 @@ fn flagged_group(key: &str, records: Vec<TenantRecord>, units: &str) -> FlaggedG
 fn data_rows(plan: &[PlannedRow]) -> Vec<(&str, &str, usize)> {
     plan.iter()
         .filter_map(|row| match row {
-            PlannedRow::Data { record, note, cluster, .. } => Some((record.unit_number.as_str(), note.as_str(), *cluster)),
+            PlannedRow::Data {
+                record,
+                note,
+                cluster,
+                ..
+            } => Some((record.unit_number.as_str(), note.as_str(), *cluster)),
             _ => None,
         })
         .collect()
@@ -32,8 +46,16 @@ fn data_rows(plan: &[PlannedRow]) -> Vec<(&str, &str, usize)> {
 fn each_group_gets_its_own_increasing_cluster_index() {
     let report = DedupReport {
         flagged_groups: vec![
-            flagged_group("smith", vec![record("101", ""), record("102", "5551234")], "101, 102"),
-            flagged_group("jones", vec![record("201", "5559876"), record("202", "")], "201, 202"),
+            flagged_group(
+                "smith",
+                vec![record("101", ""), record("102", "5551234")],
+                "101, 102",
+            ),
+            flagged_group(
+                "jones",
+                vec![record("201", "5559876"), record("202", "")],
+                "201, 202",
+            ),
         ],
         ..Default::default()
     };
@@ -50,7 +72,11 @@ fn each_group_gets_its_own_increasing_cluster_index() {
 #[test]
 fn only_the_first_row_of_a_group_carries_the_note_and_hyperlink_target() {
     let report = DedupReport {
-        flagged_groups: vec![flagged_group("smith", vec![record("101", ""), record("102", "5551234")], "101, 102")],
+        flagged_groups: vec![flagged_group(
+            "smith",
+            vec![record("101", ""), record("102", "5551234")],
+            "101, 102",
+        )],
         ..Default::default()
     };
 
@@ -58,7 +84,11 @@ fn only_the_first_row_of_a_group_carries_the_note_and_hyperlink_target() {
     let data: Vec<_> = plan
         .iter()
         .filter_map(|row| match row {
-            PlannedRow::Data { note, hyperlink_target, .. } => Some((note.clone(), hyperlink_target.clone())),
+            PlannedRow::Data {
+                note,
+                hyperlink_target,
+                ..
+            } => Some((note.clone(), hyperlink_target.clone())),
             _ => None,
         })
         .collect();
@@ -90,8 +120,18 @@ fn blank_rows_separate_groups_and_do_not_break_cluster_counting() {
 #[test]
 fn related_tenant_rows_never_get_a_hyperlink_target() {
     let all_records = vec![
-        TenantRecord { first_last: "johnsmith".into(), unit_number: "A1".into(), phone_number: "5551234".into(), ..Default::default() },
-        TenantRecord { first_last: "janedoe".into(), unit_number: "B2".into(), phone_number: "5551234".into(), ..Default::default() },
+        TenantRecord {
+            first_last: "johnsmith".into(),
+            unit_number: "A1".into(),
+            phone_number: "5551234".into(),
+            ..Default::default()
+        },
+        TenantRecord {
+            first_last: "janedoe".into(),
+            unit_number: "B2".into(),
+            phone_number: "5551234".into(),
+            ..Default::default()
+        },
     ];
 
     let report = DedupReport {
@@ -107,7 +147,10 @@ fn related_tenant_rows_never_get_a_hyperlink_target() {
     let plan = build_export_plan(&report, &all_records);
 
     for row in &plan {
-        if let PlannedRow::Data { hyperlink_target, .. } = row {
+        if let PlannedRow::Data {
+            hyperlink_target, ..
+        } = row
+        {
             assert_eq!(*hyperlink_target, None);
         }
     }

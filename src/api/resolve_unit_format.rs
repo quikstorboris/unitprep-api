@@ -10,23 +10,15 @@ use unitprep_core::session_store::SessionStoreExt;
 use crate::{
     api::{
         discover::{
-            compute_discovery,
-            current_unit_file_to_resolve,
-            find_header_mismatches,
+            compute_discovery, current_unit_file_to_resolve, find_header_mismatches,
             normalized_headers,
         },
-        session_not_found,
-        stage_conflict,
-        ApiErrorBody,
-        AppState,
+        session_not_found, stage_conflict, ApiErrorBody, AppState,
     },
     application::unit_group_session::{StageError, WorkflowStage},
 };
 use unitprep_unit_group::{
-    detect_vendor,
-    mapping_from_vendor,
-    FieldMapping,
-    CANONICAL_TARGET_FIELDS,
+    detect_vendor, mapping_from_vendor, FieldMapping, CANONICAL_TARGET_FIELDS,
     REQUIRED_TARGET_FIELDS,
 };
 
@@ -40,7 +32,9 @@ pub struct MappingEntryInput {
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ResolveAction {
     Confirm,
-    Map { mapping: Vec<MappingEntryInput> },
+    Map {
+        mapping: Vec<MappingEntryInput>,
+    },
     /// Clears the stored resolution for every currently-selected unit
     /// file, undoing a previous "confirm" or "map" -- the only way back
     /// into the confirm/map screen once every selected file is already
@@ -389,9 +383,9 @@ fn validate_manual_mapping(
     let missing_required: Vec<String> = REQUIRED_TARGET_FIELDS
         .iter()
         .filter(|required| {
-            !submitted.iter().any(|entry| {
-                &entry.target == *required && entry.source.is_some()
-            })
+            !submitted
+                .iter()
+                .any(|entry| &entry.target == *required && entry.source.is_some())
         })
         .map(|s| s.to_string())
         .collect();

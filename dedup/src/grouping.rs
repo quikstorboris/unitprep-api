@@ -37,7 +37,10 @@ pub fn group_records(records: Vec<TenantRecord>) -> Vec<TenantGroup> {
         }
         match groups.iter_mut().find(|g| g.key == key) {
             Some(group) => group.records.push(record),
-            None => groups.push(TenantGroup { key, records: vec![record] }),
+            None => groups.push(TenantGroup {
+                key,
+                records: vec![record],
+            }),
         }
     }
     groups
@@ -46,7 +49,10 @@ pub fn group_records(records: Vec<TenantRecord>) -> Vec<TenantGroup> {
 /// Multi-unit tenants only (2+ records) — the reference script's
 /// `multi`. Single-unit tenants are never flagged or compared.
 pub fn multi_unit_groups(groups: Vec<TenantGroup>) -> Vec<TenantGroup> {
-    groups.into_iter().filter(|g| g.records.len() >= 2).collect()
+    groups
+        .into_iter()
+        .filter(|g| g.records.len() >= 2)
+        .collect()
 }
 
 #[cfg(test)]
@@ -63,10 +69,7 @@ mod tests {
 
     #[test]
     fn same_key_records_group_together() {
-        let groups = group_records(vec![
-            record("John Smith", "A1"),
-            record("john smith", "A2"),
-        ]);
+        let groups = group_records(vec![record("John Smith", "A1"), record("john smith", "A2")]);
 
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].records.len(), 2);
@@ -83,20 +86,18 @@ mod tests {
         // Two singleton blank-key groups, plus the real "jane doe" group —
         // never one shared "" bucket holding two unrelated tenants.
         assert_eq!(groups.len(), 3);
-        assert!(groups
-            .iter()
-            .filter(|g| g.records.len() == 1
-                && g.records[0].first_last.trim().is_empty())
-            .count()
-            == 2);
+        assert!(
+            groups
+                .iter()
+                .filter(|g| g.records.len() == 1 && g.records[0].first_last.trim().is_empty())
+                .count()
+                == 2
+        );
     }
 
     #[test]
     fn blank_key_groups_are_not_multi_unit() {
-        let groups = group_records(vec![
-            record("", "A1"),
-            record("", "A2"),
-        ]);
+        let groups = group_records(vec![record("", "A1"), record("", "A2")]);
 
         assert!(multi_unit_groups(groups).is_empty());
     }

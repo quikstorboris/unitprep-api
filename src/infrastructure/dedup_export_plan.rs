@@ -12,7 +12,9 @@ use unitprep_dedup::grouping::group_records;
 use unitprep_dedup::types::{TenantGroup, TenantRecord};
 use unitprep_dedup::DedupReport;
 
-use cell_refs::{cite_fields_for_mismatches, first_cell_ref, note_with_cell_refs, typo_variant_cite_fields};
+use cell_refs::{
+    cite_fields_for_mismatches, first_cell_ref, note_with_cell_refs, typo_variant_cite_fields,
+};
 
 mod cell_refs;
 
@@ -120,17 +122,27 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
         }
 
         let cite_fields = cite_fields_for_mismatches(&flagged.mismatches);
-        let note = note_with_cell_refs(&flagged.note, &flagged.group.records, &cite_fields, row_num);
+        let note =
+            note_with_cell_refs(&flagged.note, &flagged.group.records, &cite_fields, row_num);
         let hyperlink_target = first_cell_ref(&cite_fields, row_num);
 
-        push_group_rows(&mut plan, &flagged.group, note, hyperlink_target, cluster, &mut row_num);
+        push_group_rows(
+            &mut plan,
+            &flagged.group,
+            note,
+            hyperlink_target,
+            cluster,
+            &mut row_num,
+        );
         cluster += 1;
     }
 
     if !report.typo_variant_candidates.is_empty() {
         plan.push(PlannedRow::Blank);
         row_num += 1;
-        plan.push(PlannedRow::Marker("Possible name/typo variants — for your review"));
+        plan.push(PlannedRow::Marker(
+            "Possible name/typo variants — for your review",
+        ));
         row_num += 1;
 
         for (i, candidate) in report.typo_variant_candidates.iter().enumerate() {
@@ -139,8 +151,10 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
                 row_num += 1;
             }
 
-            let pair: Vec<&TenantGroup> =
-                [find(&candidate.key_a), find(&candidate.key_b)].into_iter().flatten().collect();
+            let pair: Vec<&TenantGroup> = [find(&candidate.key_a), find(&candidate.key_b)]
+                .into_iter()
+                .flatten()
+                .collect();
             let combined: Vec<TenantRecord> = pair.iter().flat_map(|g| g.records.clone()).collect();
             let cite_fields = typo_variant_cite_fields(candidate, &combined);
             let note = note_with_cell_refs(&candidate.note, &combined, &cite_fields, row_num);
@@ -148,8 +162,16 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
 
             let mut wrote_note = false;
             for group in &pair {
-                let row_note = if wrote_note { String::new() } else { note.clone() };
-                let target = if wrote_note { None } else { hyperlink_target.clone() };
+                let row_note = if wrote_note {
+                    String::new()
+                } else {
+                    note.clone()
+                };
+                let target = if wrote_note {
+                    None
+                } else {
+                    hyperlink_target.clone()
+                };
                 push_group_rows(&mut plan, group, row_note, target, cluster, &mut row_num);
                 wrote_note = true;
             }
@@ -171,8 +193,11 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
                 row_num += 1;
             }
 
-            let member_groups: Vec<&TenantGroup> =
-                candidate.group_keys.iter().filter_map(|key| find(key)).collect();
+            let member_groups: Vec<&TenantGroup> = candidate
+                .group_keys
+                .iter()
+                .filter_map(|key| find(key))
+                .collect();
 
             // No cell references for this category — a shared value
             // has no single well-defined differing cell to point at
@@ -180,7 +205,11 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
             // target either.
             let mut wrote_note = false;
             for group in &member_groups {
-                let row_note = if wrote_note { String::new() } else { candidate.note.clone() };
+                let row_note = if wrote_note {
+                    String::new()
+                } else {
+                    candidate.note.clone()
+                };
                 push_group_rows(&mut plan, group, row_note, None, cluster, &mut row_num);
                 wrote_note = true;
             }
@@ -204,7 +233,11 @@ fn push_group_rows(
             record: Box::new(record.clone()),
             note: if i == 0 { note.clone() } else { String::new() },
             cluster,
-            hyperlink_target: if i == 0 { hyperlink_target.clone() } else { None },
+            hyperlink_target: if i == 0 {
+                hyperlink_target.clone()
+            } else {
+                None
+            },
         });
         *row_num += 1;
     }

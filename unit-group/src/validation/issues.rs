@@ -12,8 +12,7 @@ pub const DUPLICATE_UNITS: &str = "Duplicate unit numbers";
 pub const INVALID_DIMENSIONS: &str = "Invalid dimensions";
 pub const CLIMATE_MISMATCH: &str = "Climate status does not match UnitGroup";
 pub const LOCALITY_MISMATCH: &str = "Locality does not match UnitGroup";
-pub const UNITGROUP_DIMENSION_MISMATCH: &str =
-    "UnitGroup dimensions do not match Width/Length";
+pub const UNITGROUP_DIMENSION_MISMATCH: &str = "UnitGroup dimensions do not match Width/Length";
 pub const RARE_GROUP: &str = "Rare UnitGroup detected";
 pub const INCONSISTENT_CASING: &str = "Inconsistent unit-number casing";
 
@@ -37,47 +36,32 @@ pub struct GroupCheckAcknowledgments {
 /// decision, not a value swap, so they're deliberately not listed here).
 /// Area is never listed: it's derived from Width × Length, not an
 /// independent value a user should be asked to type in.
-pub fn correctable_fields_for(
-    description: &str,
-) -> Vec<String> {
+pub fn correctable_fields_for(description: &str) -> Vec<String> {
     let fields: &[&str] = match description {
-        INVALID_DIMENSIONS => {
-            &["width", "length"]
-        }
+        INVALID_DIMENSIONS => &["width", "length"],
 
-        CLIMATE_MISMATCH => {
-            &["climatecontrolled"]
-        }
+        CLIMATE_MISMATCH => &["climatecontrolled"],
 
         LOCALITY_MISMATCH => &["locality"],
 
-        UNITGROUP_DIMENSION_MISMATCH => {
-            &["width", "length"]
-        }
+        UNITGROUP_DIMENSION_MISMATCH => &["width", "length"],
 
         // Not `ODD_UNITGROUP` -- that's a per-group check now (see
         // `flagged_are_group_names`), fixed via `/correct-group`, not a
         // single-unit `/correct` field swap.
-        BLANK_UNITGROUP => {
-            &["unitgroup"]
-        }
+        BLANK_UNITGROUP => &["unitgroup"],
 
         _ => &[],
     };
 
-    fields
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
+    fields.iter().map(|s| s.to_string()).collect()
 }
 
 /// True only for "Invalid dimensions" — the one check where a unit can
 /// legitimately have no dimensions at all (an office, an owner's
 /// apartment, etc. in the catalog), so the right fix is exempting the
 /// unit from the check rather than fabricating a Width/Length value.
-pub fn is_dimension_exemptable(
-    description: &str,
-) -> bool {
+pub fn is_dimension_exemptable(description: &str) -> bool {
     description == INVALID_DIMENSIONS
 }
 
@@ -121,35 +105,18 @@ pub struct ValidationIssue {
 /// empty. `group_occurrence_counts` defaults empty; set it on the
 /// returned `RARE_GROUP` issue afterward if needed (see mod.rs).
 pub(super) fn build<const N: usize>(
-    candidates: [(
-        Vec<String>,
-        &str,
-        Severity,
-        bool,
-    ); N],
+    candidates: [(Vec<String>, &str, Severity, bool); N],
 ) -> Vec<ValidationIssue> {
     candidates
         .into_iter()
-        .filter(|(flagged_values, _, _, _)| {
-            !flagged_values.is_empty()
-        })
+        .filter(|(flagged_values, _, _, _)| !flagged_values.is_empty())
         .map(
-            |(
+            |(flagged_values, description, severity, flagged_are_group_names)| ValidationIssue {
                 flagged_values,
-                description,
+                description: description.to_string(),
                 severity,
                 flagged_are_group_names,
-            )| {
-                ValidationIssue {
-                    flagged_values,
-                    description:
-                        description
-                            .to_string(),
-                    severity,
-                    flagged_are_group_names,
-                    group_occurrence_counts:
-                        Vec::new(),
-                }
+                group_occurrence_counts: Vec::new(),
             },
         )
         .collect()

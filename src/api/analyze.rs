@@ -10,25 +10,12 @@ use serde::{Deserialize, Serialize};
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::{
-    api::{
-        internal_error,
-        session_not_found,
-        stage_conflict,
-        ApiErrorBody,
-        AppState,
-    },
-    application::unit_group_session::{
-        StageError,
-        WorkflowStage,
-    },
+    api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
+    application::unit_group_session::{StageError, WorkflowStage},
 };
 use unitprep_unit_group::{
-    analyze_batch,
-    build_batch_from_documents,
-    load_reference_groups_from_document,
-    select_group_document,
-    AdvisoryIssue,
-    SimilarityMatch,
+    analyze_batch, build_batch_from_documents, load_reference_groups_from_document,
+    select_group_document, AdvisoryIssue, SimilarityMatch,
 };
 
 /// Why `/analyze` isn't ready to run yet — distinct from "session
@@ -52,12 +39,9 @@ pub struct AnalyzeResponse {
     pub net_new_groups: usize,
     pub similar_groups: usize,
     pub advisory_issues: usize,
-    pub net_new_group_details:
-        Vec<String>,
-    pub similar_group_details:
-        Vec<SimilarityMatch>,
-    pub advisory_issue_details:
-        Vec<AdvisoryIssue>,
+    pub net_new_group_details: Vec<String>,
+    pub similar_group_details: Vec<SimilarityMatch>,
+    pub advisory_issue_details: Vec<AdvisoryIssue>,
 }
 
 pub async fn analyze(
@@ -70,55 +54,40 @@ pub async fn analyze(
     // (expired or invalid id) — distinct from the closure returning
     // `Err`, which means the session exists but isn't ready for a
     // business-logic reason (wrong stage, or ambiguous group file).
-    let analysis_inputs = match state
-        .unit_group_sessions
-        .with_session(
-            &request.session_id,
-            |session| {
-                if let Err(err) =
-                    session.require_stage(
-                        WorkflowStage::Validated,
-                    )
-                {
-                    tracing::warn!(
-                        session_id = %request.session_id,
-                        required = ?err.required,
-                        current = ?err.current,
-                        "Analyze called before discovery/validation completed"
-                    );
+    let analysis_inputs = match state.unit_group_sessions.with_session(
+        &request.session_id,
+        |session| {
+            if let Err(err) = session.require_stage(WorkflowStage::Validated) {
+                tracing::warn!(
+                    session_id = %request.session_id,
+                    required = ?err.required,
+                    current = ?err.current,
+                    "Analyze called before discovery/validation completed"
+                );
 
-                    return Err(AnalyzeNotReady::Stage(err));
-                }
+                return Err(AnalyzeNotReady::Stage(err));
+            }
 
-                let discovery = session
-                    .data
-                    .discovery
-                    .clone()
-                    .expect(
-                        "Validated stage guarantees discovery data",
-                    );
+            let discovery = session
+                .data
+                .discovery
+                .clone()
+                .expect("Validated stage guarantees discovery data");
 
-                if discovery.group_file_names.len() > 1
-                    && discovery
-                        .selected_group_file_name
-                        .is_none()
-                {
-                    tracing::warn!(
-                        session_id = %request.session_id,
-                        group_files = ?discovery.group_file_names,
-                        "Analysis requires master group file selection"
-                    );
+            if discovery.group_file_names.len() > 1 && discovery.selected_group_file_name.is_none()
+            {
+                tracing::warn!(
+                    session_id = %request.session_id,
+                    group_files = ?discovery.group_file_names,
+                    "Analysis requires master group file selection"
+                );
 
-                    return Err(AnalyzeNotReady::GroupFileNotSelected);
-                }
+                return Err(AnalyzeNotReady::GroupFileNotSelected);
+            }
 
-                Ok((
-                    discovery,
-                    session
-                        .effective_documents(),
-                ))
-            },
-        ) {
+            Ok((discovery, session.effective_documents()))
+        },
+    ) {
         Some(Ok(data)) => data,
         Some(Err(AnalyzeNotReady::Stage(err))) => {
             return stage_conflict(err);
@@ -138,29 +107,16 @@ pub async fn analyze(
         }
     };
 
-    let (discovery, documents) =
-        analysis_inputs;
+    let (discovery, documents) = analysis_inputs;
 
-    let unit_docs: Vec<
-        &unitprep_core::csv_document::CsvDocument,
-    > = documents
+    let unit_docs: Vec<&unitprep_core::csv_document::CsvDocument> = documents
         .iter()
-        .filter(|d| {
-            discovery
-                .unit_file_names
-                .contains(&d.file_name)
-        })
+        .filter(|d| discovery.unit_file_names.contains(&d.file_name))
         .collect();
 
-    let group_doc =
-        select_group_document(
-            &documents,
-            &discovery,
-        );
+    let group_doc = select_group_document(&documents, &discovery);
 
-    let batch = match build_batch_from_documents(
-        unit_docs,
-    ) {
+    let batch = match build_batch_from_documents(unit_docs) {
         Ok(batch) => batch,
 
         Err(err) => {
@@ -170,41 +126,29 @@ pub async fn analyze(
                 "Failed to build batch"
             );
 
-            return internal_error(
-                "Failed to build analysis batch from documents",
-            );
+            return internal_error("Failed to build analysis batch from documents");
         }
     };
 
-    let reference_groups =
-        match group_doc {
-            Some(doc) => {
-                match load_reference_groups_from_document(
-                    doc,
-                ) {
-                    Ok(groups) => {
-                        Some(groups)
-                    }
+    let reference_groups = match group_doc {
+        Some(doc) => match load_reference_groups_from_document(doc) {
+            Ok(groups) => Some(groups),
 
-                    Err(err) => {
-                        tracing::warn!(
-                            session_id = %request.session_id,
-                            error = %err,
-                            "Could not load reference groups"
-                        );
+            Err(err) => {
+                tracing::warn!(
+                    session_id = %request.session_id,
+                    error = %err,
+                    "Could not load reference groups"
+                );
 
-                        None
-                    }
-                }
+                None
             }
+        },
 
-            None => None,
-        };
+        None => None,
+    };
 
-    let results = match analyze_batch(
-        batch,
-        reference_groups,
-    ) {
+    let results = match analyze_batch(batch, reference_groups) {
         Ok(results) => results,
 
         Err(err) => {
@@ -214,22 +158,15 @@ pub async fn analyze(
                 "Analysis failed"
             );
 
-            return internal_error(
-                "Analysis failed",
-            );
+            return internal_error("Analysis failed");
         }
     };
 
     if state
         .unit_group_sessions
-        .with_session_mut(
-            &request.session_id,
-            |session| {
-                session.complete_analysis(
-                    results.clone(),
-                );
-            },
-        )
+        .with_session_mut(&request.session_id, |session| {
+            session.complete_analysis(results.clone());
+        })
         .is_none()
     {
         // The session was deleted/expired in the narrow window between
@@ -277,53 +214,24 @@ pub async fn analyze(
     );
 
     Json(AnalyzeResponse {
-        facilities:
-            results
-                .batch_run
-                .facilities
-                .len(),
+        facilities: results.batch_run.facilities.len(),
 
-        global_groups:
-            results
-                .batch_run
-                .global_groups
-                .len(),
+        global_groups: results.batch_run.global_groups.len(),
 
-        net_new_groups:
-            results
-                .net_new_groups
-                .len(),
+        net_new_groups: results.net_new_groups.len(),
 
-        similar_groups:
-            results
-                .similar_groups
-                .len(),
+        similar_groups: results.similar_groups.len(),
 
-        advisory_issues:
-            results
-                .batch_run
-                .advisory_issues
-                .len(),
+        advisory_issues: results.batch_run.advisory_issues.len(),
 
-        net_new_group_details:
-            results
-                .net_new_groups
-                .clone(),
+        net_new_group_details: results.net_new_groups.clone(),
 
-        similar_group_details:
-            results
-                .similar_groups
-                .clone(),
+        similar_group_details: results.similar_groups.clone(),
 
-        advisory_issue_details:
-            results
-                .batch_run
-                .advisory_issues
-                .clone(),
+        advisory_issue_details: results.batch_run.advisory_issues.clone(),
     })
     .into_response()
 }
-
 
 #[cfg(test)]
 #[path = "analyze_tests.rs"]

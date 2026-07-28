@@ -19,55 +19,24 @@ pub mod models;
 pub mod validation;
 
 pub use analysis::{
-    analyze_batch,
-    build_batch_from_documents,
-    has_malformed_dimension_attempt,
-    is_uncommon_group_name,
-    load_reference_groups_from_document,
-    parse_fingerprint,
-    select_group_document,
-    Climate,
-    GroupFingerprint,
-    Location,
+    analyze_batch, build_batch_from_documents, has_malformed_dimension_attempt,
+    is_uncommon_group_name, load_reference_groups_from_document, parse_fingerprint,
+    select_group_document, Climate, GroupFingerprint, Location,
 };
 pub use corrections::{
-    apply_corrections,
-    filter_excluded_groups,
-    CorrectionKey,
-    DimensionExemptionKey,
+    apply_corrections, filter_excluded_groups, CorrectionKey, DimensionExemptionKey,
     GroupCheckAcknowledgmentKey,
 };
 pub use format::{
-    detect_vendor,
-    mapping_from_vendor,
-    apply_field_mapping,
-    FieldMapping,
-    VendorFormat,
-    CANONICAL_TARGET_FIELDS,
-    REQUIRED_TARGET_FIELDS,
-    VENDOR_FORMATS,
+    apply_field_mapping, detect_vendor, mapping_from_vendor, FieldMapping, VendorFormat,
+    CANONICAL_TARGET_FIELDS, REQUIRED_TARGET_FIELDS, VENDOR_FORMATS,
 };
 pub use models::{
-    AdvisoryIssue,
-    AnalysisResults,
-    BatchRun,
-    DiscoveryResult,
-    Facility,
-    FieldMappingEntry,
-    FileValidationError,
-    Issue,
-    Severity,
-    SimilarityMatch,
-    UnitFileCandidate,
-    ValidationIssueSummary,
-    ValidationResult,
+    AdvisoryIssue, AnalysisResults, BatchRun, DiscoveryResult, Facility, FieldMappingEntry,
+    FileValidationError, Issue, Severity, SimilarityMatch, UnitFileCandidate,
+    ValidationIssueSummary, ValidationResult,
 };
 pub use validation::{
-    correctable_fields_for,
-    is_dimension_exemptable,
-    validate_document,
-    GroupCheckAcknowledgments,
-    ValidationIssue,
-    ODD_UNITGROUP,
-    RARE_GROUP,
+    correctable_fields_for, is_dimension_exemptable, validate_document, GroupCheckAcknowledgments,
+    ValidationIssue, ODD_UNITGROUP, RARE_GROUP,
 };

@@ -5,14 +5,8 @@
 
 use unitprep_core::csv_document::CsvDocument;
 use unitprep_unit_group::{
-    build_batch_from_documents,
-    detect_vendor,
-    is_uncommon_group_name,
-    mapping_from_vendor,
-    DiscoveryResult,
-    FieldMappingEntry,
-    UnitFileCandidate,
-    CANONICAL_TARGET_FIELDS,
+    build_batch_from_documents, detect_vendor, is_uncommon_group_name, mapping_from_vendor,
+    DiscoveryResult, FieldMappingEntry, UnitFileCandidate, CANONICAL_TARGET_FIELDS,
     REQUIRED_TARGET_FIELDS,
 };
 
@@ -24,22 +18,14 @@ use super::format_helpers::{find_header_mismatches, is_group_document};
 /// Classifies every document in `session`, resolves unit/group file
 /// selection against any prior selection still valid, stores the result
 /// on the session, and returns the API-facing response for it.
-pub(crate) fn compute_discovery(
-    session: &mut Session,
-) -> DiscoverResponse {
+pub(crate) fn compute_discovery(session: &mut Session) -> DiscoverResponse {
     let previous = session.data.discovery.clone();
 
-    let selection =
-        reconcile_unit_file_selection(session, &previous);
+    let selection = reconcile_unit_file_selection(session, &previous);
 
-    let group_readiness = resolve_group_file_readiness(
-        session,
-        &selection.group_files,
-        &previous,
-    );
+    let group_readiness = resolve_group_file_readiness(session, &selection.group_files, &previous);
 
-    let group_file_confirmed =
-        session.data.group_file_confirmed;
+    let group_file_confirmed = session.data.group_file_confirmed;
 
     // Which confirmed file the confirm/map UI works on next -- sorted so
     // repeated calls (and /unit-file/resolve-format, which shares this
@@ -48,12 +34,7 @@ pub(crate) fn compute_discovery(
     let mut pending_unit_file_names: Vec<String> = selection
         .selected_names
         .iter()
-        .filter(|name| {
-            !session
-                .data
-                .format_resolutions
-                .contains_key(*name)
-        })
+        .filter(|name| !session.data.format_resolutions.contains_key(*name))
         .cloned()
         .collect();
 
@@ -63,48 +44,28 @@ pub(crate) fn compute_discovery(
         .data
         .documents
         .iter()
-        .filter(|d| {
-            selection
-                .selected_names
-                .contains(&d.file_name)
-        })
+        .filter(|d| selection.selected_names.contains(&d.file_name))
         .collect();
 
-    let mismatched_header_files =
-        find_header_mismatches(&selected_documents);
+    let mismatched_header_files = find_header_mismatches(&selected_documents);
 
-    let requires_format_resolution =
-        !pending_unit_file_names.is_empty();
+    let requires_format_resolution = !pending_unit_file_names.is_empty();
 
-    let current_unit_file_name =
-        pending_unit_file_names.first().cloned();
+    let current_unit_file_name = pending_unit_file_names.first().cloned();
 
     let current_document = current_unit_file_name
         .as_ref()
-        .and_then(|name| {
-            session
-                .data
-                .documents
-                .iter()
-                .find(|d| &d.file_name == name)
-        });
+        .and_then(|name| session.data.documents.iter().find(|d| &d.file_name == name));
 
-    let (
-        detected_vendor_name,
-        source_headers,
-        suggested_mapping,
-    ) = match current_document {
+    let (detected_vendor_name, source_headers, suggested_mapping) = match current_document {
         Some(document) => match detect_vendor(document) {
             Some(vendor) => {
-                let suggested: Vec<FieldMappingEntry> =
-                    mapping_from_vendor(vendor)
-                        .into_iter()
-                        .filter_map(|(target, source)| {
-                            source.map(|source| {
-                                FieldMappingEntry { target, source }
-                            })
-                        })
-                        .collect();
+                let suggested: Vec<FieldMappingEntry> = mapping_from_vendor(vendor)
+                    .into_iter()
+                    .filter_map(|(target, source)| {
+                        source.map(|source| FieldMappingEntry { target, source })
+                    })
+                    .collect();
 
                 (
                     Some(vendor.name.to_string()),
@@ -116,11 +77,7 @@ pub(crate) fn compute_discovery(
             // vendor signature to become one at all -- kept correct
             // (populated headers, not silently empty) rather than
             // assuming it can never happen.
-            None => (
-                None,
-                document.headers.clone(),
-                Vec::new(),
-            ),
+            None => (None, document.headers.clone(), Vec::new()),
         },
         None => (None, Vec::new(), Vec::new()),
     };
@@ -139,8 +96,7 @@ pub(crate) fn compute_discovery(
 
     let ready = unit_files_resolved && group_readiness.ready;
 
-    let mut sorted_selected_unit_file_names =
-        unit_file_names.clone();
+    let mut sorted_selected_unit_file_names = unit_file_names.clone();
     sorted_selected_unit_file_names.sort();
 
     // `detected_vendor_name` goes back to `None` once every confirmed
@@ -149,17 +105,15 @@ pub(crate) fn compute_discovery(
     // one of the now-resolved documents instead of tracking it
     // separately through the bulk-confirm action.
     let confirmed_vendor_name = if !requires_format_resolution {
-        sorted_selected_unit_file_names
-            .iter()
-            .find_map(|name| {
-                session
-                    .data
-                    .documents
-                    .iter()
-                    .find(|d| &d.file_name == name)
-                    .and_then(detect_vendor)
-                    .map(|vendor| vendor.name.to_string())
-            })
+        sorted_selected_unit_file_names.iter().find_map(|name| {
+            session
+                .data
+                .documents
+                .iter()
+                .find(|d| &d.file_name == name)
+                .and_then(detect_vendor)
+                .map(|vendor| vendor.name.to_string())
+        })
     } else {
         None
     };
@@ -173,38 +127,23 @@ pub(crate) fn compute_discovery(
     // a stored resolution yet (needs manual mapping) simply contributes
     // no groups until it's resolved -- not an error, just nothing to
     // extract yet.
-    let group_names_ready = !unit_file_names.is_empty()
-        && !selection.requires_selection;
+    let group_names_ready = !unit_file_names.is_empty() && !selection.requires_selection;
 
     let (discovered_group_names, uncommon_group_names) =
-        compute_discovered_group_names(
-            session,
-            &unit_file_names,
-            group_names_ready,
-        );
+        compute_discovered_group_names(session, &unit_file_names, group_names_ready);
 
     let discovery = DiscoveryResult {
         unit_file_names: unit_file_names.clone(),
         group_file_names: selection.group_files.clone(),
-        selected_group_file_name: group_readiness
-            .selected_name
-            .clone(),
+        selected_group_file_name: group_readiness.selected_name.clone(),
         ready,
-        unit_file_candidates: selection
-            .candidates
-            .clone(),
-        selected_unit_file_names: selection
-            .selected_names
-            .clone(),
-        requires_unit_file_selection: selection
-            .requires_selection,
+        unit_file_candidates: selection.candidates.clone(),
+        selected_unit_file_names: selection.selected_names.clone(),
+        requires_unit_file_selection: selection.requires_selection,
         requires_format_resolution,
-        current_unit_file_name: current_unit_file_name
-            .clone(),
-        pending_unit_file_names: pending_unit_file_names
-            .clone(),
-        detected_vendor_name: detected_vendor_name
-            .clone(),
+        current_unit_file_name: current_unit_file_name.clone(),
+        pending_unit_file_names: pending_unit_file_names.clone(),
+        detected_vendor_name: detected_vendor_name.clone(),
         source_headers: source_headers.clone(),
         suggested_mapping: suggested_mapping.clone(),
     };
@@ -215,51 +154,26 @@ pub(crate) fn compute_discovery(
         // Total candidates found, not just the confirmed subset —
         // meaningful even before a selection is made, unlike
         // `selected_unit_file_names` (which stays empty until confirmed).
-        unit_files_found: discovery
-            .unit_file_candidates
-            .len(),
-        group_files_found: discovery
-            .group_file_names
-            .len(),
-        group_file_names: discovery
-            .group_file_names
-            .clone(),
-        selected_group_file_name: discovery
-            .selected_group_file_name
-            .clone(),
-        group_file_format_valid: group_readiness
-            .format_valid,
+        unit_files_found: discovery.unit_file_candidates.len(),
+        group_files_found: discovery.group_file_names.len(),
+        group_file_names: discovery.group_file_names.clone(),
+        selected_group_file_name: discovery.selected_group_file_name.clone(),
+        group_file_format_valid: group_readiness.format_valid,
         group_file_confirmed,
         ready: discovery.ready,
         discovered_group_names,
         uncommon_group_names,
-        unit_file_candidates: discovery
-            .unit_file_candidates
-            .clone(),
-        selected_unit_file_names: discovery
-            .selected_unit_file_names
-            .clone(),
-        requires_unit_file_selection: discovery
-            .requires_unit_file_selection,
-        requires_format_resolution: discovery
-            .requires_format_resolution,
-        current_unit_file_name: discovery
-            .current_unit_file_name
-            .clone(),
-        pending_unit_file_names: discovery
-            .pending_unit_file_names
-            .clone(),
+        unit_file_candidates: discovery.unit_file_candidates.clone(),
+        selected_unit_file_names: discovery.selected_unit_file_names.clone(),
+        requires_unit_file_selection: discovery.requires_unit_file_selection,
+        requires_format_resolution: discovery.requires_format_resolution,
+        current_unit_file_name: discovery.current_unit_file_name.clone(),
+        pending_unit_file_names: discovery.pending_unit_file_names.clone(),
         mismatched_header_files,
-        detected_vendor_name: discovery
-            .detected_vendor_name
-            .clone(),
+        detected_vendor_name: discovery.detected_vendor_name.clone(),
         confirmed_vendor_name,
-        source_headers: discovery
-            .source_headers
-            .clone(),
-        suggested_mapping: discovery
-            .suggested_mapping
-            .clone(),
+        source_headers: discovery.source_headers.clone(),
+        suggested_mapping: discovery.suggested_mapping.clone(),
         canonical_target_fields: CANONICAL_TARGET_FIELDS
             .iter()
             .map(|s| s.to_string())
@@ -285,8 +199,7 @@ fn reconcile_unit_file_selection(
     session: &Session,
     previous: &Option<DiscoveryResult>,
 ) -> UnitFileSelection {
-    let mut candidates: Vec<UnitFileCandidate> =
-        Vec::new();
+    let mut candidates: Vec<UnitFileCandidate> = Vec::new();
     let mut group_files: Vec<String> = Vec::new();
     let mut unrecognized_count = 0usize;
 
@@ -295,9 +208,7 @@ fn reconcile_unit_file_selection(
             candidates.push(UnitFileCandidate {
                 file_name: document.file_name.clone(),
                 modified_at: document.modified_at,
-                detected_vendor: vendor
-                    .name
-                    .to_string(),
+                detected_vendor: vendor.name.to_string(),
             });
         } else if is_group_document(document) {
             group_files.push(document.file_name.clone());
@@ -321,9 +232,7 @@ fn reconcile_unit_file_selection(
         .map(|d| d.selected_unit_file_names.clone())
         .unwrap_or_default()
         .into_iter()
-        .filter(|name| {
-            candidates.iter().any(|c| &c.file_name == name)
-        })
+        .filter(|name| candidates.iter().any(|c| &c.file_name == name))
         .collect();
 
     let selected_names: Vec<String> = if !previous_selection.is_empty() {
@@ -335,8 +244,7 @@ fn reconcile_unit_file_selection(
         Vec::new()
     };
 
-    let requires_selection =
-        candidates.len() > 1 && selected_names.is_empty();
+    let requires_selection = candidates.len() > 1 && selected_names.is_empty();
 
     UnitFileSelection {
         candidates,
@@ -368,31 +276,17 @@ fn resolve_group_file_readiness(
     } else {
         previous
             .as_ref()
-            .and_then(|d| {
-                d.selected_group_file_name.clone()
-            })
+            .and_then(|d| d.selected_group_file_name.clone())
             // Same reasoning as unit-file selection above: a file
             // forced via `/group-file/upload` may not independently
             // classify as a group document, but must still survive this
             // recompute as long as the document itself still exists.
-            .filter(|name| {
-                session
-                    .data
-                    .documents
-                    .iter()
-                    .any(|d| &d.file_name == name)
-            })
+            .filter(|name| session.data.documents.iter().any(|d| &d.file_name == name))
     };
 
     let format_valid: Option<bool> = selected_name
         .as_ref()
-        .and_then(|name| {
-            session
-                .data
-                .documents
-                .iter()
-                .find(|d| &d.file_name == name)
-        })
+        .and_then(|name| session.data.documents.iter().find(|d| &d.file_name == name))
         .map(is_group_document);
 
     // Satisfied either by the deliberate "net-new client" path (truly
@@ -406,10 +300,7 @@ fn resolve_group_file_readiness(
     // selecting and confirming one via the same select-file flow used
     // for the zero-candidates case.
     let ready = match &selected_name {
-        Some(_) => {
-            session.data.group_file_confirmed
-                && format_valid != Some(false)
-        }
+        Some(_) => session.data.group_file_confirmed && format_valid != Some(false),
         None => group_files.is_empty(),
     };
 
@@ -442,15 +333,11 @@ fn compute_discovered_group_names(
         .filter(|d| unit_file_names.contains(&d.file_name))
         .collect();
 
-    let selected: Vec<&CsvDocument> =
-        effective.iter().collect();
+    let selected: Vec<&CsvDocument> = effective.iter().collect();
 
-    let mut names: Vec<String> =
-        build_batch_from_documents(selected)
-            .map(|batch| {
-                batch.global_groups.into_keys().collect()
-            })
-            .unwrap_or_default();
+    let mut names: Vec<String> = build_batch_from_documents(selected)
+        .map(|batch| batch.global_groups.into_keys().collect())
+        .unwrap_or_default();
 
     names.sort();
 

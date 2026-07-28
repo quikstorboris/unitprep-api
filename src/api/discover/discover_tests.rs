@@ -2,29 +2,23 @@ use axum::http::StatusCode;
 
 use super::*;
 use crate::api::exclude_group::{exclude_group, ExcludeGroupRequest};
-use crate::api::resolve_unit_format::{resolve_unit_format, ResolveAction, ResolveUnitFormatRequest};
-use crate::api::test_support::{
-    empty_state,
-    uploaded_state,
+use crate::api::resolve_unit_format::{
+    resolve_unit_format, ResolveAction, ResolveUnitFormatRequest,
 };
+use crate::api::test_support::{empty_state, uploaded_state};
 use unitprep_core::csv_document::CsvDocument;
 
 #[tokio::test]
-async fn discover_returns_404_for_missing_session(
-) {
+async fn discover_returns_404_for_missing_session() {
     let response = discover(
         State(empty_state()),
         Json(DiscoverRequest {
-            session_id: "missing"
-                .to_string(),
+            session_id: "missing".to_string(),
         }),
     )
     .await;
 
-    assert_eq!(
-        response.status(),
-        StatusCode::NOT_FOUND
-    );
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 /// A file matching a known vendor's signature is a *candidate*, not
@@ -33,12 +27,10 @@ async fn discover_returns_404_for_missing_session(
 /// the "just discovered, nothing confirmed yet" half of that; the
 /// following test confirms the format and checks the rest.
 #[tokio::test]
-async fn discover_classifies_unit_and_group_files_but_is_not_ready_until_format_resolved(
-) {
+async fn discover_classifies_unit_and_group_files_but_is_not_ready_until_format_resolved() {
     let unit_doc = CsvDocument {
         modified_at: None,
-        file_name: "units.csv"
-            .to_string(),
+        file_name: "units.csv".to_string(),
         headers: vec![
             "number".to_string(),
             "unitgroup".to_string(),
@@ -49,8 +41,7 @@ async fn discover_classifies_unit_and_group_files_but_is_not_ready_until_format_
 
     let group_doc = CsvDocument {
         modified_at: None,
-        file_name: "groups.csv"
-            .to_string(),
+        file_name: "groups.csv".to_string(),
         headers: vec![
             "name".to_string(),
             "description".to_string(),
@@ -61,77 +52,44 @@ async fn discover_classifies_unit_and_group_files_but_is_not_ready_until_format_
         rows: Vec::new(),
     };
 
-    let state = uploaded_state(
-        "s1",
-        vec![unit_doc, group_doc],
-    );
+    let state = uploaded_state("s1", vec![unit_doc, group_doc]);
 
     let response = discover(
         State(state),
         Json(DiscoverRequest {
-            session_id: "s1"
-                .to_string(),
+            session_id: "s1".to_string(),
         }),
     )
     .await;
 
-    assert_eq!(
-        response.status(),
-        StatusCode::OK
-    );
+    assert_eq!(response.status(), StatusCode::OK);
 
-    let bytes = axum::body::to_bytes(
-        response.into_body(),
-        usize::MAX,
-    )
-    .await
-    .unwrap();
-
-    let body: serde_json::Value =
-        serde_json::from_slice(
-            &bytes,
-        )
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
         .unwrap();
 
-    assert_eq!(
-        body["unit_files_found"],
-        1
-    );
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
-    assert_eq!(
-        body["group_files_found"],
-        1
-    );
+    assert_eq!(body["unit_files_found"], 1);
 
-    assert_eq!(
-        body["requires_unit_file_selection"],
-        false
-    );
+    assert_eq!(body["group_files_found"], 1);
 
-    assert_eq!(
-        body["requires_format_resolution"],
-        true
-    );
+    assert_eq!(body["requires_unit_file_selection"], false);
 
-    assert_eq!(
-        body["detected_vendor_name"],
-        "QSX"
-    );
+    assert_eq!(body["requires_format_resolution"], true);
 
-    assert_eq!(
-        body["ready"], false
-    );
+    assert_eq!(body["detected_vendor_name"], "QSX");
+
+    assert_eq!(body["ready"], false);
 }
 
 /// Confirming the detected vendor is what actually makes discovery ready
 /// — this exercises the full discover -> resolve-format flow.
 #[tokio::test]
-async fn confirming_the_detected_vendor_makes_discovery_ready(
-) {
+async fn confirming_the_detected_vendor_makes_discovery_ready() {
     let unit_doc = CsvDocument {
         modified_at: None,
-        file_name: "units.csv"
-            .to_string(),
+        file_name: "units.csv".to_string(),
         headers: vec![
             "number".to_string(),
             "unitgroup".to_string(),
@@ -140,10 +98,7 @@ async fn confirming_the_detected_vendor_makes_discovery_ready(
         rows: Vec::new(),
     };
 
-    let state = uploaded_state(
-        "s1",
-        vec![unit_doc],
-    );
+    let state = uploaded_state("s1", vec![unit_doc]);
 
     discover(
         State(state.clone()),
@@ -179,12 +134,10 @@ async fn confirming_the_detected_vendor_makes_discovery_ready(
 /// this must be `ready`, not stuck waiting for a selection that has no
 /// candidates to select from.
 #[tokio::test]
-async fn discover_is_ready_with_zero_group_files_once_format_is_confirmed(
-) {
+async fn discover_is_ready_with_zero_group_files_once_format_is_confirmed() {
     let unit_doc = CsvDocument {
         modified_at: None,
-        file_name: "units.csv"
-            .to_string(),
+        file_name: "units.csv".to_string(),
         headers: vec![
             "number".to_string(),
             "unitgroup".to_string(),
@@ -193,10 +146,7 @@ async fn discover_is_ready_with_zero_group_files_once_format_is_confirmed(
         rows: Vec::new(),
     };
 
-    let state = uploaded_state(
-        "s1",
-        vec![unit_doc],
-    );
+    let state = uploaded_state("s1", vec![unit_doc]);
 
     discover(
         State(state.clone()),
@@ -215,32 +165,17 @@ async fn discover_is_ready_with_zero_group_files_once_format_is_confirmed(
     )
     .await;
 
-    let bytes = axum::body::to_bytes(
-        response.into_body(),
-        usize::MAX,
-    )
-    .await
-    .unwrap();
-
-    let body: serde_json::Value =
-        serde_json::from_slice(
-            &bytes,
-        )
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
         .unwrap();
 
-    assert_eq!(
-        body["group_files_found"],
-        0
-    );
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
-    assert_eq!(
-        body["selected_group_file_name"],
-        serde_json::Value::Null
-    );
+    assert_eq!(body["group_files_found"], 0);
 
-    assert_eq!(
-        body["ready"], true
-    );
+    assert_eq!(body["selected_group_file_name"], serde_json::Value::Null);
+
+    assert_eq!(body["ready"], true);
 }
 
 /// The group names shown alongside "no master file" only matter once
@@ -248,12 +183,10 @@ async fn discover_is_ready_with_zero_group_files_once_format_is_confirmed(
 /// confirmed — distinct from the zero-group-file readiness test above,
 /// which uses an empty unit file.
 #[tokio::test]
-async fn discover_lists_distinct_group_names_from_unit_files_once_format_is_confirmed(
-) {
+async fn discover_lists_distinct_group_names_from_unit_files_once_format_is_confirmed() {
     let unit_doc = CsvDocument {
         modified_at: None,
-        file_name: "units.csv"
-            .to_string(),
+        file_name: "units.csv".to_string(),
         headers: vec![
             "number".to_string(),
             "unitgroup".to_string(),
@@ -278,10 +211,7 @@ async fn discover_lists_distinct_group_names_from_unit_files_once_format_is_conf
         ],
     };
 
-    let state = uploaded_state(
-        "s1",
-        vec![unit_doc],
-    );
+    let state = uploaded_state("s1", vec![unit_doc]);
 
     discover(
         State(state.clone()),
@@ -300,25 +230,15 @@ async fn discover_lists_distinct_group_names_from_unit_files_once_format_is_conf
     )
     .await;
 
-    let bytes = axum::body::to_bytes(
-        response.into_body(),
-        usize::MAX,
-    )
-    .await
-    .unwrap();
-
-    let body: serde_json::Value =
-        serde_json::from_slice(
-            &bytes,
-        )
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
         .unwrap();
+
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
     assert_eq!(
         body["discovered_group_names"],
-        serde_json::json!([
-            "10x10 Climate",
-            "10x20 Outside"
-        ])
+        serde_json::json!(["10x10 Climate", "10x20 Outside"])
     );
 }
 
@@ -331,12 +251,10 @@ async fn discover_lists_distinct_group_names_from_unit_files_once_format_is_conf
 /// `unitprep-unit-group`'s
 /// `validate_document_errors_loudly_when_a_supposed_unit_file_has_no_matching_columns`).
 #[tokio::test]
-async fn discover_classifies_unit_file_with_underscored_headers(
-) {
+async fn discover_classifies_unit_file_with_underscored_headers() {
     let unit_doc = CsvDocument {
         modified_at: None,
-        file_name: "units.csv"
-            .to_string(),
+        file_name: "units.csv".to_string(),
         headers: vec![
             "Number".to_string(),
             "Unit_Group".to_string(),
@@ -345,42 +263,25 @@ async fn discover_classifies_unit_file_with_underscored_headers(
         rows: Vec::new(),
     };
 
-    let state = uploaded_state(
-        "s1",
-        vec![unit_doc],
-    );
+    let state = uploaded_state("s1", vec![unit_doc]);
 
     let response = discover(
         State(state),
         Json(DiscoverRequest {
-            session_id: "s1"
-                .to_string(),
+            session_id: "s1".to_string(),
         }),
     )
     .await;
 
-    let bytes = axum::body::to_bytes(
-        response.into_body(),
-        usize::MAX,
-    )
-    .await
-    .unwrap();
-
-    let body: serde_json::Value =
-        serde_json::from_slice(
-            &bytes,
-        )
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
         .unwrap();
 
-    assert_eq!(
-        body["unit_files_found"],
-        1
-    );
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
-    assert_eq!(
-        body["detected_vendor_name"],
-        "QSX"
-    );
+    assert_eq!(body["unit_files_found"], 1);
+
+    assert_eq!(body["detected_vendor_name"], "QSX");
 }
 
 /// DoorSwap's own raw header vocabulary (`Unit`, `Unit Type`, ...) never
@@ -388,8 +289,7 @@ async fn discover_classifies_unit_file_with_underscored_headers(
 /// this is the whole reason vendor presets must be hand-authored rather
 /// than derived by matching names against the canonical field list.
 #[tokio::test]
-async fn discover_detects_door_swap_and_confirm_maps_unit_type_to_unitgroup(
-) {
+async fn discover_detects_door_swap_and_confirm_maps_unit_type_to_unitgroup() {
     let unit_doc = CsvDocument {
         modified_at: None,
         file_name: "Units List.csv".to_string(),
@@ -460,9 +360,21 @@ async fn uncommon_group_names_are_surfaced_separately() {
             "category".to_string(),
         ],
         rows: vec![
-            vec!["101".to_string(), "10x10".to_string(), "Standard".to_string()],
-            vec!["102".to_string(), "1 bd, 1 ba".to_string(), "Standard".to_string()],
-            vec!["103".to_string(), "165 sq ft".to_string(), "Standard".to_string()],
+            vec![
+                "101".to_string(),
+                "10x10".to_string(),
+                "Standard".to_string(),
+            ],
+            vec![
+                "102".to_string(),
+                "1 bd, 1 ba".to_string(),
+                "Standard".to_string(),
+            ],
+            vec![
+                "103".to_string(),
+                "165 sq ft".to_string(),
+                "Standard".to_string(),
+            ],
         ],
     };
 
@@ -569,10 +481,7 @@ async fn discovered_group_names_are_populated_before_group_file_is_resolved() {
     // Two ambiguous candidates, neither selected/confirmed yet.
     assert_eq!(body["selected_group_file_name"], serde_json::Value::Null);
     assert_eq!(body["ready"], false);
-    assert_eq!(
-        body["discovered_group_names"],
-        serde_json::json!(["10x10"])
-    );
+    assert_eq!(body["discovered_group_names"], serde_json::json!(["10x10"]));
 }
 
 /// Regression test: `discovered_group_names` used to be computed by a
@@ -593,7 +502,11 @@ async fn discovered_group_names_excludes_a_group_the_user_has_excluded() {
             "category".to_string(),
         ],
         rows: vec![
-            vec!["101".to_string(), "10x10".to_string(), "Standard".to_string()],
+            vec![
+                "101".to_string(),
+                "10x10".to_string(),
+                "Standard".to_string(),
+            ],
             vec!["102".to_string(), "5x5".to_string(), "Standard".to_string()],
         ],
     };

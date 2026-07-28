@@ -83,12 +83,7 @@ fn storage_commander_default_mapping_translates_locality_to_inside_outside() {
 #[test]
 fn a_true_qsx_export_without_locality_still_detects_as_qsx() {
     let doc = document(
-        vec![
-            "Number",
-            "UnitGroup",
-            "Category",
-            "InsideOutside",
-        ],
+        vec!["Number", "UnitGroup", "Category", "InsideOutside"],
         vec![],
     );
 
@@ -99,7 +94,14 @@ fn a_true_qsx_export_without_locality_still_detects_as_qsx() {
 fn detects_door_swap_by_its_real_export_headers() {
     let doc = document(
         vec![
-            "Unit", "Status", "Unit Type", "Customer", "Phone", "Cell Phone", "Email", "Balance",
+            "Unit",
+            "Status",
+            "Unit Type",
+            "Customer",
+            "Phone",
+            "Cell Phone",
+            "Email",
+            "Balance",
         ],
         vec![],
     );
@@ -233,10 +235,7 @@ fn apply_field_mapping_omits_a_target_left_unmapped_in_a_partial_manual_mapping(
 fn apply_field_mapping_omits_a_target_whose_source_header_is_not_actually_in_the_document() {
     let doc = document(vec!["Unit"], vec![vec!["A01"]]);
 
-    let mapping: FieldMapping = vec![(
-        "Number".to_string(),
-        Some("DoesNotExist".to_string()),
-    )];
+    let mapping: FieldMapping = vec![("Number".to_string(), Some("DoesNotExist".to_string()))];
 
     let normalized = apply_field_mapping(&doc, &mapping);
 

@@ -9,8 +9,7 @@ use sha2::{Digest, Sha256};
 /// something an attacker could present as a cookie.
 pub fn generate_token() -> (String, Vec<u8>) {
     let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes)
-        .expect("the OS random number generator should never fail");
+    getrandom::fill(&mut bytes).expect("the OS random number generator should never fail");
 
     let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
     let hash = hash_token(&raw);

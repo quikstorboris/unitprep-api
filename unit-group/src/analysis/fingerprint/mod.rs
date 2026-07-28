@@ -40,112 +40,48 @@ use attributes::strip_known_attribute_aliases;
 // split — no `pub` needed for that, Rust privacy already includes
 // descendant modules.
 static DIMENSION_REGEX: Lazy<Regex> =
-    Lazy::new(|| {
-        Regex::new(
-            r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)",
-        )
-        .unwrap()
-    });
+    Lazy::new(|| Regex::new(r"(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)").unwrap());
 
-static AREA_REGEX: Lazy<Regex> =
-    Lazy::new(|| {
-        Regex::new(
-            r"\b([pm]\d+)\b",
-        )
-        .unwrap()
-    });
+static AREA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b([pm]\d+)\b").unwrap());
 
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupFingerprint {
     pub width: Option<String>,
     pub length: Option<String>,
     pub location: Option<Location>,
     pub climate: Option<Climate>,
     pub area_code: Option<String>,
-    pub floor_access:
-        Option<FloorAccess>,
+    pub floor_access: Option<FloorAccess>,
     pub remainder: String,
 }
 
-pub fn parse_fingerprint(
-    value: &str,
-) -> GroupFingerprint {
-    let lower =
-        value.to_lowercase();
+pub fn parse_fingerprint(value: &str) -> GroupFingerprint {
+    let lower = value.to_lowercase();
 
     let mut width = None;
     let mut length = None;
 
-    if let Some(caps) =
-        DIMENSION_REGEX
-            .captures(&lower)
-    {
-        width = caps
-            .get(1)
-            .map(|m| {
-                m.as_str()
-                    .to_string()
-            });
+    if let Some(caps) = DIMENSION_REGEX.captures(&lower) {
+        width = caps.get(1).map(|m| m.as_str().to_string());
 
-        length = caps
-            .get(2)
-            .map(|m| {
-                m.as_str()
-                    .to_string()
-            });
+        length = caps.get(2).map(|m| m.as_str().to_string());
     }
 
-    let location =
-        Location::detect(
-            &lower,
-        );
+    let location = Location::detect(&lower);
 
-    let climate =
-        Climate::detect(
-            &lower,
-        );
+    let climate = Climate::detect(&lower);
 
-    let area_code =
-        AREA_REGEX
-            .captures(&lower)
-            .and_then(|caps| {
-                caps.get(1)
-                    .map(|m| {
-                        m.as_str()
-                            .to_uppercase()
-                    })
-            });
+    let area_code = AREA_REGEX
+        .captures(&lower)
+        .and_then(|caps| caps.get(1).map(|m| m.as_str().to_uppercase()));
 
-    let floor_access =
-        FloorAccess::detect(
-            &lower,
-        );
+    let floor_access = FloorAccess::detect(&lower);
 
-    let remainder =
-        DIMENSION_REGEX
-            .replace_all(
-                &lower,
-                "",
-            )
-            .to_string();
+    let remainder = DIMENSION_REGEX.replace_all(&lower, "").to_string();
 
-    let remainder =
-        AREA_REGEX
-            .replace_all(
-                &remainder,
-                "",
-            )
-            .to_string();
+    let remainder = AREA_REGEX.replace_all(&remainder, "").to_string();
 
-    let remainder =
-        strip_known_attribute_aliases(
-            &remainder,
-        )
+    let remainder = strip_known_attribute_aliases(&remainder)
         .replace("-", " ")
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -162,10 +98,7 @@ pub fn parse_fingerprint(
     }
 }
 
-pub fn fingerprints_match(
-    a: &GroupFingerprint,
-    b: &GroupFingerprint,
-) -> bool {
+pub fn fingerprints_match(a: &GroupFingerprint, b: &GroupFingerprint) -> bool {
     if a.width != b.width {
         return false;
     }
@@ -174,27 +107,19 @@ pub fn fingerprints_match(
         return false;
     }
 
-    if a.location
-        != b.location
-    {
+    if a.location != b.location {
         return false;
     }
 
-    if a.climate
-        != b.climate
-    {
+    if a.climate != b.climate {
         return false;
     }
 
-    if a.area_code
-        != b.area_code
-    {
+    if a.area_code != b.area_code {
         return false;
     }
 
-    if a.floor_access
-        != b.floor_access
-    {
+    if a.floor_access != b.floor_access {
         return false;
     }
 
@@ -207,102 +132,47 @@ mod tests {
 
     #[test]
     fn different_decimal_sizes_do_not_match() {
-        let a =
-            parse_fingerprint(
-                "5x10 Inside Climate First Floor Access",
-            );
+        let a = parse_fingerprint("5x10 Inside Climate First Floor Access");
 
-        let b =
-            parse_fingerprint(
-                "7.5x10 Inside Climate First Floor Access",
-            );
+        let b = parse_fingerprint("7.5x10 Inside Climate First Floor Access");
 
-        assert!(
-            !fingerprints_match(
-                &a,
-                &b,
-            )
-        );
+        assert!(!fingerprints_match(&a, &b,));
     }
 
     #[test]
     fn different_area_codes_do_not_match() {
-        let a =
-            parse_fingerprint(
-                "10x20 Outside Non-Climate P1",
-            );
+        let a = parse_fingerprint("10x20 Outside Non-Climate P1");
 
-        let b =
-            parse_fingerprint(
-                "10x20 Outside Non-Climate M2",
-            );
+        let b = parse_fingerprint("10x20 Outside Non-Climate M2");
 
-        assert!(
-            !fingerprints_match(
-                &a,
-                &b,
-            )
-        );
+        assert!(!fingerprints_match(&a, &b,));
     }
 
     #[test]
     fn inside_and_outside_do_not_match() {
-        let a =
-            parse_fingerprint(
-                "5x10 Inside Non-Climate",
-            );
+        let a = parse_fingerprint("5x10 Inside Non-Climate");
 
-        let b =
-            parse_fingerprint(
-                "5x10 Outside Non-Climate",
-            );
+        let b = parse_fingerprint("5x10 Outside Non-Climate");
 
-        assert!(
-            !fingerprints_match(
-                &a,
-                &b,
-            )
-        );
+        assert!(!fingerprints_match(&a, &b,));
     }
 
     #[test]
     fn same_fingerprint_matches() {
-        let a =
-            parse_fingerprint(
-                "10x20 Inside Climate First Floor Access",
-            );
+        let a = parse_fingerprint("10x20 Inside Climate First Floor Access");
 
-        let b =
-            parse_fingerprint(
-                "10x20 Inside Climate First Floor Access",
-            );
+        let b = parse_fingerprint("10x20 Inside Climate First Floor Access");
 
-        assert!(
-            fingerprints_match(
-                &a,
-                &b,
-            )
-        );
+        assert!(fingerprints_match(&a, &b,));
     }
 
     #[test]
     fn climate_and_non_climate_do_not_match() {
-        let a =
-            parse_fingerprint(
-                "5x10 Inside Climate",
-            );
+        let a = parse_fingerprint("5x10 Inside Climate");
 
-        let b =
-            parse_fingerprint(
-                "5x10 Inside Non-Climate",
-            );
+        let b = parse_fingerprint("5x10 Inside Non-Climate");
 
-        assert!(
-            !fingerprints_match(
-                &a,
-                &b,
-            )
-        );
+        assert!(!fingerprints_match(&a, &b,));
     }
 
     #[test]
@@ -313,36 +183,17 @@ mod tests {
         // in this test module actually proves that ordering matters;
         // this is the regression test for it (if the alias order is
         // ever changed, this is what would catch it).
-        let a =
-            parse_fingerprint(
-                "5x10 Inside Climate First Floor Access",
-            );
+        let a = parse_fingerprint("5x10 Inside Climate First Floor Access");
 
-        let b =
-            parse_fingerprint(
-                "5x10 Inside Climate First Floor",
-            );
+        let b = parse_fingerprint("5x10 Inside Climate First Floor");
 
-        assert!(
-            !fingerprints_match(
-                &a,
-                &b,
-            )
-        );
+        assert!(!fingerprints_match(&a, &b,));
     }
 
     #[test]
     fn first_floor_access_does_not_leave_dangling_remainder_token() {
-        let fp =
-            parse_fingerprint(
-                "5x10 Inside Climate First Floor Access",
-            );
+        let fp = parse_fingerprint("5x10 Inside Climate First Floor Access");
 
-        assert!(
-            !fp.remainder
-                .contains(
-                    "access",
-                )
-        );
+        assert!(!fp.remainder.contains("access",));
     }
 }

@@ -13,10 +13,7 @@ pub use dto::DiscoverRequest;
 
 pub(crate) use compute::compute_discovery;
 pub(crate) use format_helpers::{
-    current_unit_file_to_resolve,
-    find_header_mismatches,
-    is_group_document,
-    normalized_headers,
+    current_unit_file_to_resolve, find_header_mismatches, is_group_document, normalized_headers,
 };
 
 use std::time::Instant;
@@ -38,34 +35,29 @@ pub async fn discover(
 
     let response = state
         .unit_group_sessions
-        .with_session_mut(
-            &request.session_id,
-            |session| {
-                let response = compute_discovery(session);
+        .with_session_mut(&request.session_id, |session| {
+            let response = compute_discovery(session);
 
-                tracing::info!(
-                    session_id = %request.session_id,
-                    unit_files_found = response.unit_files_found,
-                    group_files_found = response.group_files_found,
-                    requires_unit_file_selection = response.requires_unit_file_selection,
-                    requires_format_resolution = response.requires_format_resolution,
-                    group_file_confirmed = response.group_file_confirmed,
-                    ready = response.ready,
-                    discovery_ms =
-                        started
-                            .elapsed()
-                            .as_millis(),
-                    "Discovery complete"
-                );
+            tracing::info!(
+                session_id = %request.session_id,
+                unit_files_found = response.unit_files_found,
+                group_files_found = response.group_files_found,
+                requires_unit_file_selection = response.requires_unit_file_selection,
+                requires_format_resolution = response.requires_format_resolution,
+                group_file_confirmed = response.group_file_confirmed,
+                ready = response.ready,
+                discovery_ms =
+                    started
+                        .elapsed()
+                        .as_millis(),
+                "Discovery complete"
+            );
 
-                response
-            },
-        );
+            response
+        });
 
     match response {
-        Some(response) => {
-            Json(response).into_response()
-        }
+        Some(response) => Json(response).into_response(),
         None => session_not_found(),
     }
 }

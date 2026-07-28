@@ -58,11 +58,13 @@ pub fn note_template_for_category(category: FieldCategory) -> &'static str {
 /// one consistent family of finding, not four unrelated ones.
 pub const NOTE_SHARED_PHONE: &str = "{names} share the same phone number ({value}) despite having \
     different names — worth checking whether these are related tenants.";
-pub const NOTE_SHARED_EMAIL: &str = "{names} share the same email address ({value}) despite having \
+pub const NOTE_SHARED_EMAIL: &str =
+    "{names} share the same email address ({value}) despite having \
     different names — worth checking whether these are related tenants.";
 pub const NOTE_SHARED_ALT_CONTACT: &str = "{names} both list the same alternate contact ({value}) \
     despite having different names — worth checking whether these are related tenants.";
-pub const NOTE_SHARED_ADDRESS: &str = "{names} share the same home address ({value}) despite having \
+pub const NOTE_SHARED_ADDRESS: &str =
+    "{names} share the same home address ({value}) despite having \
     different names — worth checking whether these are related tenants.";
 
 /// The base template for a relatedness signal, before placeholder

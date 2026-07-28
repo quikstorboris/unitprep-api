@@ -15,8 +15,7 @@ pub struct DiscoverResponse {
     pub unit_files_found: usize,
     pub group_files_found: usize,
     pub group_file_names: Vec<String>,
-    pub selected_group_file_name:
-        Option<String>,
+    pub selected_group_file_name: Option<String>,
     /// Whether the currently selected group file actually looks like a
     /// real master group file (the same `name`/`description`/
     /// `assignedto`/`status`/`lastupdated` header check discovery itself
@@ -24,8 +23,7 @@ pub struct DiscoverResponse {
     /// manually-uploaded override (see `/group-file/upload`), which
     /// bypasses that classification on purpose. `None` until a group
     /// file is selected at all.
-    pub group_file_format_valid:
-        Option<bool>,
+    pub group_file_format_valid: Option<bool>,
     /// Explicit "yes, this is the right file" confirmation — see
     /// `/group-file/confirm`. Selecting a file (auto-detected or
     /// manual) is not enough on its own; `ready` requires this too.
@@ -41,14 +39,12 @@ pub struct DiscoverResponse {
     /// been resolved (see `requires_format_resolution`) — a file whose
     /// vendor headers haven't been mapped to canonical columns yet has
     /// no `UnitGroup` column for this to read.
-    pub discovered_group_names:
-        Vec<String>,
+    pub discovered_group_names: Vec<String>,
     /// The subset of `discovered_group_names` that don't look like a real
     /// storage-unit group name (no parseable width/length dimension, or a
     /// degenerate 0x0) — a review hint, shown separately so it's easy to
     /// notice, never used to change matching/analysis behavior.
-    pub uncommon_group_names:
-        Vec<String>,
+    pub uncommon_group_names: Vec<String>,
 
     /// Every discovered file matching a known vendor's header signature
     /// (QSX, DoorSwap, ...) — the checkbox list the frontend lets the

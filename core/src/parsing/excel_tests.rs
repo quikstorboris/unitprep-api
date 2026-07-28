@@ -13,15 +13,12 @@ use crate::uploaded_file::UploadedFile;
 /// binary fixture file — this is both the input bytes and the
 /// documentation of what a minimal `.xlsx` looks like.
 fn minimal_xlsx_bytes() -> Vec<u8> {
-    let mut cursor =
-        Cursor::new(Vec::new());
+    let mut cursor = Cursor::new(Vec::new());
 
     {
-        let mut zip =
-            ZipWriter::new(&mut cursor);
+        let mut zip = ZipWriter::new(&mut cursor);
 
-        let options =
-            SimpleFileOptions::default();
+        let options = SimpleFileOptions::default();
 
         let parts: [(&str, &str); 5] = [
             (
@@ -69,11 +66,9 @@ fn minimal_xlsx_bytes() -> Vec<u8> {
         ];
 
         for (path, xml) in parts {
-            zip.start_file(path, options)
-                .unwrap();
+            zip.start_file(path, options).unwrap();
 
-            zip.write_all(xml.as_bytes())
-                .unwrap();
+            zip.write_all(xml.as_bytes()).unwrap();
         }
 
         zip.finish().unwrap();
@@ -91,35 +86,20 @@ fn xlsx_parser_extracts_headers_and_rows() {
         modified_at: None,
     };
 
-    let document =
-        parse_document(&file).unwrap();
+    let document = parse_document(&file).unwrap();
 
-    assert_eq!(
-        document.headers,
-        vec!["number", "unitgroup"]
-    );
+    assert_eq!(document.headers, vec!["number", "unitgroup"]);
 
-    assert_eq!(
-        document.rows.len(),
-        2
-    );
+    assert_eq!(document.rows.len(), 2);
 
     assert_eq!(
         document.rows[0],
-        vec![
-            "A01".to_string(),
-            "10x10 Inside Climate"
-                .to_string(),
-        ]
+        vec!["A01".to_string(), "10x10 Inside Climate".to_string(),]
     );
 
     assert_eq!(
         document.rows[1],
-        vec![
-            "A02".to_string(),
-            "10x20 Outside Non-Climate"
-                .to_string(),
-        ]
+        vec!["A02".to_string(), "10x20 Outside Non-Climate".to_string(),]
     );
 }
 
@@ -132,13 +112,9 @@ fn xlsx_dispatch_is_case_insensitive() {
         modified_at: None,
     };
 
-    let document =
-        parse_document(&file).unwrap();
+    let document = parse_document(&file).unwrap();
 
-    assert_eq!(
-        document.headers,
-        vec!["number", "unitgroup"]
-    );
+    assert_eq!(document.headers, vec!["number", "unitgroup"]);
 }
 
 #[test]
@@ -150,18 +126,14 @@ fn xls_extension_dispatches_to_excel_parser_not_csv() {
     let file = UploadedFile {
         file_name: "test.xls".to_string(),
         relative_path: String::new(),
-        bytes: b"not a real workbook"
-            .to_vec(),
+        bytes: b"not a real workbook".to_vec(),
         modified_at: None,
     };
 
-    let err = parse_document(&file)
-        .unwrap_err();
+    let err = parse_document(&file).unwrap_err();
 
     assert!(
-        !err.to_string()
-            .to_lowercase()
-            .contains("unsupported"),
+        !err.to_string().to_lowercase().contains("unsupported"),
         "expected an Excel-parsing failure, not an unsupported-file-type error: {err}"
     );
 }

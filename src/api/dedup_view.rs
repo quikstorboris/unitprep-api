@@ -20,7 +20,9 @@ use serde::Serialize;
 
 use unitprep_dedup::grouping::group_records;
 use unitprep_dedup::types::{FieldCategory, FieldName, TenantRecord};
-use unitprep_dedup::{group_units, human_label, DedupReport, NoteComposer, RelatednessSignal, TemplateNoteComposer};
+use unitprep_dedup::{
+    group_units, human_label, DedupReport, NoteComposer, RelatednessSignal, TemplateNoteComposer,
+};
 
 use crate::infrastructure::dedup_export_plan::{build_export_plan, field_cell_refs, PlannedRow};
 
@@ -94,8 +96,10 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
         .enumerate()
         .map(|(cluster, flagged)| {
             let display_name = flagged.group.records[0].display_name();
-            let units: Vec<String> =
-                group_units(&flagged.group).into_iter().map(String::from).collect();
+            let units: Vec<String> = group_units(&flagged.group)
+                .into_iter()
+                .map(String::from)
+                .collect();
             let categories: Vec<FieldCategory> =
                 flagged.mismatches.iter().map(|m| m.category).collect();
 
@@ -110,11 +114,22 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
                         })
                         .unwrap_or_default();
 
-                    BulletView { field, label: human_label(field), sentence, cell_refs }
+                    BulletView {
+                        field,
+                        label: human_label(field),
+                        sentence,
+                        cell_refs,
+                    }
                 })
                 .collect();
 
-            FlaggedGroupView { key: flagged.group.key.clone(), display_name, units, categories, bullets }
+            FlaggedGroupView {
+                key: flagged.group.key.clone(),
+                display_name,
+                units,
+                categories,
+                bullets,
+            }
         })
         .collect();
 
@@ -133,11 +148,15 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
             let group_b = find(&candidate.key_b);
 
             TypoVariantView {
-                display_name_a: group_a.map(|g| g.records[0].display_name()).unwrap_or_default(),
+                display_name_a: group_a
+                    .map(|g| g.records[0].display_name())
+                    .unwrap_or_default(),
                 units_a: group_a
                     .map(|g| group_units(g).into_iter().map(String::from).collect())
                     .unwrap_or_default(),
-                display_name_b: group_b.map(|g| g.records[0].display_name()).unwrap_or_default(),
+                display_name_b: group_b
+                    .map(|g| g.records[0].display_name())
+                    .unwrap_or_default(),
                 units_b: group_b
                     .map(|g| group_units(g).into_iter().map(String::from).collect())
                     .unwrap_or_default(),
@@ -157,7 +176,9 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
                 .map(|key| {
                     let group = find(key);
                     RelatedTenantMemberView {
-                        display_name: group.map(|g| g.records[0].display_name()).unwrap_or_default(),
+                        display_name: group
+                            .map(|g| g.records[0].display_name())
+                            .unwrap_or_default(),
                         units: group
                             .map(|g| group_units(g).into_iter().map(String::from).collect())
                             .unwrap_or_default(),

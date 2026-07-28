@@ -12,34 +12,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use unitprep_core::csv_document::CsvDocument;
-use unitprep_core::session::{
-    HasSessionMetadata,
-    SessionMetadata,
-};
+use unitprep_core::session::{HasSessionMetadata, SessionMetadata};
 use unitprep_unit_group::{
-    apply_corrections,
-    apply_field_mapping,
-    detect_vendor,
-    filter_excluded_groups,
-    mapping_from_vendor,
-    AnalysisResults,
-    CorrectionKey,
-    DimensionExemptionKey,
-    DiscoveryResult,
-    FieldMapping,
-    GroupCheckAcknowledgmentKey,
-    ValidationResult,
+    apply_corrections, apply_field_mapping, detect_vendor, filter_excluded_groups,
+    mapping_from_vendor, AnalysisResults, CorrectionKey, DimensionExemptionKey, DiscoveryResult,
+    FieldMapping, GroupCheckAcknowledgmentKey, ValidationResult,
 };
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum WorkflowStage {
     Uploaded,
     Discovered,
@@ -83,8 +63,7 @@ pub struct SessionData {
     /// changes nothing about the data itself; it only suppresses that
     /// one check's flag on that one group going forward. See
     /// `GroupCheckAcknowledgmentKey`.
-    pub group_check_acknowledgments:
-        HashSet<GroupCheckAcknowledgmentKey>,
+    pub group_check_acknowledgments: HashSet<GroupCheckAcknowledgmentKey>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,9 +78,7 @@ impl HasSessionMetadata for Session {
         &self.metadata
     }
 
-    fn metadata_mut(
-        &mut self,
-    ) -> &mut SessionMetadata {
+    fn metadata_mut(&mut self) -> &mut SessionMetadata {
         &mut self.metadata
     }
 }
@@ -137,42 +114,21 @@ impl Session {
     /// view of a document," so every caller (including discovery's own
     /// display-only group-name computation) gets the same fallback
     /// instead of each reimplementing it slightly differently.
-    pub fn effective_documents(
-        &self,
-    ) -> Vec<CsvDocument> {
+    pub fn effective_documents(&self) -> Vec<CsvDocument> {
         self.data
             .documents
             .iter()
-            .map(|document| {
-                match self
-                    .data
-                    .format_resolutions
-                    .get(&document.file_name)
-                {
-                    Some(mapping) => {
-                        apply_field_mapping(document, mapping)
-                    }
+            .map(
+                |document| match self.data.format_resolutions.get(&document.file_name) {
+                    Some(mapping) => apply_field_mapping(document, mapping),
                     None => match detect_vendor(document) {
-                        Some(vendor) => apply_field_mapping(
-                            document,
-                            &mapping_from_vendor(vendor),
-                        ),
+                        Some(vendor) => apply_field_mapping(document, &mapping_from_vendor(vendor)),
                         None => document.clone(),
                     },
-                }
-            })
-            .map(|document| {
-                apply_corrections(
-                    &document,
-                    &self.data.corrections,
-                )
-            })
-            .map(|document| {
-                filter_excluded_groups(
-                    &document,
-                    &self.data.excluded_groups,
-                )
-            })
+                },
+            )
+            .map(|document| apply_corrections(&document, &self.data.corrections))
+            .map(|document| filter_excluded_groups(&document, &self.data.excluded_groups))
             .collect()
     }
 
@@ -181,16 +137,13 @@ impl Session {
     /// `api::unit_file_upload` / `api::group_file_upload`), which let a
     /// user designate a specific file as the unit/group file regardless
     /// of how discovery classified anything already uploaded.
-    pub fn upsert_document(
-        &mut self,
-        document: CsvDocument,
-    ) {
-        let documents =
-            Arc::make_mut(&mut self.data.documents);
+    pub fn upsert_document(&mut self, document: CsvDocument) {
+        let documents = Arc::make_mut(&mut self.data.documents);
 
-        match documents.iter_mut().find(|d| {
-            d.file_name == document.file_name
-        }) {
+        match documents
+            .iter_mut()
+            .find(|d| d.file_name == document.file_name)
+        {
             Some(existing) => {
                 *existing = document;
             }
@@ -200,114 +153,59 @@ impl Session {
         }
     }
 
-    pub fn add_correction(
-        &mut self,
-        key: CorrectionKey,
-        value: String,
-    ) {
-        self.data
-            .corrections
-            .insert(key, value);
+    pub fn add_correction(&mut self, key: CorrectionKey, value: String) {
+        self.data.corrections.insert(key, value);
     }
 
-    pub fn add_dimension_exemption(
-        &mut self,
-        key: DimensionExemptionKey,
-    ) {
-        self.data
-            .dimension_exemptions
-            .insert(key);
+    pub fn add_dimension_exemption(&mut self, key: DimensionExemptionKey) {
+        self.data.dimension_exemptions.insert(key);
     }
 
-    pub fn exclude_group(
-        &mut self,
-        group_name: String,
-    ) {
-        self.data
-            .excluded_groups
-            .insert(group_name);
+    pub fn exclude_group(&mut self, group_name: String) {
+        self.data.excluded_groups.insert(group_name);
     }
 
-    pub fn include_group(
-        &mut self,
-        group_name: &str,
-    ) {
-        self.data
-            .excluded_groups
-            .remove(group_name);
+    pub fn include_group(&mut self, group_name: &str) {
+        self.data.excluded_groups.remove(group_name);
     }
 
     /// Unit numbers exempted from the "Invalid dimensions" check for one
     /// specific file — what `validate_document` should skip that check
     /// for.
-    pub fn dimension_exemptions_for(
-        &self,
-        file_name: &str,
-    ) -> HashSet<String> {
+    pub fn dimension_exemptions_for(&self, file_name: &str) -> HashSet<String> {
         self.data
             .dimension_exemptions
             .iter()
-            .filter(|key| {
-                key.file_name == file_name
-            })
-            .map(|key| {
-                key.unit_number.clone()
-            })
+            .filter(|key| key.file_name == file_name)
+            .map(|key| key.unit_number.clone())
             .collect()
     }
 
-    pub fn acknowledge_group_check(
-        &mut self,
-        check: String,
-        group_name: String,
-    ) {
+    pub fn acknowledge_group_check(&mut self, check: String, group_name: String) {
         self.data
             .group_check_acknowledgments
-            .insert(
-                GroupCheckAcknowledgmentKey {
-                    check,
-                    group_name,
-                },
-            );
+            .insert(GroupCheckAcknowledgmentKey { check, group_name });
     }
 
-    pub fn unacknowledge_group_check(
-        &mut self,
-        check: &str,
-        group_name: &str,
-    ) {
+    pub fn unacknowledge_group_check(&mut self, check: &str, group_name: &str) {
         self.data
             .group_check_acknowledgments
-            .retain(|key| {
-                !(key.check == check
-                    && key.group_name
-                        == group_name)
-            });
+            .retain(|key| !(key.check == check && key.group_name == group_name));
     }
 
     /// Group names accepted "as is" for one specific check (`ODD_UNITGROUP`
     /// or `RARE_GROUP`) — session-wide, not per-file, since a group name is
     /// already a session-wide concept the same way `excluded_groups` is.
-    pub fn acknowledged_groups_for(
-        &self,
-        check: &str,
-    ) -> HashSet<String> {
+    pub fn acknowledged_groups_for(&self, check: &str) -> HashSet<String> {
         self.data
             .group_check_acknowledgments
             .iter()
-            .filter(|key| {
-                key.check == check
-            })
-            .map(|key| {
-                key.group_name.clone()
-            })
+            .filter(|key| key.check == check)
+            .map(|key| key.group_name.clone())
             .collect()
     }
 
-    pub fn require_stage(
-        &self,
-        required: WorkflowStage,
-    ) -> Result<(), StageError> {
+    pub fn require_stage(&self, required: WorkflowStage) -> Result<(), StageError> {
         if self.workflow >= required {
             Ok(())
         } else {
@@ -318,38 +216,23 @@ impl Session {
         }
     }
 
-    pub fn complete_discovery(
-        &mut self,
-        result: DiscoveryResult,
-    ) {
+    pub fn complete_discovery(&mut self, result: DiscoveryResult) {
         self.data.discovery = Some(result);
-        self.workflow =
-            WorkflowStage::Discovered;
+        self.workflow = WorkflowStage::Discovered;
     }
 
-    pub fn complete_validation(
-        &mut self,
-        result: ValidationResult,
-    ) {
+    pub fn complete_validation(&mut self, result: ValidationResult) {
         self.data.validation = Some(result);
-        self.workflow =
-            WorkflowStage::Validated;
+        self.workflow = WorkflowStage::Validated;
     }
 
-    pub fn complete_analysis(
-        &mut self,
-        result: AnalysisResults,
-    ) {
+    pub fn complete_analysis(&mut self, result: AnalysisResults) {
         self.data.analysis = Some(result);
-        self.workflow =
-            WorkflowStage::Analyzed;
+        self.workflow = WorkflowStage::Analyzed;
     }
 
-    pub fn complete_export(
-        &mut self,
-    ) {
-        self.workflow =
-            WorkflowStage::Exported;
+    pub fn complete_export(&mut self) {
+        self.workflow = WorkflowStage::Exported;
     }
 }
 

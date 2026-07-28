@@ -23,14 +23,7 @@ pub struct AdvisoryIssue {
     pub severity: Severity,
 }
 
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Severity {
     Info,
     Warning,

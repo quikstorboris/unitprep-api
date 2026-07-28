@@ -6,11 +6,7 @@ use serde::Deserialize;
 
 use unitprep_core::session_store::SessionStoreExt;
 
-use crate::api::{
-    respond,
-    validate::run_validation,
-    AppState,
-};
+use crate::api::{respond, validate::run_validation, AppState};
 use unitprep_unit_group::DimensionExemptionKey;
 
 #[derive(Debug, Deserialize)]
@@ -26,42 +22,27 @@ pub struct ExemptDimensionsRequest {
 /// corrected value. Immediately re-runs validation, mirroring `/correct`.
 pub async fn exempt_dimensions(
     State(state): State<AppState>,
-    Json(request): Json<
-        ExemptDimensionsRequest,
-    >,
+    Json(request): Json<ExemptDimensionsRequest>,
 ) -> Response {
     let key = DimensionExemptionKey {
-        file_name: request
-            .file_name
-            .clone(),
-        unit_number: request
-            .unit_number
-            .clone(),
+        file_name: request.file_name.clone(),
+        unit_number: request.unit_number.clone(),
     };
 
     let response = state
         .unit_group_sessions
-        .with_session_mut(
-            &request.session_id,
-            |session| {
-                session
-                    .add_dimension_exemption(
-                        key,
-                    );
+        .with_session_mut(&request.session_id, |session| {
+            session.add_dimension_exemption(key);
 
-                tracing::info!(
-                    session_id = %request.session_id,
-                    file = %request.file_name,
-                    unit_number = %request.unit_number,
-                    "Exempted unit from dimension validation"
-                );
+            tracing::info!(
+                session_id = %request.session_id,
+                file = %request.file_name,
+                unit_number = %request.unit_number,
+                "Exempted unit from dimension validation"
+            );
 
-                run_validation(
-                    session,
-                    &request.session_id,
-                )
-            },
-        );
+            run_validation(session, &request.session_id)
+        });
 
     respond(response)
 }
@@ -71,39 +52,21 @@ mod tests {
     use axum::http::StatusCode;
 
     use super::*;
-    use crate::api::test_support::{
-        discovered_state,
-        empty_state,
-        unit_document,
-        uploaded_state,
-    };
+    use crate::api::test_support::{discovered_state, empty_state, unit_document, uploaded_state};
 
     #[tokio::test]
-    async fn exempt_dimensions_returns_404_for_missing_session(
-    ) {
-        let response =
-            exempt_dimensions(
-                State(empty_state()),
-                Json(
-                    ExemptDimensionsRequest {
-                        session_id:
-                            "missing"
-                                .to_string(),
-                        file_name:
-                            "units.csv"
-                                .to_string(),
-                        unit_number:
-                            "Office"
-                                .to_string(),
-                    },
-                ),
-            )
-            .await;
+    async fn exempt_dimensions_returns_404_for_missing_session() {
+        let response = exempt_dimensions(
+            State(empty_state()),
+            Json(ExemptDimensionsRequest {
+                session_id: "missing".to_string(),
+                file_name: "units.csv".to_string(),
+                unit_number: "Office".to_string(),
+            }),
+        )
+        .await;
 
-        assert_eq!(
-            response.status(),
-            StatusCode::NOT_FOUND
-        );
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     /// Regression test for the stage/error inconsistency fix:
@@ -111,105 +74,58 @@ mod tests {
     /// surface the same 409 (not a fake 200) when the session hasn't
     /// been discovered yet.
     #[tokio::test]
-    async fn exempt_dimensions_returns_409_when_called_before_discovery(
-    ) {
+    async fn exempt_dimensions_returns_409_when_called_before_discovery() {
         let state = uploaded_state(
             "s1",
             vec![unit_document(
                 "units.csv",
-                vec![[
-                    "Office",
-                    "10x10 Inside Climate",
-                    "",
-                    "",
-                ]],
+                vec![["Office", "10x10 Inside Climate", "", ""]],
             )],
         );
 
-        let response =
-            exempt_dimensions(
-                State(state),
-                Json(
-                    ExemptDimensionsRequest {
-                        session_id:
-                            "s1"
-                                .to_string(),
-                        file_name:
-                            "units.csv"
-                                .to_string(),
-                        unit_number:
-                            "Office"
-                                .to_string(),
-                    },
-                ),
-            )
-            .await;
+        let response = exempt_dimensions(
+            State(state),
+            Json(ExemptDimensionsRequest {
+                session_id: "s1".to_string(),
+                file_name: "units.csv".to_string(),
+                unit_number: "Office".to_string(),
+            }),
+        )
+        .await;
 
-        assert_eq!(
-            response.status(),
-            StatusCode::CONFLICT
-        );
+        assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
-    async fn exempt_dimensions_clears_error_without_touching_row_data(
-    ) {
+    async fn exempt_dimensions_clears_error_without_touching_row_data() {
         let state = discovered_state(
             "s1",
             vec![unit_document(
                 "units.csv",
-                vec![[
-                    "Office",
-                    "1200 sq ft",
-                    "",
-                    "",
-                ]],
+                vec![["Office", "1200 sq ft", "", ""]],
             )],
         );
 
-        let response =
-            exempt_dimensions(
-                State(state),
-                Json(
-                    ExemptDimensionsRequest {
-                        session_id:
-                            "s1"
-                                .to_string(),
-                        file_name:
-                            "units.csv"
-                                .to_string(),
-                        unit_number:
-                            "Office"
-                                .to_string(),
-                    },
-                ),
-            )
-            .await;
-
-        assert_eq!(
-            response.status(),
-            StatusCode::OK
-        );
-
-        let bytes = axum::body::to_bytes(
-            response.into_body(),
-            usize::MAX,
+        let response = exempt_dimensions(
+            State(state),
+            Json(ExemptDimensionsRequest {
+                session_id: "s1".to_string(),
+                file_name: "units.csv".to_string(),
+                unit_number: "Office".to_string(),
+            }),
         )
-        .await
-        .unwrap();
+        .await;
 
-        let body: serde_json::Value =
-            serde_json::from_slice(
-                &bytes,
-            )
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
             .unwrap();
 
-        assert_eq!(
-            body["error_count"], 0
-        );
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
-        assert_eq!(
-            body["ready"], true
-        );
+        assert_eq!(body["error_count"], 0);
+
+        assert_eq!(body["ready"], true);
     }
 }

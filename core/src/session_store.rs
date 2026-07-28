@@ -55,45 +55,28 @@ pub struct SessionMetrics {
 pub trait SessionStore<S: HasSessionMetadata>: Send + Sync {
     fn save(&self, session: S);
 
-    fn get_handle(
-        &self,
-        id: &str,
-    ) -> Option<Arc<RwLock<S>>>;
+    fn get_handle(&self, id: &str) -> Option<Arc<RwLock<S>>>;
 
     fn delete(&self, id: &str);
 
     fn metrics(&self) -> SessionMetrics;
 }
 
-pub trait SessionStoreExt<S: HasSessionMetadata>:
-    SessionStore<S>
-{
-    fn with_session<R>(
-        &self,
-        id: &str,
-        operation: impl FnOnce(&S) -> R,
-    ) -> Option<R> {
-        let handle =
-            self.get_handle(id)?;
+pub trait SessionStoreExt<S: HasSessionMetadata>: SessionStore<S> {
+    fn with_session<R>(&self, id: &str, operation: impl FnOnce(&S) -> R) -> Option<R> {
+        let handle = self.get_handle(id)?;
 
         let session = handle.read();
 
         Some(operation(&session))
     }
 
-    fn with_session_mut<R>(
-        &self,
-        id: &str,
-        operation: impl FnOnce(&mut S) -> R,
-    ) -> Option<R> {
-        let handle =
-            self.get_handle(id)?;
+    fn with_session_mut<R>(&self, id: &str, operation: impl FnOnce(&mut S) -> R) -> Option<R> {
+        let handle = self.get_handle(id)?;
 
         let mut session = handle.write();
 
-        Some(operation(
-            &mut session,
-        ))
+        Some(operation(&mut session))
     }
 }
 

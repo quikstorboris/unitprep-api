@@ -12,7 +12,11 @@ use crate::types::{FieldName, TenantGroup};
 /// the raw list (e.g. the API layer building a `units: Vec<String>`
 /// field for the frontend) don't have to parse a phrase back apart.
 pub fn group_units(group: &TenantGroup) -> Vec<&str> {
-    let mut units: Vec<&str> = group.records.iter().map(|r| r.unit_number.as_str()).collect();
+    let mut units: Vec<&str> = group
+        .records
+        .iter()
+        .map(|r| r.unit_number.as_str())
+        .collect();
     units.sort_unstable();
     units
 }
@@ -108,7 +112,11 @@ pub(crate) fn describe_field(group: &TenantGroup, field: FieldName) -> String {
     // A comma always precedes a contrastive "but"; "and" only gets one
     // once there are 3+ clauses (Oxford comma), matching `oxford_join`.
     let needs_comma = connector == "but" || clauses.len() > 2;
-    let joiner = if needs_comma { format!(", {connector} ") } else { format!(" {connector} ") };
+    let joiner = if needs_comma {
+        format!(", {connector} ")
+    } else {
+        format!(" {connector} ")
+    };
 
     let body = match clauses.split_last() {
         Some((last, rest)) if !rest.is_empty() => format!("{}{joiner}{last}", rest.join(", ")),
@@ -127,8 +135,15 @@ fn units_by_value(group: &TenantGroup, field: FieldName) -> Vec<(String, Vec<&st
         std::collections::BTreeMap::new();
     for record in &group.records {
         let raw = record.field(field).trim();
-        let value = if raw.is_empty() { "(blank)".to_string() } else { raw.to_string() };
-        units_by_value.entry(value).or_default().push(record.unit_number.as_str());
+        let value = if raw.is_empty() {
+            "(blank)".to_string()
+        } else {
+            raw.to_string()
+        };
+        units_by_value
+            .entry(value)
+            .or_default()
+            .push(record.unit_number.as_str());
     }
 
     let mut by_value: Vec<(String, Vec<&str>)> = units_by_value.into_iter().collect();
@@ -145,8 +160,11 @@ fn units_by_value(group: &TenantGroup, field: FieldName) -> Vec<(String, Vec<&st
 /// the "these might just be separate tenants sharing a name" signal,
 /// as opposed to a genuine mismatch to fix.
 pub(crate) fn all_emails_present_and_distinct(group: &TenantGroup) -> bool {
-    let emails: Vec<String> =
-        group.records.iter().map(|r| r.email.trim().to_lowercase()).collect();
+    let emails: Vec<String> = group
+        .records
+        .iter()
+        .map(|r| r.email.trim().to_lowercase())
+        .collect();
     if emails.iter().any(|e| e.is_empty()) {
         return false;
     }

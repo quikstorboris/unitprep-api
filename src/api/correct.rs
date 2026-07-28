@@ -6,11 +6,7 @@ use serde::Deserialize;
 
 use unitprep_core::session_store::SessionStoreExt;
 
-use crate::api::{
-    respond,
-    validate::run_validation,
-    AppState,
-};
+use crate::api::{respond, validate::run_validation, AppState};
 use unitprep_unit_group::CorrectionKey;
 
 #[derive(Debug, Deserialize)]
@@ -32,45 +28,29 @@ pub async fn correct(
     Json(request): Json<CorrectRequest>,
 ) -> Response {
     let key = CorrectionKey {
-        file_name: request
-            .file_name
-            .clone(),
-        unit_number: request
-            .unit_number
-            .clone(),
-        field: request
-            .field
-            .to_lowercase(),
+        file_name: request.file_name.clone(),
+        unit_number: request.unit_number.clone(),
+        field: request.field.to_lowercase(),
     };
 
     let response = state
         .unit_group_sessions
-        .with_session_mut(
-            &request.session_id,
-            |session| {
-                session.add_correction(
-                    key,
-                    request.value.clone(),
-                );
+        .with_session_mut(&request.session_id, |session| {
+            session.add_correction(key, request.value.clone());
 
-                tracing::info!(
-                    session_id = %request.session_id,
-                    file = %request.file_name,
-                    unit_number = %request.unit_number,
-                    field = %request.field,
-                    "Applied manual correction"
-                );
+            tracing::info!(
+                session_id = %request.session_id,
+                file = %request.file_name,
+                unit_number = %request.unit_number,
+                field = %request.field,
+                "Applied manual correction"
+            );
 
-                run_validation(
-                    session,
-                    &request.session_id,
-                )
-            },
-        );
+            run_validation(session, &request.session_id)
+        });
 
     respond(response)
 }
-
 
 #[cfg(test)]
 #[path = "correct_tests.rs"]

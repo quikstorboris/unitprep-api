@@ -2,7 +2,11 @@ use super::*;
 use unitprep_dedup::types::TenantRecord;
 
 fn record(unit: &str, alt_phone: &str) -> TenantRecord {
-    TenantRecord { unit_number: unit.to_string(), alt_contact_phone_number: alt_phone.to_string(), ..Default::default() }
+    TenantRecord {
+        unit_number: unit.to_string(),
+        alt_contact_phone_number: alt_phone.to_string(),
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -22,7 +26,10 @@ fn csv_column_name_covers_every_field_and_stays_in_columns() {
     // AltContact* internally vs. AlternateContact* in the export header is
     // exactly the divergence this mapping exists to bridge — assert both
     // sides explicitly rather than just "some string came back".
-    assert_eq!(csv_column_name(FieldName::AltContactPhoneNumber), "AlternateContactPhoneNumber");
+    assert_eq!(
+        csv_column_name(FieldName::AltContactPhoneNumber),
+        "AlternateContactPhoneNumber"
+    );
     assert_eq!(csv_column_name(FieldName::AddressCity), "AddressCity");
     assert_eq!(csv_column_name(FieldName::FirstName), "FirstName");
 
@@ -50,13 +57,20 @@ fn csv_column_name_covers_every_field_and_stays_in_columns() {
         FieldName::LastName,
     ] {
         let name = csv_column_name(field);
-        assert!(COLUMNS.contains(&name), "{name} (from {field:?}) is missing from COLUMNS");
+        assert!(
+            COLUMNS.contains(&name),
+            "{name} (from {field:?}) is missing from COLUMNS"
+        );
     }
 }
 
 #[test]
 fn note_with_cell_refs_cites_the_right_cells_for_each_distinct_value() {
-    let records = vec![record("S-31", "3605525629"), record("D-216", "3607281619"), record("S-51", "")];
+    let records = vec![
+        record("S-31", "3605525629"),
+        record("D-216", "3607281619"),
+        record("S-51", ""),
+    ];
 
     let note = note_with_cell_refs(
         "Please update the alternate contact info to match across units D-216, S-31, S-51.",
@@ -83,7 +97,13 @@ fn note_with_cell_refs_is_a_no_op_without_cite_fields() {
 #[test]
 fn first_cell_ref_picks_the_first_cited_fields_first_row() {
     assert_eq!(
-        first_cell_ref(&[FieldName::AltContactPhoneNumber, FieldName::AltContactAddressCity], 7),
+        first_cell_ref(
+            &[
+                FieldName::AltContactPhoneNumber,
+                FieldName::AltContactAddressCity
+            ],
+            7
+        ),
         Some("T7".to_string())
     );
 }

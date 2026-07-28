@@ -5,10 +5,7 @@ mod webauthn_backend;
 
 pub use authenticated_user::{begin_rls_transaction, AuthenticatedUser, Role};
 pub use session_cookie::{
-    clear_session_cookie,
-    issue_session_cookie,
-    read_session_cookie,
-    SESSION_COOKIE_NAME,
+    clear_session_cookie, issue_session_cookie, read_session_cookie, SESSION_COOKIE_NAME,
 };
 pub use session_token::{generate_token, hash_token};
 pub use webauthn_backend::WebauthnRsBackend;

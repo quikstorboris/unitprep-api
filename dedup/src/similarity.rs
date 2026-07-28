@@ -107,7 +107,11 @@ fn longest_match(
                 if j >= bhi {
                     break;
                 }
-                let prev = if j == 0 { 0 } else { j2len.get(&(j - 1)).copied().unwrap_or(0) };
+                let prev = if j == 0 {
+                    0
+                } else {
+                    j2len.get(&(j - 1)).copied().unwrap_or(0)
+                };
                 let k = prev + 1;
                 new_j2len.insert(j, k);
                 if k > best_size {
@@ -166,6 +170,9 @@ mod tests {
     #[test]
     fn unrelated_names_fall_below_surface_threshold() {
         let ratio = name_similarity("CHRIS NEUFELD", "TIM NEUFELD");
-        assert!(ratio < VARIANT_SURFACE_THRESHOLD, "expected below threshold, got {ratio}");
+        assert!(
+            ratio < VARIANT_SURFACE_THRESHOLD,
+            "expected below threshold, got {ratio}"
+        );
     }
 }

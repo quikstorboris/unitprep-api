@@ -6,11 +6,7 @@ use serde::Deserialize;
 
 use unitprep_core::session_store::SessionStoreExt;
 
-use crate::api::{
-    respond,
-    validate::run_validation,
-    AppState,
-};
+use crate::api::{respond, validate::run_validation, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct ExcludeGroupRequest {
@@ -34,34 +30,22 @@ pub async fn exclude_group(
 ) -> Response {
     let response = state
         .unit_group_sessions
-        .with_session_mut(
-            &request.session_id,
-            |session| {
-                if request.excluded {
-                    session.exclude_group(
-                        request
-                            .group_name
-                            .clone(),
-                    );
-                } else {
-                    session.include_group(
-                        &request.group_name,
-                    );
-                }
+        .with_session_mut(&request.session_id, |session| {
+            if request.excluded {
+                session.exclude_group(request.group_name.clone());
+            } else {
+                session.include_group(&request.group_name);
+            }
 
-                tracing::info!(
-                    session_id = %request.session_id,
-                    group_name = %request.group_name,
-                    excluded = request.excluded,
-                    "Updated group exclusion"
-                );
+            tracing::info!(
+                session_id = %request.session_id,
+                group_name = %request.group_name,
+                excluded = request.excluded,
+                "Updated group exclusion"
+            );
 
-                run_validation(
-                    session,
-                    &request.session_id,
-                )
-            },
-        );
+            run_validation(session, &request.session_id)
+        });
 
     respond(response)
 }

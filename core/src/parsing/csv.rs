@@ -3,11 +3,8 @@ use std::io::Cursor;
 use crate::csv_document::CsvDocument;
 use crate::uploaded_file::UploadedFile;
 
-pub fn parse_csv_document(
-    file: &UploadedFile,
-) -> anyhow::Result<CsvDocument> {
-    let cursor =
-        Cursor::new(&file.bytes);
+pub fn parse_csv_document(file: &UploadedFile) -> anyhow::Result<CsvDocument> {
+    let cursor = Cursor::new(&file.bytes);
 
     // `flexible(true)`: some facility export tools emit a trailing empty
     // column on every data row that the header doesn't name (confirmed
@@ -17,10 +14,7 @@ pub fn parse_csv_document(
     // Ragged rows are normalized below to exactly `headers.len()`
     // fields — the same tolerant handling the `duplicate-tenant-check`
     // reference script already relies on for this same data.
-    let mut reader =
-        csv::ReaderBuilder::new()
-            .flexible(true)
-            .from_reader(cursor);
+    let mut reader = csv::ReaderBuilder::new().flexible(true).from_reader(cursor);
 
     let headers: Vec<String> = reader
         .headers()?
@@ -28,17 +22,14 @@ pub fn parse_csv_document(
         .map(|h| h.trim().to_lowercase())
         .collect();
 
-    let mut rows: Vec<Vec<String>> =
-        Vec::new();
+    let mut rows: Vec<Vec<String>> = Vec::new();
 
     for result in reader.records() {
         let record = result?;
 
         let mut row: Vec<String> = record
             .iter()
-            .map(|field| {
-                field.trim().to_string()
-            })
+            .map(|field| field.trim().to_string())
             .collect();
 
         // Extra trailing fields are dropped; short rows are padded —
@@ -50,8 +41,7 @@ pub fn parse_csv_document(
     }
 
     Ok(CsvDocument {
-        file_name:
-            file.file_name.clone(),
+        file_name: file.file_name.clone(),
         headers,
         rows,
         modified_at: file.modified_at,

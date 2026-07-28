@@ -3,7 +3,9 @@ use axum::http::StatusCode;
 use super::*;
 use crate::api::discover::{discover, DiscoverRequest};
 use crate::api::group_file_upload::apply_group_file_upload;
-use crate::api::resolve_unit_format::{resolve_unit_format, ResolveAction, ResolveUnitFormatRequest};
+use crate::api::resolve_unit_format::{
+    resolve_unit_format, ResolveAction, ResolveUnitFormatRequest,
+};
 use crate::api::test_support::{discovered_state, empty_state};
 use unitprep_core::csv_document::CsvDocument;
 
@@ -45,9 +47,11 @@ async fn returns_404_for_missing_session() {
 async fn returns_409_before_discovery_completes() {
     let state = empty_state();
 
-    state.unit_group_sessions.save(
-        crate::application::unit_group_session::Session::new("s1".to_string()),
-    );
+    state
+        .unit_group_sessions
+        .save(crate::application::unit_group_session::Session::new(
+            "s1".to_string(),
+        ));
 
     let response = confirm_group_file(
         State(state),
@@ -111,10 +115,7 @@ async fn confirms_a_valid_selected_file() {
     apply_group_file_upload(
         &state,
         "s1",
-        document(
-            "master_groups.csv",
-            vec!["Name", "Description", "Active"],
-        ),
+        document("master_groups.csv", vec!["Name", "Description", "Active"]),
     );
 
     let response = confirm_group_file(
@@ -159,10 +160,7 @@ async fn confirming_the_group_file_is_what_makes_discovery_ready() {
     apply_group_file_upload(
         &state,
         "s1",
-        document(
-            "master_groups.csv",
-            vec!["Name", "Description", "Active"],
-        ),
+        document("master_groups.csv", vec!["Name", "Description", "Active"]),
     );
 
     let before_confirm = discover(

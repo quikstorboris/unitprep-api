@@ -30,16 +30,34 @@ const COLUMNS: &[(&str, ColumnSetter)] = &[
     ("AddressCity", |r, v| r.address_city = v),
     ("AddressState", |r, v| r.address_state = v),
     ("AddressPostalCode", |r, v| r.address_postal_code = v),
-    ("AlternateContactFirstName", |r, v| r.alt_contact_first_name = v),
-    ("AlternateContactLastName", |r, v| r.alt_contact_last_name = v),
+    ("AlternateContactFirstName", |r, v| {
+        r.alt_contact_first_name = v
+    }),
+    ("AlternateContactLastName", |r, v| {
+        r.alt_contact_last_name = v
+    }),
     ("AlternateContactEmail", |r, v| r.alt_contact_email = v),
-    ("AlternateContactPhoneNumber", |r, v| r.alt_contact_phone_number = v),
-    ("AlternateContactPhoneNumberPrefix", |r, v| r.alt_contact_phone_number_prefix = v),
-    ("AlternateContactAddressStreet1", |r, v| r.alt_contact_address_street1 = v),
-    ("AlternateContactAddressStreet2", |r, v| r.alt_contact_address_street2 = v),
-    ("AlternateContactAddressCity", |r, v| r.alt_contact_address_city = v),
-    ("AlternateContactAddressState", |r, v| r.alt_contact_address_state = v),
-    ("AlternateContactAddressPostalCode", |r, v| r.alt_contact_address_postal_code = v),
+    ("AlternateContactPhoneNumber", |r, v| {
+        r.alt_contact_phone_number = v
+    }),
+    ("AlternateContactPhoneNumberPrefix", |r, v| {
+        r.alt_contact_phone_number_prefix = v
+    }),
+    ("AlternateContactAddressStreet1", |r, v| {
+        r.alt_contact_address_street1 = v
+    }),
+    ("AlternateContactAddressStreet2", |r, v| {
+        r.alt_contact_address_street2 = v
+    }),
+    ("AlternateContactAddressCity", |r, v| {
+        r.alt_contact_address_city = v
+    }),
+    ("AlternateContactAddressState", |r, v| {
+        r.alt_contact_address_state = v
+    }),
+    ("AlternateContactAddressPostalCode", |r, v| {
+        r.alt_contact_address_postal_code = v
+    }),
 ];
 
 /// Builds one `TenantRecord` per data row in `doc`. Errors if a required
@@ -52,9 +70,7 @@ pub fn records_from_csv_document(doc: &CsvDocument) -> Result<Vec<TenantRecord>>
 
     let resolved: Vec<(usize, ColumnSetter)> = COLUMNS
         .iter()
-        .filter_map(|(header, setter)| {
-            doc.header_index(header).map(|idx| (idx, *setter))
-        })
+        .filter_map(|(header, setter)| doc.header_index(header).map(|idx| (idx, *setter)))
         .collect();
 
     Ok(doc

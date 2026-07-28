@@ -5,10 +5,7 @@
 
 use std::collections::HashMap;
 
-use crate::analysis::{
-    has_malformed_dimension_attempt,
-    is_uncommon_group_name,
-};
+use crate::analysis::{has_malformed_dimension_attempt, is_uncommon_group_name};
 
 /// Group names appearing on `max_occurrences` units or fewer in this
 /// file, paired with their actual count — small enough that a
@@ -39,42 +36,28 @@ pub(super) fn rare_groups(
 /// for the other half of that rule). `is_uncommon_group_name` itself
 /// stays untouched, since discovery's own "Uncommon Group Names" review
 /// list calls it directly and the two pages' counts are meant to agree.
-pub(super) fn is_odd_group_name(
-    group: &str,
-) -> bool {
-    (group.contains(',')
-        || is_uncommon_group_name(group))
-        && !has_malformed_dimension_attempt(
-            group,
-        )
+pub(super) fn is_odd_group_name(group: &str) -> bool {
+    (group.contains(',') || is_uncommon_group_name(group))
+        && !has_malformed_dimension_attempt(group)
 }
 
 /// Distinct group names in this file that read as "odd" — see
 /// `is_odd_group_name`.
-pub(super) fn odd_group_names(
-    group_counts: &HashMap<String, usize>,
-) -> Vec<String> {
+pub(super) fn odd_group_names(group_counts: &HashMap<String, usize>) -> Vec<String> {
     group_counts
         .keys()
-        .filter(|group| {
-            is_odd_group_name(group)
-        })
+        .filter(|group| is_odd_group_name(group))
         .cloned()
         .collect()
 }
 
 /// Unit numbers that appear on more than one row, sorted.
-pub(super) fn duplicate_units(
-    unit_counts: HashMap<String, usize>,
-) -> Vec<String> {
-    let mut duplicates: Vec<String> =
-        unit_counts
-            .into_iter()
-            .filter(|(_, count)| {
-                *count > 1
-            })
-            .map(|(unit, _)| unit)
-            .collect();
+pub(super) fn duplicate_units(unit_counts: HashMap<String, usize>) -> Vec<String> {
+    let mut duplicates: Vec<String> = unit_counts
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(unit, _)| unit)
+        .collect();
 
     duplicates.sort();
     duplicates
@@ -82,14 +65,10 @@ pub(super) fn duplicate_units(
 
 /// Unit numbers seen written with more than one distinct casing (e.g.
 /// "K10" and "k10" both appearing) — flags every variant seen.
-pub(super) fn casing_inconsistencies(
-    casing_map: HashMap<String, Vec<String>>,
-) -> Vec<String> {
+pub(super) fn casing_inconsistencies(casing_map: HashMap<String, Vec<String>>) -> Vec<String> {
     let mut flagged = Vec::new();
 
-    for mut variants in
-        casing_map.into_values()
-    {
+    for mut variants in casing_map.into_values() {
         variants.sort();
         variants.dedup();
 
@@ -105,47 +84,21 @@ pub(super) fn casing_inconsistencies(
 mod tests {
     use super::*;
 
-    fn counts(
-        pairs: &[(&str, usize)],
-    ) -> HashMap<String, usize> {
-        pairs
-            .iter()
-            .map(|(k, v)| {
-                (k.to_string(), *v)
-            })
-            .collect()
+    fn counts(pairs: &[(&str, usize)]) -> HashMap<String, usize> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
     }
 
     #[test]
     fn rare_groups_includes_everything_at_or_under_the_threshold() {
-        let group_counts = counts(&[
-            ("one-unit", 1),
-            ("four-units", 4),
-            ("five-units", 5),
-        ]);
+        let group_counts = counts(&[("one-unit", 1), ("four-units", 4), ("five-units", 5)]);
 
-        let mut result =
-            rare_groups(
-                &group_counts,
-                4,
-            );
+        let mut result = rare_groups(&group_counts, 4);
 
         result.sort();
 
         assert_eq!(
             result,
-            vec![
-                (
-                    "four-units"
-                        .to_string(),
-                    4
-                ),
-                (
-                    "one-unit"
-                        .to_string(),
-                    1
-                ),
-            ]
+            vec![("four-units".to_string(), 4), ("one-unit".to_string(), 1),]
         );
     }
 
@@ -157,77 +110,40 @@ mod tests {
             ("10x10 Inside Climate", 5),
         ]);
 
-        let mut result =
-            odd_group_names(
-                &group_counts,
-            );
+        let mut result = odd_group_names(&group_counts);
 
         result.sort();
 
         assert_eq!(
             result,
-            vec![
-                "10x10, 10x20"
-                    .to_string(),
-                "Hertz Office Space"
-                    .to_string(),
-            ]
+            vec!["10x10, 10x20".to_string(), "Hertz Office Space".to_string(),]
         );
     }
 
     #[test]
     fn duplicate_units_are_sorted_and_singles_excluded() {
-        let unit_counts = counts(&[
-            ("B02", 2),
-            ("A01", 1),
-            ("C03", 3),
-        ]);
+        let unit_counts = counts(&[("B02", 2), ("A01", 1), ("C03", 3)]);
 
-        let result =
-            duplicate_units(unit_counts);
+        let result = duplicate_units(unit_counts);
 
-        assert_eq!(
-            result,
-            vec![
-                "B02".to_string(),
-                "C03".to_string(),
-            ]
-        );
+        assert_eq!(result, vec!["B02".to_string(), "C03".to_string(),]);
     }
 
     #[test]
     fn casing_inconsistencies_flags_only_multi_casing_units() {
-        let mut casing_map: HashMap<
-            String,
-            Vec<String>,
-        > = HashMap::new();
+        let mut casing_map: HashMap<String, Vec<String>> = HashMap::new();
 
         casing_map.insert(
             "k10".to_string(),
-            vec![
-                "K10".to_string(),
-                "k10".to_string(),
-            ],
+            vec!["K10".to_string(), "k10".to_string()],
         );
 
-        casing_map.insert(
-            "a01".to_string(),
-            vec!["A01".to_string()],
-        );
+        casing_map.insert("a01".to_string(), vec!["A01".to_string()]);
 
-        let mut result =
-            casing_inconsistencies(
-                casing_map,
-            );
+        let mut result = casing_inconsistencies(casing_map);
 
         result.sort();
 
-        assert_eq!(
-            result,
-            vec![
-                "K10".to_string(),
-                "k10".to_string(),
-            ]
-        );
+        assert_eq!(result, vec!["K10".to_string(), "k10".to_string(),]);
     }
 }

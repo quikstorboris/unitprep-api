@@ -38,7 +38,12 @@ fn load_records_from_env(env_var: &str) -> Vec<TenantRecord> {
         .unwrap()
         .to_string_lossy()
         .to_string();
-    let uploaded = UploadedFile { file_name, relative_path: String::new(), bytes, modified_at: None };
+    let uploaded = UploadedFile {
+        file_name,
+        relative_path: String::new(),
+        bytes,
+        modified_at: None,
+    };
     let document = parse_document(&uploaded).expect("fixture must parse as CSV");
     records_from_csv_document(&document).expect("fixture must have a FirtLast column")
 }

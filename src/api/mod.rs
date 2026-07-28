@@ -26,21 +26,14 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json,
-    Router,
+    Json, Router,
 };
 
 use serde::Serialize;
 
-use tower_http::cors::{
-    AllowOrigin,
-    CorsLayer,
-};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
-use unitprep_core::session_store::{
-    SessionMetrics,
-    SessionStore,
-};
+use unitprep_core::session_store::{SessionMetrics, SessionStore};
 
 use crate::application::dedup_session_service::DedupSession;
 use crate::application::unit_group_session::Session;
@@ -52,8 +45,7 @@ pub struct AppState {
     // their own store instance (see unitprep-core's generic
     // SessionStore<S>); this field will get company (e.g.
     // `dedup_sessions`) rather than being renamed later under pressure.
-    pub unit_group_sessions:
-        Arc<dyn SessionStore<Session>>,
+    pub unit_group_sessions: Arc<dyn SessionStore<Session>>,
 
     // Additive, per the comment above — a second tool's store, not a
     // rename of the first.
@@ -110,9 +102,7 @@ pub(crate) struct ApiErrorBody {
 /// which is exactly the ambiguity `session_not_found`'s own doc comment
 /// above already identifies as the thing to avoid. This closes that same
 /// gap for stage violations.
-pub(crate) fn stage_conflict(
-    err: crate::application::unit_group_session::StageError,
-) -> Response {
+pub(crate) fn stage_conflict(err: crate::application::unit_group_session::StageError) -> Response {
     (
         StatusCode::CONFLICT,
         Json(ApiErrorBody {
@@ -136,12 +126,7 @@ pub(crate) fn stage_conflict(
 /// `correct_group`'s `UnknownGroup` variant) keep their own custom match
 /// instead of forcing an unrelated variant through this shape.
 pub(crate) fn respond<T: Serialize>(
-    result: Option<
-        Result<
-            T,
-            crate::application::unit_group_session::StageError,
-        >,
-    >,
+    result: Option<Result<T, crate::application::unit_group_session::StageError>>,
 ) -> Response {
     match result {
         Some(Ok(body)) => Json(body).into_response(),
@@ -155,16 +140,12 @@ pub(crate) fn respond<T: Serialize>(
 /// should be a short, safe-to-display description; the real error detail
 /// belongs in the `tracing::error!` call the caller already makes
 /// alongside this, not in the response body.
-pub(crate) fn internal_error(
-    context: &str,
-) -> Response {
+pub(crate) fn internal_error(context: &str) -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(ApiErrorBody {
             error: "internal_error",
-            message: format!(
-                "{context} — check server logs for details.",
-            ),
+            message: format!("{context} — check server logs for details.",),
         }),
     )
         .into_response()
@@ -175,48 +156,26 @@ pub(crate) fn internal_error(
 /// `CORS_ALLOWED_ORIGINS` (comma-separated) to add real deployed
 /// frontend origins instead of hardcoding them here.
 fn allowed_origins() -> Vec<axum::http::HeaderValue> {
-    match std::env::var("CORS_ALLOWED_ORIGINS")
-    {
-        Ok(value)
-            if !value.trim().is_empty() =>
-        {
-            value
-                .split(',')
-                .map(|origin| {
-                    origin.trim()
-                })
-                .filter(|origin| {
-                    !origin.is_empty()
-                })
-                .filter_map(|origin| {
-                    origin.parse().ok()
-                })
-                .collect()
-        }
+    match std::env::var("CORS_ALLOWED_ORIGINS") {
+        Ok(value) if !value.trim().is_empty() => value
+            .split(',')
+            .map(|origin| origin.trim())
+            .filter(|origin| !origin.is_empty())
+            .filter_map(|origin| origin.parse().ok())
+            .collect(),
 
         _ => vec![
-            "http://localhost:3000"
-                .parse()
-                .unwrap(),
-            "http://localhost:5173"
-                .parse()
-                .unwrap(),
+            "http://localhost:3000".parse().unwrap(),
+            "http://localhost:5173".parse().unwrap(),
         ],
     }
 }
 
 pub fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::list(
-            allowed_origins(),
-        ))
-        .allow_methods([
-            axum::http::Method::GET,
-            axum::http::Method::POST,
-        ])
-        .allow_headers([
-            axum::http::header::CONTENT_TYPE,
-        ]);
+        .allow_origin(AllowOrigin::list(allowed_origins()))
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_headers([axum::http::header::CONTENT_TYPE]);
 
     Router::new()
         .route("/health", get(health))
@@ -226,27 +185,13 @@ pub fn router(state: AppState) -> Router {
         .route("/discover", post(discover::discover))
         .route("/validate", post(validate::validate))
         .route("/correct", post(correct::correct))
-        .route(
-            "/correct-group",
-            post(correct_group::correct_group),
-        )
-        .route(
-            "/exempt-dimensions",
-            post(exempt::exempt_dimensions),
-        )
-        .route(
-            "/exclude-group",
-            post(exclude_group::exclude_group),
-        )
-        .route(
-            "/exclude-groups",
-            post(exclude_groups::exclude_groups),
-        )
+        .route("/correct-group", post(correct_group::correct_group))
+        .route("/exempt-dimensions", post(exempt::exempt_dimensions))
+        .route("/exclude-group", post(exclude_group::exclude_group))
+        .route("/exclude-groups", post(exclude_groups::exclude_groups))
         .route(
             "/acknowledge-group-warnings",
-            post(
-                acknowledge_group_warnings::acknowledge_group_warnings,
-            ),
+            post(acknowledge_group_warnings::acknowledge_group_warnings),
         )
         .route("/analyze", post(analyze::analyze))
         .route("/export", post(export::export))
@@ -270,18 +215,11 @@ pub fn router(state: AppState) -> Router {
             "/group-file/select",
             post(select_group_file::select_group_file),
         )
-        .route(
-            "/session/cancel",
-            post(cancel_session::cancel_session),
-        )
+        .route("/session/cancel", post(cancel_session::cancel_session))
         .route("/dedup/check", post(dedup::check))
         .route("/dedup/report", post(dedup::report))
         .route("/dedup/export", post(dedup::export))
-        .layer(
-            DefaultBodyLimit::max(
-                100 * 1024 * 1024,
-            ),
-        )
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(state)
         .layer(cors)
 }
@@ -294,23 +232,15 @@ struct HealthResponse {
     dedup_sessions: SessionMetrics,
 }
 
-async fn health(
-    State(state): State<AppState>,
-) -> Json<HealthResponse> {
+async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
     Json(HealthResponse {
         status: "ok",
         // Read from Cargo.toml at compile time — bumping the version
         // there is the only thing needed to keep this in sync; nothing
         // to remember to update in two places.
-        version: env!(
-            "CARGO_PKG_VERSION"
-        ),
-        sessions: state
-            .unit_group_sessions
-            .metrics(),
-        dedup_sessions: state
-            .dedup_sessions
-            .metrics(),
+        version: env!("CARGO_PKG_VERSION"),
+        sessions: state.unit_group_sessions.metrics(),
+        dedup_sessions: state.dedup_sessions.metrics(),
     })
 }
 
@@ -327,14 +257,10 @@ struct DbHealthResponse {
 /// would otherwise silently bypass every RLS policy in the schema while
 /// still working from the app's point of view, so this check is
 /// deliberately more than a bare SELECT 1.
-async fn health_db(
-    State(state): State<AppState>,
-) -> Response {
-    match sqlx::query_scalar::<_, String>(
-        "SELECT current_user",
-    )
-    .fetch_one(&state.db)
-    .await
+async fn health_db(State(state): State<AppState>) -> Response {
+    match sqlx::query_scalar::<_, String>("SELECT current_user")
+        .fetch_one(&state.db)
+        .await
     {
         Ok(connected_as) => (
             StatusCode::OK,
@@ -349,9 +275,7 @@ async fn health_db(
                 error = %err,
                 "database health check failed"
             );
-            internal_error(
-                "Database connectivity check failed",
-            )
+            internal_error("Database connectivity check failed")
         }
     }
 }
@@ -366,9 +290,7 @@ struct WhoamiResponse {
 /// -> identity chain actually works end to end -- exercises
 /// AuthenticatedUser the same way any future protected endpoint will,
 /// without yet having a real protected endpoint to exercise it through.
-async fn whoami(
-    user: crate::auth::AuthenticatedUser,
-) -> Json<WhoamiResponse> {
+async fn whoami(user: crate::auth::AuthenticatedUser) -> Json<WhoamiResponse> {
     Json(WhoamiResponse {
         user_id: user.user_id.to_string(),
         role: user.role.as_db_text(),

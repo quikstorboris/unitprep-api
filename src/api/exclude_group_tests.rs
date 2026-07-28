@@ -1,12 +1,7 @@
 use axum::http::StatusCode;
 
 use super::*;
-use crate::api::test_support::{
-    discovered_state,
-    empty_state,
-    unit_document,
-    uploaded_state,
-};
+use crate::api::test_support::{discovered_state, empty_state, unit_document, uploaded_state};
 
 async fn body_json(response: axum::response::Response) -> serde_json::Value {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)

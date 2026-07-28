@@ -12,7 +12,9 @@ use crate::notes::{
     note_template_for_category, relatedness_template_for_signal, NOTE_SEPARATE_TENANTS,
     NOTE_VERIFY_DIFFERS, NOTE_VERIFY_MATCHES,
 };
-use crate::phrasing::{all_emails_present_and_distinct, capitalize_first, describe_field, group_units, units_phrase};
+use crate::phrasing::{
+    all_emails_present_and_distinct, capitalize_first, describe_field, group_units, units_phrase,
+};
 use crate::relatedness::RelatednessSignal;
 use crate::types::{FieldCategory, FieldMismatch, FieldName, TenantGroup, CATEGORY_PRIORITY};
 
@@ -109,7 +111,12 @@ impl NoteComposer for TemplateNoteComposer {
         differing
             .iter()
             .flat_map(|mismatch| &mismatch.fields)
-            .map(|field_mismatch| (field_mismatch.field, describe_field(group, field_mismatch.field)))
+            .map(|field_mismatch| {
+                (
+                    field_mismatch.field,
+                    describe_field(group, field_mismatch.field),
+                )
+            })
             .collect()
     }
 
@@ -119,7 +126,11 @@ impl NoteComposer for TemplateNoteComposer {
         group_b: &TenantGroup,
         contact_info_matches: bool,
     ) -> String {
-        let template = if contact_info_matches { NOTE_VERIFY_MATCHES } else { NOTE_VERIFY_DIFFERS };
+        let template = if contact_info_matches {
+            NOTE_VERIFY_MATCHES
+        } else {
+            NOTE_VERIFY_DIFFERS
+        };
         template
             .replace("{name_a}", &group_a.records[0].display_name())
             .replace("{units_a}", &units_phrase(&group_units(group_a)))
@@ -135,7 +146,13 @@ impl NoteComposer for TemplateNoteComposer {
     ) -> String {
         let names = groups
             .iter()
-            .map(|g| format!("{} ({})", g.records[0].display_name(), units_phrase(&group_units(g))))
+            .map(|g| {
+                format!(
+                    "{} ({})",
+                    g.records[0].display_name(),
+                    units_phrase(&group_units(g))
+                )
+            })
             .collect::<Vec<_>>()
             .join(" and ");
 
@@ -195,17 +212,35 @@ mod tests {
         // text should name each field, each distinct value, and exactly
         // which units have it, in plain English, not just restate the
         // category.
-        let mut a = record("D-216", "Carlos Humberto", "Pascual Alejandro", "x@example.com");
+        let mut a = record(
+            "D-216",
+            "Carlos Humberto",
+            "Pascual Alejandro",
+            "x@example.com",
+        );
         a.alt_contact_first_name = "Carlos".to_string();
         a.alt_contact_phone_number = "3607281619".to_string();
-        let mut b = record("S-31", "Carlos Humberto", "Pascual Alejandro", "x@example.com");
+        let mut b = record(
+            "S-31",
+            "Carlos Humberto",
+            "Pascual Alejandro",
+            "x@example.com",
+        );
         b.alt_contact_first_name = "Agustin".to_string();
         b.alt_contact_phone_number = "3605525629".to_string();
-        let mut c = record("S-51", "Carlos Humberto", "Pascual Alejandro", "x@example.com");
+        let mut c = record(
+            "S-51",
+            "Carlos Humberto",
+            "Pascual Alejandro",
+            "x@example.com",
+        );
         c.alt_contact_first_name = String::new();
         c.alt_contact_phone_number = String::new();
 
-        let group = TenantGroup { key: "carlos".to_string(), records: vec![a, b, c] };
+        let group = TenantGroup {
+            key: "carlos".to_string(),
+            records: vec![a, b, c],
+        };
 
         let differing = vec![FieldMismatch {
             category: FieldCategory::AltContact,
@@ -253,7 +288,10 @@ mod tests {
         let bullets = TemplateNoteComposer.describe_group_bullets(&group, &differing);
         assert_eq!(bullets.len(), 1);
         assert_eq!(bullets[0].0, crate::types::FieldName::Email);
-        assert_eq!(bullets[0].1, "Email address is a@example.com for unit 101, but blank for unit 204.");
+        assert_eq!(
+            bullets[0].1,
+            "Email address is a@example.com for unit 101, but blank for unit 204."
+        );
     }
 
     #[test]

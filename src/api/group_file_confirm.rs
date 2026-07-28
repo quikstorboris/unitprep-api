@@ -5,11 +5,7 @@ use axum::response::{IntoResponse, Response};
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{
-    discover::compute_discovery,
-    session_not_found,
-    stage_conflict,
-    ApiErrorBody,
-    AppState,
+    discover::compute_discovery, session_not_found, stage_conflict, ApiErrorBody, AppState,
 };
 use crate::application::unit_group_session::{StageError, WorkflowStage};
 

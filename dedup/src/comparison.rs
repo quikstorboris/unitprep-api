@@ -3,7 +3,9 @@
 //! `find_differing_categories` / `contact_info_matches`.
 
 use crate::normalization::normalize_value;
-use crate::types::{FieldMismatch, FieldName, FieldValueMismatch, TenantRecord, CATEGORY_PRIORITY, FIELD_SPECS};
+use crate::types::{
+    FieldMismatch, FieldName, FieldValueMismatch, TenantRecord, CATEGORY_PRIORITY, FIELD_SPECS,
+};
 
 /// For each field category (in priority order), checks whether any of
 /// its fields differ (after normalization) across `group`. Returns one
@@ -25,7 +27,10 @@ pub fn find_differing_categories(group: &[TenantRecord]) -> Vec<FieldMismatch> {
             })
             .collect();
         if !differing_fields.is_empty() {
-            result.push(FieldMismatch { category, fields: differing_fields });
+            result.push(FieldMismatch {
+                category,
+                fields: differing_fields,
+            });
         }
     }
     result
@@ -40,7 +45,11 @@ fn distinct_display_values(group: &[TenantRecord], field: FieldName) -> Vec<Stri
         .iter()
         .map(|r| {
             let raw = r.field(field).trim();
-            if raw.is_empty() { "(blank)".to_string() } else { raw.to_string() }
+            if raw.is_empty() {
+                "(blank)".to_string()
+            } else {
+                raw.to_string()
+            }
         })
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
@@ -65,9 +74,7 @@ fn field_matches_across(
     name: FieldName,
     kind: crate::types::FieldKind,
 ) -> bool {
-    let mut values = group
-        .iter()
-        .map(|r| normalize_value(kind, r.field(name)));
+    let mut values = group.iter().map(|r| normalize_value(kind, r.field(name)));
     let first = match values.next() {
         Some(v) => v,
         None => return true,
@@ -81,7 +88,10 @@ mod tests {
     use crate::types::FieldCategory;
 
     fn record(email: &str) -> TenantRecord {
-        TenantRecord { email: email.to_string(), ..Default::default() }
+        TenantRecord {
+            email: email.to_string(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -97,7 +107,10 @@ mod tests {
         assert_eq!(email_mismatch.fields.len(), 1);
         assert_eq!(email_mismatch.fields[0].field, FieldName::Email);
         // Blank sorts last, matching the reference script's display convention.
-        assert_eq!(email_mismatch.fields[0].values, vec!["a@example.com", "(blank)"]);
+        assert_eq!(
+            email_mismatch.fields[0].values,
+            vec!["a@example.com", "(blank)"]
+        );
     }
 
     #[test]
@@ -110,8 +123,14 @@ mod tests {
     #[test]
     fn differently_formatted_phone_numbers_are_not_reported_as_differing() {
         let group = vec![
-            TenantRecord { phone_number: "(555) 123-4567".to_string(), ..Default::default() },
-            TenantRecord { phone_number: "555-123-4567".to_string(), ..Default::default() },
+            TenantRecord {
+                phone_number: "(555) 123-4567".to_string(),
+                ..Default::default()
+            },
+            TenantRecord {
+                phone_number: "555-123-4567".to_string(),
+                ..Default::default()
+            },
         ];
         let differing = find_differing_categories(&group);
         assert!(differing.iter().all(|m| m.category != FieldCategory::Phone));

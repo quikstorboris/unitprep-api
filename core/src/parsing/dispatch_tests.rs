@@ -10,7 +10,5 @@ fn unsupported_file_fails() {
         modified_at: None,
     };
 
-    assert!(
-        parse_document(&file).is_err()
-    );
+    assert!(parse_document(&file).is_err());
 }

@@ -17,9 +17,7 @@ use crate::application::unit_group_session::Session;
 /// `compute_discovery` uses for `current_unit_file_name`, factored out so
 /// `/unit-file/resolve-format` (see `resolve_unit_format.rs`) agrees with
 /// it without duplicating the sort/filter.
-pub(crate) fn current_unit_file_to_resolve(
-    session: &Session,
-) -> Option<String> {
+pub(crate) fn current_unit_file_to_resolve(session: &Session) -> Option<String> {
     session
         .data
         .discovery
@@ -33,9 +31,7 @@ pub(crate) fn current_unit_file_to_resolve(
 /// `resolve_unit_format`'s bulk-confirm logic, which needs the exact same
 /// notion of "same shape" to decide which confirmed files a single
 /// vendor confirmation covers.
-pub(crate) fn normalized_headers(
-    document: &CsvDocument,
-) -> Vec<String> {
+pub(crate) fn normalized_headers(document: &CsvDocument) -> Vec<String> {
     let mut normalized: Vec<String> = document
         .headers
         .iter()
@@ -55,9 +51,7 @@ pub(crate) fn normalized_headers(
 /// broken arbitrarily (whichever group `HashMap` iteration visits first)
 /// -- with a real tie there's no principled way to prefer one shape over
 /// the other anyway.
-pub(crate) fn find_header_mismatches(
-    documents: &[&CsvDocument],
-) -> Vec<String> {
+pub(crate) fn find_header_mismatches(documents: &[&CsvDocument]) -> Vec<String> {
     if documents.len() <= 1 {
         return Vec::new();
     }
@@ -98,27 +92,12 @@ pub(crate) fn find_header_mismatches(
 /// To, Status, Last Updated) -- either is accepted, and column order
 /// never matters (`header_index` is a set lookup, not positional). Extra
 /// columns beyond either set are simply ignored.
-pub(crate) fn is_group_document(
-    document: &CsvDocument,
-) -> bool {
-    const MINIMAL: [&str; 3] =
-        ["name", "description", "active"];
+pub(crate) fn is_group_document(document: &CsvDocument) -> bool {
+    const MINIMAL: [&str; 3] = ["name", "description", "active"];
 
-    const FULL: [&str; 5] = [
-        "name",
-        "description",
-        "assignedto",
-        "status",
-        "lastupdated",
-    ];
+    const FULL: [&str; 5] = ["name", "description", "assignedto", "status", "lastupdated"];
 
-    let has_all = |required: &[&str]| {
-        required.iter().all(|r| {
-            document
-                .header_index(r)
-                .is_some()
-        })
-    };
+    let has_all = |required: &[&str]| required.iter().all(|r| document.header_index(r).is_some());
 
     has_all(&MINIMAL) || has_all(&FULL)
 }

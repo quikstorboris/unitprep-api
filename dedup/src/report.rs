@@ -139,12 +139,7 @@ mod tests {
     use super::*;
     use crate::types::TenantRecord;
 
-    fn record(
-        first_last: &str,
-        first_name: &str,
-        last_name: &str,
-        unit: &str,
-    ) -> TenantRecord {
+    fn record(first_last: &str, first_name: &str, last_name: &str, unit: &str) -> TenantRecord {
         TenantRecord {
             first_last: first_last.to_string(),
             first_name: first_name.to_string(),
@@ -163,28 +158,15 @@ mod tests {
         let groups = vec![
             TenantGroup {
                 key: "smith, john".to_string(),
-                records: vec![record(
-                    "Smith, John",
-                    "John",
-                    "Smith",
-                    "A1",
-                )],
+                records: vec![record("Smith, John", "John", "Smith", "A1")],
             },
             TenantGroup {
                 key: "john  smith".to_string(),
-                records: vec![record(
-                    "John  Smith",
-                    "John",
-                    "Smith",
-                    "B2",
-                )],
+                records: vec![record("John  Smith", "John", "Smith", "B2")],
             },
         ];
 
-        let candidates = find_typo_variant_candidates(
-            &groups,
-            &TemplateNoteComposer,
-        );
+        let candidates = find_typo_variant_candidates(&groups, &TemplateNoteComposer);
 
         assert_eq!(candidates.len(), 1);
         assert!(
@@ -207,10 +189,7 @@ mod tests {
             },
         ];
 
-        let candidates = find_typo_variant_candidates(
-            &groups,
-            &TemplateNoteComposer,
-        );
+        let candidates = find_typo_variant_candidates(&groups, &TemplateNoteComposer);
 
         assert!(candidates.is_empty());
     }

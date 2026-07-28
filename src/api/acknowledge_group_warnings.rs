@@ -6,11 +6,7 @@ use serde::Deserialize;
 
 use unitprep_core::session_store::SessionStoreExt;
 
-use crate::api::{
-    respond,
-    validate::run_validation,
-    AppState,
-};
+use crate::api::{respond, validate::run_validation, AppState};
 
 #[derive(Debug, Deserialize)]
 pub struct AcknowledgeGroupWarningsRequest {
@@ -40,45 +36,29 @@ pub struct AcknowledgeGroupWarningsRequest {
 /// needs its own, separate acknowledgment.
 pub async fn acknowledge_group_warnings(
     State(state): State<AppState>,
-    Json(request): Json<
-        AcknowledgeGroupWarningsRequest,
-    >,
+    Json(request): Json<AcknowledgeGroupWarningsRequest>,
 ) -> Response {
     let response = state
         .unit_group_sessions
-        .with_session_mut(
-            &request.session_id,
-            |session| {
-                for group_name in
-                    &request.group_names
-                {
-                    if request.acknowledged {
-                        session.acknowledge_group_check(
-                            request.check.clone(),
-                            group_name.clone(),
-                        );
-                    } else {
-                        session.unacknowledge_group_check(
-                            &request.check,
-                            group_name,
-                        );
-                    }
+        .with_session_mut(&request.session_id, |session| {
+            for group_name in &request.group_names {
+                if request.acknowledged {
+                    session.acknowledge_group_check(request.check.clone(), group_name.clone());
+                } else {
+                    session.unacknowledge_group_check(&request.check, group_name);
                 }
+            }
 
-                tracing::info!(
-                    session_id = %request.session_id,
-                    check = %request.check,
-                    group_count = request.group_names.len(),
-                    acknowledged = request.acknowledged,
-                    "Bulk-updated group check acknowledgments"
-                );
+            tracing::info!(
+                session_id = %request.session_id,
+                check = %request.check,
+                group_count = request.group_names.len(),
+                acknowledged = request.acknowledged,
+                "Bulk-updated group check acknowledgments"
+            );
 
-                run_validation(
-                    session,
-                    &request.session_id,
-                )
-            },
-        );
+            run_validation(session, &request.session_id)
+        });
 
     respond(response)
 }

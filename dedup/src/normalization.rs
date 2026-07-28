@@ -80,7 +80,13 @@ fn normalize_address(v: &str) -> String {
     let without_periods: String = v.chars().filter(|&c| c != '.').collect();
     let punctuation_as_space: String = without_periods
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' || c.is_whitespace() { c } else { ' ' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c.is_whitespace() {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect();
     punctuation_as_space
         .split_whitespace()
@@ -141,7 +147,10 @@ mod tests {
             normalize_value(FieldKind::Phone, "831.555.1234"),
             normalize_value(FieldKind::Phone, "8315551234")
         );
-        assert_eq!(normalize_value(FieldKind::Phone, "(831) 555-1234"), "8315551234");
+        assert_eq!(
+            normalize_value(FieldKind::Phone, "(831) 555-1234"),
+            "8315551234"
+        );
     }
 
     #[test]

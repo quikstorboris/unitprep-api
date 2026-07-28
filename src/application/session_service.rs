@@ -14,29 +14,18 @@ pub struct SessionService {
 }
 
 impl SessionService {
-    pub fn new(
-        store: Arc<dyn SessionStore<Session>>,
-    ) -> Self {
+    pub fn new(store: Arc<dyn SessionStore<Session>>) -> Self {
         Self { store }
     }
 
-    pub fn create_session(
-        &self,
-        uploaded_files: Vec<UploadedFile>,
-    ) -> String {
-        tracing::info!(
-            uploaded_files = uploaded_files.len(),
-            "Creating session"
-        );
+    pub fn create_session(&self, uploaded_files: Vec<UploadedFile>) -> String {
+        tracing::info!(uploaded_files = uploaded_files.len(), "Creating session");
 
-        let session_id =
-            Uuid::new_v4().to_string();
+        let session_id = Uuid::new_v4().to_string();
 
-        let mut session =
-            Session::new(session_id.clone());
+        let mut session = Session::new(session_id.clone());
 
-        let mut documents: Vec<CsvDocument> =
-            Vec::new();
+        let mut documents: Vec<CsvDocument> = Vec::new();
 
         let mut skipped = 0usize;
 
@@ -65,8 +54,7 @@ impl SessionService {
             "Session contents before save"
         );
 
-        session.data.documents =
-            Arc::new(documents);
+        session.data.documents = Arc::new(documents);
 
         self.store.save(session);
 

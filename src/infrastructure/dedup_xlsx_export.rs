@@ -44,20 +44,42 @@ pub fn generate_xlsx(report: &DedupReport, all_records: &[TenantRecord]) -> Resu
         match planned_row {
             PlannedRow::Blank => {}
             PlannedRow::Marker(text) => {
-                worksheet.write_string_with_format(excel_row, 0, *text, &Format::new().set_bold())?;
+                worksheet.write_string_with_format(
+                    excel_row,
+                    0,
+                    *text,
+                    &Format::new().set_bold(),
+                )?;
             }
-            PlannedRow::Data { record, note, cluster, hyperlink_target } => {
-                let format =
-                    Format::new().set_background_color(Color::RGB(CLUSTER_COLORS[cluster % CLUSTER_COLORS.len()]));
+            PlannedRow::Data {
+                record,
+                note,
+                cluster,
+                hyperlink_target,
+            } => {
+                let format = Format::new().set_background_color(Color::RGB(
+                    CLUSTER_COLORS[cluster % CLUSTER_COLORS.len()],
+                ));
 
                 for (col, value) in record_values(record).into_iter().enumerate() {
                     if col as u16 != NOTE_COLUMN {
-                        worksheet.write_string_with_format(excel_row, col as u16, value.as_str(), &format)?;
+                        worksheet.write_string_with_format(
+                            excel_row,
+                            col as u16,
+                            value.as_str(),
+                            &format,
+                        )?;
                     }
                 }
 
                 let note = sanitize_cell(note);
-                write_note_cell(worksheet, excel_row, &note, hyperlink_target.as_deref(), &format)?;
+                write_note_cell(
+                    worksheet,
+                    excel_row,
+                    &note,
+                    hyperlink_target.as_deref(),
+                    &format,
+                )?;
             }
         }
     }

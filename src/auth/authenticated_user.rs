@@ -58,23 +58,19 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             .await
             .expect("CookieJar extraction is infallible");
 
-        let raw_token =
-            read_session_cookie(&jar).ok_or_else(unauthorized)?;
+        let raw_token = read_session_cookie(&jar).ok_or_else(unauthorized)?;
         let token_hash = hash_token(&raw_token);
 
-        let row: Option<(Uuid, String)> = sqlx::query_as(
-            "SELECT user_id, role::text FROM resolve_session($1)",
-        )
-        .bind(token_hash)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|_| internal_error())?;
+        let row: Option<(Uuid, String)> =
+            sqlx::query_as("SELECT user_id, role::text FROM resolve_session($1)")
+                .bind(token_hash)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|_| internal_error())?;
 
-        let (user_id, role_text) =
-            row.ok_or_else(unauthorized)?;
+        let (user_id, role_text) = row.ok_or_else(unauthorized)?;
 
-        let role = Role::from_db_text(&role_text)
-            .ok_or_else(internal_error)?;
+        let role = Role::from_db_text(&role_text).ok_or_else(internal_error)?;
 
         Ok(AuthenticatedUser { user_id, role })
     }
@@ -116,19 +112,15 @@ pub async fn begin_rls_transaction(
 ) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, sqlx::Error> {
     let mut tx = pool.begin().await?;
 
-    sqlx::query(
-        "SELECT set_config('app.current_user_id', $1, true)",
-    )
-    .bind(user_id.to_string())
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+        .bind(user_id.to_string())
+        .execute(&mut *tx)
+        .await?;
 
-    sqlx::query(
-        "SELECT set_config('app.current_user_role', $1, true)",
-    )
-    .bind(role.as_db_text())
-    .execute(&mut *tx)
-    .await?;
+    sqlx::query("SELECT set_config('app.current_user_role', $1, true)")
+        .bind(role.as_db_text())
+        .execute(&mut *tx)
+        .await?;
 
     Ok(tx)
 }
@@ -139,7 +131,10 @@ mod tests {
 
     #[test]
     fn role_round_trips_through_its_db_text_form() {
-        assert_eq!(Role::from_db_text(Role::Admin.as_db_text()), Some(Role::Admin));
+        assert_eq!(
+            Role::from_db_text(Role::Admin.as_db_text()),
+            Some(Role::Admin)
+        );
     }
 
     #[test]

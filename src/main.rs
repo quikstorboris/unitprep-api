@@ -36,48 +36,30 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| {
-                    tracing_subscriber::EnvFilter::new(
-                        "unitprep=info",
-                    )
-                }),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("unitprep=info")),
         )
         .init();
 
     // Overridable per deployment without a code change — defaults to
     // the same 10 minutes as before if unset or unparseable.
-    let session_timeout_secs = std::env::var(
-        "SESSION_TIMEOUT_SECS",
-    )
-    .ok()
-    .and_then(|v| v.parse::<u64>().ok())
-    .unwrap_or(60 * 10);
+    let session_timeout_secs = std::env::var("SESSION_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(60 * 10);
 
-    let session_store =
-        Arc::new(
-            InMemorySessionStore::<Session>::with_timeout(
-                std::time::Duration::from_secs(
-                    session_timeout_secs,
-                ),
-            ),
-        );
+    let session_store = Arc::new(InMemorySessionStore::<Session>::with_timeout(
+        std::time::Duration::from_secs(session_timeout_secs),
+    ));
 
-    session_store
-        .start_cleanup_task();
+    session_store.start_cleanup_task();
 
     // Same timeout policy as unit_group_sessions — no reason for the
     // two tools' sessions to expire on different schedules today.
-    let dedup_session_store =
-        Arc::new(
-            InMemorySessionStore::<DedupSession>::with_timeout(
-                std::time::Duration::from_secs(
-                    session_timeout_secs,
-                ),
-            ),
-        );
+    let dedup_session_store = Arc::new(InMemorySessionStore::<DedupSession>::with_timeout(
+        std::time::Duration::from_secs(session_timeout_secs),
+    ));
 
-    dedup_session_store
-        .start_cleanup_task();
+    dedup_session_store.start_cleanup_task();
 
     // See db.rs -- deliberately non-blocking (connect_lazy), since most
     // existing endpoints do not touch Postgres at all yet.
@@ -88,17 +70,15 @@ async fn main() {
     // WEBAUTHN_RP_ID must be a valid domain suffix of WEBAUTHN_RP_ORIGIN
     // (e.g. "example.com" with "https://app.example.com") -- defaults
     // match local frontend dev, same as CORS_ALLOWED_ORIGINS below.
-    let rp_id = std::env::var("WEBAUTHN_RP_ID")
-        .unwrap_or_else(|_| "localhost".to_string());
+    let rp_id = std::env::var("WEBAUTHN_RP_ID").unwrap_or_else(|_| "localhost".to_string());
 
-    let rp_origin = std::env::var("WEBAUTHN_RP_ORIGIN")
-        .unwrap_or_else(|_| "http://localhost:3000".to_string());
+    let rp_origin =
+        std::env::var("WEBAUTHN_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
     let auth_backend: Arc<dyn auth::AuthBackend> = Arc::new(
-        auth::WebauthnRsBackend::new(&rp_id, &rp_origin)
-            .unwrap_or_else(|err| {
-                panic!("Failed to configure the WebAuthn backend: {err}");
-            }),
+        auth::WebauthnRsBackend::new(&rp_id, &rp_origin).unwrap_or_else(|err| {
+            panic!("Failed to configure the WebAuthn backend: {err}");
+        }),
     );
 
     let state = AppState {
@@ -108,8 +88,7 @@ async fn main() {
         auth_backend,
     };
 
-    let app =
-        api::router(state);
+    let app = api::router(state);
 
     // Defaults to 0.0.0.0 (all interfaces), not 127.0.0.1 — a container
     // runtime's proxy (Fly.io, Docker, etc.) connects over the container's
@@ -117,15 +96,9 @@ async fn main() {
     // the app unreachable from outside the container despite running fine
     // locally. HOST/PORT are the de-facto standard env vars most hosting
     // platforms inject; both are overridable for local conflicts.
-    let host = std::env::var("HOST")
-        .unwrap_or_else(|_| {
-            "0.0.0.0".to_string()
-        });
+    let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
 
-    let port = std::env::var("PORT")
-        .unwrap_or_else(|_| {
-            "8080".to_string()
-        });
+    let port = std::env::var("PORT").unwrap_or_else(|_| "8080".to_string());
 
     let addr = format!("{host}:{port}");
 
@@ -136,10 +109,7 @@ async fn main() {
     // that finds it, not trying to embed a PID we don't have.
     let listener = match tokio::net::TcpListener::bind(&addr).await {
         Ok(listener) => listener,
-        Err(err)
-            if err.kind()
-                == std::io::ErrorKind::AddrInUse =>
-        {
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
             eprintln!(
                 "Failed to start: {addr} is already in use — another unitprep instance is likely still running.\nFind it with `ss -ltnp | grep :{port}` (or `lsof -i :{port}`) and stop it before starting a new one."
             );
@@ -147,9 +117,7 @@ async fn main() {
             std::process::exit(1);
         }
         Err(err) => {
-            panic!(
-                "Failed to bind to {addr}: {err}"
-            );
+            panic!("Failed to bind to {addr}: {err}");
         }
     };
 
@@ -158,10 +126,5 @@ async fn main() {
         "UnitPrep API listening on http://{addr}"
     );
 
-    axum::serve(
-        listener,
-        app,
-    )
-    .await
-    .unwrap();
+    axum::serve(listener, app).await.unwrap();
 }

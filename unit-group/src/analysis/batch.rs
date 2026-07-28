@@ -5,22 +5,16 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
-use unitprep_core::csv_document::CsvDocument;
 use crate::models::{BatchRun, Facility};
+use unitprep_core::csv_document::CsvDocument;
 
-pub fn build_batch_from_documents(
-    unit_docs: Vec<&CsvDocument>,
-) -> Result<BatchRun> {
-    let mut facilities =
-        Vec::<Facility>::new();
+pub fn build_batch_from_documents(unit_docs: Vec<&CsvDocument>) -> Result<BatchRun> {
+    let mut facilities = Vec::<Facility>::new();
 
-    let mut global_groups =
-        HashMap::<String, usize>::new();
+    let mut global_groups = HashMap::<String, usize>::new();
 
     for document in unit_docs {
-        let group_index = match document
-            .header_index("unitgroup")
-        {
+        let group_index = match document.header_index("unitgroup") {
             Some(i) => i,
 
             None => {
@@ -33,54 +27,33 @@ pub fn build_batch_from_documents(
             }
         };
 
-        let mut groups =
-            HashMap::<String, usize>::new();
+        let mut groups = HashMap::<String, usize>::new();
 
         for row in &document.rows {
-            if let Some(group) =
-                row.get(group_index)
-            {
-                let group =
-                    group.trim();
+            if let Some(group) = row.get(group_index) {
+                let group = group.trim();
 
-                if !group.is_empty()
-                {
-                    *groups
-                        .entry(
-                            group.to_string(),
-                        )
-                        .or_insert(0) += 1;
+                if !group.is_empty() {
+                    *groups.entry(group.to_string()).or_insert(0) += 1;
 
-                    *global_groups
-                        .entry(
-                            group.to_string(),
-                        )
-                        .or_insert(0) += 1;
+                    *global_groups.entry(group.to_string()).or_insert(0) += 1;
                 }
             }
         }
 
-        facilities.push(
-            Facility {
-                name: document
-                    .file_name
-                    .clone(),
+        facilities.push(Facility {
+            name: document.file_name.clone(),
 
-                source_files:
-                    vec![document
-                        .file_name
-                        .clone()],
+            source_files: vec![document.file_name.clone()],
 
-                groups,
-            },
-        );
+            groups,
+        });
     }
 
     Ok(BatchRun {
         facilities,
         global_groups,
-        advisory_issues:
-            Vec::new(),
+        advisory_issues: Vec::new(),
     })
 }
 

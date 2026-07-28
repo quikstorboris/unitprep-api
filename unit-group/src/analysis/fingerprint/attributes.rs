@@ -14,27 +14,18 @@ pub enum Location {
 }
 
 impl Location {
-    const ALIASES: &'static [(
-        &'static str,
-        Location,
-    )] = &[
+    const ALIASES: &'static [(&'static str, Location)] = &[
         ("outside", Location::Outside),
         ("exterior", Location::Outside),
         ("inside", Location::Inside),
         ("interior", Location::Inside),
     ];
 
-    pub fn detect(
-        lower: &str,
-    ) -> Option<Self> {
+    pub fn detect(lower: &str) -> Option<Self> {
         Self::ALIASES
             .iter()
-            .find(|(alias, _)| {
-                lower.contains(alias)
-            })
-            .map(|(_, variant)| {
-                *variant
-            })
+            .find(|(alias, _)| lower.contains(alias))
+            .map(|(_, variant)| *variant)
     }
 }
 
@@ -45,35 +36,17 @@ pub enum Climate {
 }
 
 impl Climate {
-    const ALIASES: &'static [(
-        &'static str,
-        Climate,
-    )] = &[
-        (
-            "non-climate",
-            Climate::NonClimate,
-        ),
-        (
-            "non climate",
-            Climate::NonClimate,
-        ),
-        (
-            "climate",
-            Climate::Climate,
-        ),
+    const ALIASES: &'static [(&'static str, Climate)] = &[
+        ("non-climate", Climate::NonClimate),
+        ("non climate", Climate::NonClimate),
+        ("climate", Climate::Climate),
     ];
 
-    pub fn detect(
-        lower: &str,
-    ) -> Option<Self> {
+    pub fn detect(lower: &str) -> Option<Self> {
         Self::ALIASES
             .iter()
-            .find(|(alias, _)| {
-                lower.contains(alias)
-            })
-            .map(|(_, variant)| {
-                *variant
-            })
+            .find(|(alias, _)| lower.contains(alias))
+            .map(|(_, variant)| *variant)
     }
 }
 
@@ -94,51 +67,24 @@ pub enum FloorAccess {
 }
 
 impl FloorAccess {
-    const ALIASES: &'static [(
-        &'static str,
-        FloorAccess,
-    )] = &[
-        (
-            "first floor access",
-            FloorAccess::FirstFloorAccess,
-        ),
-        (
-            "ground floor",
-            FloorAccess::GroundFloor,
-        ),
-        (
-            "first floor",
-            FloorAccess::FirstFloor,
-        ),
-        (
-            "second floor",
-            FloorAccess::SecondFloor,
-        ),
-        (
-            "upper level",
-            FloorAccess::UpperLevel,
-        ),
-        (
-            "lower level",
-            FloorAccess::LowerLevel,
-        ),
+    const ALIASES: &'static [(&'static str, FloorAccess)] = &[
+        ("first floor access", FloorAccess::FirstFloorAccess),
+        ("ground floor", FloorAccess::GroundFloor),
+        ("first floor", FloorAccess::FirstFloor),
+        ("second floor", FloorAccess::SecondFloor),
+        ("upper level", FloorAccess::UpperLevel),
+        ("lower level", FloorAccess::LowerLevel),
     ];
 
     // Made `pub` to match `Location`/`Climate`'s own `detect` — this was
     // previously the only one of the three left private, an inconsistency
     // noticed while splitting this file out, not a deliberate design
     // choice worth preserving.
-    pub fn detect(
-        lower: &str,
-    ) -> Option<Self> {
+    pub fn detect(lower: &str) -> Option<Self> {
         Self::ALIASES
             .iter()
-            .find(|(alias, _)| {
-                lower.contains(alias)
-            })
-            .map(|(_, variant)| {
-                *variant
-            })
+            .find(|(alias, _)| lower.contains(alias))
+            .map(|(_, variant)| *variant)
     }
 }
 
@@ -155,31 +101,19 @@ impl FloorAccess {
 /// (e.g. "access") behind. See
 /// `first_floor_access_does_not_leave_dangling_remainder_token` in
 /// `fingerprint::mod`'s own tests for the regression this guards.
-pub(super) fn strip_known_attribute_aliases(
-    text: &str,
-) -> String {
-    let mut result =
-        text.to_string();
+pub(super) fn strip_known_attribute_aliases(text: &str) -> String {
+    let mut result = text.to_string();
 
-    for (alias, _) in
-        Location::ALIASES
-    {
-        result =
-            result.replace(alias, "");
+    for (alias, _) in Location::ALIASES {
+        result = result.replace(alias, "");
     }
 
-    for (alias, _) in
-        Climate::ALIASES
-    {
-        result =
-            result.replace(alias, "");
+    for (alias, _) in Climate::ALIASES {
+        result = result.replace(alias, "");
     }
 
-    for (alias, _) in
-        FloorAccess::ALIASES
-    {
-        result =
-            result.replace(alias, "");
+    for (alias, _) in FloorAccess::ALIASES {
+        result = result.replace(alias, "");
     }
 
     result

@@ -80,16 +80,28 @@ pub fn find_related_tenant_candidates(
             }
             keys.sort();
 
-            let member_groups: Vec<&TenantGroup> =
-                keys.iter().filter_map(|key| groups.iter().find(|g| &g.key == key)).collect();
+            let member_groups: Vec<&TenantGroup> = keys
+                .iter()
+                .filter_map(|key| groups.iter().find(|g| &g.key == key))
+                .collect();
 
             let note = composer.compose_relatedness_note(&member_groups, signal, &value);
 
-            candidates.push(RelatedTenantCandidate { group_keys: keys, signal, shared_value: value, note });
+            candidates.push(RelatedTenantCandidate {
+                group_keys: keys,
+                signal,
+                shared_value: value,
+                note,
+            });
         }
     }
 
-    candidates.sort_by(|a, b| b.group_keys.len().cmp(&a.group_keys.len()).then(a.group_keys.cmp(&b.group_keys)));
+    candidates.sort_by(|a, b| {
+        b.group_keys
+            .len()
+            .cmp(&a.group_keys.len())
+            .then(a.group_keys.cmp(&b.group_keys))
+    });
     candidates
 }
 
@@ -97,7 +109,10 @@ pub fn find_related_tenant_candidates(
 /// (group key) it appears on, for one signal. A value appearing on
 /// only one tenant is not a cluster (nothing shared); one appearing on
 /// more than `MAX_CLUSTER_SIZE` is filtered by the caller.
-fn find_clusters(groups: &[TenantGroup], signal: RelatednessSignal) -> HashMap<String, Vec<String>> {
+fn find_clusters(
+    groups: &[TenantGroup],
+    signal: RelatednessSignal,
+) -> HashMap<String, Vec<String>> {
     let mut clusters: HashMap<String, Vec<String>> = HashMap::new();
 
     for group in groups {
@@ -164,9 +179,17 @@ fn alt_contact_identities(group: &TenantGroup) -> Vec<String> {
         .records
         .iter()
         .filter_map(|r| {
-            let name = format!("{} {}", r.alt_contact_first_name.trim(), r.alt_contact_last_name.trim());
+            let name = format!(
+                "{} {}",
+                r.alt_contact_first_name.trim(),
+                r.alt_contact_last_name.trim()
+            );
             let name = name.trim();
-            if name.is_empty() { None } else { Some(normalize_value(FieldKind::Plain, name)) }
+            if name.is_empty() {
+                None
+            } else {
+                Some(normalize_value(FieldKind::Plain, name))
+            }
         })
         .collect()
 }
@@ -202,7 +225,13 @@ fn address_values(group: &TenantGroup) -> Vec<String> {
         .collect()
 }
 
-fn full_address(street1: &str, street2: &str, city: &str, state: &str, postal: &str) -> Option<String> {
+fn full_address(
+    street1: &str,
+    street2: &str,
+    city: &str,
+    state: &str,
+    postal: &str,
+) -> Option<String> {
     if is_empty(street1) {
         return None;
     }

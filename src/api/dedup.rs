@@ -74,7 +74,12 @@ async fn first_uploaded_file(
         let bytes = field.bytes().await?.to_vec();
 
         if result.is_none() {
-            result = Some(UploadedFile { file_name, relative_path, bytes, modified_at: None });
+            result = Some(UploadedFile {
+                file_name,
+                relative_path,
+                bytes,
+                modified_at: None,
+            });
         } else {
             tracing::warn!(
                 file = %file_name,
@@ -132,7 +137,10 @@ pub async fn check(State(state): State<AppState>, mut multipart: Multipart) -> R
             tracing::warn!(file = %file_name, error = %err, "Dedup check failed to ingest file");
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody { error: "invalid_file", message: err.to_string() }),
+                Json(ApiErrorBody {
+                    error: "invalid_file",
+                    message: err.to_string(),
+                }),
             )
                 .into_response();
         }
@@ -140,7 +148,9 @@ pub async fn check(State(state): State<AppState>, mut multipart: Multipart) -> R
 
     let (report, records) = state
         .dedup_sessions
-        .with_session(&session_id, |session| (session.report.clone(), session.records.clone()))
+        .with_session(&session_id, |session| {
+            (session.report.clone(), session.records.clone())
+        })
         .expect("session was just created and saved");
 
     tracing::info!(
@@ -165,8 +175,9 @@ pub async fn report(
 ) -> Response {
     match state
         .dedup_sessions
-        .with_session(&request.session_id, |session| (session.report.clone(), session.records.clone()))
-    {
+        .with_session(&request.session_id, |session| {
+            (session.report.clone(), session.records.clone())
+        }) {
         Some((report, records)) => Json(build_report_view(&report, &records)).into_response(),
         None => session_not_found(),
     }
@@ -212,7 +223,11 @@ pub async fn export(
     response
 }
 
-fn build_csv_response(session_id: &str, report: &DedupReport, records: &[TenantRecord]) -> Response {
+fn build_csv_response(
+    session_id: &str,
+    report: &DedupReport,
+    records: &[TenantRecord],
+) -> Response {
     match dedup_csv_export::generate_csv(report, records) {
         Ok(bytes) => file_response(bytes, "text/csv", "duplicate_tenant_check.csv"),
         Err(err) => {
@@ -222,7 +237,11 @@ fn build_csv_response(session_id: &str, report: &DedupReport, records: &[TenantR
     }
 }
 
-fn build_xlsx_response(session_id: &str, report: &DedupReport, records: &[TenantRecord]) -> Response {
+fn build_xlsx_response(
+    session_id: &str,
+    report: &DedupReport,
+    records: &[TenantRecord],
+) -> Response {
     match dedup_xlsx_export::generate_xlsx(report, records) {
         Ok(bytes) => file_response(
             bytes,
@@ -236,7 +255,11 @@ fn build_xlsx_response(session_id: &str, report: &DedupReport, records: &[Tenant
     }
 }
 
-fn build_zip_response(session_id: &str, report: &DedupReport, records: &[TenantRecord]) -> Response {
+fn build_zip_response(
+    session_id: &str,
+    report: &DedupReport,
+    records: &[TenantRecord],
+) -> Response {
     let csv_bytes = match dedup_csv_export::generate_csv(report, records) {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -254,8 +277,14 @@ fn build_zip_response(session_id: &str, report: &DedupReport, records: &[TenantR
     };
 
     let files = vec![
-        ExportFile { file_name: "duplicate_tenant_check.csv".to_string(), bytes: csv_bytes },
-        ExportFile { file_name: "duplicate_tenant_check.xlsx".to_string(), bytes: xlsx_bytes },
+        ExportFile {
+            file_name: "duplicate_tenant_check.csv".to_string(),
+            bytes: csv_bytes,
+        },
+        ExportFile {
+            file_name: "duplicate_tenant_check.xlsx".to_string(),
+            bytes: xlsx_bytes,
+        },
     ];
 
     match build_zip(files) {
@@ -272,7 +301,9 @@ fn file_response(bytes: Vec<u8>, content_type: &str, file_name: &str) -> Respons
     headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
     headers.insert(
         header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{file_name}\"").parse().unwrap(),
+        format!("attachment; filename=\"{file_name}\"")
+            .parse()
+            .unwrap(),
     );
     (headers, bytes).into_response()
 }

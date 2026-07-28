@@ -6,11 +6,7 @@
 // (see mod.rs) a simple sequence of calls rather than a wall of inline
 // logic.
 
-use crate::analysis::{
-    Climate,
-    GroupFingerprint,
-    Location,
-};
+use crate::analysis::{Climate, GroupFingerprint, Location};
 
 /// How the UnitGroup value on a row reads at a glance. "Odd" values
 /// (comma-merged, or no parseable dimension) are a group-level property,
@@ -22,9 +18,7 @@ pub(super) enum GroupValue {
     Blank,
 }
 
-pub(super) fn classify_group_value(
-    group: &str,
-) -> GroupValue {
+pub(super) fn classify_group_value(group: &str) -> GroupValue {
     if group.is_empty() {
         GroupValue::Blank
     } else {
@@ -32,10 +26,7 @@ pub(super) fn classify_group_value(
     }
 }
 
-fn parses_as_positive(
-    row: &[String],
-    idx: usize,
-) -> bool {
+fn parses_as_positive(row: &[String], idx: usize) -> bool {
     row.get(idx)
         .map(|v| v.trim())
         .and_then(|v| v.parse::<f64>().ok())
@@ -56,9 +47,7 @@ pub(super) fn has_bad_dimensions(
     [width_idx, length_idx]
         .into_iter()
         .flatten()
-        .any(|idx| {
-            !parses_as_positive(row, idx)
-        })
+        .any(|idx| !parses_as_positive(row, idx))
 }
 
 /// True if a declared "climate controlled" yes/no column disagrees with
@@ -68,8 +57,7 @@ pub(super) fn climate_mismatches_group(
     climate_controlled_idx: Option<usize>,
     fingerprint: &GroupFingerprint,
 ) -> bool {
-    let Some(idx) = climate_controlled_idx
-    else {
+    let Some(idx) = climate_controlled_idx else {
         return false;
     };
 
@@ -85,9 +73,7 @@ pub(super) fn climate_mismatches_group(
     };
 
     match (fingerprint.climate, declared) {
-        (Some(expected), Some(declared)) => {
-            expected != declared
-        }
+        (Some(expected), Some(declared)) => expected != declared,
         _ => false,
     }
 }
@@ -110,16 +96,12 @@ pub(super) fn locality_mismatches_group(
 
     let declared = match value.as_str() {
         "inside" => Some(Location::Inside),
-        "outside" => {
-            Some(Location::Outside)
-        }
+        "outside" => Some(Location::Outside),
         _ => None,
     };
 
     match (fingerprint.location, declared) {
-        (Some(expected), Some(declared)) => {
-            expected != declared
-        }
+        (Some(expected), Some(declared)) => expected != declared,
         _ => false,
     }
 }
@@ -133,19 +115,13 @@ pub(super) fn dimensions_mismatch_group(
     length_idx: Option<usize>,
     fingerprint: &GroupFingerprint,
 ) -> bool {
-    let (Some(width_idx), Some(length_idx)) =
-        (width_idx, length_idx)
-    else {
+    let (Some(width_idx), Some(length_idx)) = (width_idx, length_idx) else {
         return false;
     };
 
-    let actual_width = row
-        .get(width_idx)
-        .map(|v| v.trim());
+    let actual_width = row.get(width_idx).map(|v| v.trim());
 
-    let actual_length = row
-        .get(length_idx)
-        .map(|v| v.trim());
+    let actual_length = row.get(length_idx).map(|v| v.trim());
 
     match (
         fingerprint.width.as_deref(),
@@ -153,12 +129,7 @@ pub(super) fn dimensions_mismatch_group(
         actual_width,
         actual_length,
     ) {
-        (
-            Some(fp_width),
-            Some(fp_length),
-            Some(actual_width),
-            Some(actual_length),
-        ) => {
+        (Some(fp_width), Some(fp_length), Some(actual_width), Some(actual_length)) => {
             dimension_values_differ(fp_width, actual_width)
                 || dimension_values_differ(fp_length, actual_length)
         }
@@ -170,14 +141,8 @@ pub(super) fn dimensions_mismatch_group(
 /// number (so "10" and "10.0" agree, instead of the raw string equality
 /// this function used before), falling back to a literal string
 /// comparison only when either side isn't a plain number.
-fn dimension_values_differ(
-    a: &str,
-    b: &str,
-) -> bool {
-    match (
-        a.parse::<f64>(),
-        b.parse::<f64>(),
-    ) {
+fn dimension_values_differ(a: &str, b: &str) -> bool {
+    match (a.parse::<f64>(), b.parse::<f64>()) {
         (Ok(a), Ok(b)) => a != b,
         _ => a != b,
     }
@@ -189,23 +154,15 @@ mod tests {
     use crate::analysis::parse_fingerprint;
 
     fn row(values: &[&str]) -> Vec<String> {
-        values
-            .iter()
-            .map(|v| v.to_string())
-            .collect()
+        values.iter().map(|v| v.to_string()).collect()
     }
 
     #[test]
     fn classifies_blank_and_ok_group_values() {
-        assert!(matches!(
-            classify_group_value(""),
-            GroupValue::Blank
-        ));
+        assert!(matches!(classify_group_value(""), GroupValue::Blank));
 
         assert!(matches!(
-            classify_group_value(
-                "10x10 Inside Climate"
-            ),
+            classify_group_value("10x10 Inside Climate"),
             GroupValue::Ok
         ));
     }
@@ -214,35 +171,21 @@ mod tests {
     fn bad_dimensions_flags_non_positive_values_only_for_present_columns() {
         let good = row(&["10", "20"]);
 
-        assert!(!has_bad_dimensions(
-            &good,
-            Some(0),
-            Some(1)
-        ));
+        assert!(!has_bad_dimensions(&good, Some(0), Some(1)));
 
-        let zero_width =
-            row(&["0", "20"]);
+        let zero_width = row(&["0", "20"]);
 
-        assert!(has_bad_dimensions(
-            &zero_width,
-            Some(0),
-            Some(1)
-        ));
+        assert!(has_bad_dimensions(&zero_width, Some(0), Some(1)));
 
         // No dimension columns in this file at all — nothing to flag.
-        assert!(!has_bad_dimensions(
-            &good, None, None
-        ));
+        assert!(!has_bad_dimensions(&good, None, None));
     }
 
     #[test]
     fn climate_mismatch_detects_disagreement_with_group_name() {
-        let fingerprint = parse_fingerprint(
-            "10x10 Inside Climate",
-        );
+        let fingerprint = parse_fingerprint("10x10 Inside Climate");
 
-        let declared_no =
-            row(&["A01", "No"]);
+        let declared_no = row(&["A01", "No"]);
 
         assert!(climate_mismatches_group(
             &declared_no,
@@ -250,8 +193,7 @@ mod tests {
             &fingerprint
         ));
 
-        let declared_yes =
-            row(&["A01", "Yes"]);
+        let declared_yes = row(&["A01", "Yes"]);
 
         assert!(!climate_mismatches_group(
             &declared_yes,
@@ -259,21 +201,14 @@ mod tests {
             &fingerprint
         ));
 
-        assert!(!climate_mismatches_group(
-            &declared_no,
-            None,
-            &fingerprint
-        ));
+        assert!(!climate_mismatches_group(&declared_no, None, &fingerprint));
     }
 
     #[test]
     fn locality_mismatch_detects_disagreement_with_group_name() {
-        let fingerprint = parse_fingerprint(
-            "10x10 Outside Non-Climate",
-        );
+        let fingerprint = parse_fingerprint("10x10 Outside Non-Climate");
 
-        let declared_inside =
-            row(&["A01", "Inside"]);
+        let declared_inside = row(&["A01", "Inside"]);
 
         assert!(locality_mismatches_group(
             &declared_inside,
@@ -281,81 +216,62 @@ mod tests {
             &fingerprint
         ));
 
-        let declared_outside =
-            row(&["A01", "Outside"]);
+        let declared_outside = row(&["A01", "Outside"]);
 
-        assert!(
-            !locality_mismatches_group(
-                &declared_outside,
-                Some(1),
-                &fingerprint
-            )
-        );
+        assert!(!locality_mismatches_group(
+            &declared_outside,
+            Some(1),
+            &fingerprint
+        ));
     }
 
     #[test]
     fn dimensions_mismatch_detects_disagreement_with_group_name() {
-        let fingerprint = parse_fingerprint(
-            "10x20 Inside Climate",
-        );
+        let fingerprint = parse_fingerprint("10x20 Inside Climate");
 
-        let wrong_length =
-            row(&["A01", "10", "15"]);
+        let wrong_length = row(&["A01", "10", "15"]);
 
-        assert!(
-            dimensions_mismatch_group(
-                &wrong_length,
-                Some(1),
-                Some(2),
-                &fingerprint
-            )
-        );
+        assert!(dimensions_mismatch_group(
+            &wrong_length,
+            Some(1),
+            Some(2),
+            &fingerprint
+        ));
 
-        let correct =
-            row(&["A01", "10", "20"]);
+        let correct = row(&["A01", "10", "20"]);
 
-        assert!(
-            !dimensions_mismatch_group(
-                &correct,
-                Some(1),
-                Some(2),
-                &fingerprint
-            )
-        );
+        assert!(!dimensions_mismatch_group(
+            &correct,
+            Some(1),
+            Some(2),
+            &fingerprint
+        ));
     }
 
     #[test]
     fn dimensions_mismatch_ignores_pure_formatting_differences() {
-        let fingerprint = parse_fingerprint(
-            "10x20 Inside Climate",
-        );
+        let fingerprint = parse_fingerprint("10x20 Inside Climate");
 
         // "10.0"/"20.0" are numerically identical to the fingerprint's
         // "10"/"20" — this must not be flagged as a real mismatch.
-        let differently_formatted =
-            row(&["A01", "10.0", "20.0"]);
+        let differently_formatted = row(&["A01", "10.0", "20.0"]);
 
-        assert!(
-            !dimensions_mismatch_group(
-                &differently_formatted,
-                Some(1),
-                Some(2),
-                &fingerprint
-            )
-        );
+        assert!(!dimensions_mismatch_group(
+            &differently_formatted,
+            Some(1),
+            Some(2),
+            &fingerprint
+        ));
 
         // A genuinely different value must still be flagged even when
         // both sides parse as numbers.
-        let really_wrong =
-            row(&["A01", "10.5", "20"]);
+        let really_wrong = row(&["A01", "10.5", "20"]);
 
-        assert!(
-            dimensions_mismatch_group(
-                &really_wrong,
-                Some(1),
-                Some(2),
-                &fingerprint
-            )
-        );
+        assert!(dimensions_mismatch_group(
+            &really_wrong,
+            Some(1),
+            Some(2),
+            &fingerprint
+        ));
     }
 }

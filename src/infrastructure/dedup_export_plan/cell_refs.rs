@@ -9,7 +9,9 @@
 //! answer (specifically `first_cell_ref`, for the hyperlink target).
 
 use unitprep_dedup::comparison::find_differing_categories;
-use unitprep_dedup::types::{FieldCategory, FieldMismatch, FieldName, TenantRecord, TypoVariantCandidate};
+use unitprep_dedup::types::{
+    FieldCategory, FieldMismatch, FieldName, TenantRecord, TypoVariantCandidate,
+};
 
 use super::COLUMNS;
 
@@ -18,7 +20,10 @@ use super::COLUMNS;
 /// already produced them in — no reordering/dedup needed since each field
 /// belongs to exactly one category.
 pub(super) fn cite_fields_for_mismatches(mismatches: &[FieldMismatch]) -> Vec<FieldName> {
-    mismatches.iter().flat_map(|m| m.fields.iter().map(|f| f.field)).collect()
+    mismatches
+        .iter()
+        .flat_map(|m| m.fields.iter().map(|f| f.field))
+        .collect()
 }
 
 /// A typo-variant candidate always differs by name (that's the whole
@@ -99,14 +104,20 @@ pub(super) fn note_with_cell_refs(
 /// `FieldName` this crate defines, but this stays a lookup rather than
 /// an assumption, matching `note_with_cell_refs`'s own `?`-based
 /// lookup above).
-pub(crate) fn field_cell_refs(field: FieldName, first_row: usize, record_count: usize) -> Vec<String> {
+pub(crate) fn field_cell_refs(
+    field: FieldName,
+    first_row: usize,
+    record_count: usize,
+) -> Vec<String> {
     let column_name = csv_column_name(field);
     let Some(column_index) = COLUMNS.iter().position(|c| *c == column_name) else {
         return Vec::new();
     };
     let letter = col_letter(column_index);
 
-    (0..record_count).map(|i| format!("{letter}{}", first_row + i)).collect()
+    (0..record_count)
+        .map(|i| format!("{letter}{}", first_row + i))
+        .collect()
 }
 
 /// The single cell reference (e.g. `"T7"`) that `note_with_cell_refs`

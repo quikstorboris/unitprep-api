@@ -43,9 +43,11 @@ async fn select_unit_file_returns_404_for_missing_session() {
 #[tokio::test]
 async fn select_unit_file_returns_409_before_discovery_completes() {
     let state = empty_state();
-    state.unit_group_sessions.save(
-        crate::application::unit_group_session::Session::new("s1".to_string()),
-    );
+    state
+        .unit_group_sessions
+        .save(crate::application::unit_group_session::Session::new(
+            "s1".to_string(),
+        ));
 
     let response = select_unit_file(
         State(state),
@@ -89,10 +91,7 @@ async fn select_unit_file_rejects_an_empty_selection() {
 
 #[tokio::test]
 async fn select_unit_file_rejects_a_file_discovery_never_found() {
-    let state = uploaded_state(
-        "s1",
-        vec![qsx_document("units.csv", None)],
-    );
+    let state = uploaded_state("s1", vec![qsx_document("units.csv", None)]);
 
     discover(
         State(state.clone()),
@@ -150,10 +149,7 @@ async fn selecting_a_subset_of_candidates_becomes_the_confirmed_set() {
         State(state),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
-            unit_file_names: vec![
-                "facility_a.csv".to_string(),
-                "facility_c.csv".to_string(),
-            ],
+            unit_file_names: vec!["facility_a.csv".to_string(), "facility_c.csv".to_string()],
         }),
     )
     .await;
@@ -170,10 +166,7 @@ async fn selecting_a_subset_of_candidates_becomes_the_confirmed_set() {
     );
 
     // facility_b.csv was left out of the confirmed set entirely.
-    assert_eq!(
-        body["current_unit_file_name"],
-        "facility_a.csv"
-    );
+    assert_eq!(body["current_unit_file_name"], "facility_a.csv");
 
     assert_eq!(
         body["pending_unit_file_names"],
@@ -208,10 +201,7 @@ async fn selecting_every_candidate_confirms_them_all() {
         State(state),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
-            unit_file_names: vec![
-                "facility_a.csv".to_string(),
-                "facility_b.csv".to_string(),
-            ],
+            unit_file_names: vec!["facility_a.csv".to_string(), "facility_b.csv".to_string()],
         }),
     )
     .await;

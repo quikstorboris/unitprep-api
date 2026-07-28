@@ -43,25 +43,16 @@ pub async fn cancel_session(
     // delete the session anyway.
     let age_ms = state
         .unit_group_sessions
-        .with_session(
-            &request.session_id,
-            |session| {
-                SystemTime::now()
-                    .duration_since(
-                        session
-                            .metadata
-                            .created_at,
-                    )
-                    .unwrap_or_default()
-                    .as_millis()
-            },
-        );
+        .with_session(&request.session_id, |session| {
+            SystemTime::now()
+                .duration_since(session.metadata.created_at)
+                .unwrap_or_default()
+                .as_millis()
+        });
 
     let deleted = age_ms.is_some();
 
-    state
-        .unit_group_sessions
-        .delete(&request.session_id);
+    state.unit_group_sessions.delete(&request.session_id);
 
     tracing::info!(
         session_id = %request.session_id,
@@ -87,18 +78,24 @@ mod tests {
     #[tokio::test]
     async fn cancel_reports_deleted_true_for_a_real_session() {
         let state = empty_state();
-        state.unit_group_sessions.save(Session::new("s1".to_string()));
+        state
+            .unit_group_sessions
+            .save(Session::new("s1".to_string()));
 
         let response = cancel_session(
             State(state.clone()),
-            Json(CancelSessionRequest { session_id: "s1".to_string() }),
+            Json(CancelSessionRequest {
+                session_id: "s1".to_string(),
+            }),
         )
         .await
         .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
         assert_eq!(body["success"], true);
@@ -110,14 +107,18 @@ mod tests {
     async fn cancel_stays_idempotent_but_reports_deleted_false_for_unknown_session() {
         let response = cancel_session(
             State(empty_state()),
-            Json(CancelSessionRequest { session_id: "missing".to_string() }),
+            Json(CancelSessionRequest {
+                session_id: "missing".to_string(),
+            }),
         )
         .await
         .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
 
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
         assert_eq!(body["success"], true);

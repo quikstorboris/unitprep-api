@@ -198,16 +198,12 @@ pub type FieldMapping = Vec<(String, Option<String>)>;
 
 /// Returns the first registered vendor whose full signature is present in
 /// `document`'s headers, or `None` if it matches none of them.
-pub fn detect_vendor(
-    document: &CsvDocument,
-) -> Option<&'static VendorFormat> {
+pub fn detect_vendor(document: &CsvDocument) -> Option<&'static VendorFormat> {
     VENDOR_FORMATS.iter().find(|vendor| {
         vendor
             .signature_headers
             .iter()
-            .all(|header| {
-                document.header_index(header).is_some()
-            })
+            .all(|header| document.header_index(header).is_some())
     })
 }
 
@@ -243,10 +239,7 @@ pub fn mapping_from_vendor(vendor: &VendorFormat) -> FieldMapping {
 /// `corrections::apply_corrections` in shape: a pure function producing a
 /// new document rather than mutating the original, so the raw upload
 /// stays a stable record of what was actually received.
-pub fn apply_field_mapping(
-    document: &CsvDocument,
-    mapping: &FieldMapping,
-) -> CsvDocument {
+pub fn apply_field_mapping(document: &CsvDocument, mapping: &FieldMapping) -> CsvDocument {
     let mapped: Vec<(&str, usize)> = mapping
         .iter()
         .filter_map(|(target, source)| {
@@ -256,8 +249,7 @@ pub fn apply_field_mapping(
         })
         .collect();
 
-    let source_indices: Vec<usize> =
-        mapped.iter().map(|(_, index)| *index).collect();
+    let source_indices: Vec<usize> = mapped.iter().map(|(_, index)| *index).collect();
 
     let headers: Vec<String> = mapped
         .iter()
@@ -270,11 +262,7 @@ pub fn apply_field_mapping(
         .map(|row| {
             source_indices
                 .iter()
-                .map(|&index| {
-                    row.get(index)
-                        .cloned()
-                        .unwrap_or_default()
-                })
+                .map(|&index| row.get(index).cloned().unwrap_or_default())
                 .collect()
         })
         .collect();

@@ -47,51 +47,33 @@ pub struct GroupCheckAcknowledgmentKey {
 /// everywhere else (`CsvDocument::header_index`).
 pub fn apply_corrections(
     document: &CsvDocument,
-    corrections: &HashMap<
-        CorrectionKey,
-        String,
-    >,
+    corrections: &HashMap<CorrectionKey, String>,
 ) -> CsvDocument {
     if corrections.is_empty() {
         return document.clone();
     }
 
-    let Some(number_index) =
-        document.header_index("number")
-    else {
+    let Some(number_index) = document.header_index("number") else {
         return document.clone();
     };
 
     let mut result = document.clone();
 
     for row in &mut result.rows {
-        let Some(unit_number) = row
-            .get(number_index)
-            .cloned()
-        else {
+        let Some(unit_number) = row.get(number_index).cloned() else {
             continue;
         };
 
         for (key, value) in corrections {
-            if key.file_name
-                != document.file_name
-                || key.unit_number
-                    != unit_number
-            {
+            if key.file_name != document.file_name || key.unit_number != unit_number {
                 continue;
             }
 
-            let Some(field_index) =
-                document.header_index(
-                    &key.field,
-                )
-            else {
+            let Some(field_index) = document.header_index(&key.field) else {
                 continue;
             };
 
-            if let Some(cell) =
-                row.get_mut(field_index)
-            {
+            if let Some(cell) = row.get_mut(field_index) {
                 *cell = value.clone();
             }
         }
@@ -115,19 +97,14 @@ pub fn filter_excluded_groups(
         return document.clone();
     }
 
-    let Some(unit_group_index) =
-        document.header_index("unitgroup")
-    else {
+    let Some(unit_group_index) = document.header_index("unitgroup") else {
         return document.clone();
     };
 
     let mut result = document.clone();
 
     result.rows.retain(|row| {
-        let group = row
-            .get(unit_group_index)
-            .map(|v| v.trim())
-            .unwrap_or("");
+        let group = row.get(unit_group_index).map(|v| v.trim()).unwrap_or("");
 
         !excluded_groups.contains(group)
     });
@@ -142,8 +119,7 @@ mod tests {
     fn document() -> CsvDocument {
         CsvDocument {
             modified_at: None,
-            file_name: "units.csv"
-                .to_string(),
+            file_name: "units.csv".to_string(),
             headers: vec![
                 "number".to_string(),
                 "unitgroup".to_string(),
@@ -152,14 +128,12 @@ mod tests {
             rows: vec![
                 vec![
                     "A01".to_string(),
-                    "10x10 Inside Climate"
-                        .to_string(),
+                    "10x10 Inside Climate".to_string(),
                     "0".to_string(),
                 ],
                 vec![
                     "A02".to_string(),
-                    "10x10 Inside Climate"
-                        .to_string(),
+                    "10x10 Inside Climate".to_string(),
                     "10".to_string(),
                 ],
             ],
@@ -167,140 +141,75 @@ mod tests {
     }
 
     #[test]
-    fn applies_correction_to_matching_unit_and_field(
-    ) {
-        let mut corrections =
-            HashMap::new();
+    fn applies_correction_to_matching_unit_and_field() {
+        let mut corrections = HashMap::new();
 
         corrections.insert(
             CorrectionKey {
-                file_name: "units.csv"
-                    .to_string(),
-                unit_number: "A01"
-                    .to_string(),
-                field: "width"
-                    .to_string(),
+                file_name: "units.csv".to_string(),
+                unit_number: "A01".to_string(),
+                field: "width".to_string(),
             },
             "10".to_string(),
         );
 
-        let corrected =
-            apply_corrections(
-                &document(),
-                &corrections,
-            );
+        let corrected = apply_corrections(&document(), &corrections);
 
-        assert_eq!(
-            corrected.rows[0][2],
-            "10"
-        );
+        assert_eq!(corrected.rows[0][2], "10");
 
         // Untouched row stays untouched.
-        assert_eq!(
-            corrected.rows[1][2],
-            "10"
-        );
+        assert_eq!(corrected.rows[1][2], "10");
     }
 
     #[test]
-    fn ignores_corrections_for_a_different_file(
-    ) {
-        let mut corrections =
-            HashMap::new();
+    fn ignores_corrections_for_a_different_file() {
+        let mut corrections = HashMap::new();
 
         corrections.insert(
             CorrectionKey {
-                file_name:
-                    "other.csv"
-                        .to_string(),
-                unit_number: "A01"
-                    .to_string(),
-                field: "width"
-                    .to_string(),
+                file_name: "other.csv".to_string(),
+                unit_number: "A01".to_string(),
+                field: "width".to_string(),
             },
             "999".to_string(),
         );
 
-        let corrected =
-            apply_corrections(
-                &document(),
-                &corrections,
-            );
+        let corrected = apply_corrections(&document(), &corrections);
 
-        assert_eq!(
-            corrected.rows[0][2],
-            "0"
-        );
+        assert_eq!(corrected.rows[0][2], "0");
     }
 
     #[test]
-    fn empty_corrections_returns_document_unchanged(
-    ) {
-        let corrected =
-            apply_corrections(
-                &document(),
-                &HashMap::new(),
-            );
+    fn empty_corrections_returns_document_unchanged() {
+        let corrected = apply_corrections(&document(), &HashMap::new());
 
-        assert_eq!(
-            corrected.rows,
-            document().rows
-        );
+        assert_eq!(corrected.rows, document().rows);
     }
 
     #[test]
-    fn filter_excluded_groups_drops_every_row_in_an_excluded_group(
-    ) {
-        let mut excluded =
-            HashSet::new();
-        excluded.insert(
-            "10x10 Inside Climate"
-                .to_string(),
-        );
+    fn filter_excluded_groups_drops_every_row_in_an_excluded_group() {
+        let mut excluded = HashSet::new();
+        excluded.insert("10x10 Inside Climate".to_string());
 
-        let filtered =
-            filter_excluded_groups(
-                &document(),
-                &excluded,
-            );
+        let filtered = filter_excluded_groups(&document(), &excluded);
 
         assert!(filtered.rows.is_empty());
     }
 
     #[test]
-    fn filter_excluded_groups_leaves_other_groups_untouched(
-    ) {
-        let mut excluded =
-            HashSet::new();
-        excluded.insert(
-            "some other group"
-                .to_string(),
-        );
+    fn filter_excluded_groups_leaves_other_groups_untouched() {
+        let mut excluded = HashSet::new();
+        excluded.insert("some other group".to_string());
 
-        let filtered =
-            filter_excluded_groups(
-                &document(),
-                &excluded,
-            );
+        let filtered = filter_excluded_groups(&document(), &excluded);
 
-        assert_eq!(
-            filtered.rows,
-            document().rows
-        );
+        assert_eq!(filtered.rows, document().rows);
     }
 
     #[test]
-    fn filter_excluded_groups_is_a_noop_for_an_empty_set(
-    ) {
-        let filtered =
-            filter_excluded_groups(
-                &document(),
-                &HashSet::new(),
-            );
+    fn filter_excluded_groups_is_a_noop_for_an_empty_set() {
+        let filtered = filter_excluded_groups(&document(), &HashSet::new());
 
-        assert_eq!(
-            filtered.rows,
-            document().rows
-        );
+        assert_eq!(filtered.rows, document().rows);
     }
 }

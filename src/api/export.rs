@@ -23,11 +23,7 @@ use std::time::Instant;
 
 use axum::{
     extract::{Json, State},
-    http::{
-        header,
-        HeaderMap,
-        StatusCode,
-    },
+    http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
@@ -36,13 +32,7 @@ use serde::Deserialize;
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::{
-    api::{
-        internal_error,
-        session_not_found,
-        stage_conflict,
-        ApiErrorBody,
-        AppState,
-    },
+    api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
     application::unit_group_session::WorkflowStage,
     infrastructure::csv_export,
 };
@@ -60,26 +50,18 @@ pub struct ExportRequest {
     pub acknowledge_errors: bool,
 }
 
-pub async fn export(
-    State(state): State<AppState>,
-    Json(request): Json<ExportRequest>,
-) -> Response {
+pub async fn export(State(state): State<AppState>, Json(request): Json<ExportRequest>) -> Response {
     let started = Instant::now();
 
     //
     // Read-only session access.
     // This shape is deliberately future-proof for PR3.
     //
-    let session_data = match state
-        .unit_group_sessions
-        .with_session(
-            &request.session_id,
-            |session| {
-                if let Err(err) =
-                    session.require_stage(
-                        WorkflowStage::Analyzed,
-                    )
-                {
+    let session_data =
+        match state
+            .unit_group_sessions
+            .with_session(&request.session_id, |session| {
+                if let Err(err) = session.require_stage(WorkflowStage::Analyzed) {
                     tracing::warn!(
                         session_id = %request.session_id,
                         required = ?err.required,
@@ -94,39 +76,28 @@ pub async fn export(
                     .data
                     .validation
                     .clone()
-                    .expect(
-                        "Analyzed stage guarantees validation data",
-                    );
+                    .expect("Analyzed stage guarantees validation data");
 
                 let analysis = session
                     .data
                     .analysis
                     .clone()
-                    .expect(
-                        "Analyzed stage guarantees analysis data",
-                    );
+                    .expect("Analyzed stage guarantees analysis data");
 
-                Ok((
-                    validation,
-                    analysis,
-                ))
-            },
-        ) {
-        Some(Ok(data)) => data,
-        Some(Err(err)) => {
-            return stage_conflict(err);
-        }
-        None => {
-            return session_not_found();
-        }
-    };
+                Ok((validation, analysis))
+            }) {
+            Some(Ok(data)) => data,
+            Some(Err(err)) => {
+                return stage_conflict(err);
+            }
+            None => {
+                return session_not_found();
+            }
+        };
 
-    let (validation, analysis) =
-        session_data;
+    let (validation, analysis) = session_data;
 
-    if !validation.ready
-        && !request.acknowledge_errors
-    {
+    if !validation.ready && !request.acknowledge_errors {
         tracing::warn!(
             session_id = %request.session_id,
             issue_count = validation.issue_count,
@@ -144,9 +115,7 @@ pub async fn export(
             .into_response();
     }
 
-    if !validation.ready
-        && request.acknowledge_errors
-    {
+    if !validation.ready && request.acknowledge_errors {
         tracing::warn!(
             session_id = %request.session_id,
             error_count = validation.error_count,
@@ -154,21 +123,10 @@ pub async fn export(
         );
     }
 
-    let has_exportable_content =
-        !analysis
-            .batch_run
-            .facilities
-            .is_empty()
-            || !analysis
-                .net_new_groups
-                .is_empty()
-            || !analysis
-                .similar_groups
-                .is_empty()
-            || !analysis
-                .batch_run
-                .advisory_issues
-                .is_empty();
+    let has_exportable_content = !analysis.batch_run.facilities.is_empty()
+        || !analysis.net_new_groups.is_empty()
+        || !analysis.similar_groups.is_empty()
+        || !analysis.batch_run.advisory_issues.is_empty();
 
     if !has_exportable_content {
         tracing::warn!(
@@ -186,31 +144,22 @@ pub async fn export(
             .into_response();
     }
 
-    let export_files =
-        match csv_export::generate_outputs(
-            &analysis,
-            true,
-        ) {
-            Ok(files) => files,
-            Err(err) => {
-                tracing::error!(
-                    session_id = %request.session_id,
-                    error = %err,
-                    "Failed generating export files"
-                );
+    let export_files = match csv_export::generate_outputs(&analysis, true) {
+        Ok(files) => files,
+        Err(err) => {
+            tracing::error!(
+                session_id = %request.session_id,
+                error = %err,
+                "Failed generating export files"
+            );
 
-                return internal_error(
-                    "Failed generating export files",
-                );
-            }
-        };
+            return internal_error("Failed generating export files");
+        }
+    };
 
-    let file_count =
-        export_files.len();
+    let file_count = export_files.len();
 
-    let zip_bytes = match csv_export::build_zip(
-        export_files,
-    ) {
+    let zip_bytes = match csv_export::build_zip(export_files) {
         Ok(bytes) => bytes,
         Err(err) => {
             tracing::error!(
@@ -219,32 +168,22 @@ pub async fn export(
                 "Failed building export ZIP"
             );
 
-            return internal_error(
-                "Failed building export ZIP",
-            );
+            return internal_error("Failed building export ZIP");
         }
     };
 
-    let timestamp = Utc::now()
-        .format("%Y-%m-%d_%H%M%S")
-        .to_string();
+    let timestamp = Utc::now().format("%Y-%m-%d_%H%M%S").to_string();
 
-    let filename = format!(
-        "UnitPrep_Output_{}.zip",
-        timestamp
-    );
+    let filename = format!("UnitPrep_Output_{}.zip", timestamp);
 
     //
     // Tiny mutation scope.
     //
     if state
         .unit_group_sessions
-        .with_session_mut(
-            &request.session_id,
-            |session| {
-                session.complete_export();
-            },
-        )
+        .with_session_mut(&request.session_id, |session| {
+            session.complete_export();
+        })
         .is_none()
     {
         // Same narrow race as analyze.rs: the session vanished between
@@ -290,30 +229,19 @@ pub async fn export(
         "Export generated successfully"
     );
 
-    let mut headers =
-        HeaderMap::new();
+    let mut headers = HeaderMap::new();
+
+    headers.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
 
     headers.insert(
-        header::CONTENT_TYPE,
-        "application/zip"
+        header::CONTENT_DISPOSITION,
+        format!("attachment; filename=\"{}\"", filename)
             .parse()
             .unwrap(),
     );
 
-    headers.insert(
-        header::CONTENT_DISPOSITION,
-        format!(
-            "attachment; filename=\"{}\"",
-            filename
-        )
-        .parse()
-        .unwrap(),
-    );
-
-    (headers, zip_bytes)
-        .into_response()
+    (headers, zip_bytes).into_response()
 }
-
 
 #[cfg(test)]
 #[path = "export_tests.rs"]

@@ -25,15 +25,10 @@ use crate::uploaded_file::UploadedFile;
 /// `.`), not the whole path — used for dispatch and for the "unsupported
 /// file type" diagnostic below.
 fn extension_of(file_name: &str) -> &str {
-    file_name
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
+    file_name.rsplit('.').next().unwrap_or("")
 }
 
-pub fn parse_document(
-    file: &UploadedFile,
-) -> anyhow::Result<CsvDocument> {
+pub fn parse_document(file: &UploadedFile) -> anyhow::Result<CsvDocument> {
     // Content is sniffed before the extension is trusted: some facility
     // export tools label Excel 2003 SpreadsheetML XML with a `.xls`
     // extension (Excel itself opens it by content, not extension), which
@@ -41,20 +36,15 @@ pub fn parse_document(
     // decides relevance by header inspection, not by which files happened
     // to parse, so a file in this dialect needs to actually be read.
     if is_spreadsheetml(&file.bytes) {
-        return parse_spreadsheetml_document(
-            file,
-        );
+        return parse_spreadsheetml_document(file);
     }
 
-    let lower =
-        file.file_name.to_lowercase();
+    let lower = file.file_name.to_lowercase();
 
     match extension_of(&lower) {
         "csv" => parse_csv_document(file),
 
-        "xlsx" | "xls" => {
-            parse_excel_document(file)
-        }
+        "xlsx" | "xls" => parse_excel_document(file),
 
         other => {
             tracing::warn!(
@@ -63,10 +53,7 @@ pub fn parse_document(
                 "Unsupported file type — skipping"
             );
 
-            anyhow::bail!(
-                "Unsupported file type: {}",
-                file.file_name
-            );
+            anyhow::bail!("Unsupported file type: {}", file.file_name);
         }
     }
 }
