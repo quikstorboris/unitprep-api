@@ -73,6 +73,76 @@ fn new_session_starts_uploaded() {
 }
 
 #[test]
+fn new_session_starts_at_generation_zero() {
+    let session = Session::new("s1".to_string(), None);
+
+    assert_eq!(session.data_generation(), 0);
+}
+
+/// Every mutation that can change what `effective_documents` produces
+/// must bump `data_generation` -- this is what `/analyze` and `/export`
+/// compare against their own captured read-time value to detect a
+/// concurrent correction landing in their read -> write-back gap (see
+/// analyze_tests.rs/export_tests.rs's TOCTOU regression tests).
+#[test]
+fn every_data_mutating_method_bumps_the_generation() {
+    let mut session = Session::new("s1".to_string(), None);
+
+    let mut previous = session.data_generation();
+
+    session.add_correction(
+        unitprep_unit_group::CorrectionKey {
+            file_name: "units.csv".to_string(),
+            unit_number: "A01".to_string(),
+            field: "width".to_string(),
+        },
+        "10".to_string(),
+    );
+    assert!(session.data_generation() > previous);
+    previous = session.data_generation();
+
+    session.add_dimension_exemption(unitprep_unit_group::DimensionExemptionKey {
+        file_name: "units.csv".to_string(),
+        unit_number: "Office".to_string(),
+    });
+    assert!(session.data_generation() > previous);
+    previous = session.data_generation();
+
+    session.exclude_group("10x10 Inside Climate".to_string());
+    assert!(session.data_generation() > previous);
+    previous = session.data_generation();
+
+    session.include_group("10x10 Inside Climate");
+    assert!(session.data_generation() > previous);
+    previous = session.data_generation();
+
+    session.acknowledge_group_check("Odd UnitGroup values".to_string(), "Office".to_string());
+    assert!(session.data_generation() > previous);
+    previous = session.data_generation();
+
+    session.unacknowledge_group_check("Odd UnitGroup values", "Office");
+    assert!(session.data_generation() > previous);
+    previous = session.data_generation();
+
+    session.upsert_document(document("units.csv", vec!["number", "unitgroup"]));
+    assert!(session.data_generation() > previous);
+}
+
+/// Read-only stage-machine calls (`require_stage`, `complete_discovery`)
+/// must NOT bump the generation on their own -- only the data-mutating
+/// methods above do. `complete_validation`/`complete_analysis`/
+/// `complete_export` are driven by the results of a validation/analysis
+/// run, not a direct data edit, so they're deliberately excluded too.
+#[test]
+fn completing_a_stage_does_not_bump_the_generation_on_its_own() {
+    let mut session = Session::new("s1".to_string(), None);
+
+    session.complete_discovery(discovery_result());
+
+    assert_eq!(session.data_generation(), 0);
+}
+
+#[test]
 fn stage_ordering_is_pipeline_order() {
     assert!(WorkflowStage::Uploaded < WorkflowStage::Discovered);
 

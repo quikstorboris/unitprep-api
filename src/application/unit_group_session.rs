@@ -71,6 +71,17 @@ pub struct SessionData {
     /// one check's flag on that one group going forward. See
     /// `GroupCheckAcknowledgmentKey`.
     pub group_check_acknowledgments: HashSet<GroupCheckAcknowledgmentKey>,
+
+    /// Bumped by every mutation that can change what `effective_documents`
+    /// produces (corrections, exemptions, group exclusion/inclusion,
+    /// group-check acknowledgment, a re-uploaded document) — see
+    /// `Session::touch_data`. `/analyze` and `/export` capture this at
+    /// read time and compare it again right before their own delayed
+    /// write-back (`complete_analysis`/`complete_export`), so a
+    /// correction that lands in the gap between the two can't have its
+    /// safety-net stage downgrade silently re-promoted by a slower
+    /// analyze/export using data from before the correction.
+    pub data_generation: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -178,22 +189,69 @@ impl Session {
                 documents.push(document);
             }
         }
+
+        self.touch_data();
     }
 
     pub fn add_correction(&mut self, key: CorrectionKey, value: String) {
         self.data.corrections.insert(key, value);
+        self.touch_data();
     }
 
     pub fn add_dimension_exemption(&mut self, key: DimensionExemptionKey) {
         self.data.dimension_exemptions.insert(key);
+        self.touch_data();
     }
 
     pub fn exclude_group(&mut self, group_name: String) {
         self.data.excluded_groups.insert(group_name);
+        self.touch_data();
     }
 
     pub fn include_group(&mut self, group_name: &str) {
         self.data.excluded_groups.remove(group_name);
+        self.touch_data();
+    }
+
+    /// Bumps `data_generation` — called by every mutation above that can
+    /// change what `effective_documents` produces. See the field's own
+    /// doc comment for what this guards against.
+    fn touch_data(&mut self) {
+        self.data.data_generation = self.data.data_generation.wrapping_add(1);
+    }
+
+    pub fn data_generation(&self) -> u64 {
+        self.data.data_generation
+    }
+
+    /// Counts how many rows in `file_name` currently carry `unit_number`
+    /// (after any prior corrections/mapping), trimmed the same way the
+    /// unit number is read everywhere else it's used as an identifier.
+    /// Used by `/correct` and `/exempt-dimensions` to reject a
+    /// `file_name`/`unit_number` pair that doesn't belong to this
+    /// session at all (0) as well as one that's ambiguous (2+, since a
+    /// duplicate unit number can't be targeted to a single row) --
+    /// previously neither handler checked this at all, silently storing
+    /// a correction/exemption keyed by a stale, mistyped, or
+    /// already-excluded identifier with no error surfaced to the caller.
+    pub fn unit_number_occurrences(&self, file_name: &str, unit_number: &str) -> usize {
+        let unit_number = unit_number.trim();
+
+        let documents = self.effective_documents();
+
+        let Some(document) = documents.iter().find(|d| d.file_name == file_name) else {
+            return 0;
+        };
+
+        let Some(number_index) = document.header_index("number") else {
+            return 0;
+        };
+
+        document
+            .rows
+            .iter()
+            .filter(|row| row.get(number_index).map(|v| v.trim()) == Some(unit_number))
+            .count()
     }
 
     /// Unit numbers exempted from the "Invalid dimensions" check for one
@@ -212,12 +270,14 @@ impl Session {
         self.data
             .group_check_acknowledgments
             .insert(GroupCheckAcknowledgmentKey { check, group_name });
+        self.touch_data();
     }
 
     pub fn unacknowledge_group_check(&mut self, check: &str, group_name: &str) {
         self.data
             .group_check_acknowledgments
             .retain(|key| !(key.check == check && key.group_name == group_name));
+        self.touch_data();
     }
 
     /// Group names accepted "as is" for one specific check (`ODD_UNITGROUP`
