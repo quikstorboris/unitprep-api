@@ -317,4 +317,91 @@ mod tests {
             vec!["maria garcia".to_string(), "robert chen".to_string()]
         );
     }
+
+    /// Sibling to `full_pipeline_runs_all_three_passes_together_on_fabricated_data`
+    /// above, but at the pipeline's smallest input size that still gives
+    /// every pass something to loop over -- two single-unit, otherwise
+    /// unrelated tenants is the smallest dataset where grouping, the
+    /// typo-variant pass, and the relatedness pass each actually walk a
+    /// real (if trivial) pair of groups, rather than short-circuiting on
+    /// zero or one group. Nothing here is expected to be flagged; the
+    /// point is confirming the pipeline runs cleanly end to end and
+    /// doesn't panic/misbehave on this near-empty dataset.
+    #[test]
+    fn full_pipeline_runs_cleanly_on_the_smallest_multi_group_input() {
+        fn r(
+            first_last: &str,
+            first_name: &str,
+            last_name: &str,
+            unit: &str,
+            email: &str,
+            phone: &str,
+        ) -> TenantRecord {
+            TenantRecord {
+                first_last: first_last.to_string(),
+                first_name: first_name.to_string(),
+                last_name: last_name.to_string(),
+                unit_number: unit.to_string(),
+                email: email.to_string(),
+                phone_number: phone.to_string(),
+                ..Default::default()
+            }
+        }
+
+        let records = vec![
+            r(
+                "Alvarez, Nina",
+                "Nina",
+                "Alvarez",
+                "E1",
+                "nina@example.com",
+                "5550001111",
+            ),
+            r(
+                "Baker, Tom",
+                "Tom",
+                "Baker",
+                "F1",
+                "tom@example.com",
+                "5552223333",
+            ),
+        ];
+
+        let report = run(records);
+
+        assert_eq!(report.total_rows, 2);
+        assert_eq!(report.unique_tenants, 2, "2 distinct FirtLast keys");
+        assert_eq!(
+            report.multi_unit_tenants, 0,
+            "both tenants have exactly one unit"
+        );
+        assert!(report.flagged_groups.is_empty());
+        assert!(report.typo_variant_candidates.is_empty());
+        assert!(report.related_tenant_candidates.is_empty());
+    }
+
+    /// Even smaller: a single record, so every pass's "compare against
+    /// every other group" loop has literally nothing to iterate over.
+    /// Must not panic on this, the pipeline's true floor.
+    #[test]
+    fn single_record_pipeline_does_not_panic_with_nothing_to_compare_against() {
+        let records = vec![TenantRecord {
+            first_last: "Solo, Sam".to_string(),
+            first_name: "Sam".to_string(),
+            last_name: "Solo".to_string(),
+            unit_number: "G1".to_string(),
+            email: "sam@example.com".to_string(),
+            phone_number: "5554445555".to_string(),
+            ..Default::default()
+        }];
+
+        let report = run(records);
+
+        assert_eq!(report.total_rows, 1);
+        assert_eq!(report.unique_tenants, 1);
+        assert_eq!(report.multi_unit_tenants, 0);
+        assert!(report.flagged_groups.is_empty());
+        assert!(report.typo_variant_candidates.is_empty());
+        assert!(report.related_tenant_candidates.is_empty());
+    }
 }
