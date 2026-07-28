@@ -57,6 +57,25 @@ pub fn apply_corrections(
         return document.clone();
     };
 
+    // Index this document's own corrections by unit number first, so
+    // each row below only looks at the handful of corrections that
+    // apply to it instead of rescanning every correction in the session
+    // (across every file) for every row.
+    let mut by_unit: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
+
+    for (key, value) in corrections {
+        if key.file_name == document.file_name {
+            by_unit
+                .entry(key.unit_number.as_str())
+                .or_default()
+                .push((key.field.as_str(), value.as_str()));
+        }
+    }
+
+    if by_unit.is_empty() {
+        return document.clone();
+    }
+
     let mut result = document.clone();
 
     for row in &mut result.rows {
@@ -64,17 +83,17 @@ pub fn apply_corrections(
             continue;
         };
 
-        for (key, value) in corrections {
-            if key.file_name != document.file_name || key.unit_number != unit_number {
-                continue;
-            }
+        let Some(fields) = by_unit.get(unit_number.as_str()) else {
+            continue;
+        };
 
-            let Some(field_index) = document.header_index(&key.field) else {
+        for (field, value) in fields {
+            let Some(field_index) = document.header_index(field) else {
                 continue;
             };
 
             if let Some(cell) = row.get_mut(field_index) {
-                *cell = value.clone();
+                *cell = value.to_string();
             }
         }
     }

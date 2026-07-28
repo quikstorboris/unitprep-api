@@ -33,8 +33,8 @@ pub use format::{
 };
 pub use models::{
     AdvisoryIssue, AnalysisResults, BatchRun, DiscoveryResult, Facility, FieldMappingEntry,
-    FileValidationError, Issue, Severity, SimilarityMatch, UnitFileCandidate,
-    ValidationIssueSummary, ValidationResult,
+    FileValidationError, Severity, SimilarityMatch, UnitFileCandidate, ValidationIssueSummary,
+    ValidationResult,
 };
 pub use validation::{
     correctable_fields_for, is_dimension_exemptable, validate_document, GroupCheckAcknowledgments,

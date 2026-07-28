@@ -23,17 +23,20 @@ use strsim::normalized_levenshtein;
 
 use fingerprint::fingerprints_match;
 
-use crate::models::{AnalysisResults, BatchRun, Issue, Severity, SimilarityMatch};
+use crate::models::{AdvisoryIssue, AnalysisResults, BatchRun, Severity, SimilarityMatch};
 
 pub fn analyze_batch(
     batch: BatchRun,
     reference_groups: Option<Vec<String>>,
 ) -> Result<AnalysisResults> {
-    let mut issues = batch.advisory_issues.clone();
-
-    let global_groups = batch.global_groups.clone();
-
-    let facility_groups = batch.facilities.clone();
+    // `batch` is owned here, not borrowed — destructuring it moves each
+    // field out directly instead of cloning a batch that's about to be
+    // dropped anyway.
+    let BatchRun {
+        facilities: facility_groups,
+        global_groups,
+        advisory_issues: mut issues,
+    } = batch;
 
     let mut net_new_groups = Vec::new();
 
@@ -135,7 +138,7 @@ pub fn analyze_batch(
             };
 
             if *score >= 0.80 && candidate != group {
-                issues.push(Issue {
+                issues.push(AdvisoryIssue {
                     source: format!("Facility {}", facility_name),
                     issue: format!(
                         "Similar but not exact match found: '{}' vs '{}' (score {:.2})",
@@ -164,7 +167,7 @@ pub fn analyze_batch(
             global_groups,
             advisory_issues: issues,
         },
-        reference_groups: reference_groups.clone(),
+        reference_groups,
         net_new_groups,
         similar_groups,
     })

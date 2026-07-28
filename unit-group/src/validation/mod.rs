@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
-use crate::analysis::{has_malformed_dimension_attempt, parse_fingerprint};
+use crate::analysis::{has_malformed_dimension_attempt, parse_fingerprint, GroupFingerprint};
 use crate::models::Severity;
 use unitprep_core::csv_document::CsvDocument;
 
@@ -55,9 +55,27 @@ struct RowScan {
     unit_counts: HashMap<String, usize>,
     group_counts: HashMap<String, usize>,
     casing_map: HashMap<String, Vec<String>>,
+
+    /// (is_odd_group_name, fingerprint) per distinct group name, computed
+    /// the first time a row with that name is scanned and reused for
+    /// every other row that shares it — fingerprint parsing is several
+    /// regex passes plus string allocations, and the same group name
+    /// recurring across many rows is the normal case, not an edge case.
+    group_fingerprints: HashMap<String, (bool, GroupFingerprint)>,
 }
 
 impl RowScan {
+    fn group_fingerprint(&mut self, group: &str) -> (bool, GroupFingerprint) {
+        self.group_fingerprints
+            .entry(group.to_string())
+            .or_insert_with(|| {
+                (
+                    group_checks::is_odd_group_name(group),
+                    parse_fingerprint(group),
+                )
+            })
+            .clone()
+    }
     fn record_row(
         &mut self,
         row: &[String],
@@ -103,18 +121,18 @@ impl RowScan {
         // agree there's a real, positive value there.
         let group_is_malformed = has_malformed_dimension_attempt(group);
 
+        let (is_odd_group, fingerprint) = self.group_fingerprint(group);
+
         // `is_odd_group_name` already excludes malformed attempts on
         // its own (see its doc comment) -- no need to repeat that
         // exclusion here.
         if group_is_malformed
-            || (!group_checks::is_odd_group_name(group)
+            || (!is_odd_group
                 && !dimension_exempt_units.contains(&unit)
                 && row_checks::has_bad_dimensions(row, indices.width, indices.length))
         {
             self.bad_dimensions.push(unit.clone());
         }
-
-        let fingerprint = parse_fingerprint(group);
 
         if row_checks::climate_mismatches_group(row, indices.climate_controlled, &fingerprint) {
             self.climate_mismatches.push(unit.clone());

@@ -6,7 +6,7 @@ use serde::Serialize;
 pub struct BatchRun {
     pub facilities: Vec<Facility>,
     pub global_groups: HashMap<String, usize>,
-    pub advisory_issues: Vec<Issue>,
+    pub advisory_issues: Vec<AdvisoryIssue>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -29,18 +29,6 @@ pub enum Severity {
     Warning,
     Error,
 }
-
-impl From<&str> for Severity {
-    fn from(value: &str) -> Self {
-        match value {
-            "error" | "Error" => Severity::Error,
-            "warning" | "Warning" => Severity::Warning,
-            _ => Severity::Info,
-        }
-    }
-}
-
-pub type Issue = AdvisoryIssue;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SimilarityMatch {
