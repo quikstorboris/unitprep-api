@@ -76,8 +76,9 @@ The pipeline is sequential:
      non-dimensioned (an office, an owner's apartment, etc. in the
      catalog) so blank Width/Length stops being flagged for it, without
      fabricating values.
-   - Export is blocked while Severity::Error issues remain, unless the
-     caller explicitly sets `acknowledge_errors: true` on `/export`.
+   - Export is blocked while Severity::Error issues remain — there is no
+     override; every Error-severity issue must be corrected or exempted
+     first.
 5. `POST /analyze` — compares each facility's UnitGroup names against the
    selected master file. Existence is decided by **exact name match
    only**; fuzzy (fingerprint + normalized Levenshtein) similarity is

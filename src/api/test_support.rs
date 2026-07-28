@@ -90,6 +90,73 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
     }
 }
 
+/// A session at `Analyzed` with clean validation (no outstanding
+/// issues) and non-empty analysis results — what `/export`'s genuine
+/// success-path test needs: a session with nothing blocking export at
+/// all, unlike `analyzed_state_with_errors` above.
+pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
+    let mut session = Session::new(session_id.to_string(), None);
+
+    let unit_file_names: Vec<String> = documents.iter().map(|d| d.file_name.clone()).collect();
+
+    session.data.documents = Arc::new(documents);
+
+    session.complete_discovery(DiscoveryResult {
+        unit_file_candidates: unit_file_names
+            .iter()
+            .map(|name| unitprep_unit_group::UnitFileCandidate {
+                file_name: name.clone(),
+                modified_at: None,
+                detected_vendor: "QSX".to_string(),
+            })
+            .collect(),
+        selected_unit_file_names: unit_file_names.clone(),
+        requires_unit_file_selection: false,
+        requires_format_resolution: false,
+        current_unit_file_name: None,
+        pending_unit_file_names: Vec::new(),
+        detected_vendor_name: Some("QSX".to_string()),
+        source_headers: Vec::new(),
+        suggested_mapping: Vec::new(),
+        unit_file_names,
+        group_file_names: Vec::new(),
+        selected_group_file_name: None,
+        ready: true,
+    });
+
+    session.complete_validation(ValidationResult {
+        files_checked: 1,
+        issue_count: 0,
+        error_count: 0,
+        warning_count: 0,
+        issues: Vec::new(),
+        files_errored: Vec::new(),
+        ready: true,
+    });
+
+    session.complete_analysis(Arc::new(AnalysisResults {
+        batch_run: BatchRun {
+            facilities: Vec::new(),
+            global_groups: Default::default(),
+            advisory_issues: Vec::new(),
+        },
+        reference_groups: None,
+        net_new_groups: vec!["10x10 Inside Climate".to_string()],
+        similar_groups: Vec::new(),
+    }));
+
+    let store = Arc::new(InMemorySessionStore::<Session>::new());
+
+    store.save(session);
+
+    AppState {
+        unit_group_sessions: store,
+        dedup_sessions: empty_dedup_store(),
+        db: test_db_pool(),
+        auth_backend: test_auth_backend(),
+    }
+}
+
 /// A session past `Discovered`, with `documents` registered as unit
 /// files — the minimum stage `/validate`, `/correct`, and
 /// `/exempt-dimensions` need.
@@ -191,8 +258,8 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
 }
 
 /// A session at `Analyzed` with one Error-severity validation issue
-/// still outstanding and non-empty analysis results — what
-/// `/export`'s acknowledge-override tests need: a session that's
+/// still outstanding and non-empty analysis results — what `/export`'s
+/// "blocked by unresolved errors" tests need: a session that's
 /// legitimately blocked, not just missing.
 pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
     let mut session = Session::new(session_id.to_string(), None);

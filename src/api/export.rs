@@ -40,14 +40,6 @@ use crate::{
 #[derive(Debug, Deserialize)]
 pub struct ExportRequest {
     pub session_id: String,
-
-    /// Explicit human override for exporting despite unresolved
-    /// Severity::Error validation issues (e.g. after reviewing them via
-    /// the inline correction UI and deciding to proceed anyway). Defaults
-    /// to false so old clients that don't send this field keep the
-    /// existing blocking behavior.
-    #[serde(default)]
-    pub acknowledge_errors: bool,
 }
 
 pub async fn export(State(state): State<AppState>, Json(request): Json<ExportRequest>) -> Response {
@@ -97,7 +89,7 @@ pub async fn export(State(state): State<AppState>, Json(request): Json<ExportReq
 
     let (validation, analysis, read_generation) = session_data;
 
-    if !validation.ready && !request.acknowledge_errors {
+    if !validation.ready {
         tracing::warn!(
             session_id = %request.session_id,
             issue_count = validation.issue_count,
@@ -113,14 +105,6 @@ pub async fn export(State(state): State<AppState>, Json(request): Json<ExportReq
             }),
         )
             .into_response();
-    }
-
-    if !validation.ready && request.acknowledge_errors {
-        tracing::warn!(
-            session_id = %request.session_id,
-            error_count = validation.error_count,
-            "Export proceeding despite unresolved validation errors — acknowledged by user"
-        );
     }
 
     let has_exportable_content = !analysis.batch_run.facilities.is_empty()

@@ -3,7 +3,8 @@ use unitprep_unit_group::{CorrectionKey, ValidationResult};
 
 use super::*;
 use crate::api::test_support::{
-    analyzed_state_with_errors, empty_state, unit_document, validated_state,
+    analyzed_state_ready_for_export, analyzed_state_with_errors, empty_state, unit_document,
+    validated_state,
 };
 use crate::application::unit_group_session::WorkflowStage;
 
@@ -13,7 +14,6 @@ async fn export_returns_404_for_missing_session() {
         State(empty_state()),
         Json(ExportRequest {
             session_id: "missing".to_string(),
-            acknowledge_errors: false,
         }),
     )
     .await;
@@ -40,7 +40,6 @@ async fn export_returns_409_when_called_before_analysis() {
         State(state),
         Json(ExportRequest {
             session_id: "s1".to_string(),
-            acknowledge_errors: false,
         }),
     )
     .await;
@@ -48,8 +47,12 @@ async fn export_returns_409_when_called_before_analysis() {
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
+/// Regression coverage for the removed `acknowledge_errors` override:
+/// unresolved `Severity::Error` validation issues now block export
+/// unconditionally -- there is no longer any request field that can
+/// bypass this.
 #[tokio::test]
-async fn export_blocked_without_acknowledge_when_errors_present() {
+async fn export_blocked_when_errors_present() {
     let state = analyzed_state_with_errors(
         "s1",
         vec![unit_document(
@@ -62,7 +65,6 @@ async fn export_blocked_without_acknowledge_when_errors_present() {
         State(state),
         Json(ExportRequest {
             session_id: "s1".to_string(),
-            acknowledge_errors: false,
         }),
     )
     .await;
@@ -70,13 +72,19 @@ async fn export_blocked_without_acknowledge_when_errors_present() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// The genuine success path: a session with clean validation (nothing
+/// to block on) and non-empty analysis results must actually produce a
+/// ZIP. This used to be covered incidentally by a now-removed
+/// `acknowledge_errors: true` test that exercised the override path
+/// instead of a genuinely clean one -- with that field gone, this is
+/// the one remaining test proving `/export` ever succeeds at all.
 #[tokio::test]
-async fn export_succeeds_with_acknowledge_despite_errors() {
-    let state = analyzed_state_with_errors(
+async fn export_succeeds_with_clean_validation() {
+    let state = analyzed_state_ready_for_export(
         "s1",
         vec![unit_document(
             "units.csv",
-            vec![["A01", "10x10 Inside Climate", "", ""]],
+            vec![["A01", "10x10 Inside Climate", "10", "10"]],
         )],
     );
 
@@ -84,7 +92,6 @@ async fn export_succeeds_with_acknowledge_despite_errors() {
         State(state),
         Json(ExportRequest {
             session_id: "s1".to_string(),
-            acknowledge_errors: true,
         }),
     )
     .await;
