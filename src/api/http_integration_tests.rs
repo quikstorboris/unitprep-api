@@ -106,6 +106,103 @@ async fn cross_origin_request_from_an_unlisted_origin_gets_no_allow_origin_heade
         .is_none());
 }
 
+/// Regression test for the error-body-shape fix: malformed JSON used to
+/// reject with a plain-text body ("Failed to parse the request body as
+/// JSON: ...") before any handler ever ran, unlike every other error path
+/// in this API (`{error, message}` JSON). Confirmed live against the real
+/// router, not a direct handler call, since `Json<T>`'s own rejection
+/// only happens at actual request-extraction time.
+#[tokio::test]
+async fn malformed_json_body_gets_the_standard_error_shape() {
+    let addr = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(format!("http://{addr}/correct"))
+        .header("Content-Type", "application/json")
+        .body("{not valid json")
+        .send()
+        .await
+        .expect("request should reach the real server");
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(content_type.starts_with("application/json"));
+
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .expect("error body should itself be valid JSON");
+
+    assert_eq!(body["error"], "invalid_request_body");
+    assert!(body["message"].as_str().is_some_and(|m| !m.is_empty()));
+}
+
+/// The other confirmed symptom of the same gap: posting JSON without the
+/// `Content-Type: application/json` header used to reject with a
+/// plain-text 415 body instead of the standard JSON error shape.
+#[tokio::test]
+async fn wrong_content_type_gets_the_standard_error_shape() {
+    let addr = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(format!("http://{addr}/correct"))
+        .header("Content-Type", "text/plain")
+        .body("{}")
+        .send()
+        .await
+        .expect("request should reach the real server");
+
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE
+    );
+
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .expect("error body should itself be valid JSON");
+
+    assert_eq!(body["error"], "unsupported_media_type");
+}
+
+/// A handler's own legitimately-JSON error response (not an extraction
+/// rejection) must pass through this layer completely untouched.
+#[tokio::test]
+async fn a_handlers_own_json_error_response_is_not_rewritten() {
+    let addr = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(format!("http://{addr}/correct"))
+        .json(&serde_json::json!({
+            "session_id": "missing",
+            "file_name": "units.csv",
+            "unit_number": "A01",
+            "field": "width",
+            "value": "10"
+        }))
+        .send()
+        .await
+        .expect("request should reach the real server");
+
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .expect("error body should itself be valid JSON");
+
+    assert_eq!(body["error"], "session_not_found");
+}
+
 /// The one handler whose input (`multipart/form-data`) is awkward to
 /// construct by calling the function directly -- `upload_tests.rs`
 /// already covers this via axum's own `Multipart::from_request`, but
