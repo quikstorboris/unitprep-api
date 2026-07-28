@@ -191,6 +191,20 @@ pub fn parse_spreadsheetml_document(file: &UploadedFile) -> anyhow::Result<CsvDo
                 }
             }
 
+            // A `<![CDATA[...]]>` cell value is legal SpreadsheetML (a
+            // natural choice for a value containing `"`, `&`, `<`, `>`
+            // without entity-escaping) and was previously silently
+            // dropped -- this match had no arm for it at all, so it fell
+            // through to the wildcard below and the cell text stayed
+            // empty. Unlike `Event::Text`, CDATA content is literal by
+            // definition and must never be entity-unescaped.
+            Event::CData(t) => {
+                if in_data {
+                    let decoded = t.decode().unwrap_or_default();
+                    cell_text.push_str(&decoded);
+                }
+            }
+
             Event::End(e) => match e.name().as_ref() {
                 b"Data" if in_first_worksheet => {
                     in_data = false;
@@ -324,6 +338,23 @@ mod tests {
         // plain cell — the plain cell must land after the merged span,
         // not immediately next to it.
         assert_eq!(doc.rows[1], vec!["A02", "", "10x10 Inside Climate",]);
+    }
+
+    /// Regression test: `<Data><![CDATA[...]]></Data>` is legal
+    /// SpreadsheetML (a natural way to embed `"`, `&`, `<`, `>` without
+    /// entity-escaping) but the parser had no match arm for `Event::CData`
+    /// at all, so the value silently became "" instead of surfacing an
+    /// error or the real content.
+    #[test]
+    fn cdata_cell_values_are_not_silently_dropped() {
+        let xml = SAMPLE_SPREADSHEETML.replace(
+            r#"<Cell><Data ss:Type="String">A01</Data></Cell>"#,
+            r#"<Cell><Data ss:Type="String"><![CDATA[A01]]></Data></Cell>"#,
+        );
+
+        let doc = parse_spreadsheetml_document(&file_with("companySummary.xls", &xml)).unwrap();
+
+        assert_eq!(doc.rows[0][0], "A01");
     }
 
     #[test]
