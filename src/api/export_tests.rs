@@ -1,3 +1,5 @@
+use unitprep_core::session_store::SessionStoreExt;
+
 use super::*;
 use crate::api::test_support::{
     analyzed_state_with_errors, empty_state, unit_document, validated_state,
@@ -90,4 +92,30 @@ async fn export_succeeds_with_acknowledge_despite_errors() {
     let content_type = response.headers().get(header::CONTENT_TYPE).unwrap();
 
     assert_eq!(content_type, "application/zip");
+}
+
+/// Same narrow write-back race as `analyze.rs` (see that module's
+/// equivalent test for the full reasoning on why this is a direct
+/// store-level check rather than a timing-based concurrency test): if
+/// the session vanishes between export's read lock and this write-back,
+/// `with_session_mut` must report "gone" without running its closure.
+#[tokio::test]
+async fn write_back_after_session_deletion_is_detected_not_run() {
+    let state = analyzed_state_with_errors(
+        "s1",
+        vec![unit_document(
+            "units.csv",
+            vec![["A01", "10x10 Inside Climate", "10", "10"]],
+        )],
+    );
+
+    state.unit_group_sessions.delete("s1");
+
+    let wrote = state
+        .unit_group_sessions
+        .with_session_mut("s1", |_session| {
+            unreachable!("with_session_mut must not invoke its closure for a deleted session");
+        });
+
+    assert!(wrote.is_none());
 }
