@@ -31,6 +31,44 @@ versioning follows [Semantic Versioning](https://semver.org/).
   the whole chain end to end for now, since no real protected endpoint
   exists yet to exercise it through.
 
+## [1.1.3] - 2026-07-28
+
+12 real bugs found via a 6-agent adversarial review (core parsers, dedup,
+unit-group, and the HTTP/session layer), each confirmed empirically
+before fixing and each with its own regression test; no new
+functionality.
+
+### Fixed
+- SpreadsheetML `<![CDATA[...]]>` cell values were silently dropped
+  (no parser match arm for that event) instead of surfacing an error.
+- Excel float cells silently saturated to `i64::MAX`/`MIN` for a
+  whole-number value outside `i64`'s range instead of erroring.
+- A blank phone-number prefix on one dedup record falsely flagged a
+  Phone-category mismatch even when the actual phone number matched.
+- `group_key` didn't collapse internal whitespace, so two records
+  differing only by a double space landed in separate tenant groups.
+- The typo-variant candidate sort used `partial_cmp(...).unwrap()`,
+  a latent NaN panic path; switched to `total_cmp`.
+- Dimension exemption was silently ineffective when a unit's UnitGroup
+  name was itself a malformed dimension attempt (e.g. `"10x"`).
+- Unit-number identifiers weren't trimmed consistently (asymmetric
+  with UnitGroup), across validation, corrections, and `/correct-group`.
+- Comma-decimal dimension values (`"10,5"`) were rejected as invalid.
+- Repeating an identical `/correct-group` rename request returned 400
+  the second time instead of succeeding as a no-op.
+- A concurrent correction/exemption/exclusion landing between
+  `/analyze` or `/export`'s read and delayed write-back could have its
+  safety-net stage downgrade silently undone, re-promoting the
+  workflow using stale pre-correction data -- confirmed live. Fixed
+  with a session data-generation counter checked before each write-back.
+- Malformed JSON, a wrong Content-Type, or an oversized body rejected
+  with a plain-text response instead of this API's standard
+  `{error, message}` shape.
+- `/correct` and `/exempt-dimensions` accepted a `unit_number` that
+  didn't exist in the file, or was ambiguous (shared by 2+ rows from
+  an already-flagged duplicate), silently storing a dead or
+  data-corrupting entry with no error.
+
 ## [1.1.2] - 2026-07-28
 
 Test coverage and two crash fixes found through it; no new functionality.
