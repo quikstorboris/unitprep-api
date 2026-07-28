@@ -190,3 +190,14 @@ pub const FIELD_SPECS: &[FieldSpec] = &[
         kind: FieldKind::Plain,
     },
 ];
+
+/// Looks up `name`'s declared `FieldKind` — for the few call sites (e.g.
+/// `phrasing::units_by_value`) that only have a bare `FieldName` on hand,
+/// not the full `FieldSpec` a `FIELD_SPECS` iteration already carries.
+pub fn kind_for(name: FieldName) -> FieldKind {
+    FIELD_SPECS
+        .iter()
+        .find(|spec| spec.name == name)
+        .map(|spec| spec.kind)
+        .expect("every FieldName has a FIELD_SPECS entry")
+}

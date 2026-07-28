@@ -7,7 +7,9 @@
 use serde::Serialize;
 
 mod fields;
-pub use fields::{FieldCategory, FieldKind, FieldName, FieldSpec, CATEGORY_PRIORITY, FIELD_SPECS};
+pub use fields::{
+    kind_for, FieldCategory, FieldKind, FieldName, FieldSpec, CATEGORY_PRIORITY, FIELD_SPECS,
+};
 
 /// One tenant/unit row from a QMS End Users export. Only the columns
 /// this crate's logic actually reads — the full 71-column passthrough
@@ -106,17 +108,32 @@ impl TenantRecord {
 /// full locale-aware title-casing dependency.
 fn title_case(s: &str) -> String {
     s.split_whitespace()
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                Some(first) => {
-                    first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
-                }
-                None => String::new(),
-            }
-        })
+        .map(title_case_word)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Capitalizes a word's first letter *and* the letter immediately
+/// following any `'`/`-` within it, lowercasing everything else — so
+/// "O'BRIEN" becomes "O'Brien" and "SMITH-JONES" becomes "Smith-Jones"
+/// instead of only the word's very first letter ever getting
+/// capitalized (the previous behavior lowercased everything after index
+/// 0 unconditionally, including the letter right after an apostrophe or
+/// hyphen).
+fn title_case_word(word: &str) -> String {
+    let mut result = String::with_capacity(word.len());
+    let mut capitalize_next = true;
+
+    for ch in word.chars() {
+        if capitalize_next {
+            result.extend(ch.to_uppercase());
+        } else {
+            result.extend(ch.to_lowercase());
+        }
+        capitalize_next = ch == '\'' || ch == '-';
+    }
+
+    result
 }
 
 /// One field that differed within a group, and the actual values
@@ -212,5 +229,21 @@ mod tests {
     fn display_name_handles_already_mixed_case_input() {
         let r = record("Michelle", "Rodgers", "");
         assert_eq!(r.display_name(), "Michelle Rodgers");
+    }
+
+    /// Regression test: a name with an apostrophe must have the letter
+    /// after it capitalized too, not just the very first letter of the
+    /// word.
+    #[test]
+    fn display_name_capitalizes_after_an_apostrophe() {
+        let r = record("JOHN", "O'BRIEN", "");
+        assert_eq!(r.display_name(), "John O'Brien");
+    }
+
+    /// Same regression, for a hyphenated last name.
+    #[test]
+    fn display_name_capitalizes_after_a_hyphen() {
+        let r = record("MARY", "SMITH-JONES", "");
+        assert_eq!(r.display_name(), "Mary Smith-Jones");
     }
 }

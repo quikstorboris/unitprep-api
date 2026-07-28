@@ -2,7 +2,7 @@
 //! categories disagree. Ported from the reference script's
 //! `find_differing_categories` / `contact_info_matches`.
 
-use crate::normalization::normalize_value;
+use crate::normalization::{is_empty, normalize_value};
 use crate::types::{
     FieldMismatch, FieldName, FieldValueMismatch, TenantRecord, CATEGORY_PRIORITY, FIELD_SPECS,
 };
@@ -23,7 +23,7 @@ pub fn find_differing_categories(group: &[TenantRecord]) -> Vec<FieldMismatch> {
             .filter(|spec| !field_matches_across(group, spec.name, spec.kind))
             .map(|spec| FieldValueMismatch {
                 field: spec.name,
-                values: distinct_display_values(group, spec.name),
+                values: distinct_display_values(group, spec.name, spec.kind),
             })
             .collect();
         if !differing_fields.is_empty() {
@@ -40,20 +40,35 @@ pub fn find_differing_categories(group: &[TenantRecord]) -> Vec<FieldMismatch> {
 /// `group`, blank shown as `"(blank)"`, sorted with blank last — same
 /// display convention as the reference script's console summary
 /// (`sorted({...}, key=lambda x: (x == "(blank)", x))`).
-fn distinct_display_values(group: &[TenantRecord], field: FieldName) -> Vec<String> {
-    let mut values: Vec<String> = group
-        .iter()
-        .map(|r| {
-            let raw = r.field(field).trim();
-            if raw.is_empty() {
-                "(blank)".to_string()
-            } else {
-                raw.to_string()
-            }
-        })
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
+///
+/// Dedupes on the same `(is_blank, normalized value)` key
+/// `field_matches_across` uses to decide a mismatch, not the raw string —
+/// otherwise two values that count as "the same" there (two emails
+/// differing only in case, two phone numbers differing only in
+/// formatting) would still show up as two separate "distinct values"
+/// here, overstating how much the group's data actually disagrees.
+fn distinct_display_values(
+    group: &[TenantRecord],
+    field: FieldName,
+    kind: crate::types::FieldKind,
+) -> Vec<String> {
+    let mut by_key: std::collections::BTreeMap<(bool, String), String> =
+        std::collections::BTreeMap::new();
+
+    for record in group {
+        let raw = record.field(field).trim();
+        let blank = is_empty(raw);
+        let display = if blank {
+            "(blank)".to_string()
+        } else {
+            raw.to_string()
+        };
+        by_key
+            .entry((blank, normalize_value(kind, raw)))
+            .or_insert(display);
+    }
+
+    let mut values: Vec<String> = by_key.into_values().collect();
     values.sort_by_key(|v| (v == "(blank)", v.clone()));
     values
 }
@@ -69,12 +84,23 @@ pub fn contact_info_matches(group: &[TenantRecord]) -> bool {
         .all(|spec| field_matches_across(group, spec.name, spec.kind))
 }
 
+/// A value that's genuinely blank and one that merely *normalizes* to an
+/// empty string (e.g. a phone field containing "N/A" or "----", which
+/// `normalize_phone` reduces to "" for having no digits) must never
+/// compare equal here -- per this crate's own rule that blank-vs-filled
+/// always counts as a mismatch, not a match. Comparing raw blank-ness
+/// alongside the normalized value (rather than the normalized value
+/// alone) is what keeps that rule honest for fields where normalization
+/// can produce an empty string from non-empty input.
 fn field_matches_across(
     group: &[TenantRecord],
     name: FieldName,
     kind: crate::types::FieldKind,
 ) -> bool {
-    let mut values = group.iter().map(|r| normalize_value(kind, r.field(name)));
+    let mut values = group.iter().map(|r| {
+        let raw = r.field(name);
+        (is_empty(raw), normalize_value(kind, raw))
+    });
     let first = match values.next() {
         Some(v) => v,
         None => return true,
@@ -129,6 +155,69 @@ mod tests {
             },
             TenantRecord {
                 phone_number: "555-123-4567".to_string(),
+                ..Default::default()
+            },
+        ];
+        let differing = find_differing_categories(&group);
+        assert!(differing.iter().all(|m| m.category != FieldCategory::Phone));
+    }
+
+    /// Regression test: a phone value that normalizes to "" for having no
+    /// digits at all ("N/A") must not silently match a genuinely blank
+    /// phone value just because both normalize the same way.
+    #[test]
+    fn a_garbage_phone_value_does_not_match_a_genuinely_blank_one() {
+        let group = vec![
+            TenantRecord {
+                phone_number: "N/A".to_string(),
+                ..Default::default()
+            },
+            TenantRecord {
+                phone_number: "".to_string(),
+                ..Default::default()
+            },
+        ];
+        let differing = find_differing_categories(&group);
+        assert!(
+            differing.iter().any(|m| m.category == FieldCategory::Phone),
+            "a garbage phone value and a blank one should still count as a mismatch"
+        );
+    }
+
+    /// Regression test: two emails differing only in case must collapse
+    /// to a single displayed value, not two -- they already count as the
+    /// same value per `field_matches_across`'s normalized comparison, so
+    /// the displayed "distinct values" list must agree.
+    #[test]
+    fn case_variant_values_are_not_shown_as_two_distinct_values() {
+        let group = vec![record("Bob@Test.com"), record("bob@test.com"), record("")];
+        let differing = find_differing_categories(&group);
+
+        let email_mismatch = differing
+            .iter()
+            .find(|m| m.category == FieldCategory::Email)
+            .expect("email should be flagged as differing (blank vs. filled)");
+
+        assert_eq!(
+            email_mismatch.fields[0].values.len(),
+            2,
+            "the two case-variant emails should collapse into one displayed value, \
+             leaving just that value plus \"(blank)\": {:?}",
+            email_mismatch.fields[0].values
+        );
+    }
+
+    /// Two genuinely blank phone values must still match each other (not
+    /// regress into every pair of blanks becoming a false mismatch).
+    #[test]
+    fn two_genuinely_blank_phone_values_still_match() {
+        let group = vec![
+            TenantRecord {
+                phone_number: "".to_string(),
+                ..Default::default()
+            },
+            TenantRecord {
+                phone_number: "   ".to_string(),
                 ..Default::default()
             },
         ];

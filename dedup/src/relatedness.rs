@@ -235,10 +235,16 @@ fn full_address(
     if is_empty(street1) {
         return None;
     }
+    // Every field keeps its position in the join, blank or not -- dropping
+    // blank fields before joining (the previous behavior) let two
+    // addresses whose data lands in different columns (e.g. one export's
+    // city sitting in `street2`, another's in `city` -- a real
+    // vendor-format inconsistency this project already documents
+    // elsewhere) collapse to the identical joined string and register as
+    // a false "shared address."
     let joined = [street1, street2, city, state, postal]
         .iter()
         .map(|v| normalize_value(FieldKind::Address, v))
-        .filter(|v| !v.is_empty())
         .collect::<Vec<_>>()
         .join(", ");
     Some(joined)

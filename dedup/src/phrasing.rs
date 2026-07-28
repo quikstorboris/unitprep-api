@@ -5,7 +5,8 @@
 
 use std::collections::HashSet;
 
-use crate::types::{FieldName, TenantGroup};
+use crate::normalization::normalize_value;
+use crate::types::{kind_for, FieldName, TenantGroup};
 
 /// This group's unit numbers, sorted. The base list `units_phrase` turns
 /// into a properly-worded phrase — kept separate so callers that need
@@ -127,26 +128,37 @@ pub(crate) fn describe_field(group: &TenantGroup, field: FieldName) -> String {
     format!("{} is {body}.", human_label(field))
 }
 
-/// Groups `group`'s records by their raw value for `field`, returning
-/// (value, sorted units) pairs — blank last, then alphabetical, mirroring
-/// the reference script's own console-summary convention.
+/// Groups `group`'s records by the same `(is_blank, normalized value)`
+/// key `comparison::field_matches_across` uses to decide a mismatch —
+/// not the raw value — so two records that count as "the same" there
+/// (e.g. two phone numbers differing only in formatting) land in one
+/// clause here too, instead of the note claiming more distinct values
+/// disagree than actually do. Reports the *first* raw value seen per key
+/// (not the normalized form) so the note still reads like real data.
+/// Returns (value, sorted units) pairs — blank last, then alphabetical by
+/// that display value, mirroring the reference script's own
+/// console-summary convention.
 fn units_by_value(group: &TenantGroup, field: FieldName) -> Vec<(String, Vec<&str>)> {
-    let mut units_by_value: std::collections::BTreeMap<String, Vec<&str>> =
+    let kind = kind_for(field);
+
+    let mut by_key: std::collections::BTreeMap<(bool, String), (String, Vec<&str>)> =
         std::collections::BTreeMap::new();
+
     for record in &group.records {
         let raw = record.field(field).trim();
-        let value = if raw.is_empty() {
+        let blank = raw.is_empty();
+        let display = if blank {
             "(blank)".to_string()
         } else {
             raw.to_string()
         };
-        units_by_value
-            .entry(value)
-            .or_default()
-            .push(record.unit_number.as_str());
+        let key = (blank, normalize_value(kind, raw));
+
+        let entry = by_key.entry(key).or_insert_with(|| (display, Vec::new()));
+        entry.1.push(record.unit_number.as_str());
     }
 
-    let mut by_value: Vec<(String, Vec<&str>)> = units_by_value.into_iter().collect();
+    let mut by_value: Vec<(String, Vec<&str>)> = by_key.into_values().collect();
     by_value.sort_by_key(|(value, _)| (value == "(blank)", value.clone()));
 
     for (_, units) in &mut by_value {
@@ -175,11 +187,49 @@ pub(crate) fn all_emails_present_and_distinct(group: &TenantGroup) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::TenantRecord;
 
     #[test]
     fn units_phrase_agrees_in_number() {
         assert_eq!(units_phrase(&["13"]), "unit 13");
         assert_eq!(units_phrase(&["13", "54"]), "units 13 and 54");
         assert_eq!(units_phrase(&["13", "54", "67"]), "units 13, 54, and 67");
+    }
+
+    /// Regression test: two differently-formatted but equal phone numbers
+    /// must merge into one clause, not appear as two separate "distinct"
+    /// values in the generated sentence.
+    #[test]
+    fn units_by_value_merges_differently_formatted_but_equal_values() {
+        let group = TenantGroup {
+            key: "test".to_string(),
+            records: vec![
+                TenantRecord {
+                    unit_number: "10".into(),
+                    phone_number: "(555) 123-4567".into(),
+                    ..Default::default()
+                },
+                TenantRecord {
+                    unit_number: "20".into(),
+                    phone_number: "555-123-4567".into(),
+                    ..Default::default()
+                },
+                TenantRecord {
+                    unit_number: "30".into(),
+                    phone_number: "".into(),
+                    ..Default::default()
+                },
+            ],
+        };
+
+        let by_value = units_by_value(&group, FieldName::PhoneNumber);
+
+        assert_eq!(
+            by_value.len(),
+            2,
+            "the two differently-formatted-but-equal phone numbers should merge into \
+             one clause, leaving just that value plus \"(blank)\": {:?}",
+            by_value
+        );
     }
 }

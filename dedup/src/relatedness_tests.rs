@@ -221,6 +221,50 @@ fn blank_street_address_never_counts_as_a_shared_address() {
         .all(|c| c.signal != RelatednessSignal::SharedHomeAddress));
 }
 
+/// Regression test: two tenants whose address data lands in different
+/// columns (a real vendor-format inconsistency, not a contrived case --
+/// see `full_address`'s doc comment) must not collapse to the same
+/// joined string just because dropping blank fields would have made
+/// them line up. Here "Springfield" sits in `city` for one tenant and in
+/// `street2` for the other, with the fields swapped around it.
+#[test]
+fn addresses_with_data_shifted_into_different_columns_do_not_falsely_match() {
+    let a = group(
+        "a",
+        "A1",
+        TenantRecord {
+            first_name: "Ann".into(),
+            last_name: "Lee".into(),
+            address_street1: "123 Main St".into(),
+            address_street2: "".into(),
+            address_city: "Springfield".into(),
+            ..blank()
+        },
+    );
+    let b = group(
+        "b",
+        "B2",
+        TenantRecord {
+            first_name: "Bob".into(),
+            last_name: "Ng".into(),
+            address_street1: "123 Main St".into(),
+            address_street2: "Springfield".into(),
+            address_city: "".into(),
+            ..blank()
+        },
+    );
+
+    let candidates = find_related_tenant_candidates(&[a, b], &TemplateNoteComposer);
+
+    assert!(
+        candidates
+            .iter()
+            .all(|c| c.signal != RelatednessSignal::SharedHomeAddress),
+        "shifted-column addresses must not register as a shared address just because \
+         filtering blanks would have made their joined strings identical"
+    );
+}
+
 #[test]
 fn a_value_shared_by_too_many_tenants_is_not_surfaced() {
     // Four different tenants all sharing the same phone number (e.g. a

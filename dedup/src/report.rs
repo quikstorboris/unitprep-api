@@ -94,12 +94,17 @@ fn find_typo_variant_candidates(
 ) -> Vec<TypoVariantCandidate> {
     let mut candidates = Vec::new();
     for i in 0..groups.len() {
+        // Every group has at least one record — group_records never
+        // creates an empty one. `a` depends only on `i`, so compute it
+        // once per outer iteration instead of once per (i, j) pair — the
+        // inner loop can run many times per `i` in a large facility.
+        let a = groups[i].records[0].display_name();
+        if a.is_empty() {
+            continue;
+        }
         for j in (i + 1)..groups.len() {
-            // Every group has at least one record — group_records never
-            // creates an empty one.
-            let a = groups[i].records[0].display_name();
             let b = groups[j].records[0].display_name();
-            if a.is_empty() || b.is_empty() {
+            if b.is_empty() {
                 continue;
             }
             // NOTE: two *different* group keys (distinct `FirtLast`
@@ -192,5 +197,118 @@ mod tests {
         let candidates = find_typo_variant_candidates(&groups, &TemplateNoteComposer);
 
         assert!(candidates.is_empty());
+    }
+
+    /// End-to-end, fabricated (no real PII) fixture exercising all three
+    /// passes together in one `run()` call — grouping, flagging,
+    /// typo-variant, and relatedness all interacting on the same
+    /// dataset. The only other full-pipeline tests in this crate are the
+    /// two `#[ignore]`d real-data fixtures in `tests/reference_fixtures.rs`,
+    /// which need real PII files on disk and don't run in CI — this one
+    /// runs every time and would catch a regression where fixing one
+    /// pass breaks an assumption another pass depends on.
+    #[test]
+    fn full_pipeline_runs_all_three_passes_together_on_fabricated_data() {
+        fn r(
+            first_last: &str,
+            first_name: &str,
+            last_name: &str,
+            unit: &str,
+            email: &str,
+            phone: &str,
+        ) -> TenantRecord {
+            TenantRecord {
+                first_last: first_last.to_string(),
+                first_name: first_name.to_string(),
+                last_name: last_name.to_string(),
+                unit_number: unit.to_string(),
+                email: email.to_string(),
+                phone_number: phone.to_string(),
+                ..Default::default()
+            }
+        }
+
+        let records = vec![
+            // "Smith, John" — two units, same tenant, one has an email
+            // on file and the other doesn't. A real contact-info
+            // mismatch: should surface in `flagged_groups`.
+            r(
+                "Smith, John",
+                "John",
+                "Smith",
+                "A1",
+                "john@example.com",
+                "5551110001",
+            ),
+            r("Smith, John", "John", "Smith", "A2", "", "5551110001"),
+            // "John Smith" — a different raw `FirtLast` key from the
+            // group above, but the same display name once titled. The
+            // strongest duplicate-tenant signal there is: should surface
+            // as a typo-variant candidate against "Smith, John" above.
+            r(
+                "John Smith",
+                "John",
+                "Smith",
+                "B1",
+                "someone-else@example.com",
+                "5551110099",
+            ),
+            // "Maria Garcia" and "Robert Chen" — unrelated tenants by
+            // name, but sharing a phone number nobody else has: should
+            // surface as a related-tenant candidate.
+            r(
+                "Maria Garcia",
+                "Maria",
+                "Garcia",
+                "C1",
+                "maria@example.com",
+                "5559876543",
+            ),
+            r(
+                "Robert Chen",
+                "Robert",
+                "Chen",
+                "D1",
+                "robert@example.com",
+                "5559876543",
+            ),
+        ];
+
+        let report = run(records);
+
+        assert_eq!(report.total_rows, 5);
+        assert_eq!(report.unique_tenants, 4, "4 distinct FirtLast keys");
+        assert_eq!(
+            report.multi_unit_tenants, 1,
+            "only \"Smith, John\" has 2+ units"
+        );
+
+        assert_eq!(report.flagged_groups.len(), 1);
+        assert!(
+            report.flagged_groups[0]
+                .mismatches
+                .iter()
+                .any(|m| m.category == crate::types::FieldCategory::Email),
+            "the flagged group should be the email mismatch between A1 and A2"
+        );
+
+        assert_eq!(report.typo_variant_candidates.len(), 1);
+        let variant = &report.typo_variant_candidates[0];
+        assert!(
+            (variant.ratio - 1.0).abs() < 1e-9,
+            "\"Smith, John\" and \"John Smith\" should be a perfect display-name match"
+        );
+
+        assert_eq!(report.related_tenant_candidates.len(), 1);
+        let related = &report.related_tenant_candidates[0];
+        assert_eq!(
+            related.signal,
+            crate::relatedness::RelatednessSignal::SharedPhone
+        );
+        assert_eq!(related.shared_value, "5559876543");
+        assert_eq!(
+            related.group_keys,
+            vec!["maria garcia".to_string(), "robert chen".to_string()]
+        );
     }
 }

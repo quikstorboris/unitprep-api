@@ -123,7 +123,10 @@ supporting context in a human summary, never as its own trigger.
 
 ## Normalization rules (used by rules 2 and 4)
 
-- **Plain fields** (phone, email, names): lowercase + trim.
+- **Plain fields** (email, names): lowercase + trim.
+- **Phone fields**: reduced to digits only (all other characters
+  stripped), so `"(831) 555-1234"`, `"831-555-1234"`, and `"8315551234"`
+  all compare equal regardless of formatting.
 - **Address fields**: periods stripped *first* (so `"P.O. Box"` and
   `"PO Box"` both collapse to `"po box"` — stripping other punctuation
   before periods was a real, fixed bug), then remaining punctuation
