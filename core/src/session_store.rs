@@ -64,10 +64,21 @@ pub trait SessionStore<S: HasSessionMetadata>: Send + Sync {
 }
 
 pub trait SessionStoreExt<S: HasSessionMetadata>: SessionStore<S> {
+    /// A cancelled session is treated exactly like a nonexistent one --
+    /// same reasoning, and the same `None` result, as the `owner_id`
+    /// mismatch gate below. This is what lets `/session/cancel` mark a
+    /// session cancelled (under that session's own write lock) and have
+    /// every other access path -- present and future, since nothing calls
+    /// `get_handle` directly outside this module -- immediately start
+    /// treating it as gone, without each handler needing its own check.
     fn with_session<R>(&self, id: &str, operation: impl FnOnce(&S) -> R) -> Option<R> {
         let handle = self.get_handle(id)?;
 
         let session = handle.read();
+
+        if session.metadata().cancelled {
+            return None;
+        }
 
         Some(operation(&session))
     }
@@ -77,6 +88,10 @@ pub trait SessionStoreExt<S: HasSessionMetadata>: SessionStore<S> {
 
         let mut session = handle.write();
 
+        if session.metadata().cancelled {
+            return None;
+        }
+
         Some(operation(&mut session))
     }
 
@@ -85,7 +100,8 @@ pub trait SessionStoreExt<S: HasSessionMetadata>: SessionStore<S> {
     /// else returns `None` -- exactly the same result as a session that
     /// doesn't exist at all -- so a session ID belonging to another user
     /// can never be distinguished from a stale/unknown one by whoever's
-    /// probing with it.
+    /// probing with it. Also `None` if the session has been cancelled,
+    /// same as `with_session` above.
     fn with_owned_session<R>(
         &self,
         id: &str,
@@ -96,7 +112,7 @@ pub trait SessionStoreExt<S: HasSessionMetadata>: SessionStore<S> {
 
         let session = handle.read();
 
-        if session.metadata().owner_id != Some(owner_id) {
+        if session.metadata().cancelled || session.metadata().owner_id != Some(owner_id) {
             return None;
         }
 
@@ -114,7 +130,7 @@ pub trait SessionStoreExt<S: HasSessionMetadata>: SessionStore<S> {
 
         let mut session = handle.write();
 
-        if session.metadata().owner_id != Some(owner_id) {
+        if session.metadata().cancelled || session.metadata().owner_id != Some(owner_id) {
             return None;
         }
 

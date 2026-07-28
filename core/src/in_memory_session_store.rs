@@ -91,13 +91,7 @@ impl<S: HasSessionMetadata + Send + Sync + 'static> InMemorySessionStore<S> {
                 // until memory usage or stale-session reports raise an
                 // alarm. Catch it, log it, and keep ticking.
                 let tick_result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    let mut map = sessions.write();
-
-                    let before = map.len();
-
-                    Self::cleanup_expired(&mut map, timeout);
-
-                    before.saturating_sub(map.len())
+                    Self::cleanup_expired(&sessions, timeout)
                 }));
 
                 match tick_result {
@@ -117,32 +111,113 @@ impl<S: HasSessionMetadata + Send + Sync + 'static> InMemorySessionStore<S> {
         });
     }
 
-    fn cleanup_expired(sessions: &mut HashMap<String, Arc<RwLock<S>>>, timeout: Duration) {
+    /// Sweeps expired sessions in two passes so the map's write lock --
+    /// which blocks every concurrent `save`/`get_handle`/`delete` call
+    /// for every session, not just the ones actually being removed -- is
+    /// only ever held long enough to remove the handful of IDs found
+    /// expired, not for the whole O(n) scan across every session.
+    ///
+    /// Pass 1 (`scan_expired_candidates`) finds candidates under a READ
+    /// lock on the map, so the scan itself never blocks a concurrent
+    /// `save`/`get_handle`/`delete` on any session. Pass 2
+    /// (`remove_still_expired`) then re-checks each candidate under that
+    /// session's OWN write lock before removing it from the map, closing
+    /// the gap where a concurrent `get_handle` bumps `last_accessed`
+    /// (via that same per-session lock) between the scan and the
+    /// removal -- without that re-check, a session touched in that
+    /// window would be swept away anyway, silently discarding the
+    /// access that just happened. Returns the number of sessions
+    /// actually removed.
+    fn cleanup_expired(
+        sessions: &RwLock<HashMap<String, Arc<RwLock<S>>>>,
+        timeout: Duration,
+    ) -> usize {
         let now = SystemTime::now();
 
-        sessions.retain(|session_id, session_handle| {
-            let session = session_handle.read();
+        let candidates = Self::scan_expired_candidates(sessions, now, timeout);
 
-            let expired = match now.duration_since(session.metadata().last_accessed) {
-                Ok(elapsed) => elapsed > timeout,
-                Err(_) => false,
+        Self::remove_still_expired(sessions, candidates, now, timeout)
+    }
+
+    /// Read-locks the map (not write-locks it) for the duration of the
+    /// scan -- every concurrent `save`/`get_handle`/`delete` for any
+    /// session can proceed uncontended while this runs. Each session's
+    /// own read lock is taken only momentarily, one at a time, to check
+    /// its `last_accessed`.
+    fn scan_expired_candidates(
+        sessions: &RwLock<HashMap<String, Arc<RwLock<S>>>>,
+        now: SystemTime,
+        timeout: Duration,
+    ) -> Vec<(String, Arc<RwLock<S>>)> {
+        let map = sessions.read();
+
+        map.iter()
+            .filter(|(_, handle)| is_expired(&*handle.read(), now, timeout))
+            .map(|(id, handle)| (id.clone(), Arc::clone(handle)))
+            .collect()
+    }
+
+    /// Takes the map's write lock only now, and only for as long as it
+    /// takes to walk the (typically small) candidate list -- not the
+    /// whole session table. Each candidate is re-checked under its own
+    /// write lock immediately before removal, so a session that was
+    /// touched (via `get_handle`) after the scan above but before this
+    /// runs is correctly left in place instead of being removed anyway.
+    fn remove_still_expired(
+        sessions: &RwLock<HashMap<String, Arc<RwLock<S>>>>,
+        candidates: Vec<(String, Arc<RwLock<S>>)>,
+        now: SystemTime,
+        timeout: Duration,
+    ) -> usize {
+        if candidates.is_empty() {
+            return 0;
+        }
+
+        let mut map = sessions.write();
+
+        let mut expired_count = 0usize;
+
+        for (session_id, handle) in candidates {
+            // Write-locking the session itself (rather than reading it
+            // again) guarantees this re-check happens strictly after any
+            // concurrent `get_handle` bump that had already started
+            // taking this same per-session lock, instead of racing it.
+            let (still_expired, age_ms) = {
+                let session = handle.write();
+
+                (
+                    is_expired(&*session, now, timeout),
+                    now.duration_since(session.metadata().created_at)
+                        .unwrap_or_default()
+                        .as_millis(),
+                )
             };
 
-            if expired {
-                let age_ms = now
-                    .duration_since(session.metadata().created_at)
-                    .unwrap_or_default()
-                    .as_millis();
+            if !still_expired {
+                continue;
+            }
 
+            if map.remove(&session_id).is_some() {
                 tracing::info!(
                     session_id = %session_id,
                     age_ms,
                     "Session expired"
                 );
-            }
 
-            !expired
-        });
+                expired_count += 1;
+            }
+        }
+
+        expired_count
+    }
+}
+
+/// Shared by both cleanup passes so "expired" can never mean two
+/// slightly different things depending on which pass is asking.
+fn is_expired<S: HasSessionMetadata>(session: &S, now: SystemTime, timeout: Duration) -> bool {
+    match now.duration_since(session.metadata().last_accessed) {
+        Ok(elapsed) => elapsed > timeout,
+        Err(_) => false,
     }
 }
 

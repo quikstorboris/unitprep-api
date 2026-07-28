@@ -36,43 +36,48 @@ pub async fn cancel_session(
     State(state): State<AppState>,
     Json(request): Json<CancelSessionRequest>,
 ) -> impl IntoResponse {
-    // Read the session's total lifetime before it's gone — distinct from
-    // (and not derivable from) last_accessed, which only tells you how
-    // long it sat idle. Both matter for different diagnostic questions,
-    // which is why this is worth reading even though we're about to
-    // delete the session anyway.
+    // Read the session's total lifetime AND mark it cancelled in the same
+    // write-locked operation, before the map entry is ever touched. Doing
+    // both under one `with_session_mut` call (rather than a separate read
+    // then a separate write) means the cancellation flag lands atomically
+    // with respect to any concurrent mutator -- whoever acquires this
+    // session's lock next, here or in another in-flight request, cannot
+    // observe a state where the age was read but cancellation hadn't
+    // "started" yet.
+    //
+    // This is also what closes the concurrent-mutation race `delete`
+    // alone could not: a handler racing for this same session's write
+    // lock (e.g. `/correct`, via `with_session_mut`) either wins the lock
+    // first and completes its mutation before `cancelled` is set here (its
+    // write is preserved, same as if cancellation had simply happened a
+    // moment later), or loses the race and observes `cancelled == true`
+    // once it gets the lock -- at which point `SessionStoreExt`'s default
+    // methods (see `core::session_store`) treat the session exactly like
+    // a nonexistent one and return `None`, instead of silently applying a
+    // mutation to an object about to be detached from the map with no way
+    // to ever look it up again.
     let age_ms = state
         .unit_group_sessions
-        .with_session(&request.session_id, |session| {
-            SystemTime::now()
+        .with_session_mut(&request.session_id, |session| {
+            let age_ms = SystemTime::now()
                 .duration_since(session.metadata.created_at)
                 .unwrap_or_default()
-                .as_millis()
+                .as_millis();
+
+            session.metadata.cancelled = true;
+
+            age_ms
         });
 
     let deleted = age_ms.is_some();
 
     state.unit_group_sessions.delete(&request.session_id);
 
-    // Deleting the map entry here doesn't affect a concurrent mutator
-    // (e.g. /correct) that already checked out its own handle to this
-    // same session before this call started -- that write can still
-    // land successfully on a now map-detached session, silently lost
-    // from the caller's point of view since nothing can look the
-    // session up again afterward. Narrow and low-probability (needs a
-    // cancel and a slow mutation on the very same session_id at nearly
-    // the same instant) and not fixed here -- a real fix needs either a
-    // tombstone check or deferred deletion until in-flight ops
-    // complete, a larger change than this pass's scope -- but unlike
-    // that gap, at least making it observable (the same "log it, don't
-    // silently change behavior" approach analyze/export's own vanish-
-    // race already uses) costs nothing.
     tracing::info!(
         session_id = %request.session_id,
         age_ms = ?age_ms,
         deleted,
-        "Session cancelled — any correction/exemption/etc. already in flight for this \
-         session_id may still land on a now-detached handle with no way to observe it"
+        "Session cancelled"
     );
 
     Json(CancelSessionResponse {
@@ -123,6 +128,35 @@ mod tests {
             State(empty_state()),
             Json(CancelSessionRequest {
                 session_id: "missing".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(body["success"], true);
+        assert_eq!(body["deleted"], false);
+    }
+
+    /// `session_id` is never parsed as a UUID anywhere in this codebase
+    /// -- it's a plain `String` key into the session map -- but a
+    /// clearly malformed value (unlike merely an unknown-but-well-formed
+    /// one, covered above) is worth its own regression test: a real
+    /// client could plausibly send garbage here, and this must return
+    /// the same clean "nothing to delete" response, not a panic or a
+    /// different error shape.
+    #[tokio::test]
+    async fn cancel_handles_a_malformed_non_uuid_session_id_cleanly() {
+        let response = cancel_session(
+            State(empty_state()),
+            Json(CancelSessionRequest {
+                session_id: "not-a-uuid-!!!-🙃".to_string(),
             }),
         )
         .await
