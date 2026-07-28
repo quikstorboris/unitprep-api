@@ -1,13 +1,16 @@
 //! `/discover` and the shared discovery-recomputation logic used by it,
 //! `/unit-file/select`, and `/unit-file/resolve-format`. Split into
 //! `dto` (request/response shapes), `compute` (the actual discovery
-//! logic), and `format_helpers` (header-shape/vendor-classification
-//! helpers also used outside this module) — four separable concerns
-//! that had grown into one 600+ line file over time, not one idea.
+//! logic), `selection` (unit/group-file selection and readiness
+//! resolution, plus discovered-group-name extraction), and
+//! `format_helpers` (header-shape/vendor-classification helpers also
+//! used outside this module) — separable concerns that had grown into
+//! one file over time, not one idea.
 
 mod compute;
 mod dto;
 mod format_helpers;
+mod selection;
 
 pub use dto::DiscoverRequest;
 
