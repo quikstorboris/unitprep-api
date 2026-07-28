@@ -6,6 +6,15 @@
 //! partial-failure counting) is exactly the logic worth testing, so
 //! these tests build a real multipart request body and drive it through
 //! axum's own `Multipart` extractor instead of bypassing it.
+//!
+//! One thing that can't be covered here: the router's
+//! `DefaultBodyLimit::max(...)` (see `router()` in `mod.rs`) is a
+//! `.layer(...)` on the `Router` itself, outside the request-extraction
+//! path these tests exercise by calling `Multipart::from_request` and
+//! `upload` directly. See
+//! `http_integration_tests::oversized_request_body_is_rejected_with_the_standard_error_shape`,
+//! which drives a real oversized request through the real `Router`
+//! instead, for that coverage.
 
 use axum::body::{to_bytes, Body};
 use axum::extract::{FromRequest, State};
