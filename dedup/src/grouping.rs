@@ -3,12 +3,17 @@
 //! never used to decide group membership here, per UnitPrep's
 //! exact-match-decides principle.
 
+use crate::normalization::collapse_whitespace;
 use crate::types::{TenantGroup, TenantRecord};
 
-/// Grouping key: trim + lowercase of the raw `FirtLast` value. Matches
-/// the reference script's `group_key`.
+/// Grouping key: trim + lowercase + internal-whitespace-collapse of the
+/// raw `FirtLast` value. Every other `Plain`-kind field (see
+/// `normalization::normalize_value`) already collapses repeated internal
+/// whitespace, not just leading/trailing -- this key was trim-only, so
+/// "John  Smith" (double space) and "John Smith" produced two different
+/// group keys instead of exact-matching into one group.
 pub fn group_key(first_last: &str) -> String {
-    first_last.trim().to_lowercase()
+    collapse_whitespace(&first_last.trim().to_lowercase())
 }
 
 /// Groups records by `group_key`, preserving first-seen order (mirrors
@@ -93,6 +98,21 @@ mod tests {
                 .count()
                 == 2
         );
+    }
+
+    /// Regression test: repeated internal whitespace must collapse the
+    /// same way every other Plain-kind field's normalization does, so
+    /// "John  Smith" (double space) exact-matches "John Smith" into one
+    /// group instead of silently landing in two.
+    #[test]
+    fn internal_whitespace_variance_still_groups_together() {
+        let groups = group_records(vec![
+            record("John  Smith", "A1"),
+            record("John Smith", "A2"),
+        ]);
+
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].records.len(), 2);
     }
 
     #[test]

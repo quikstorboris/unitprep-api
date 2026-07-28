@@ -58,7 +58,7 @@ pub fn normalize_value(kind: FieldKind, value: &str) -> String {
     }
 }
 
-fn collapse_whitespace(v: &str) -> String {
+pub(crate) fn collapse_whitespace(v: &str) -> String {
     v.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
