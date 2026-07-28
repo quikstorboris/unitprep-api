@@ -59,8 +59,10 @@ axum = { version = "0.8", features = ["multipart"] }
 # Async runtime
 tokio = { version = "1", features = ["full"] }
 
-# Middleware
-tower-http = { version = "0.6", features = ["cors"] }
+# Middleware. "catch-panic" turns a handler panic into the project's own
+# ApiErrorBody 500 shape (see api::mod::handle_panic) instead of dropping
+# the connection with no response at all.
+tower-http = { version = "0.6", features = ["cors", "catch-panic"] }
 
 # Logging
 tracing = "0.1"
@@ -140,4 +142,4 @@ getrandom = { version = "0.4.3", features = ["std"] }
 # Reads the xlsx exporter's own output back in its tests, so those
 # tests verify real cell values/structure instead of just "some bytes
 # came out". Same version already pinned in core/Cargo.toml.
-calamine = "0.25"
+calamine = "0.36"

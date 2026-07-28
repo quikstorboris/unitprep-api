@@ -24,7 +24,10 @@ fn xml_attr(element: &BytesStart, name: &[u8]) -> Option<String> {
         .attributes()
         .flatten()
         .find(|attr| attr.key.as_ref() == name)
-        .and_then(|attr| attr.unescape_value().ok())
+        .and_then(|attr| {
+            attr.normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                .ok()
+        })
         .map(|v| v.into_owned())
 }
 
@@ -147,7 +150,13 @@ pub fn parse_spreadsheetml_document(file: &UploadedFile) -> anyhow::Result<CsvDo
 
             Event::Text(t) => {
                 if in_data {
-                    cell_text.push_str(&t.unescape().unwrap_or_default());
+                    // quick-xml 0.41 split what used to be one `unescape()`
+                    // call into a charset-decode step and a separate
+                    // entity-unescape step (`&amp;` -> `&` etc.) -- both
+                    // needed to reproduce the old behavior.
+                    let decoded = t.decode().unwrap_or_default();
+                    let unescaped = quick_xml::escape::unescape(&decoded).unwrap_or_default();
+                    cell_text.push_str(&unescaped);
                 }
             }
 
