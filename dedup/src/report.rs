@@ -135,7 +135,13 @@ fn find_typo_variant_candidates(
             });
         }
     }
-    candidates.sort_by(|a, b| b.ratio.partial_cmp(&a.ratio).unwrap());
+    // `partial_cmp(...).unwrap()` would panic on a NaN ratio. Nothing
+    // produces one today (blank display names are filtered out above,
+    // and `sequence_matcher_ratio` special-cases zero-length input to
+    // return 1.0 rather than dividing 0/0) -- `total_cmp` costs nothing
+    // over `partial_cmp` in the common case and removes the panic path
+    // entirely rather than relying on that invariant holding forever.
+    candidates.sort_by(|a, b| b.ratio.total_cmp(&a.ratio));
     candidates
 }
 
