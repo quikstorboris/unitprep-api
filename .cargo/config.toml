@@ -1,0 +1,12 @@
+[alias]
+# cargo-llvm-cov (recommended primary) -- LLVM source-based coverage,
+# fast, accurate branch coverage. `cargo cov` opens target/llvm-cov/html/index.html.
+cov = "llvm-cov --workspace --html"
+cov-summary = "llvm-cov --workspace --summary-only"
+
+# cargo-tarpaulin -- kept as an optional cross-check, not a second
+# tool to run routinely alongside llvm-cov (they measure the same
+# thing; running both every time is redundant maintenance for no real
+# extra signal). Reach for this if llvm-cov's numbers ever look
+# suspicious and you want an independently-implemented second opinion.
+cov-tarpaulin = "tarpaulin --workspace --out Html --output-dir target/tarpaulin"

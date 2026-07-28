@@ -31,6 +31,38 @@ versioning follows [Semantic Versioning](https://semver.org/).
   the whole chain end to end for now, since no real protected endpoint
   exists yet to exercise it through.
 
+## [1.1.2] - 2026-07-28
+
+Test coverage and two crash fixes found through it; no new functionality.
+
+### Fixed
+- `cell_to_string` (Excel parsing): a date-typed cell with an extreme
+  serial number could panic inside chrono's `TimeDelta` construction,
+  not just return `None` as calamine's own doc comment claims. Wrapped
+  in `catch_unwind`, falling back to the raw serial number for that one
+  cell instead of failing the whole request.
+- SpreadsheetML parsing: `ss:Index`/`ss:MergeAcross` were parsed from
+  untrusted XML into `usize` with no bound, then fed straight to
+  `Vec::resize` -- a single crafted cell (e.g. `ss:Index="99999999999999"`)
+  could attempt an astronomical allocation and abort the whole process,
+  not a `panic!` the catch-panic middleware could intercept. Both
+  attributes are now clamped to `1..=16384` (Excel's own real column
+  limit) at the point they're parsed.
+
+### Added
+- Property-based/fuzz tests (via `proptest`) for all three file
+  parsers -- the two fixes above were both found this way.
+- Real HTTP-level integration tests (`src/api/http_integration_tests.rs`):
+  bind the actual router to a loopback port and drive it with a real
+  `reqwest` client, including an automated regression test for the CORS
+  credentials fix (previously verified only by hand in a browser).
+- Regression tests for the analyze/export session write-back race.
+- `cargo-llvm-cov` wired in as the primary coverage tool (`cargo cov`
+  / `cargo cov-summary` aliases in `.cargo/config.toml`) -- current
+  baseline 84% lines workspace-wide. `cargo-tarpaulin` also available
+  (`cargo cov-tarpaulin`) as an occasional independent cross-check, not
+  a second tool to run routinely alongside llvm-cov.
+
 ## [1.1.1] - 2026-07-28
 
 No new functionality; a full post-1.1.0 hygiene, security, and
