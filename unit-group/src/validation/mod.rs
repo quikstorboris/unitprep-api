@@ -82,7 +82,16 @@ impl RowScan {
         indices: &ColumnIndices,
         dimension_exempt_units: &HashSet<String>,
     ) {
-        let unit = row.get(indices.number).cloned().unwrap_or_default();
+        // Trimmed the same way the UnitGroup column already is -- a
+        // stray leading/trailing space on a unit number used to be a
+        // silent mismatch vector: it was never flagged as a duplicate/
+        // casing-inconsistent variant of the untrimmed value, and a
+        // `/correct` submission echoing back the displayed (trimmed)
+        // value would silently match nothing.
+        let unit = row
+            .get(indices.number)
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default();
 
         let group = row.get(indices.unit_group).map(|v| v.trim()).unwrap_or("");
 

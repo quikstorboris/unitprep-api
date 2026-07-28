@@ -79,7 +79,12 @@ pub fn apply_corrections(
     let mut result = document.clone();
 
     for row in &mut result.rows {
-        let Some(unit_number) = row.get(number_index).cloned() else {
+        // Trimmed to match how the unit number is read everywhere else it's
+        // used as an identifier (see validation's `record_row`) -- a stray
+        // leading/trailing space here would otherwise silently match
+        // nothing, since `CorrectionKey.unit_number` is submitted as the
+        // trimmed, displayed value.
+        let Some(unit_number) = row.get(number_index).map(|v| v.trim().to_string()) else {
             continue;
         };
 
@@ -178,6 +183,32 @@ mod tests {
 
         // Untouched row stays untouched.
         assert_eq!(corrected.rows[1][2], "10");
+    }
+
+    /// Regression test: a stray leading/trailing space on the row's own
+    /// "number" cell must not prevent a correction from matching -- the
+    /// unit number is now trimmed the same way the UnitGroup column
+    /// already is, matching the trimmed value a `/correct` request
+    /// submits (echoed back from what the UI displayed).
+    #[test]
+    fn matches_a_correction_despite_whitespace_around_the_stored_unit_number() {
+        let mut document = self::document();
+        document.rows[0][0] = " A01 ".to_string();
+
+        let mut corrections = HashMap::new();
+
+        corrections.insert(
+            CorrectionKey {
+                file_name: "units.csv".to_string(),
+                unit_number: "A01".to_string(),
+                field: "width".to_string(),
+            },
+            "10".to_string(),
+        );
+
+        let corrected = apply_corrections(&document, &corrections);
+
+        assert_eq!(corrected.rows[0][2], "10");
     }
 
     #[test]

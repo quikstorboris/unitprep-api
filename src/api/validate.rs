@@ -105,7 +105,12 @@ pub fn run_validation(
                 .rows
                 .iter()
                 .filter_map(|row| {
-                    let unit = row.get(unit_idx)?.clone();
+                    // Trimmed to match how the unit number is read
+                    // everywhere else it's used as an identifier (see
+                    // validation's `record_row`) -- otherwise a stray
+                    // leading/trailing space here would fail to resolve a
+                    // flagged unit back to its UnitGroup.
+                    let unit = row.get(unit_idx)?.trim().to_string();
                     let group = row.get(group_idx)?.trim().to_string();
 
                     if unit.is_empty() {
