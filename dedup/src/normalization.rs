@@ -166,4 +166,23 @@ mod tests {
             normalize_value(FieldKind::Phone, "(831) 555-9999")
         );
     }
+
+    /// Names (`FirstName`/`LastName`, etc.) are `FieldKind::Plain` --
+    /// case/whitespace-normalized only, same as the reference script's
+    /// `norm_value`, which relies on Python's plain `str.lower()` and
+    /// does nothing further to a name. Neither strips diacritics, so
+    /// "José" and "Jose" normalize to two visibly different strings and
+    /// compare as different names rather than being folded together as
+    /// the same tenant. This is a coverage/regression test locking in
+    /// that inherited, documented behavior -- not a claim that it's the
+    /// ideal behavior for a future revision to keep.
+    #[test]
+    fn diacritics_in_names_are_preserved_not_folded_to_ascii() {
+        assert_eq!(normalize_value(FieldKind::Plain, "José"), "josé");
+        assert_eq!(normalize_value(FieldKind::Plain, "Jose"), "jose");
+        assert_ne!(
+            normalize_value(FieldKind::Plain, "José"),
+            normalize_value(FieldKind::Plain, "Jose")
+        );
+    }
 }
