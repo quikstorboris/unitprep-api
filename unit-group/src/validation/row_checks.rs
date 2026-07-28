@@ -26,10 +26,38 @@ pub(super) fn classify_group_value(group: &str) -> GroupValue {
     }
 }
 
+/// Parses a dimension value as `f64`, accepting a comma decimal separator
+/// ("10,5") as a fallback when the plain period-decimal parse fails --
+/// only for the narrow, unambiguous shape of digits-comma-digits with no
+/// period already present, so a genuine thousands-separated value (which
+/// this app never expects for a unit width/length) is never misread.
+/// Without this, a comma-decimal locale's otherwise-valid positive number
+/// was rejected outright as an "Invalid dimensions" false positive.
+fn parse_dimension_number(value: &str) -> Option<f64> {
+    if let Ok(parsed) = value.parse::<f64>() {
+        return Some(parsed);
+    }
+
+    let mut parts = value.splitn(2, ',');
+    let (whole, fraction) = (parts.next()?, parts.next()?);
+
+    if fraction.contains(',') || whole.is_empty() || fraction.is_empty() {
+        return None;
+    }
+
+    if !whole.chars().all(|c| c.is_ascii_digit() || c == '-')
+        || !fraction.chars().all(|c| c.is_ascii_digit())
+    {
+        return None;
+    }
+
+    format!("{whole}.{fraction}").parse::<f64>().ok()
+}
+
 fn parses_as_positive(row: &[String], idx: usize) -> bool {
     row.get(idx)
         .map(|v| v.trim())
-        .and_then(|v| v.parse::<f64>().ok())
+        .and_then(parse_dimension_number)
         .is_some_and(|v| v > 0.0)
 }
 
@@ -142,8 +170,8 @@ pub(super) fn dimensions_mismatch_group(
 /// this function used before), falling back to a literal string
 /// comparison only when either side isn't a plain number.
 fn dimension_values_differ(a: &str, b: &str) -> bool {
-    match (a.parse::<f64>(), b.parse::<f64>()) {
-        (Ok(a), Ok(b)) => a != b,
+    match (parse_dimension_number(a), parse_dimension_number(b)) {
+        (Some(a), Some(b)) => a != b,
         _ => a != b,
     }
 }
@@ -179,6 +207,32 @@ mod tests {
 
         // No dimension columns in this file at all — nothing to flag.
         assert!(!has_bad_dimensions(&good, None, None));
+    }
+
+    /// Regression test: a comma-decimal value ("10,5") is a legitimately
+    /// formatted positive number in a comma-decimal locale and must not
+    /// be flagged as an invalid dimension just because `str::parse::<f64>`
+    /// alone rejects the comma.
+    #[test]
+    fn comma_decimal_dimension_values_are_accepted_as_positive() {
+        let row = row(&["10,5", "20"]);
+
+        assert!(!has_bad_dimensions(&row, Some(0), Some(1)));
+    }
+
+    #[test]
+    fn comma_decimal_dimension_value_agrees_with_its_period_equivalent() {
+        assert!(!dimension_values_differ("10,5", "10.5"));
+    }
+
+    /// A bare digit-comma-digit shape is the only comma pattern accepted
+    /// -- anything else (a second comma, no digits on one side) still
+    /// fails to parse rather than being guessed at.
+    #[test]
+    fn malformed_comma_values_still_fail_to_parse_as_positive() {
+        let row = row(&["10,5,2", "20"]);
+
+        assert!(has_bad_dimensions(&row, Some(0), Some(1)));
     }
 
     #[test]
