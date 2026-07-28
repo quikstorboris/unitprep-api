@@ -54,11 +54,25 @@ pub async fn cancel_session(
 
     state.unit_group_sessions.delete(&request.session_id);
 
+    // Deleting the map entry here doesn't affect a concurrent mutator
+    // (e.g. /correct) that already checked out its own handle to this
+    // same session before this call started -- that write can still
+    // land successfully on a now map-detached session, silently lost
+    // from the caller's point of view since nothing can look the
+    // session up again afterward. Narrow and low-probability (needs a
+    // cancel and a slow mutation on the very same session_id at nearly
+    // the same instant) and not fixed here -- a real fix needs either a
+    // tombstone check or deferred deletion until in-flight ops
+    // complete, a larger change than this pass's scope -- but unlike
+    // that gap, at least making it observable (the same "log it, don't
+    // silently change behavior" approach analyze/export's own vanish-
+    // race already uses) costs nothing.
     tracing::info!(
         session_id = %request.session_id,
         age_ms = ?age_ms,
         deleted,
-        "Session cancelled"
+        "Session cancelled — any correction/exemption/etc. already in flight for this \
+         session_id may still land on a now-detached handle with no way to observe it"
     );
 
     Json(CancelSessionResponse {
