@@ -31,6 +31,60 @@ versioning follows [Semantic Versioning](https://semver.org/).
   the whole chain end to end for now, since no real protected endpoint
   exists yet to exercise it through.
 
+## [1.1.1] - 2026-07-28
+
+No new functionality; a full post-1.1.0 hygiene, security, and
+correctness pass across every crate.
+
+### Added
+- `SessionMetadata.owner_id: Option<Uuid>` plus owner-gated
+  `with_owned_session`/`with_owned_session_mut` store lookups, threaded
+  through both session-creating handlers (currently passing `None` --
+  no `AuthenticatedUser` exists on either yet).
+- Router-wide panic-catching middleware
+  (`tower_http::catch_panic::CatchPanicLayer`) returning the project's
+  own `ApiErrorBody` 500 shape instead of dropping the connection.
+- First test coverage for the upload handler (4 tests via a real
+  multipart request).
+- A synthetic full-pipeline dedup test covering grouping, flagging,
+  typo-variant detection, and relatedness together on fabricated data.
+- `.cargo/audit.toml` documenting one accepted, non-reachable
+  `cargo-audit` finding (`RUSTSEC-2023-0071`, an optional `sqlx-mysql`
+  dependency never compiled into this binary).
+
+### Changed
+- Applied `cargo fmt` across the entire workspace (no rustfmt.toml
+  existed before this; formatting was never mechanized).
+- `unit-group`: removed unnecessary clones in `analyze_batch`, added a
+  group-fingerprint cache to `RowScan`, indexed `apply_corrections`
+  lookups by unit instead of rescanning per row, removed dead/lossy
+  code in `models.rs` and consolidated on a single public type name for
+  advisory issues.
+- `dedup`: fixed 4 blank-vs-normalized-value comparison/display bugs
+  across `comparison.rs`/`phrasing.rs`, an address-join bug in
+  `relatedness.rs` that could collapse two different addresses into
+  one string, and a title-casing bug for names like `O'Brien`.
+- `csv_export.rs` and the dedup CSV/XLSX writers now share single
+  helpers (`write_csv`, `record_field_values`) instead of each
+  independently repeating the same boilerplate/field list.
+- `DiscoverResponse::from(&DiscoveryResult)` replaces ~60 lines of
+  hand-copying with ~15; `Session::effective_documents_for(names)`
+  lets `analyze`/`validate`/discovery filter to relevant documents
+  before the mapping/correction/exclusion transform instead of after;
+  `AnalysisResults` is now `Arc`-wrapped so passing it around a session
+  is a refcount bump instead of a deep clone.
+- Bumped `quick-xml` (0.36 -> 0.41, direct and via `calamine`) and
+  `calamine` (0.25 -> 0.36) for two RustSec advisories reachable via
+  uploaded SpreadsheetML files.
+
+### Fixed
+- A real CORS gap: the frontend's shared fetch hooks send
+  `credentials: "include"`, but the API's `CorsLayer` didn't set
+  `Access-Control-Allow-Credentials: true` -- which per the Fetch/CORS
+  spec makes a credentialed response invisible to the browser
+  regardless of whether a cookie exists yet. Verified live against a
+  running frontend, not just by reading code.
+
 ## [1.1.0] - 2026-07-20
 
 ### Added
