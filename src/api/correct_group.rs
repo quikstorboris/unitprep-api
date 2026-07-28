@@ -101,6 +101,18 @@ pub async fn correct_group(
 
             let mut matched_any = false;
 
+            // Set when some unit already carries `new_group_name` --
+            // distinct from `matched_any` (which unit currently carries
+            // the *old* name). Lets a repeat of the exact same rename
+            // request be treated as an already-satisfied no-op instead of
+            // erroring: the first call renames every matching unit, so a
+            // second, identical call finds zero units still under the old
+            // name and used to 400 as `unknown_group` even though nothing
+            // is actually wrong -- the same request twice should reach the
+            // same successful outcome, not fail the second time purely
+            // because it already succeeded once.
+            let mut already_applied = false;
+
             for document in effective.iter() {
                 if !discovery.unit_file_names.contains(&document.file_name) {
                     continue;
@@ -117,11 +129,18 @@ pub async fn correct_group(
                 for row in &document.rows {
                     let group = row.get(unit_group_index).map(|v| v.trim()).unwrap_or("");
 
+                    if group == new_group_name {
+                        already_applied = true;
+                    }
+
                     if group != request.group_name {
                         continue;
                     }
 
-                    let Some(unit_number) = row.get(number_index) else {
+                    // Trimmed to match how the unit number is read
+                    // everywhere else it's used as an identifier.
+                    let Some(unit_number) = row.get(number_index).map(|v| v.trim().to_string())
+                    else {
                         continue;
                     };
 
@@ -130,7 +149,7 @@ pub async fn correct_group(
                     session.add_correction(
                         CorrectionKey {
                             file_name: document.file_name.clone(),
-                            unit_number: unit_number.clone(),
+                            unit_number,
                             field: "unitgroup".to_string(),
                         },
                         new_group_name.clone(),
@@ -139,6 +158,18 @@ pub async fn correct_group(
             }
 
             if !matched_any {
+                if already_applied {
+                    tracing::info!(
+                        session_id = %request.session_id,
+                        group_name = %request.group_name,
+                        new_group_name = %new_group_name,
+                        "Correct-group is a no-op — already renamed to this value"
+                    );
+
+                    return run_validation(session, &request.session_id)
+                        .map_err(CorrectGroupNotReady::Stage);
+                }
+
                 tracing::warn!(
                     session_id = %request.session_id,
                     group_name = %request.group_name,

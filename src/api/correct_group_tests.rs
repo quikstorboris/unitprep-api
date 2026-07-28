@@ -79,6 +79,42 @@ async fn rejects_a_group_name_that_matches_no_unit() {
     assert_eq!(body["error"], "unknown_group");
 }
 
+/// Regression test: submitting the exact same rename twice must reach
+/// the same successful outcome both times, not 200-then-400 -- the
+/// second call finds zero units still under the *old* name (since the
+/// first call already renamed them), which used to be indistinguishable
+/// from a genuinely unknown group name.
+#[tokio::test]
+async fn repeating_the_same_rename_is_a_no_op_success_not_an_error() {
+    let state = discovered_state(
+        "s1",
+        vec![unit_document(
+            "units.csv",
+            vec![["A01", "Hertz Office Space", "", ""]],
+        )],
+    );
+
+    let first = correct_group(
+        State(state.clone()),
+        Json(request("Hertz Office Space", Some("10"), Some("15"), None)),
+    )
+    .await;
+
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let second = correct_group(
+        State(state),
+        Json(request("Hertz Office Space", Some("10"), Some("15"), None)),
+    )
+    .await;
+
+    assert_eq!(
+        second.status(),
+        StatusCode::OK,
+        "repeating an already-applied rename should succeed as a no-op, not 400"
+    );
+}
+
 /// The core scenario: width+length given, no additional properties --
 /// the new UnitGroup value becomes a plain "WxL" dimension string.
 #[tokio::test]
