@@ -1,12 +1,16 @@
 use axum::{
     extract::{Json, State},
-    response::Response,
+    http::StatusCode,
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 
 use unitprep_core::session_store::SessionStoreExt;
 
-use crate::api::{respond, validate::run_validation, AppState};
+use crate::api::{
+    session_not_found, stage_conflict, validate::run_validation, ApiErrorBody, AppState,
+};
+use crate::application::unit_group_session::StageError;
 use unitprep_unit_group::CorrectionKey;
 
 #[derive(Debug, Deserialize)]
@@ -16,6 +20,27 @@ pub struct CorrectRequest {
     pub unit_number: String,
     pub field: String,
     pub value: String,
+}
+
+enum CorrectNotReady {
+    Stage(StageError),
+
+    /// `unit_number` doesn't currently appear in `file_name` at all --
+    /// a stale identifier, a typo, or a unit whose group was excluded
+    /// since the UI last loaded. Applying the correction anyway would
+    /// silently store a dead entry with no effect and no error, per the
+    /// same "fail loudly instead" philosophy `correct_group`'s own
+    /// `unknown_group` check already applies to a whole-group rename.
+    UnknownUnit,
+
+    /// `unit_number` is shared by more than one row in `file_name` --
+    /// applying the correction would silently overwrite every one of
+    /// those rows identically (see `Session::unit_number_occurrences`'s
+    /// doc comment), so it's refused outright rather than guessing which
+    /// row the caller meant.
+    AmbiguousUnitNumber {
+        occurrences: usize,
+    },
 }
 
 /// Applies one manual correction (e.g. fixing a flagged unit's Width) and
@@ -36,6 +61,32 @@ pub async fn correct(
     let response = state
         .unit_group_sessions
         .with_session_mut(&request.session_id, |session| {
+            let occurrences =
+                session.unit_number_occurrences(&request.file_name, &request.unit_number);
+
+            if occurrences == 0 {
+                tracing::warn!(
+                    session_id = %request.session_id,
+                    file = %request.file_name,
+                    unit_number = %request.unit_number,
+                    "Correct rejected — unit number does not currently exist in this file"
+                );
+
+                return Err(CorrectNotReady::UnknownUnit);
+            }
+
+            if occurrences >= 2 {
+                tracing::warn!(
+                    session_id = %request.session_id,
+                    file = %request.file_name,
+                    unit_number = %request.unit_number,
+                    occurrences,
+                    "Correct rejected — unit number is ambiguous (shared by multiple rows) in this file"
+                );
+
+                return Err(CorrectNotReady::AmbiguousUnitNumber { occurrences });
+            }
+
             session.add_correction(key, request.value.clone());
 
             tracing::info!(
@@ -46,10 +97,40 @@ pub async fn correct(
                 "Applied manual correction"
             );
 
-            run_validation(session, &request.session_id)
+            run_validation(session, &request.session_id).map_err(CorrectNotReady::Stage)
         });
 
-    respond(response)
+    match response {
+        Some(Ok(response)) => Json(response).into_response(),
+
+        Some(Err(CorrectNotReady::Stage(err))) => stage_conflict(err),
+
+        Some(Err(CorrectNotReady::UnknownUnit)) => (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorBody {
+                error: "unknown_unit",
+                message: format!(
+                    "No row in '{}' currently has unit number '{}'.",
+                    request.file_name, request.unit_number
+                ),
+            }),
+        )
+            .into_response(),
+
+        Some(Err(CorrectNotReady::AmbiguousUnitNumber { occurrences })) => (
+            StatusCode::CONFLICT,
+            Json(ApiErrorBody {
+                error: "ambiguous_unit_number",
+                message: format!(
+                    "{occurrences} rows in this file share unit number '{}' — this correction can't be targeted to a single row. Resolve the duplicate unit numbers in the source file first.",
+                    request.unit_number
+                ),
+            }),
+        )
+            .into_response(),
+
+        None => session_not_found(),
+    }
 }
 
 #[cfg(test)]

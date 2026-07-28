@@ -48,6 +48,114 @@ async fn correct_returns_409_when_called_before_discovery() {
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
 
+/// Regression test: a `unit_number` that doesn't exist in `file_name` at
+/// all (a stale identifier, a typo, or a unit whose group was excluded
+/// since the UI last loaded) must be rejected rather than silently
+/// stored as a dead correction with no effect and no error.
+#[tokio::test]
+async fn correct_rejects_a_unit_number_that_does_not_exist_in_the_file() {
+    let state = discovered_state(
+        "s1",
+        vec![unit_document(
+            "units.csv",
+            vec![["A01", "10x10 Inside Climate", "10", "10"]],
+        )],
+    );
+
+    let response = correct(
+        State(state),
+        Json(CorrectRequest {
+            session_id: "s1".to_string(),
+            file_name: "units.csv".to_string(),
+            unit_number: "NOT-A-REAL-UNIT".to_string(),
+            field: "width".to_string(),
+            value: "10".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(body["error"], "unknown_unit");
+}
+
+/// Regression test: two rows sharing the same unit number (already
+/// flagged as a Duplicate Unit Numbers error) must reject a `/correct`
+/// naming that unit number, rather than silently applying the same new
+/// value to both rows -- including the one that was already correct.
+#[tokio::test]
+async fn correct_rejects_an_ambiguous_duplicate_unit_number() {
+    let state = discovered_state(
+        "s1",
+        vec![unit_document(
+            "units.csv",
+            vec![
+                ["A01", "10x10 Inside Climate", "0", "10"],
+                ["A01", "10x10 Inside Climate", "10", "10"],
+            ],
+        )],
+    );
+
+    let response = correct(
+        State(state),
+        Json(CorrectRequest {
+            session_id: "s1".to_string(),
+            file_name: "units.csv".to_string(),
+            unit_number: "A01".to_string(),
+            field: "width".to_string(),
+            value: "10".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(body["error"], "ambiguous_unit_number");
+}
+
+/// A unique unit number in the same file must still correct normally --
+/// the ambiguity check is scoped to genuinely duplicated numbers only.
+#[tokio::test]
+async fn correct_still_applies_for_a_unique_unit_number_alongside_a_duplicate() {
+    let state = discovered_state(
+        "s1",
+        vec![unit_document(
+            "units.csv",
+            vec![
+                ["A01", "10x10 Inside Climate", "0", "10"],
+                ["A01", "10x10 Inside Climate", "10", "10"],
+                ["A02", "10x10 Inside Climate", "0", "10"],
+            ],
+        )],
+    );
+
+    let response = correct(
+        State(state),
+        Json(CorrectRequest {
+            session_id: "s1".to_string(),
+            file_name: "units.csv".to_string(),
+            unit_number: "A02".to_string(),
+            field: "width".to_string(),
+            value: "10".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
 #[tokio::test]
 async fn correct_clears_invalid_dimensions_warning() {
     // UnitGroup must actually parse as a real dimension — an odd/
