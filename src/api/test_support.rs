@@ -74,7 +74,7 @@ pub fn unit_document(file_name: &str, rows: Vec<[&str; 4]>) -> CsvDocument {
 /// `/discover` itself needs (it classifies documents on the fly, so
 /// requires no particular stage going in).
 pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
-    let mut session = Session::new(session_id.to_string());
+    let mut session = Session::new(session_id.to_string(), None);
 
     session.data.documents = Arc::new(documents);
 
@@ -94,7 +94,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
 /// files — the minimum stage `/validate`, `/correct`, and
 /// `/exempt-dimensions` need.
 pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
-    let mut session = Session::new(session_id.to_string());
+    let mut session = Session::new(session_id.to_string(), None);
 
     let unit_file_names: Vec<String> = documents.iter().map(|d| d.file_name.clone()).collect();
 
@@ -139,7 +139,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
 /// `/analyze` needs to actually run instead of hitting its own
 /// not-ready gate.
 pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
-    let mut session = Session::new(session_id.to_string());
+    let mut session = Session::new(session_id.to_string(), None);
 
     let unit_file_names: Vec<String> = documents.iter().map(|d| d.file_name.clone()).collect();
 
@@ -195,7 +195,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
 /// `/export`'s acknowledge-override tests need: a session that's
 /// legitimately blocked, not just missing.
 pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
-    let mut session = Session::new(session_id.to_string());
+    let mut session = Session::new(session_id.to_string(), None);
 
     let unit_file_names: Vec<String> = documents.iter().map(|d| d.file_name.clone()).collect();
 
@@ -246,7 +246,7 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         ready: false,
     });
 
-    session.complete_analysis(AnalysisResults {
+    session.complete_analysis(Arc::new(AnalysisResults {
         batch_run: BatchRun {
             facilities: Vec::new(),
             global_groups: Default::default(),
@@ -255,7 +255,7 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         reference_groups: None,
         net_new_groups: vec!["10x10 Inside Climate".to_string()],
         similar_groups: Vec::new(),
-    });
+    }));
 
     let store = Arc::new(InMemorySessionStore::<Session>::new());
 

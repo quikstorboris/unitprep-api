@@ -5,7 +5,7 @@ use anyhow::Result;
 use csv::Writer;
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
-use unitprep_unit_group::{AnalysisResults, Issue};
+use unitprep_unit_group::{AdvisoryIssue, AnalysisResults};
 
 use crate::infrastructure::csv_safety::sanitize_cell;
 
@@ -84,151 +84,145 @@ pub fn build_zip(files: Vec<ExportFile>) -> Result<Vec<u8>> {
     Ok(cursor.into_inner())
 }
 
-fn generate_net_new_groups_csv(analysis: &AnalysisResults) -> Result<ExportFile> {
+/// Writes `header` followed by `rows` to an in-memory CSV byte buffer —
+/// the `Writer::from_writer` + write loop + `flush()` boilerplate every
+/// `generate_*_csv` function below used to repeat independently.
+fn write_csv(header: &[&str], rows: impl IntoIterator<Item = Vec<String>>) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
 
     {
         let mut writer = Writer::from_writer(&mut buffer);
 
-        writer.write_record(["Name", "Description", "Active"])?;
+        writer.write_record(header)?;
 
-        let mut rows = analysis.net_new_groups.clone();
-
-        rows.sort();
-
-        for group in rows {
-            let group = sanitize_cell(&group);
-            writer.write_record([group.as_str(), group.as_str(), "Yes"])?;
+        for row in rows {
+            writer.write_record(row)?;
         }
 
         writer.flush()?;
     }
 
+    Ok(buffer)
+}
+
+fn generate_net_new_groups_csv(analysis: &AnalysisResults) -> Result<ExportFile> {
+    let mut rows = analysis.net_new_groups.clone();
+    rows.sort();
+
+    let bytes = write_csv(
+        &["Name", "Description", "Active"],
+        rows.iter().map(|group| {
+            let group = sanitize_cell(group);
+            vec![group.clone(), group, "Yes".to_string()]
+        }),
+    )?;
+
     Ok(ExportFile {
         file_name: infer_output_name(analysis),
-        bytes: buffer,
+        bytes,
     })
 }
 
 fn generate_facility_assignments_csv(analysis: &AnalysisResults) -> Result<ExportFile> {
-    let mut buffer = Vec::new();
+    let existing_set = analysis
+        .reference_groups
+        .as_ref()
+        .map(|groups| groups.iter().cloned().collect::<HashSet<_>>());
 
-    {
-        let mut writer = Writer::from_writer(&mut buffer);
+    let mut rows: Vec<Vec<String>> = Vec::new();
 
-        writer.write_record([
+    for facility in &analysis.batch_run.facilities {
+        let mut groups: Vec<_> = facility.groups.iter().collect();
+        groups.sort_by_key(|(left, _)| *left);
+
+        for (group, count) in groups {
+            let (exists, net_new) = if let Some(set) = &existing_set {
+                let exists = set.contains(group);
+                (Some(exists), Some(!exists))
+            } else {
+                (None, None)
+            };
+
+            rows.push(vec![
+                sanitize_cell(&facility.name),
+                sanitize_cell(&facility.source_files.join(";")),
+                sanitize_cell(group),
+                count.to_string(),
+                exists.map(|v| v.to_string()).unwrap_or_default(),
+                net_new.map(|v| v.to_string()).unwrap_or_default(),
+            ]);
+        }
+    }
+
+    let bytes = write_csv(
+        &[
             "Facility",
             "SourceFile",
             "UnitGroup",
             "UnitCount",
             "ExistsInGlobalGroups",
             "NetNew",
-        ])?;
-
-        let existing_set = analysis
-            .reference_groups
-            .as_ref()
-            .map(|groups| groups.iter().cloned().collect::<HashSet<_>>());
-
-        for facility in &analysis.batch_run.facilities {
-            let mut groups: Vec<_> = facility.groups.iter().collect();
-
-            groups.sort_by(|(left, _), (right, _)| left.cmp(right));
-
-            for (group, count) in groups {
-                let (exists, net_new) = if let Some(set) = &existing_set {
-                    let exists = set.contains(group);
-
-                    (Some(exists), Some(!exists))
-                } else {
-                    (None, None)
-                };
-
-                writer.write_record([
-                    sanitize_cell(&facility.name),
-                    sanitize_cell(&facility.source_files.join(";")),
-                    sanitize_cell(group),
-                    count.to_string(),
-                    exists.map(|v| v.to_string()).unwrap_or_default(),
-                    net_new.map(|v| v.to_string()).unwrap_or_default(),
-                ])?;
-            }
-        }
-
-        writer.flush()?;
-    }
+        ],
+        rows,
+    )?;
 
     Ok(ExportFile {
         file_name: "facility_group_assignments.csv".to_string(),
-        bytes: buffer,
+        bytes,
     })
 }
 
 fn generate_facility_group_lookup_csv(analysis: &AnalysisResults) -> Result<ExportFile> {
-    let mut buffer = Vec::new();
+    let existing_set = analysis
+        .reference_groups
+        .as_ref()
+        .map(|groups| groups.iter().cloned().collect::<HashSet<_>>());
 
-    {
-        let mut writer = Writer::from_writer(&mut buffer);
+    let mut rows: Vec<Vec<String>> = Vec::new();
 
-        writer.write_record(["Facility", "Group"])?;
+    for facility in &analysis.batch_run.facilities {
+        let mut groups: Vec<_> = facility.groups.keys().collect();
+        groups.sort();
 
-        let existing_set = analysis
-            .reference_groups
-            .as_ref()
-            .map(|groups| groups.iter().cloned().collect::<HashSet<_>>());
+        for group in groups {
+            let is_net_new = existing_set
+                .as_ref()
+                .map(|set| !set.contains(group))
+                .unwrap_or(true);
 
-        for facility in &analysis.batch_run.facilities {
-            let mut groups: Vec<_> = facility.groups.keys().collect();
-
-            groups.sort();
-
-            for group in groups {
-                let is_net_new = existing_set
-                    .as_ref()
-                    .map(|set| !set.contains(group))
-                    .unwrap_or(true);
-
-                if is_net_new {
-                    writer.write_record([sanitize_cell(&facility.name), sanitize_cell(group)])?;
-                }
+            if is_net_new {
+                rows.push(vec![sanitize_cell(&facility.name), sanitize_cell(group)]);
             }
         }
-
-        writer.flush()?;
     }
+
+    let bytes = write_csv(&["Facility", "Group"], rows)?;
 
     Ok(ExportFile {
         file_name: "facility_group_lookup.csv".to_string(),
-        bytes: buffer,
+        bytes,
     })
 }
 
-fn generate_advisory_csv(advisory_issues: &[Issue]) -> Result<ExportFile> {
-    let mut buffer = Vec::new();
-
-    {
-        let mut writer = Writer::from_writer(&mut buffer);
-
-        writer.write_record(["Source", "Issue", "Severity"])?;
-
-        for issue in advisory_issues {
-            writer.write_record([
+fn generate_advisory_csv(advisory_issues: &[AdvisoryIssue]) -> Result<ExportFile> {
+    let bytes = write_csv(
+        &["Source", "Issue", "Severity"],
+        advisory_issues.iter().map(|issue| {
+            vec![
                 sanitize_cell(&issue.source),
                 sanitize_cell(&issue.issue),
                 format!("{:?}", issue.severity),
-            ])?;
-        }
-
-        writer.flush()?;
-    }
+            ]
+        }),
+    )?;
 
     Ok(ExportFile {
         file_name: "advisory_issues.csv".to_string(),
-        bytes: buffer,
+        bytes,
     })
 }
 
-fn generate_advisory_json(advisory_issues: &[Issue]) -> Result<ExportFile> {
+fn generate_advisory_json(advisory_issues: &[AdvisoryIssue]) -> Result<ExportFile> {
     Ok(ExportFile {
         file_name: "advisory_issues.json".to_string(),
         bytes: serde_json::to_vec_pretty(advisory_issues)?,

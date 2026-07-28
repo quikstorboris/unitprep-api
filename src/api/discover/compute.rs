@@ -150,30 +150,17 @@ pub(crate) fn compute_discovery(session: &mut Session) -> DiscoverResponse {
 
     session.complete_discovery(discovery.clone());
 
+    // Every field `DiscoverResponse` shares with `DiscoveryResult`
+    // (group_file_names, unit_file_candidates, ready, etc.) comes from
+    // the `From` impl below; only the fields that need data
+    // `DiscoveryResult` doesn't carry are set explicitly here.
     DiscoverResponse {
-        // Total candidates found, not just the confirmed subset —
-        // meaningful even before a selection is made, unlike
-        // `selected_unit_file_names` (which stays empty until confirmed).
-        unit_files_found: discovery.unit_file_candidates.len(),
-        group_files_found: discovery.group_file_names.len(),
-        group_file_names: discovery.group_file_names.clone(),
-        selected_group_file_name: discovery.selected_group_file_name.clone(),
         group_file_format_valid: group_readiness.format_valid,
         group_file_confirmed,
-        ready: discovery.ready,
         discovered_group_names,
         uncommon_group_names,
-        unit_file_candidates: discovery.unit_file_candidates.clone(),
-        selected_unit_file_names: discovery.selected_unit_file_names.clone(),
-        requires_unit_file_selection: discovery.requires_unit_file_selection,
-        requires_format_resolution: discovery.requires_format_resolution,
-        current_unit_file_name: discovery.current_unit_file_name.clone(),
-        pending_unit_file_names: discovery.pending_unit_file_names.clone(),
         mismatched_header_files,
-        detected_vendor_name: discovery.detected_vendor_name.clone(),
         confirmed_vendor_name,
-        source_headers: discovery.source_headers.clone(),
-        suggested_mapping: discovery.suggested_mapping.clone(),
         canonical_target_fields: CANONICAL_TARGET_FIELDS
             .iter()
             .map(|s| s.to_string())
@@ -182,6 +169,7 @@ pub(crate) fn compute_discovery(session: &mut Session) -> DiscoverResponse {
             .iter()
             .map(|s| s.to_string())
             .collect(),
+        ..DiscoverResponse::from(&discovery)
     }
 }
 
@@ -327,11 +315,7 @@ fn compute_discovered_group_names(
         return (Vec::new(), Vec::new());
     }
 
-    let effective: Vec<CsvDocument> = session
-        .effective_documents()
-        .into_iter()
-        .filter(|d| unit_file_names.contains(&d.file_name))
-        .collect();
+    let effective: Vec<CsvDocument> = session.effective_documents_for(unit_file_names);
 
     let selected: Vec<&CsvDocument> = effective.iter().collect();
 

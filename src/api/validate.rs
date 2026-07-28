@@ -73,7 +73,12 @@ pub fn run_validation(
     let mut files_checked = 0;
     let mut files_errored = Vec::new();
 
-    let documents = session.effective_documents();
+    // Only transform (map/correct/exclude) the unit files this pass
+    // actually reads, instead of every document ever uploaded to the
+    // session — the loop below already skipped anything else, so this
+    // just stops paying the transform cost for documents it was going to
+    // discard anyway.
+    let documents = session.effective_documents_for(&discovery.unit_file_names);
 
     // Session-wide, not per-file (a group name is already a session-wide
     // concept the same way `excluded_groups` is) — built once outside the
@@ -84,10 +89,6 @@ pub fn run_validation(
     };
 
     for document in documents.iter() {
-        if !discovery.unit_file_names.contains(&document.file_name) {
-            continue;
-        }
-
         let exempt_units = session.dimension_exemptions_for(&document.file_name);
 
         // Cheap per-document lookup, built once regardless of how many

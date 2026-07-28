@@ -1,7 +1,10 @@
-//! Shared multipart handling for the two manual-file-upload endpoints
-//! (`unit_file_upload`, `group_file_upload`) -- both accept the exact
-//! same two-field shape (`session_id` text field, `file` file field) and
-//! only differ in which discovery field gets forced afterward.
+//! Multipart handling for a manual-file-upload endpoint: a plain
+//! `session_id` text field plus a `file` field, parsed once into an
+//! `UploadedFile`. Used today by `group_file_upload` alone; kept as its
+//! own module (rather than inlined there) since the shape is generic
+//! enough to serve a second manual-upload endpoint without any change
+//! here, should one ever be added -- there is no such endpoint yet, so
+//! don't assume one exists elsewhere in the codebase.
 
 use axum::extract::multipart::MultipartError;
 use axum::extract::Multipart;

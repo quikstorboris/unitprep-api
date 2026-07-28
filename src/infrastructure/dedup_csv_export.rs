@@ -11,7 +11,9 @@ use unitprep_dedup::types::TenantRecord;
 use unitprep_dedup::DedupReport;
 
 use crate::infrastructure::csv_safety::sanitize_cell;
-use crate::infrastructure::dedup_export_plan::{build_export_plan, PlannedRow, COLUMNS};
+use crate::infrastructure::dedup_export_plan::{
+    build_export_plan, record_field_values, PlannedRow, COLUMNS, NOTE_COLUMN_INDEX,
+};
 
 pub fn generate_csv(report: &DedupReport, all_records: &[TenantRecord]) -> Result<Vec<u8>> {
     let plan = build_export_plan(report, all_records);
@@ -45,36 +47,9 @@ pub fn generate_csv(report: &DedupReport, all_records: &[TenantRecord]) -> Resul
 }
 
 fn record_row(record: &TenantRecord, note: &str) -> Vec<String> {
-    [
-        record.cust_numb.as_str(),
-        record.unit_number.as_str(),
-        note,
-        record.first_last.as_str(),
-        record.first_name.as_str(),
-        record.last_name.as_str(),
-        record.company_name.as_str(),
-        record.phone_number_prefix.as_str(),
-        record.phone_number.as_str(),
-        record.email.as_str(),
-        record.address_street1.as_str(),
-        record.address_street2.as_str(),
-        record.address_city.as_str(),
-        record.address_state.as_str(),
-        record.address_postal_code.as_str(),
-        record.alt_contact_first_name.as_str(),
-        record.alt_contact_last_name.as_str(),
-        record.alt_contact_email.as_str(),
-        record.alt_contact_phone_number_prefix.as_str(),
-        record.alt_contact_phone_number.as_str(),
-        record.alt_contact_address_street1.as_str(),
-        record.alt_contact_address_street2.as_str(),
-        record.alt_contact_address_city.as_str(),
-        record.alt_contact_address_state.as_str(),
-        record.alt_contact_address_postal_code.as_str(),
-    ]
-    .into_iter()
-    .map(sanitize_cell)
-    .collect()
+    let mut values = record_field_values(record);
+    values[NOTE_COLUMN_INDEX] = note;
+    values.into_iter().map(sanitize_cell).collect()
 }
 
 #[cfg(test)]

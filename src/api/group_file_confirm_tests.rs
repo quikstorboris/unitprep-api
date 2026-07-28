@@ -51,6 +51,7 @@ async fn returns_409_before_discovery_completes() {
         .unit_group_sessions
         .save(crate::application::unit_group_session::Session::new(
             "s1".to_string(),
+            None,
         ));
 
     let response = confirm_group_file(

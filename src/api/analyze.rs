@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
@@ -85,7 +86,20 @@ pub async fn analyze(
                 return Err(AnalyzeNotReady::GroupFileNotSelected);
             }
 
-            Ok((discovery, session.effective_documents()))
+            // Only transform (map/correct/exclude) the documents
+            // this call can actually use — the confirmed unit files,
+            // plus every group-file candidate `select_group_document`
+            // below might look up — instead of every document ever
+            // uploaded to the session, which can include stray or
+            // superseded files nothing here reads.
+            let relevant_names: Vec<String> = discovery
+                .unit_file_names
+                .iter()
+                .cloned()
+                .chain(discovery.group_file_names.iter().cloned())
+                .collect();
+
+            Ok((discovery, session.effective_documents_for(&relevant_names)))
         },
     ) {
         Some(Ok(data)) => data,
@@ -161,6 +175,11 @@ pub async fn analyze(
             return internal_error("Analysis failed");
         }
     };
+
+    // Arc, not owned -- storing this on the session and reading its
+    // fields below to build the response should share one allocation,
+    // not each deep-clone the batch's facilities/groups/issues.
+    let results = Arc::new(results);
 
     if state
         .unit_group_sessions

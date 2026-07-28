@@ -26,6 +26,12 @@ mod cell_refs;
 // note bullets (see its own doc comment for why).
 pub(crate) use cell_refs::field_cell_refs;
 
+/// Index of the `CorrectionNote` column within `COLUMNS`/
+/// `record_field_values` — shared by both writers rather than each
+/// hardcoding its own copy of "2" (the xlsx writer already needed its
+/// own typed constant for the worksheet API; see `NOTE_COLUMN` there).
+pub const NOTE_COLUMN_INDEX: usize = 2;
+
 pub const COLUMNS: &[&str] = &[
     "CustNumb",
     "UnitNumber",
@@ -218,6 +224,45 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
     }
 
     plan
+}
+
+/// `record`'s values in `COLUMNS` order, as raw (unsanitized) borrowed
+/// strings, with an empty placeholder at `NOTE_COLUMN_INDEX` — the
+/// single place that maps a `TenantRecord` to its 25-column export row,
+/// shared by both writers (`dedup_csv_export.rs`, `dedup_xlsx_export.rs`)
+/// instead of each independently enumerating the same 24 fields in the
+/// same order. The CSV writer overwrites the placeholder with the real
+/// note directly; the xlsx writer, which needs to write that column
+/// separately anyway (it may become a hyperlink), uses the placeholder
+/// as-is.
+pub fn record_field_values(record: &TenantRecord) -> [&str; 25] {
+    [
+        record.cust_numb.as_str(),
+        record.unit_number.as_str(),
+        "",
+        record.first_last.as_str(),
+        record.first_name.as_str(),
+        record.last_name.as_str(),
+        record.company_name.as_str(),
+        record.phone_number_prefix.as_str(),
+        record.phone_number.as_str(),
+        record.email.as_str(),
+        record.address_street1.as_str(),
+        record.address_street2.as_str(),
+        record.address_city.as_str(),
+        record.address_state.as_str(),
+        record.address_postal_code.as_str(),
+        record.alt_contact_first_name.as_str(),
+        record.alt_contact_last_name.as_str(),
+        record.alt_contact_email.as_str(),
+        record.alt_contact_phone_number_prefix.as_str(),
+        record.alt_contact_phone_number.as_str(),
+        record.alt_contact_address_street1.as_str(),
+        record.alt_contact_address_street2.as_str(),
+        record.alt_contact_address_city.as_str(),
+        record.alt_contact_address_state.as_str(),
+        record.alt_contact_address_postal_code.as_str(),
+    ]
 }
 
 fn push_group_rows(

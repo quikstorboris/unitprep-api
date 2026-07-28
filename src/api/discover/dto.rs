@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use unitprep_unit_group::{FieldMappingEntry, UnitFileCandidate};
+use unitprep_unit_group::{DiscoveryResult, FieldMappingEntry, UnitFileCandidate};
 
 #[derive(Debug, Deserialize)]
 pub struct DiscoverRequest {
@@ -101,4 +101,43 @@ pub struct DiscoverResponse {
     /// frontend never has to hard-code its own copy.
     pub canonical_target_fields: Vec<String>,
     pub required_target_fields: Vec<String>,
+}
+
+/// Fills every field `DiscoverResponse` shares with `DiscoveryResult`
+/// directly; the handful of response-only fields that need data
+/// `DiscoveryResult` doesn't carry (`group_file_format_valid`,
+/// `group_file_confirmed`, `discovered_group_names`,
+/// `uncommon_group_names`, `mismatched_header_files`,
+/// `confirmed_vendor_name`, `canonical_target_fields`,
+/// `required_target_fields`) come back as empty/`None`/`false` here —
+/// the caller overrides just those via struct-update syntax
+/// (`DiscoverResponse { discovered_group_names, .. DiscoverResponse::from(&discovery) }`)
+/// instead of every field being hand-copied twice.
+impl From<&DiscoveryResult> for DiscoverResponse {
+    fn from(discovery: &DiscoveryResult) -> Self {
+        DiscoverResponse {
+            unit_files_found: discovery.unit_file_candidates.len(),
+            group_files_found: discovery.group_file_names.len(),
+            group_file_names: discovery.group_file_names.clone(),
+            selected_group_file_name: discovery.selected_group_file_name.clone(),
+            group_file_format_valid: None,
+            group_file_confirmed: false,
+            ready: discovery.ready,
+            discovered_group_names: Vec::new(),
+            uncommon_group_names: Vec::new(),
+            unit_file_candidates: discovery.unit_file_candidates.clone(),
+            selected_unit_file_names: discovery.selected_unit_file_names.clone(),
+            requires_unit_file_selection: discovery.requires_unit_file_selection,
+            requires_format_resolution: discovery.requires_format_resolution,
+            current_unit_file_name: discovery.current_unit_file_name.clone(),
+            pending_unit_file_names: discovery.pending_unit_file_names.clone(),
+            mismatched_header_files: Vec::new(),
+            detected_vendor_name: discovery.detected_vendor_name.clone(),
+            confirmed_vendor_name: None,
+            source_headers: discovery.source_headers.clone(),
+            suggested_mapping: discovery.suggested_mapping.clone(),
+            canonical_target_fields: Vec::new(),
+            required_target_fields: Vec::new(),
+        }
+    }
 }

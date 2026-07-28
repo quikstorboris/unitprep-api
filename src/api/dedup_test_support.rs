@@ -25,7 +25,12 @@ pub fn dedup_state_with_report(
     report: unitprep_dedup::DedupReport,
 ) -> AppState {
     let store = empty_dedup_store();
-    store.save(DedupSession::new(session_id.to_string(), records, report));
+    store.save(DedupSession::new(
+        session_id.to_string(),
+        None,
+        records,
+        report,
+    ));
 
     AppState {
         unit_group_sessions: Arc::new(InMemorySessionStore::<Session>::new()),

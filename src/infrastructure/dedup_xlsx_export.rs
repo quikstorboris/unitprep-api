@@ -15,7 +15,9 @@ use unitprep_dedup::types::TenantRecord;
 use unitprep_dedup::DedupReport;
 
 use crate::infrastructure::csv_safety::sanitize_cell;
-use crate::infrastructure::dedup_export_plan::{build_export_plan, PlannedRow, COLUMNS};
+use crate::infrastructure::dedup_export_plan::{
+    build_export_plan, record_field_values, PlannedRow, COLUMNS, NOTE_COLUMN_INDEX,
+};
 
 const SHEET_NAME: &str = "Duplicate Tenant Check";
 
@@ -26,7 +28,7 @@ const SHEET_NAME: &str = "Duplicate Tenant Check";
 /// anyway. Light, muted fills so the black text stays easy to read.
 const CLUSTER_COLORS: &[u32] = &[0xDDEBF7, 0xE2EFDA, 0xFFF2CC, 0xFCE4D6];
 
-const NOTE_COLUMN: u16 = 2;
+const NOTE_COLUMN: u16 = NOTE_COLUMN_INDEX as u16;
 
 pub fn generate_xlsx(report: &DedupReport, all_records: &[TenantRecord]) -> Result<Vec<u8>> {
     let plan = build_export_plan(report, all_records);
@@ -111,39 +113,12 @@ fn write_note_cell(
     Ok(())
 }
 
-/// Same 25-column layout as `dedup_csv_export::record_row`, with an
-/// empty placeholder at the `CorrectionNote` position — that column is
-/// always written separately via `write_note_cell`, since it may need
-/// to become a hyperlink rather than a plain string.
+/// The `CorrectionNote` position is already a blank placeholder in
+/// `record_field_values` — that column is always written separately via
+/// `write_note_cell`, since it may need to become a hyperlink rather
+/// than a plain string.
 fn record_values(record: &TenantRecord) -> [String; 25] {
-    [
-        record.cust_numb.as_str(),
-        record.unit_number.as_str(),
-        "",
-        record.first_last.as_str(),
-        record.first_name.as_str(),
-        record.last_name.as_str(),
-        record.company_name.as_str(),
-        record.phone_number_prefix.as_str(),
-        record.phone_number.as_str(),
-        record.email.as_str(),
-        record.address_street1.as_str(),
-        record.address_street2.as_str(),
-        record.address_city.as_str(),
-        record.address_state.as_str(),
-        record.address_postal_code.as_str(),
-        record.alt_contact_first_name.as_str(),
-        record.alt_contact_last_name.as_str(),
-        record.alt_contact_email.as_str(),
-        record.alt_contact_phone_number_prefix.as_str(),
-        record.alt_contact_phone_number.as_str(),
-        record.alt_contact_address_street1.as_str(),
-        record.alt_contact_address_street2.as_str(),
-        record.alt_contact_address_city.as_str(),
-        record.alt_contact_address_state.as_str(),
-        record.alt_contact_address_postal_code.as_str(),
-    ]
-    .map(sanitize_cell)
+    record_field_values(record).map(sanitize_cell)
 }
 
 #[cfg(test)]

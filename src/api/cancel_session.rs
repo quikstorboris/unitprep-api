@@ -80,7 +80,7 @@ mod tests {
         let state = empty_state();
         state
             .unit_group_sessions
-            .save(Session::new("s1".to_string()));
+            .save(Session::new("s1".to_string(), None));
 
         let response = cancel_session(
             State(state.clone()),

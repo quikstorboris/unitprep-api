@@ -41,7 +41,8 @@ pub async fn upload_group_file(State(state): State<AppState>, multipart: Multipa
 }
 
 /// The testable core, separated from the Multipart-extracting handler
-/// above — same reasoning as `unit_file_upload::apply_unit_file_upload`.
+/// above so a test can exercise it directly with an already-parsed
+/// `CsvDocument`, without constructing a real multipart body.
 pub(crate) fn apply_group_file_upload(
     state: &AppState,
     session_id: &str,

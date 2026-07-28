@@ -31,6 +31,7 @@ use axum::{
 
 use serde::Serialize;
 
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use unitprep_core::session_store::{SessionMetrics, SessionStore};
@@ -175,7 +176,16 @@ pub fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed_origins()))
         .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
-        .allow_headers([axum::http::header::CONTENT_TYPE]);
+        .allow_headers([axum::http::header::CONTENT_TYPE])
+        // The frontend's shared hooks (useSessionPost/useSessionAction)
+        // now send `credentials: "include"` on every request, ahead of
+        // auth actually issuing a session cookie -- per the Fetch/CORS
+        // spec, a credentialed request's response is invisible to the
+        // browser unless the server explicitly echoes this header, even
+        // before any real cookie exists to send. `allow_origin` above is
+        // already a specific list (never `*`), which credentialed CORS
+        // requires regardless.
+        .allow_credentials(true);
 
     Router::new()
         .route("/health", get(health))
@@ -222,6 +232,32 @@ pub fn router(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(state)
         .layer(cors)
+        // Outermost layer — catches a panic anywhere in the stack below
+        // (routes, cors, body-limit) and turns it into the project's own
+        // ApiErrorBody 500 shape instead of silently dropping the
+        // connection with no response at all.
+        .layer(CatchPanicLayer::custom(handle_panic))
+}
+
+/// Turns a caught handler panic into a logged event plus the project's
+/// standard `internal_error` response — the real panic detail goes to
+/// the server log via `tracing::error!`, never into the response body a
+/// client sees.
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> Response {
+    let message = if let Some(s) = err.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic payload".to_string()
+    };
+
+    tracing::error!(
+        panic_message = %message,
+        "request handler panicked"
+    );
+
+    internal_error("The server encountered an unexpected error")
 }
 
 #[derive(Serialize)]
@@ -295,6 +331,32 @@ async fn whoami(user: crate::auth::AuthenticatedUser) -> Json<WhoamiResponse> {
         user_id: user.user_id.to_string(),
         role: user.role.as_db_text(),
     })
+}
+
+#[cfg(test)]
+mod panic_handler_tests {
+    use super::*;
+
+    #[test]
+    fn handle_panic_returns_a_500_for_a_str_payload() {
+        let response = handle_panic(Box::new("boom"));
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn handle_panic_returns_a_500_for_a_string_payload() {
+        let response = handle_panic(Box::new(String::from("boom")));
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// A panic payload isn't always a &str/String (`std::panic::panic_any`
+    /// can carry anything) — the fallback branch must still produce a
+    /// clean 500, not panic itself while handling a panic.
+    #[test]
+    fn handle_panic_returns_a_500_for_an_unrecognized_payload() {
+        let response = handle_panic(Box::new(42_i32));
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }
 
 /// Shared session-construction helpers for endpoint-level tests. Handlers
