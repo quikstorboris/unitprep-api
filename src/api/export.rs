@@ -84,7 +84,7 @@ pub async fn export(State(state): State<AppState>, Json(request): Json<ExportReq
                     .clone()
                     .expect("Analyzed stage guarantees analysis data");
 
-                Ok((validation, analysis))
+                Ok((validation, analysis, session.data_generation()))
             }) {
             Some(Ok(data)) => data,
             Some(Err(err)) => {
@@ -95,7 +95,7 @@ pub async fn export(State(state): State<AppState>, Json(request): Json<ExportReq
             }
         };
 
-    let (validation, analysis) = session_data;
+    let (validation, analysis, read_generation) = session_data;
 
     if !validation.ready && !request.acknowledge_errors {
         tracing::warn!(
@@ -179,21 +179,41 @@ pub async fn export(State(state): State<AppState>, Json(request): Json<ExportReq
     //
     // Tiny mutation scope.
     //
-    if state
+    match state
         .unit_group_sessions
         .with_session_mut(&request.session_id, |session| {
-            session.complete_export();
-        })
-        .is_none()
-    {
-        // Same narrow race as analyze.rs: the session vanished between
-        // the read lock above and this write-back. The ZIP is already
-        // built and returned regardless — this just makes the race
-        // observable rather than changing the response.
-        tracing::warn!(
-            session_id = %request.session_id,
-            "Session no longer exists — export stage could not be recorded"
-        );
+            // Same TOCTOU concern as analyze.rs: a correction landing in
+            // this gap already downgraded `workflow` back to `Validated`
+            // as its own safety net — unconditionally calling
+            // `complete_export` here would silently re-promote it to
+            // `Exported` even though the ZIP just returned was built from
+            // data that's no longer current.
+            if session.data_generation() == read_generation {
+                session.complete_export();
+                true
+            } else {
+                false
+            }
+        }) {
+        Some(true) => {}
+
+        Some(false) => {
+            tracing::warn!(
+                session_id = %request.session_id,
+                "Session data changed during export — discarding the stale write-back so the workflow stage can't be falsely re-promoted to Exported"
+            );
+        }
+
+        None => {
+            // Same narrow race as analyze.rs: the session vanished
+            // between the read lock above and this write-back. The ZIP
+            // is already built and returned regardless — this just makes
+            // the race observable rather than changing the response.
+            tracing::warn!(
+                session_id = %request.session_id,
+                "Session no longer exists — export stage could not be recorded"
+            );
+        }
     }
 
     tracing::info!(

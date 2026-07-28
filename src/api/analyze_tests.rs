@@ -1,9 +1,13 @@
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 
 use unitprep_core::session_store::SessionStoreExt;
+use unitprep_unit_group::{AnalysisResults, BatchRun, CorrectionKey};
 
 use super::*;
 use crate::api::test_support::{discovered_state, empty_state, unit_document, validated_state};
+use crate::application::unit_group_session::WorkflowStage;
 
 #[tokio::test]
 async fn analyze_returns_404_for_missing_session() {
@@ -112,4 +116,94 @@ async fn write_back_after_session_deletion_is_detected_not_run() {
         });
 
     assert!(wrote.is_none());
+}
+
+/// Regression test for the TOCTOU race this session's bug-hunt found and
+/// confirmed live: a correction landing between analyze()'s read and its
+/// delayed write-back used to have its `Validated` safety-net downgrade
+/// (see `run_validation` -> `complete_validation`) silently undone by
+/// analyze's unconditional `complete_analysis` call, re-promoting the
+/// workflow to `Analyzed` using data from before the correction. This
+/// reproduces the same read -> concurrent-mutation -> write-back sequence
+/// analyze() performs, using the generation-check it now runs before that
+/// write-back.
+#[tokio::test]
+async fn a_correction_between_analyzes_read_and_write_back_is_not_silently_overwritten() {
+    let state = validated_state(
+        "s1",
+        vec![unit_document(
+            "units.csv",
+            vec![["A01", "10x10 Inside Climate", "10", "10"]],
+        )],
+    );
+
+    // analyze()'s own initial read -- captures the generation exactly
+    // like its real `with_session` closure does.
+    let read_generation = state
+        .unit_group_sessions
+        .with_session("s1", |session| session.data_generation())
+        .unwrap();
+
+    // A concurrent /correct landing in the read -> write-back gap --
+    // bumps the generation, same as the real handler would trigger.
+    state.unit_group_sessions.with_session_mut("s1", |session| {
+        session.add_correction(
+            CorrectionKey {
+                file_name: "units.csv".to_string(),
+                unit_number: "A01".to_string(),
+                field: "width".to_string(),
+            },
+            "12".to_string(),
+        );
+    });
+
+    let workflow_after_correction = state
+        .unit_group_sessions
+        .with_session("s1", |session| session.workflow)
+        .unwrap();
+
+    assert_eq!(
+        workflow_after_correction,
+        WorkflowStage::Validated,
+        "add_correction alone doesn't downgrade workflow -- validated_state already starts there"
+    );
+
+    // analyze()'s delayed write-back, using its own generation check.
+    let results = Arc::new(AnalysisResults {
+        batch_run: BatchRun {
+            facilities: Vec::new(),
+            global_groups: Default::default(),
+            advisory_issues: Vec::new(),
+        },
+        reference_groups: None,
+        net_new_groups: Vec::new(),
+        similar_groups: Vec::new(),
+    });
+
+    let wrote = state.unit_group_sessions.with_session_mut("s1", |session| {
+        if session.data_generation() == read_generation {
+            session.complete_analysis(results.clone());
+            true
+        } else {
+            false
+        }
+    });
+
+    assert_eq!(
+        wrote,
+        Some(false),
+        "the stale write-back must be discarded, not silently applied"
+    );
+
+    let workflow = state
+        .unit_group_sessions
+        .with_session("s1", |session| session.workflow)
+        .unwrap();
+
+    assert_eq!(
+        workflow,
+        WorkflowStage::Validated,
+        "the concurrent correction's downgrade must survive -- it must NOT get \
+         silently re-promoted to Analyzed by the stale write-back"
+    );
 }

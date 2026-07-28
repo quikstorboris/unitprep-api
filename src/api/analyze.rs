@@ -99,7 +99,11 @@ pub async fn analyze(
                 .chain(discovery.group_file_names.iter().cloned())
                 .collect();
 
-            Ok((discovery, session.effective_documents_for(&relevant_names)))
+            Ok((
+                discovery,
+                session.effective_documents_for(&relevant_names),
+                session.data_generation(),
+            ))
         },
     ) {
         Some(Ok(data)) => data,
@@ -121,7 +125,7 @@ pub async fn analyze(
         }
     };
 
-    let (discovery, documents) = analysis_inputs;
+    let (discovery, documents, read_generation) = analysis_inputs;
 
     let unit_docs: Vec<&unitprep_core::csv_document::CsvDocument> = documents
         .iter()
@@ -181,23 +185,46 @@ pub async fn analyze(
     // not each deep-clone the batch's facilities/groups/issues.
     let results = Arc::new(results);
 
-    if state
+    match state
         .unit_group_sessions
         .with_session_mut(&request.session_id, |session| {
-            session.complete_analysis(results.clone());
-        })
-        .is_none()
-    {
-        // The session was deleted/expired in the narrow window between
-        // the read lock above and this write-back. The analysis itself
-        // is already complete and valid — there's nothing to recover by
-        // erroring here, since no later call could have used the
-        // advanced stage anyway. This just makes a previously-silent
-        // race observable instead of changing the response.
-        tracing::warn!(
-            session_id = %request.session_id,
-            "Session no longer exists — analysis stage could not be recorded"
-        );
+            // A correction/exemption/exclusion/acknowledgment landing in
+            // the gap between the read above and this write-back already
+            // downgraded `workflow` back to `Validated` as its own safety
+            // net (see `run_validation` -> `complete_validation`) —
+            // unconditionally calling `complete_analysis` here would
+            // silently re-promote it to `Analyzed` using `results`
+            // computed from data that's no longer current. Comparing the
+            // generation captured at read time catches exactly that.
+            if session.data_generation() == read_generation {
+                session.complete_analysis(results.clone());
+                true
+            } else {
+                false
+            }
+        }) {
+        Some(true) => {}
+
+        Some(false) => {
+            tracing::warn!(
+                session_id = %request.session_id,
+                "Session data changed during analysis — discarding the stale write-back so the workflow stage can't be falsely re-promoted to Analyzed"
+            );
+        }
+
+        None => {
+            // The session was deleted/expired in the narrow window
+            // between the read lock above and this write-back. The
+            // analysis itself is already complete and valid — there's
+            // nothing to recover by erroring here, since no later call
+            // could have used the advanced stage anyway. This just makes
+            // a previously-silent race observable instead of changing
+            // the response.
+            tracing::warn!(
+                session_id = %request.session_id,
+                "Session no longer exists — analysis stage could not be recorded"
+            );
+        }
     }
 
     tracing::info!(
