@@ -303,9 +303,24 @@ impl Session {
         }
     }
 
+    /// Bumps `data_generation` (unlike `complete_validation`/
+    /// `complete_analysis`/`complete_export`) because `compute_discovery`
+    /// -- the single funnel this feeds -- is reachable from handlers
+    /// (`/unit-file/select`, `/unit-file/resolve-format`,
+    /// `/group-file/select`, `/group-file/confirm`, `/group-file/upload`)
+    /// that mutate `SessionData` fields directly (e.g.
+    /// `format_resolutions`, `selected_group_file_name`,
+    /// `group_file_confirmed`) without going through one of the
+    /// `touch_data`-calling methods above. Since `require_stage` uses
+    /// `>=`, those handlers stay callable after `Analyzed`/`Exported`, so
+    /// without this bump a discovery-affecting edit landing in the
+    /// analyze/export read -> write-back gap could have its safety-net
+    /// stage downgrade silently re-promoted -- exactly the race
+    /// `data_generation` exists to close.
     pub fn complete_discovery(&mut self, result: DiscoveryResult) {
         self.data.discovery = Some(result);
         self.workflow = WorkflowStage::Discovered;
+        self.touch_data();
     }
 
     pub fn complete_validation(&mut self, result: ValidationResult) {

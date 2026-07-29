@@ -128,18 +128,47 @@ fn every_data_mutating_method_bumps_the_generation() {
     assert!(session.data_generation() > previous);
 }
 
-/// Read-only stage-machine calls (`require_stage`, `complete_discovery`)
-/// must NOT bump the generation on their own -- only the data-mutating
-/// methods above do. `complete_validation`/`complete_analysis`/
-/// `complete_export` are driven by the results of a validation/analysis
-/// run, not a direct data edit, so they're deliberately excluded too.
+/// `complete_validation`/`complete_analysis`/`complete_export` are driven
+/// by the results of a validation/analysis run, not a direct data edit,
+/// so they deliberately do NOT bump the generation on their own.
+/// `complete_discovery` is different -- see its own doc comment and the
+/// `complete_discovery_bumps_the_generation` test below.
 #[test]
-fn completing_a_stage_does_not_bump_the_generation_on_its_own() {
+fn completing_downstream_stages_does_not_bump_the_generation_on_its_own() {
     let mut session = Session::new("s1".to_string(), None);
 
     session.complete_discovery(discovery_result());
+    let after_discovery = session.data_generation();
 
-    assert_eq!(session.data_generation(), 0);
+    session.complete_validation(validation_result());
+    assert_eq!(session.data_generation(), after_discovery);
+
+    session.complete_analysis(Arc::new(analysis_results()));
+    assert_eq!(session.data_generation(), after_discovery);
+
+    session.complete_export();
+    assert_eq!(session.data_generation(), after_discovery);
+}
+
+/// `complete_discovery` is the single funnel every discovery-affecting
+/// handler goes through (`/discover`, `/unit-file/select`,
+/// `/unit-file/resolve-format`, `/group-file/select`,
+/// `/group-file/confirm`, `/group-file/upload`) -- including handlers
+/// that mutate `SessionData` fields (`format_resolutions`,
+/// `selected_group_file_name`, `group_file_confirmed`) directly rather
+/// than through a `touch_data`-calling method. It must bump
+/// `data_generation` itself so those mutations are caught by the same
+/// analyze/export TOCTOU guard as `add_correction` et al. -- see the
+/// field's own doc comment.
+#[test]
+fn complete_discovery_bumps_the_generation() {
+    let mut session = Session::new("s1".to_string(), None);
+
+    let previous = session.data_generation();
+
+    session.complete_discovery(discovery_result());
+
+    assert!(session.data_generation() > previous);
 }
 
 #[test]
