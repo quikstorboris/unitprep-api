@@ -8,10 +8,10 @@
 --   * UPDATE ... SET expires_at = <far future>  -- self-extend a session
 --
 -- Both defeat the exact mechanism the opaque-token design exists to
--- provide: an opaque token looked up in Postgres on every request was
--- chosen over a JWT specifically so revocation is instant and complete.
--- A session its holder can un-revoke is no better than the JWT that was
--- rejected for being unrevokable.
+-- provide. From [[Architecture]]: an opaque token looked up in Postgres
+-- per request was chosen over a JWT specifically so revocation is
+-- instant and complete. A session the holder can un-revoke is no better
+-- than the JWT that was rejected for being unrevokable.
 --
 -- Unlike auth.users, NO column-level grant is issued in its place: there
 -- is no legitimate application-level UPDATE on this table at all. Every
