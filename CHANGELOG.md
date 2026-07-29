@@ -31,6 +31,40 @@ versioning follows [Semantic Versioning](https://semver.org/).
   the whole chain end to end for now, since no real protected endpoint
   exists yet to exercise it through.
 
+## [1.1.5] - 2026-07-29
+
+A fresh adversarial review pass (5 parallel reviewers, one per crate/
+layer boundary) after 1.1.4 shipped, run to close out the refactor
+before a code-quality conclusion. No new functionality.
+
+### Fixed
+- `Session::complete_discovery` didn't bump `data_generation`, reopening
+  the exact class of race 1.1.3/1.1.4 closed for corrections/exemptions/
+  exclusions: handlers reachable after `Analyzed`/`Exported` (unit-file
+  format resolution, group-file selection) mutate `SessionData` directly
+  without going through a generation-bumping method, so a change landing
+  in `/analyze` or `/export`'s read -> write-back gap could still have
+  its safety-net stage downgrade silently re-promoted. Fixed at the
+  single funnel (`complete_discovery`) rather than each handler.
+
+### Changed
+- Moved `find_typo_variant_candidates` from `report.rs` into
+  `similarity.rs`, matching this crate's own documented one-module-
+  per-signal convention (next to `relatedness.rs`'s equivalent).
+- Corrected `dedup/RULES.md`'s "individually well-formed email" wording
+  to match what `all_emails_present_and_distinct` actually checks
+  (non-blank and mutually distinct -- no format validation).
+- Removed two no-op entries from `STREET_SUFFIXES`.
+
+### Added
+- A regression test for the `complete_discovery` generation-bump fix.
+- Completeness tests for `FIELD_SPECS`/`CATEGORY_PRIORITY` against every
+  `FieldName`/`FieldCategory` variant (compile-error-on-drift, via an
+  exhaustive match with no wildcard arm).
+- Tests exercising `GroupCheckAcknowledgments` with real (non-default)
+  values at the `unit-group` crate's own unit-test level.
+- A zero-row dedup pipeline test.
+
 ## [1.1.4] - 2026-07-28
 
 Closes out the two file splits and two concurrency gaps this pass's own
