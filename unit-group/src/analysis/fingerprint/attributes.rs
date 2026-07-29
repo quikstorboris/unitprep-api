@@ -14,6 +14,10 @@ pub enum Location {
 }
 
 impl Location {
+    // No alias here nests as a substring of another today, so ordering
+    // is unconstrained -- but see `Climate::ALIASES` below: a future
+    // alias that does nest would need the same "more specific first"
+    // care this table currently gets for free.
     const ALIASES: &'static [(&'static str, Location)] = &[
         ("outside", Location::Outside),
         ("exterior", Location::Outside),
