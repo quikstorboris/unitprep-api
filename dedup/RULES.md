@@ -40,7 +40,8 @@ differs — but *every* differing category gets described in the note
 now (see rule 6), not just the lead one.
 
 **Special case**: if the *only* difference is that every unit has a
-different, individually well-formed email, the note says "these may be
+non-blank email and all of them are mutually distinct (no format/`@`
+validation — just present and different), the note says "these may be
 separate tenants" instead of "please fix this" — a shared name with
 genuinely different emails is a real thing (two different people, same
 name) and shouldn't be presented as an error.
