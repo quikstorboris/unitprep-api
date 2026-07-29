@@ -3,6 +3,10 @@
 
 use std::collections::HashMap;
 
+use crate::comparison::contact_info_matches;
+use crate::note_composer::NoteComposer;
+use crate::types::{TenantGroup, TenantRecord, TypoVariantCandidate};
+
 /// Below this ratio, two names are not considered variant candidates at
 /// all. Matches the reference script's `VARIANT_REVIEW_THRESHOLD`. Every
 /// candidate at/above this is surfaced identically for human
@@ -126,9 +130,128 @@ fn longest_match(
     (best_i, best_j, best_size)
 }
 
+/// Pass over every pair of distinct-key groups, surfacing any whose
+/// display names are similar enough to be the same tenant under a
+/// typo/variant spelling. Unlike the reference script's
+/// `classify_variant_pairs`, this never merges groups or writes a
+/// combined row into anything — every candidate above threshold is
+/// returned as-is for a human to confirm (see crate-level docs).
+pub fn find_typo_variant_candidates(
+    groups: &[TenantGroup],
+    composer: &dyn NoteComposer,
+) -> Vec<TypoVariantCandidate> {
+    let mut candidates = Vec::new();
+    for i in 0..groups.len() {
+        // Every group has at least one record — group_records never
+        // creates an empty one. `a` depends only on `i`, so compute it
+        // once per outer iteration instead of once per (i, j) pair — the
+        // inner loop can run many times per `i` in a large facility.
+        let a = groups[i].records[0].display_name();
+        if a.is_empty() {
+            continue;
+        }
+        for j in (i + 1)..groups.len() {
+            let b = groups[j].records[0].display_name();
+            if b.is_empty() {
+                continue;
+            }
+            // NOTE: two *different* group keys (distinct `FirtLast`
+            // spellings/formatting) can still produce an identical
+            // display name — e.g. "Smith, John" vs. "John  Smith" both
+            // display as "John Smith" but never collapse into one
+            // `group_key`. That's exactly the strongest duplicate-tenant
+            // signal there is, so it must NOT be skipped here; a 100%
+            // `name_similarity` ratio surfaces it through the normal
+            // threshold check below like any other high-similarity pair.
+            let ratio = name_similarity(&a, &b);
+            if ratio < VARIANT_SURFACE_THRESHOLD {
+                continue;
+            }
+            let combined: Vec<TenantRecord> = groups[i]
+                .records
+                .iter()
+                .chain(groups[j].records.iter())
+                .cloned()
+                .collect();
+            let matches = contact_info_matches(&combined);
+            candidates.push(TypoVariantCandidate {
+                key_a: groups[i].key.clone(),
+                key_b: groups[j].key.clone(),
+                ratio,
+                contact_info_matches: matches,
+                note: composer.compose_variant_note(&groups[i], &groups[j], matches),
+            });
+        }
+    }
+    // `partial_cmp(...).unwrap()` would panic on a NaN ratio. Nothing
+    // produces one today (blank display names are filtered out above,
+    // and `sequence_matcher_ratio` special-cases zero-length input to
+    // return 1.0 rather than dividing 0/0) -- `total_cmp` costs nothing
+    // over `partial_cmp` in the common case and removes the panic path
+    // entirely rather than relying on that invariant holding forever.
+    candidates.sort_by(|a, b| b.ratio.total_cmp(&a.ratio));
+    candidates
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::note_composer::TemplateNoteComposer;
+
+    fn record(first_last: &str, first_name: &str, last_name: &str, unit: &str) -> TenantRecord {
+        TenantRecord {
+            first_last: first_last.to_string(),
+            first_name: first_name.to_string(),
+            last_name: last_name.to_string(),
+            unit_number: unit.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn identical_display_names_under_different_keys_are_surfaced() {
+        // Two different `FirtLast` spellings/formats ("Smith, John" vs.
+        // "John  Smith") never share a group_key, but both display as
+        // "John Smith" — exactly the strongest duplicate-tenant signal
+        // there is. This must NOT be silently skipped.
+        let groups = vec![
+            TenantGroup {
+                key: "smith, john".to_string(),
+                records: vec![record("Smith, John", "John", "Smith", "A1")],
+            },
+            TenantGroup {
+                key: "john  smith".to_string(),
+                records: vec![record("John  Smith", "John", "Smith", "B2")],
+            },
+        ];
+
+        let candidates = find_typo_variant_candidates(&groups, &TemplateNoteComposer);
+
+        assert_eq!(candidates.len(), 1);
+        assert!(
+            (candidates[0].ratio - 1.0).abs() < 1e-9,
+            "expected a perfect-match ratio, got {}",
+            candidates[0].ratio
+        );
+    }
+
+    #[test]
+    fn blank_display_names_are_still_skipped() {
+        let groups = vec![
+            TenantGroup {
+                key: "a".to_string(),
+                records: vec![record("", "", "", "A1")],
+            },
+            TenantGroup {
+                key: "b".to_string(),
+                records: vec![record("", "", "", "B2")],
+            },
+        ];
+
+        let candidates = find_typo_variant_candidates(&groups, &TemplateNoteComposer);
+
+        assert!(candidates.is_empty());
+    }
 
     /// Every value here was computed by actually running Python's
     /// `difflib.SequenceMatcher` (the reference implementation) on the

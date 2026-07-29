@@ -6,11 +6,11 @@
 
 use serde::Serialize;
 
-use crate::comparison::{contact_info_matches, find_differing_categories};
+use crate::comparison::find_differing_categories;
 use crate::grouping::{group_records, multi_unit_groups};
 use crate::note_composer::{NoteComposer, TemplateNoteComposer};
 use crate::relatedness::{find_related_tenant_candidates, RelatedTenantCandidate};
-use crate::similarity::{name_similarity, VARIANT_SURFACE_THRESHOLD};
+use crate::similarity::find_typo_variant_candidates;
 use crate::types::{FlaggedGroup, TenantGroup, TenantRecord, TypoVariantCandidate};
 
 /// Full result of a duplicate-tenant check run.
@@ -82,128 +82,10 @@ fn flag_groups(groups: Vec<TenantGroup>, composer: &dyn NoteComposer) -> Vec<Fla
         .collect()
 }
 
-/// Pass over every pair of distinct-key groups, surfacing any whose
-/// display names are similar enough to be the same tenant under a
-/// typo/variant spelling. Unlike the reference script's
-/// `classify_variant_pairs`, this never merges groups or writes a
-/// combined row into anything — every candidate above threshold is
-/// returned as-is for a human to confirm (see crate-level docs).
-fn find_typo_variant_candidates(
-    groups: &[TenantGroup],
-    composer: &dyn NoteComposer,
-) -> Vec<TypoVariantCandidate> {
-    let mut candidates = Vec::new();
-    for i in 0..groups.len() {
-        // Every group has at least one record — group_records never
-        // creates an empty one. `a` depends only on `i`, so compute it
-        // once per outer iteration instead of once per (i, j) pair — the
-        // inner loop can run many times per `i` in a large facility.
-        let a = groups[i].records[0].display_name();
-        if a.is_empty() {
-            continue;
-        }
-        for j in (i + 1)..groups.len() {
-            let b = groups[j].records[0].display_name();
-            if b.is_empty() {
-                continue;
-            }
-            // NOTE: two *different* group keys (distinct `FirtLast`
-            // spellings/formatting) can still produce an identical
-            // display name — e.g. "Smith, John" vs. "John  Smith" both
-            // display as "John Smith" but never collapse into one
-            // `group_key`. That's exactly the strongest duplicate-tenant
-            // signal there is, so it must NOT be skipped here; a 100%
-            // `name_similarity` ratio surfaces it through the normal
-            // threshold check below like any other high-similarity pair.
-            let ratio = name_similarity(&a, &b);
-            if ratio < VARIANT_SURFACE_THRESHOLD {
-                continue;
-            }
-            let combined: Vec<TenantRecord> = groups[i]
-                .records
-                .iter()
-                .chain(groups[j].records.iter())
-                .cloned()
-                .collect();
-            let matches = contact_info_matches(&combined);
-            candidates.push(TypoVariantCandidate {
-                key_a: groups[i].key.clone(),
-                key_b: groups[j].key.clone(),
-                ratio,
-                contact_info_matches: matches,
-                note: composer.compose_variant_note(&groups[i], &groups[j], matches),
-            });
-        }
-    }
-    // `partial_cmp(...).unwrap()` would panic on a NaN ratio. Nothing
-    // produces one today (blank display names are filtered out above,
-    // and `sequence_matcher_ratio` special-cases zero-length input to
-    // return 1.0 rather than dividing 0/0) -- `total_cmp` costs nothing
-    // over `partial_cmp` in the common case and removes the panic path
-    // entirely rather than relying on that invariant holding forever.
-    candidates.sort_by(|a, b| b.ratio.total_cmp(&a.ratio));
-    candidates
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::TenantRecord;
-
-    fn record(first_last: &str, first_name: &str, last_name: &str, unit: &str) -> TenantRecord {
-        TenantRecord {
-            first_last: first_last.to_string(),
-            first_name: first_name.to_string(),
-            last_name: last_name.to_string(),
-            unit_number: unit.to_string(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn identical_display_names_under_different_keys_are_surfaced() {
-        // Two different `FirtLast` spellings/formats ("Smith, John" vs.
-        // "John  Smith") never share a group_key, but both display as
-        // "John Smith" — exactly the strongest duplicate-tenant signal
-        // there is. This must NOT be silently skipped.
-        let groups = vec![
-            TenantGroup {
-                key: "smith, john".to_string(),
-                records: vec![record("Smith, John", "John", "Smith", "A1")],
-            },
-            TenantGroup {
-                key: "john  smith".to_string(),
-                records: vec![record("John  Smith", "John", "Smith", "B2")],
-            },
-        ];
-
-        let candidates = find_typo_variant_candidates(&groups, &TemplateNoteComposer);
-
-        assert_eq!(candidates.len(), 1);
-        assert!(
-            (candidates[0].ratio - 1.0).abs() < 1e-9,
-            "expected a perfect-match ratio, got {}",
-            candidates[0].ratio
-        );
-    }
-
-    #[test]
-    fn blank_display_names_are_still_skipped() {
-        let groups = vec![
-            TenantGroup {
-                key: "a".to_string(),
-                records: vec![record("", "", "", "A1")],
-            },
-            TenantGroup {
-                key: "b".to_string(),
-                records: vec![record("", "", "", "B2")],
-            },
-        ];
-
-        let candidates = find_typo_variant_candidates(&groups, &TemplateNoteComposer);
-
-        assert!(candidates.is_empty());
-    }
 
     /// End-to-end, fabricated (no real PII) fixture exercising all three
     /// passes together in one `run()` call — grouping, flagging,
@@ -399,6 +281,22 @@ mod tests {
 
         assert_eq!(report.total_rows, 1);
         assert_eq!(report.unique_tenants, 1);
+        assert_eq!(report.multi_unit_tenants, 0);
+        assert!(report.flagged_groups.is_empty());
+        assert!(report.typo_variant_candidates.is_empty());
+        assert!(report.related_tenant_candidates.is_empty());
+    }
+
+    /// The pipeline's actual floor: zero rows, not just one. Every pass
+    /// operates on an empty `groups` collection here rather than a
+    /// single-element one -- must not panic and should report an
+    /// entirely empty result.
+    #[test]
+    fn zero_row_pipeline_does_not_panic_and_returns_an_empty_report() {
+        let report = run(Vec::new());
+
+        assert_eq!(report.total_rows, 0);
+        assert_eq!(report.unique_tenants, 0);
         assert_eq!(report.multi_unit_tenants, 0);
         assert!(report.flagged_groups.is_empty());
         assert!(report.typo_variant_candidates.is_empty());
