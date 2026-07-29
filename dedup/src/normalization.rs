@@ -23,7 +23,6 @@ pub const STREET_SUFFIXES: &[(&str, &str)] = &[
     ("highway", "hwy"),
     ("parkway", "pkwy"),
     ("trail", "trl"),
-    ("way", "way"),
     ("north", "n"),
     ("south", "s"),
     ("east", "e"),
@@ -34,7 +33,6 @@ pub const STREET_SUFFIXES: &[(&str, &str)] = &[
     ("southwest", "sw"),
     ("apartment", "apt"),
     ("suite", "ste"),
-    ("unit", "unit"),
 ];
 
 /// True for blank, whitespace-only, or absent values.
