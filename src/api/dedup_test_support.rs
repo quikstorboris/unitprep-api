@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
 
+use crate::api::test_support::empty_ceremony_store;
 use crate::api::test_support::empty_dedup_store;
 use crate::api::test_support::test_auth_backend;
 use crate::api::test_support::test_db_pool;
@@ -37,5 +38,6 @@ pub fn dedup_state_with_report(
         dedup_sessions: store,
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
+        registration_ceremonies: empty_ceremony_store(),
     }
 }

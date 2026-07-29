@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::application::dedup_session_service::DedupSession;
 use crate::application::unit_group_session::Session;
+use crate::auth::RegistrationCeremony;
 use unitprep_core::csv_document::CsvDocument;
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
 use unitprep_core::session_store::SessionStore;
@@ -18,6 +19,12 @@ use super::AppState;
 /// use one.
 pub(crate) fn empty_dedup_store() -> Arc<dyn SessionStore<DedupSession>> {
     Arc::new(InMemorySessionStore::<DedupSession>::new())
+}
+
+/// Same reasoning as `empty_dedup_store` above, for the registration-
+/// ceremony store `AppState` now also requires.
+pub(crate) fn empty_ceremony_store() -> Arc<dyn SessionStore<RegistrationCeremony>> {
+    Arc::new(InMemorySessionStore::<RegistrationCeremony>::new())
 }
 
 // A pool that never actually connects -- connect_lazy only validates
@@ -47,6 +54,7 @@ pub fn empty_state() -> AppState {
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
+        registration_ceremonies: empty_ceremony_store(),
     }
 }
 
@@ -87,6 +95,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
+        registration_ceremonies: empty_ceremony_store(),
     }
 }
 
@@ -154,6 +163,7 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
+        registration_ceremonies: empty_ceremony_store(),
     }
 }
 
@@ -199,6 +209,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
+        registration_ceremonies: empty_ceremony_store(),
     }
 }
 
@@ -254,6 +265,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
+        registration_ceremonies: empty_ceremony_store(),
     }
 }
 
@@ -333,5 +345,6 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         dedup_sessions: empty_dedup_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
+        registration_ceremonies: empty_ceremony_store(),
     }
 }

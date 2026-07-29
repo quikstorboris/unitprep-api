@@ -81,11 +81,25 @@ async fn main() {
         }),
     );
 
+    // Fixed at 5 minutes, not env-overridable like session_timeout_secs
+    // above -- a WebAuthn ceremony is one request/response round trip
+    // through the browser's own navigator.credentials.create(), not a
+    // tunable operational parameter the way a login session's lifetime
+    // is.
+    let registration_ceremonies = Arc::new(
+        InMemorySessionStore::<auth::RegistrationCeremony>::with_timeout(
+            std::time::Duration::from_secs(5 * 60),
+        ),
+    );
+
+    registration_ceremonies.start_cleanup_task();
+
     let state = AppState {
         unit_group_sessions: session_store,
         dedup_sessions: dedup_session_store,
         db: db_pool,
         auth_backend,
+        registration_ceremonies,
     };
 
     let app = api::router(state);

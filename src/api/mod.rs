@@ -1,5 +1,6 @@
 mod acknowledge_group_warnings;
 mod analyze;
+mod auth_register;
 mod cancel_session;
 mod correct;
 mod correct_group;
@@ -63,6 +64,13 @@ pub struct AppState {
     // pattern as the session stores above, so a future backend swap is
     // a new impl, not a rewrite of every call site.
     pub auth_backend: Arc<dyn crate::auth::AuthBackend>,
+
+    // Ephemeral WebAuthn registration-ceremony state (see
+    // auth::RegistrationCeremony) -- same generic SessionStore engine as
+    // unit_group_sessions/dedup_sessions above, just a much shorter
+    // timeout, since a ceremony is one request/response round trip, not
+    // a standing session.
+    pub registration_ceremonies: Arc<dyn SessionStore<crate::auth::RegistrationCeremony>>,
 }
 
 /// The one true "your session is gone" response — a session can disappear
@@ -193,6 +201,11 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/health/db", get(health_db))
         .route("/health/whoami", get(whoami))
+        .route("/auth/register/begin", post(auth_register::register_begin))
+        .route(
+            "/auth/register/finish",
+            post(auth_register::register_finish),
+        )
         .route("/upload", post(upload::upload))
         .route("/discover", post(discover::discover))
         .route("/validate", post(validate::validate))
