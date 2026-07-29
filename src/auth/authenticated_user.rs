@@ -58,15 +58,13 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             .await
             .expect("CookieJar extraction is infallible");
 
-        let raw_token = read_session_cookie(&jar).ok_or_else(unauthorized)?;
-        let token_hash = hash_token(&raw_token);
+        let Some(raw_token) = read_session_cookie(&jar) else {
+            return Err(unauthorized());
+        };
 
-        let row: Option<(Uuid, String)> =
-            sqlx::query_as("SELECT user_id, role::text FROM resolve_session($1)")
-                .bind(token_hash)
-                .fetch_optional(&state.db)
-                .await
-                .map_err(|_| internal_error())?;
+        let row = query_session(&raw_token, &state.db)
+            .await
+            .map_err(|_| internal_error())?;
 
         let (user_id, role_text) = row.ok_or_else(unauthorized)?;
 
@@ -74,6 +72,42 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 
         Ok(AuthenticatedUser { user_id, role })
     }
+}
+
+/// The one query behind session resolution -- shared by the mandatory
+/// extractor above and by `try_authenticated_user` below so there is
+/// exactly one place that knows resolve_session's shape.
+async fn query_session(
+    raw_token: &str,
+    db: &PgPool,
+) -> Result<Option<(Uuid, String)>, sqlx::Error> {
+    let token_hash = hash_token(raw_token);
+
+    sqlx::query_as("SELECT user_id, role::text FROM resolve_session($1)")
+        .bind(token_hash)
+        .fetch_optional(db)
+        .await
+}
+
+/// A best-effort version of the extractor above, for a handler that
+/// needs to know "is there already a valid session" without rejecting
+/// the request when there isn't one -- see register_begin, which treats
+/// an existing session as "add another passkey for yourself" and an
+/// absent or unresolvable one as the bootstrap path instead of a 401.
+/// Any failure (missing cookie, DB error, unresolved session, unknown
+/// role) collapses to `None` here -- unlike the mandatory extractor,
+/// nothing downstream needs to tell those cases apart, since the caller
+/// falls through to its own, entirely separate bootstrap checks either
+/// way.
+pub async fn try_authenticated_user(
+    jar: &CookieJar,
+    state: &AppState,
+) -> Option<AuthenticatedUser> {
+    let raw_token = read_session_cookie(jar)?;
+    let (user_id, role_text) = query_session(&raw_token, &state.db).await.ok()??;
+    let role = Role::from_db_text(&role_text)?;
+
+    Some(AuthenticatedUser { user_id, role })
 }
 
 fn unauthorized() -> Response {
@@ -119,6 +153,36 @@ pub async fn begin_rls_transaction(
 
     sqlx::query("SELECT set_config('app.current_user_role', $1, true)")
         .bind(role.as_db_text())
+        .execute(&mut *tx)
+        .await?;
+
+    Ok(tx)
+}
+
+/// Like `begin_rls_transaction`, but sets ONLY `app.current_user_id` and
+/// deliberately leaves `app.current_user_role` unset.
+///
+/// For pre-authentication flows that must write a row owned by a
+/// specific user before that user has any established role to assert --
+/// today, the bootstrap half of passkey registration (see
+/// `api::auth_register`), where no session exists yet by definition.
+///
+/// Strictly LESS privilege than `begin_rls_transaction`, not a
+/// convenience variant: every admin-bypass branch in this schema's
+/// policies is written as `current_setting('app.current_user_role', true)
+/// = 'admin'`, which safely evaluates false when the setting is unset
+/// (a text comparison, so it needs no `NULLIF` guard -- unlike the uuid
+/// casts, see the RLS notes on why those do). So a transaction opened
+/// here can reach owner-scoped rows and nothing else, and cannot
+/// accidentally inherit admin visibility.
+pub async fn begin_owner_rls_transaction(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
+        .bind(user_id.to_string())
         .execute(&mut *tx)
         .await?;
 

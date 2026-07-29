@@ -1,9 +1,22 @@
 mod authenticated_user;
+mod ceremony_cookie;
+mod registration_ceremony;
 mod session_cookie;
 mod session_token;
 mod webauthn_backend;
 
-pub use authenticated_user::{begin_rls_transaction, AuthenticatedUser, Role};
+pub use authenticated_user::{
+    begin_owner_rls_transaction, begin_rls_transaction, try_authenticated_user, AuthenticatedUser,
+    Role,
+};
+// CEREMONY_COOKIE_NAME is deliberately NOT re-exported yet -- nothing
+// outside this module needs the literal name, and exporting it unused
+// would add a dead-code warning. Re-export it when something (a login
+// flow, an HTTP-level test asserting the Set-Cookie header) actually
+// reads it, the same way SESSION_COOKIE_NAME is exported for its own
+// still-pending caller.
+pub use ceremony_cookie::{clear_ceremony_cookie, issue_ceremony_cookie, read_ceremony_cookie};
+pub use registration_ceremony::RegistrationCeremony;
 pub use session_cookie::{
     clear_session_cookie, issue_session_cookie, read_session_cookie, SESSION_COOKIE_NAME,
 };
