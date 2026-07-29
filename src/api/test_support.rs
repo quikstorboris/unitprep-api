@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::application::dedup_session_service::DedupSession;
 use crate::application::unit_group_session::Session;
-use crate::auth::RegistrationCeremony;
+use crate::auth::{AuthenticationCeremony, RegistrationCeremony};
 use unitprep_core::csv_document::CsvDocument;
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
 use unitprep_core::session_store::SessionStore;
@@ -27,12 +27,31 @@ pub(crate) fn empty_ceremony_store() -> Arc<dyn SessionStore<RegistrationCeremon
     Arc::new(InMemorySessionStore::<RegistrationCeremony>::new())
 }
 
-// A pool that never actually connects -- connect_lazy only validates
-// the URL is well-formed, so this is safe for every fixture below,
-// none of which touch state.db yet. Add a real pool here only once a
-// test actually needs to hit Postgres.
+/// Login's counterpart to `empty_ceremony_store`.
+pub(crate) fn empty_auth_ceremony_store() -> Arc<dyn SessionStore<AuthenticationCeremony>> {
+    Arc::new(InMemorySessionStore::<AuthenticationCeremony>::new())
+}
+
+// A pool that never actually connects -- connect_lazy only validates the
+// URL is well-formed, so this is safe for fixtures that never touch
+// state.db. Add a real pool here only once a test genuinely needs
+// Postgres.
+//
+// The short acquire_timeout is load-bearing, not tidiness. sqlx defaults
+// to 30 SECONDS, and because the pool is lazy, a handler path that
+// unexpectedly reaches the database does not error -- it stalls for the
+// full timeout and then errors, so the test still passes and the only
+// symptom is a suite that got mysteriously slower. That is exactly what
+// happened when the login tests landed: five tests took 30.00s between
+// them where every other test in this crate runs in microseconds.
+//
+// A tight timeout converts that from "silently slow" into "fails almost
+// immediately", which is the correct outcome for a unit test that was
+// never supposed to need a database. Any test that legitimately needs one
+// must build its own pool rather than raise this.
 pub(crate) fn test_db_pool() -> sqlx::PgPool {
     sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(50))
         .connect_lazy("postgres://test:test@localhost/test")
         .expect("connect_lazy should never fail for a well-formed URL")
 }
@@ -55,6 +74,7 @@ pub fn empty_state() -> AppState {
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
+        authentication_ceremonies: empty_auth_ceremony_store(),
     }
 }
 
@@ -96,6 +116,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
+        authentication_ceremonies: empty_auth_ceremony_store(),
     }
 }
 
@@ -164,6 +185,7 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
+        authentication_ceremonies: empty_auth_ceremony_store(),
     }
 }
 
@@ -210,6 +232,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
+        authentication_ceremonies: empty_auth_ceremony_store(),
     }
 }
 
@@ -266,6 +289,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
+        authentication_ceremonies: empty_auth_ceremony_store(),
     }
 }
 
@@ -346,5 +370,6 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
+        authentication_ceremonies: empty_auth_ceremony_store(),
     }
 }

@@ -94,12 +94,23 @@ async fn main() {
 
     registration_ceremonies.start_cleanup_task();
 
+    // Same fixed TTL and same reasoning as the registration ceremonies
+    // above -- one browser round trip, not a tunable operational value.
+    let authentication_ceremonies = Arc::new(
+        InMemorySessionStore::<auth::AuthenticationCeremony>::with_timeout(
+            std::time::Duration::from_secs(5 * 60),
+        ),
+    );
+
+    authentication_ceremonies.start_cleanup_task();
+
     let state = AppState {
         unit_group_sessions: session_store,
         dedup_sessions: dedup_session_store,
         db: db_pool,
         auth_backend,
         registration_ceremonies,
+        authentication_ceremonies,
     };
 
     let app = api::router(state);

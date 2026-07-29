@@ -53,9 +53,10 @@ use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{
-    begin_owner_rls_transaction, begin_rls_transaction, clear_ceremony_cookie, generate_token,
-    issue_ceremony_cookie, issue_session_cookie, read_ceremony_cookie, try_authenticated_user,
-    RegistrationCeremony, Role, StoredCredential,
+    audit_log, begin_owner_rls_transaction, begin_rls_transaction, clear_ceremony_cookie,
+    generate_token, issue_ceremony_cookie, issue_session_cookie, read_ceremony_cookie,
+    try_authenticated_user, RegistrationCeremony, Role, StoredCredential,
+    REGISTRATION_CEREMONY_COOKIE,
 };
 
 /// How long a started-but-unfinished ceremony stays valid. Deliberately
@@ -260,6 +261,7 @@ pub async fn register_begin(
 
     let jar = issue_ceremony_cookie(
         jar,
+        REGISTRATION_CEREMONY_COOKIE,
         ceremony_id,
         time::Duration::minutes(CEREMONY_TTL_MINUTES),
     );
@@ -348,7 +350,7 @@ pub async fn register_finish(
     headers: HeaderMap,
     Json(request): Json<RegisterFinishRequest>,
 ) -> Response {
-    let Some(ceremony_id) = read_ceremony_cookie(&jar) else {
+    let Some(ceremony_id) = read_ceremony_cookie(&jar, REGISTRATION_CEREMONY_COOKIE) else {
         return ceremony_not_found();
     };
 
@@ -367,7 +369,11 @@ pub async fn register_finish(
                 )
             })
     else {
-        return (clear_ceremony_cookie(jar), ceremony_not_found()).into_response();
+        return (
+            clear_ceremony_cookie(jar, REGISTRATION_CEREMONY_COOKIE),
+            ceremony_not_found(),
+        )
+            .into_response();
     };
 
     // Single-use, and consumed BEFORE verification rather than after: a
@@ -375,7 +381,7 @@ pub async fn register_finish(
     // same challenge. A legitimate retry needs a fresh `/begin`.
     state.registration_ceremonies.delete(&ceremony_id);
 
-    let jar = clear_ceremony_cookie(jar);
+    let jar = clear_ceremony_cookie(jar, REGISTRATION_CEREMONY_COOKIE);
 
     let stored = match state
         .auth_backend
@@ -402,6 +408,19 @@ pub async fn register_finish(
         return (jar, internal_error("Could not save the passkey")).into_response();
     }
 
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok());
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::PASSKEY_REGISTERED,
+        Some(user_id),
+        user_agent,
+        serde_json::json!({ "bootstrap": is_bootstrap }),
+    )
+    .await;
+
     if !is_bootstrap {
         tracing::info!(user_id = %user_id, "additional passkey registered");
 
@@ -422,10 +441,6 @@ pub async fn register_finish(
 
     let lifetime_hours = session_lifetime_hours();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(lifetime_hours);
-
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
 
     // `ip_address` is left NULL deliberately. Capturing a real client IP
     // needs `into_make_service_with_connect_info` wiring in `main.rs`
@@ -583,6 +598,7 @@ mod tests {
     async fn finish_with_an_unknown_ceremony_id_is_a_bad_request() {
         let jar = issue_ceremony_cookie(
             CookieJar::new(),
+            REGISTRATION_CEREMONY_COOKIE,
             "not-a-real-ceremony".to_string(),
             time::Duration::minutes(5),
         );
@@ -623,6 +639,7 @@ mod tests {
 
         let jar = issue_ceremony_cookie(
             CookieJar::new(),
+            REGISTRATION_CEREMONY_COOKIE,
             "ceremony-1".to_string(),
             time::Duration::minutes(5),
         );

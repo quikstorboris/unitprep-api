@@ -1,5 +1,6 @@
 mod acknowledge_group_warnings;
 mod analyze;
+mod auth_login;
 mod auth_register;
 mod cancel_session;
 mod correct;
@@ -71,6 +72,12 @@ pub struct AppState {
     // timeout, since a ceremony is one request/response round trip, not
     // a standing session.
     pub registration_ceremonies: Arc<dyn SessionStore<crate::auth::RegistrationCeremony>>,
+
+    // Login's counterpart to registration_ceremonies. A separate store,
+    // not a shared one: the two hold different webauthn-rs state types and
+    // can be in flight simultaneously (see the ceremony-cookie names in
+    // auth/ceremony_cookie.rs for the same reasoning).
+    pub authentication_ceremonies: Arc<dyn SessionStore<crate::auth::AuthenticationCeremony>>,
 }
 
 /// The one true "your session is gone" response — a session can disappear
@@ -206,6 +213,8 @@ pub fn router(state: AppState) -> Router {
             "/auth/register/finish",
             post(auth_register::register_finish),
         )
+        .route("/auth/login/begin", post(auth_login::login_begin))
+        .route("/auth/login/finish", post(auth_login::login_finish))
         .route("/upload", post(upload::upload))
         .route("/discover", post(discover::discover))
         .route("/validate", post(validate::validate))
