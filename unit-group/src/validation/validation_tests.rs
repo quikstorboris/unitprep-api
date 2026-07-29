@@ -404,6 +404,97 @@ fn rare_group_flags_group_names_not_unit_numbers() {
     assert_eq!(rare.flagged_values, vec!["10x17 Climate".to_string()]);
 }
 
+/// Every other test in this file passes `GroupCheckAcknowledgments::default()`
+/// -- an empty one -- so none of them exercise the actual suppression
+/// behavior: a group the user has explicitly accepted "as is" for a
+/// given check should stop being flagged under that check, even though
+/// its units stay in the data unchanged. This constructs a non-default
+/// `GroupCheckAcknowledgments` and confirms the odd-group issue is
+/// filtered out once "Office" is acknowledged as odd.
+#[test]
+fn acknowledged_odd_group_is_filtered_out_of_validation() {
+    // 5 units so this group is odd (no parseable width/length) but NOT
+    // also rare (rare's threshold is <= 4 occurrences) -- keeps the two
+    // per-group checks from interfering with each other in this test.
+    let document = CsvDocument {
+        modified_at: None,
+        file_name: "test.csv".to_string(),
+        headers: vec!["number".to_string(), "unitgroup".to_string()],
+        rows: vec![
+            vec!["A01".to_string(), "Office".to_string()],
+            vec!["A02".to_string(), "Office".to_string()],
+            vec!["A03".to_string(), "Office".to_string()],
+            vec!["A04".to_string(), "Office".to_string()],
+            vec!["A05".to_string(), "Office".to_string()],
+        ],
+    };
+
+    let unacknowledged = validate_document(
+        &document,
+        &HashSet::new(),
+        &GroupCheckAcknowledgments::default(),
+    )
+    .unwrap();
+    assert!(
+        unacknowledged
+            .iter()
+            .any(|i| i.description == "Odd UnitGroup values"),
+        "sanity check: \"Office\" should be flagged as odd before any acknowledgment"
+    );
+
+    let mut acknowledgments = GroupCheckAcknowledgments::default();
+    acknowledgments.odd.insert("Office".to_string());
+
+    let issues = validate_document(&document, &HashSet::new(), &acknowledgments).unwrap();
+
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.description == "Odd UnitGroup values"),
+        "an acknowledged odd group should not be flagged again"
+    );
+}
+
+/// Sibling to `acknowledged_odd_group_is_filtered_out_of_validation` above,
+/// for the rare-group check instead of odd.
+#[test]
+fn acknowledged_rare_group_is_filtered_out_of_validation() {
+    // A single unit of a dimensioned group: rare (count 1 <= 4), but not
+    // odd (it parses a clean width/length), so the two checks don't
+    // overlap here either.
+    let document = CsvDocument {
+        modified_at: None,
+        file_name: "test.csv".to_string(),
+        headers: vec!["number".to_string(), "unitgroup".to_string()],
+        rows: vec![vec!["A01".to_string(), "10x17 Climate".to_string()]],
+    };
+
+    let unacknowledged = validate_document(
+        &document,
+        &HashSet::new(),
+        &GroupCheckAcknowledgments::default(),
+    )
+    .unwrap();
+    assert!(
+        unacknowledged
+            .iter()
+            .any(|i| i.description == "Rare UnitGroup detected"),
+        "sanity check: \"10x17 Climate\" should be flagged as rare before any acknowledgment"
+    );
+
+    let mut acknowledgments = GroupCheckAcknowledgments::default();
+    acknowledgments.rare.insert("10x17 Climate".to_string());
+
+    let issues = validate_document(&document, &HashSet::new(), &acknowledgments).unwrap();
+
+    assert!(
+        !issues
+            .iter()
+            .any(|i| i.description == "Rare UnitGroup detected"),
+        "an acknowledged rare group should not be flagged again"
+    );
+}
+
 #[test]
 fn invalid_dimensions_flags_unit_numbers_not_group_names() {
     let document = CsvDocument {
