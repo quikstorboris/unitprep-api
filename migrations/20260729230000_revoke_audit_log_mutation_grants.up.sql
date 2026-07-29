@@ -1,0 +1,58 @@
+-- Completes the append-only intent for auth_audit_logs. The original
+-- design called for revoking UPDATE/DELETE grants outright in addition to
+-- the trigger; only the trigger half was ever implemented.
+--
+-- This is a THIRD layer, not a hole being closed. As of this migration
+-- app_service is already stopped twice over:
+--
+--   1. RLS default-deny -- the table has only SELECT and INSERT policies,
+--      and a command with no permissive policy is denied, so UPDATE and
+--      DELETE match zero rows for app_service regardless of its grants.
+--   2. The auth_audit_logs_no_update / auth_audit_logs_no_delete
+--      triggers, which RAISE on either.
+--
+-- Layer 1 protects only roles that are subject to RLS. Layer 2 is the
+-- only thing standing between neondb_owner (which bypasses RLS by
+-- ownership) and a rewritten audit trail. Removing the grants adds a
+-- third, independent barrier for app_service that does not depend on
+-- policy evaluation being configured correctly -- worth having on the one
+-- table whose entire value is being untamperable.
+--
+-- SELECT and INSERT are deliberately preserved:
+--   INSERT  the app must be able to log events, including a failed login
+--           with no identity context at all (hence WITH CHECK (true)).
+--   SELECT  gated to admins by auth_audit_logs_select_admin_only; the
+--           future audit-log viewer reads through it.
+--
+-- Verified 2026-07-29: no application code updates or deletes audit logs,
+-- so nothing depends on the grants being present.
+--
+--
+-- TRAP FOR WHOEVER WIRES AUDIT LOGGING (task 11) -- found while verifying
+-- this migration, and it long predates it:
+--
+--   Do NOT write audit-log inserts as `INSERT ... RETURNING`.
+--
+-- RETURNING requires the new row to be readable, which means it is
+-- evaluated against auth_audit_logs_select_admin_only. So the insert
+-- succeeds or fails depending on whether app.current_user_role happens to
+-- be 'admin' at the time:
+--
+--   INSERT ... RETURNING id   with no identity context  -> ERROR
+--     "new row violates row-level security policy" (misleading: the
+--     WITH CHECK (true) insert policy passed fine; it is the SELECT
+--     policy on the returned row that fails)
+--   INSERT ... RETURNING id   with role = 'admin'       -> OK
+--   INSERT ... (no RETURNING) with no identity context  -> OK
+--
+-- The failure mode is selective and therefore easy to ship: audit logging
+-- would work for admin-context events and break on precisely the ones
+-- with no identity context -- failed logins -- which are the events the
+-- audit trail exists for. Verified all four combinations as app_service
+-- on the dev branch 2026-07-29.
+--
+-- If an insert genuinely needs the generated id back, either omit
+-- RETURNING and let the id stay server-side, or route the write through a
+-- SECURITY DEFINER function the way create_session does.
+
+REVOKE UPDATE, DELETE ON auth.auth_audit_logs FROM app_service;

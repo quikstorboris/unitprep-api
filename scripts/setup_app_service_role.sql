@@ -156,3 +156,19 @@ BEGIN
     END IF;
 END
 $$;
+
+-- auth_audit_logs is append-only (migration
+-- 20260729230000_revoke_audit_log_mutation_grants). INSERT and SELECT are
+-- retained by the blanket grant above and are both wanted; only the
+-- mutation grants come back off.
+DO
+$$
+BEGIN
+    IF EXISTS (
+        SELECT FROM pg_catalog.pg_tables
+        WHERE schemaname = 'auth' AND tablename = 'auth_audit_logs'
+    ) THEN
+        EXECUTE 'REVOKE UPDATE, DELETE ON auth.auth_audit_logs FROM app_service';
+    END IF;
+END
+$$;
