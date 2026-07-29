@@ -113,19 +113,21 @@ BEGIN
 END
 $$;
 
--- Re-assert the auth.users column-level UPDATE restriction.
+-- Re-assert the UPDATE restrictions on auth.users and auth.sessions.
 --
 -- REQUIRED, not belt-and-braces: the blanket
 -- 'GRANT ... UPDATE ... ON ALL TABLES IN SCHEMA auth' above re-grants
--- TABLE-level UPDATE on auth.users, which silently undoes migration
--- 20260729210000_restrict_users_update_columns and re-opens the
--- role-escalation gap it closed. Running this file would otherwise be a
--- security regression with no error and no output to notice.
+-- TABLE-level UPDATE on both tables, which silently undoes migrations
+-- 20260729210000_restrict_users_update_columns and
+-- 20260729220000_revoke_sessions_update, re-opening the role-escalation
+-- and session-un-revoke gaps they closed. Running this file would
+-- otherwise be a security regression with no error and no output to
+-- notice.
 --
--- The migration remains the source of truth for WHY these columns and no
--- others; this block only keeps the script from converging on the wrong
--- state. If that column list ever changes, change it there and mirror it
--- here -- the two must agree.
+-- Those migrations remain the source of truth for WHY these grants look
+-- the way they do; the blocks below only keep this script from
+-- converging on the wrong state. If either changes, change it there and
+-- mirror it here -- they must agree.
 DO
 $$
 BEGIN
@@ -135,6 +137,22 @@ BEGIN
     ) THEN
         EXECUTE 'REVOKE UPDATE ON auth.users FROM app_service';
         EXECUTE 'GRANT UPDATE (first_name, last_name, job_title) ON auth.users TO app_service';
+    END IF;
+END
+$$;
+
+-- No column grant is re-issued for sessions: there is no legitimate
+-- application-level UPDATE on that table. create_session and
+-- resolve_session are SECURITY DEFINER and run as the owner, so they are
+-- unaffected.
+DO
+$$
+BEGIN
+    IF EXISTS (
+        SELECT FROM pg_catalog.pg_tables
+        WHERE schemaname = 'auth' AND tablename = 'sessions'
+    ) THEN
+        EXECUTE 'REVOKE UPDATE ON auth.sessions FROM app_service';
     END IF;
 END
 $$;

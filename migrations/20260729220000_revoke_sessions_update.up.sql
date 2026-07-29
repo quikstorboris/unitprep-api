@@ -1,0 +1,45 @@
+-- Same class of gap as 20260729210000 (auth.users), found in the same
+-- pass: app_service held TABLE-level UPDATE on auth.sessions while
+-- sessions_update_own_or_admin is row-scoped, not column-scoped. That
+-- policy correctly lets a caller touch their OWN session rows -- and
+-- placed no constraint on which columns, so in principle a caller could:
+--
+--   * UPDATE ... SET revoked_at = NULL   -- undo "sign out everywhere"
+--   * UPDATE ... SET expires_at = <far future>  -- self-extend a session
+--
+-- Both defeat the exact mechanism the opaque-token design exists to
+-- provide. From [[Architecture]]: an opaque token looked up in Postgres
+-- per request was chosen over a JWT specifically so revocation is
+-- instant and complete. A session the holder can un-revoke is no better
+-- than the JWT that was rejected for being unrevokable.
+--
+-- Unlike auth.users, NO column-level grant is issued in its place: there
+-- is no legitimate application-level UPDATE on this table at all. Every
+-- sanctioned mutation already goes through a SECURITY DEFINER function
+-- that runs as the owner and is therefore unaffected by this revoke:
+--
+--   create_session()   INSERT (the sessions_insert_blocked policy blocks
+--                      every other path)
+--   resolve_session()  bumps last_seen_at -- verified as the only
+--                      function in the auth schema that updates this
+--                      table, and it is SECURITY DEFINER
+--
+-- Task 10 (logout / sign-out-everywhere) must follow the same pattern:
+-- a SECURITY DEFINER function that only ever sets revoked_at = now(),
+-- never clears it. Granting app_service UPDATE (revoked_at) instead
+-- would hand back the un-revoke capability this migration removes,
+-- because a column grant permits writing NULL just as readily as a
+-- timestamp.
+--
+-- Not reachable today (no application code updates sessions -- verified
+-- by grep 2026-07-29), which is why it is cheap to close before task 10
+-- creates the first caller that might have been tempted by the loose
+-- grant.
+
+REVOKE UPDATE ON auth.sessions FROM app_service;
+
+-- sessions_update_own_or_admin is deliberately LEFT IN PLACE. It is
+-- moot for app_service now that the grant is gone, but it still supplies
+-- row scoping for any future non-owner role that is granted UPDATE (a
+-- per-developer role, an admin tool). Dropping it would remove a layer
+-- rather than tidy one up.
