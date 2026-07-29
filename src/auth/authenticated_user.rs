@@ -83,7 +83,7 @@ async fn query_session(
 ) -> Result<Option<(Uuid, String)>, sqlx::Error> {
     let token_hash = hash_token(raw_token);
 
-    sqlx::query_as("SELECT user_id, role::text FROM resolve_session($1)")
+    sqlx::query_as("SELECT user_id, role::text FROM auth.resolve_session($1)")
         .bind(token_hash)
         .fetch_optional(db)
         .await

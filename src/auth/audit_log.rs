@@ -68,7 +68,7 @@ pub async fn record(
 ) {
     // No RETURNING -- see the module doc above.
     let result = sqlx::query(
-        "INSERT INTO auth_audit_logs (event_type, actor_user_id, user_agent, metadata)
+        "INSERT INTO auth.auth_audit_logs (event_type, actor_user_id, user_agent, metadata)
          VALUES ($1, $2, $3, $4)",
     )
     .bind(event_type)

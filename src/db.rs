@@ -18,12 +18,30 @@ pub fn connect() -> Result<PgPool, sqlx::Error> {
     let database_url =
         std::env::var("DATABASE_URL").expect("DATABASE_URL must be set -- see .env.local");
 
-    // Every auth table/type/function lives in the `auth` schema now,
-    // not `public` -- every unqualified name in application queries
-    // (users, resolve_session, etc.) resolves through this. `public`
-    // stays on the path behind it for shared extension types (citext).
+    // NO search_path is set on the connection, deliberately. Every
+    // application query schema-qualifies its auth objects instead
+    // (`auth.users`, `auth.resolve_session(...)`, ...).
+    //
+    // This used to set `options=[("search_path", "auth,public")]`, which
+    // works on a direct connection and fails outright on Neon's pooled
+    // endpoint: `search_path` travels in the Postgres startup packet, and
+    // the pooler rejects unsupported startup parameters with
+    // "unsupported startup parameter in options: search_path". Every
+    // query failed, including /health/db.
+    //
+    // Moving it to a per-connection `SET search_path` via after_connect
+    // would not fix it either. The pooler is transaction-mode PgBouncer,
+    // so a session-level SET is not reliably tied to the client that
+    // issued it -- it would appear to work under light load and start
+    // leaking or vanishing under concurrency, which is worse than
+    // failing.
+    //
+    // Schema-qualifying is the only form that is correct on both
+    // endpoints and under pooling. The cost is that an unqualified name
+    // added later fails at runtime rather than compile time -- see the
+    // note in scripts/setup_app_service_role.sql on the search_path the
+    // migration connection uses, which differs again.
     let connect_options: PgConnectOptions = database_url.parse()?;
-    let connect_options = connect_options.options([("search_path", "auth,public")]);
 
     Ok(PgPoolOptions::new()
         .max_connections(5)

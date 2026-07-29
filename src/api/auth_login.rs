@@ -218,7 +218,7 @@ async fn load_login_candidate(
     email: &str,
 ) -> Result<Option<LoginCandidate>, sqlx::Error> {
     let rows: Vec<(Uuid, Vec<u8>, serde_json::Value)> = sqlx::query_as(
-        "SELECT user_id, credential_id, passkey_data FROM resolve_login_candidate($1::citext)",
+        "SELECT user_id, credential_id, passkey_data FROM auth.resolve_login_candidate($1::citext)",
     )
     .bind(email)
     .fetch_all(&state.db)
@@ -357,7 +357,7 @@ pub async fn login_finish(
     // trusted-forwarded-header policy that does not exist yet, and a
     // spoofable value in an audit-relevant column is worse than none.
     let created: Result<Uuid, sqlx::Error> =
-        sqlx::query_scalar("SELECT create_session($1, $2, $3, NULL, $4)")
+        sqlx::query_scalar("SELECT auth.create_session($1, $2, $3, NULL, $4)")
             .bind(user_id)
             .bind(&token_hash)
             .bind(expires_at)
@@ -416,7 +416,7 @@ async fn load_credentials_for_user(
     let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
 
     let rows: Vec<(Vec<u8>, serde_json::Value)> = sqlx::query_as(
-        "SELECT credential_id, passkey_data FROM webauthn_credentials WHERE user_id = $1",
+        "SELECT credential_id, passkey_data FROM auth.webauthn_credentials WHERE user_id = $1",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -445,7 +445,7 @@ async fn persist_credential_use(
     let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
 
     sqlx::query(
-        "UPDATE webauthn_credentials
+        "UPDATE auth.webauthn_credentials
             SET passkey_data = $1, last_used_at = now()
           WHERE user_id = $2 AND credential_id = $3",
     )

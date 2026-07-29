@@ -293,7 +293,7 @@ async fn authenticated_target(
     let mut tx = begin_rls_transaction(&state.db, user_id, role).await?;
 
     let row: Option<(String, String, String)> =
-        sqlx::query_as("SELECT email::text, first_name, last_name FROM users WHERE id = $1")
+        sqlx::query_as("SELECT email::text, first_name, last_name FROM auth.users WHERE id = $1")
             .bind(user_id)
             .fetch_optional(&mut *tx)
             .await?;
@@ -303,11 +303,12 @@ async fn authenticated_target(
         return Ok(None);
     };
 
-    let exclude: Vec<Vec<u8>> =
-        sqlx::query_scalar("SELECT credential_id FROM webauthn_credentials WHERE user_id = $1")
-            .bind(user_id)
-            .fetch_all(&mut *tx)
-            .await?;
+    let exclude: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT credential_id FROM auth.webauthn_credentials WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
 
     tx.commit().await?;
 
@@ -328,7 +329,7 @@ async fn bootstrap_target(
     email: &str,
 ) -> Result<Option<RegistrationTarget>, sqlx::Error> {
     let row: Option<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT user_id, first_name, last_name FROM resolve_bootstrap_registration($1::citext)",
+        "SELECT user_id, first_name, last_name FROM auth.resolve_bootstrap_registration($1::citext)",
     )
     .bind(email)
     .fetch_optional(&state.db)
@@ -450,7 +451,7 @@ pub async fn register_finish(
     // recording none, so it stays null until that decision is actually
     // made.
     let created: Result<Uuid, sqlx::Error> =
-        sqlx::query_scalar("SELECT create_session($1, $2, $3, NULL, $4)")
+        sqlx::query_scalar("SELECT auth.create_session($1, $2, $3, NULL, $4)")
             .bind(user_id)
             .bind(&token_hash)
             .bind(expires_at)
@@ -516,7 +517,7 @@ async fn insert_credential(
     let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
 
     sqlx::query(
-        "INSERT INTO webauthn_credentials (user_id, credential_id, passkey_data, nickname)
+        "INSERT INTO auth.webauthn_credentials (user_id, credential_id, passkey_data, nickname)
          VALUES ($1, $2, $3, $4)",
     )
     .bind(user_id)
