@@ -157,6 +157,39 @@ time = "0.3.54"
 # byte buffer).
 getrandom = { version = "0.4.3", features = ["std"] }
 
+# TOTP (Phase 2 task 9), the fallback factor for a device with no passkey
+# enrolled. The architecture named this crate specifically; it is the
+# Kanidm-adjacent, widely-used option, and it handles the parts of RFC 6238
+# that are easy to get subtly wrong -- base32 secret encoding, the time-step
+# skew window, and building the otpauth:// URI an authenticator app scans.
+#
+# default-features = false deliberately: the default set pulls in `qrcode`
+# and `image` to render QR codes server-side, which is a lot of build for
+# something the frontend can do from the URI string with any JS QR library.
+# "otpauth" is the one feature actually needed (URI generation + parsing).
+totp-rs = { version = "5.7", default-features = false, features = ["otpauth"] }
+
+# Encrypts the TOTP secret at rest (auth.totp_credentials.secret_encrypted).
+#
+# A TOTP secret is a long-lived shared secret -- unlike a session token it
+# cannot be revoked by deleting a row somewhere else, and unlike a passkey
+# the server holds the whole thing. So it is the one credential in this
+# schema that genuinely must not sit in plaintext, which is why the schema
+# named the column `secret_encrypted` before anything could write to it.
+#
+# ChaCha20-Poly1305 rather than AES-GCM: both are fine, but ChaCha needs no
+# AES-NI to be fast, and this runs on whatever hardware the deployment
+# happens to have. AEAD (not bare encryption) matters here because the
+# additional-data field lets each ciphertext be bound to its own user_id --
+# see auth::totp for why that is worth doing.
+chacha20poly1305 = "0.10.1"
+
+# Decodes the hex-encoded TOTP_ENCRYPTION_KEY from the environment. Kept
+# separate from base64 above rather than reusing it: a key is copied by hand
+# between a secret store and an env var, and hex survives that without the
+# +/= characters that get mangled in shell quoting and .env parsing.
+hex = "0.4.3"
+
 [dev-dependencies]
 
 # Reads the xlsx exporter's own output back in its tests, so those

@@ -4,6 +4,7 @@ mod auth_invites;
 mod auth_login;
 mod auth_logout;
 mod auth_register;
+mod auth_totp;
 mod cancel_session;
 mod correct;
 mod correct_group;
@@ -226,6 +227,13 @@ pub fn router(state: AppState) -> Router {
         // out must succeed with a stale or missing cookie, or the one case
         // where a user most needs to clear it is the case that 401s. See
         // auth_logout's module docs.
+        // TOTP: enrolment and removal are authenticated (the extractor is in
+        // the handler); the sign-in path is not, and is deliberately as
+        // opaque as the passkey login path.
+        .route("/auth/totp/enroll/begin", post(auth_totp::enroll_begin))
+        .route("/auth/totp/enroll/confirm", post(auth_totp::enroll_confirm))
+        .route("/auth/totp/disable", post(auth_totp::disable))
+        .route("/auth/login/totp", post(auth_totp::login))
         .route("/auth/logout", post(auth_logout::logout))
         .route(
             "/auth/logout/everywhere",

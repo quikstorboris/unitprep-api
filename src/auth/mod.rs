@@ -6,6 +6,7 @@ mod ceremony_cookie;
 mod registration_ceremony;
 mod session_cookie;
 mod session_token;
+mod totp;
 mod webauthn_backend;
 
 pub use authenticated_user::{
@@ -26,6 +27,13 @@ pub use registration_ceremony::RegistrationCeremony;
 // genuinely pass them, choosing between the login and registration cookie.
 pub use session_cookie::{clear_session_cookie, issue_session_cookie, read_session_cookie};
 pub use session_token::{generate_token, hash_token};
+// `decrypt_secret` and `TotpError` are intentionally not re-exported: the
+// only callers outside `totp` verify codes rather than handling raw secrets,
+// and re-exporting a decrypt primitive invites someone to reach for it.
+pub use totp::{
+    base32_secret, encrypt_secret, generate_secret, is_configured as totp_configured,
+    provisioning_uri, verify_code,
+};
 pub use webauthn_backend::WebauthnRsBackend;
 
 use uuid::Uuid;

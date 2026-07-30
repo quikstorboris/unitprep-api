@@ -60,8 +60,27 @@
     <button id="btn-login">Sign in with passkey</button>
     <button id="btn-whoami">Check session (/health/whoami)</button>
     <button id="btn-healthdb">Check DB (/health/db)</button>
+    <button id="btn-logout">Sign out</button>
+    <button id="btn-logout-all">Sign out everywhere</button>
     <button id="btn-clear">Clear log</button>
   </div>
+</fieldset>
+
+<fieldset>
+  <legend>TOTP (fallback factor)</legend>
+  <p style="margin:.25rem 0 .5rem; opacity:.7">
+    Enrolling needs an existing session &mdash; sign in with a passkey first.
+    Signing in with TOTP does not: that is the whole point of a fallback.
+  </p>
+  <label for="totp-code">6-digit code from your authenticator app</label>
+  <input type="text" id="totp-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
+  <div class="row" style="margin-top:.5rem">
+    <button id="btn-totp-begin">1. Begin enrolment (get QR/secret)</button>
+    <button id="btn-totp-confirm">2. Confirm with code</button>
+    <button id="btn-totp-login">Sign in with TOTP (uses Email above)</button>
+    <button id="btn-totp-disable">Remove TOTP</button>
+  </div>
+  <div id="totp-qr" style="margin-top:.75rem"></div>
 </fieldset>
 
 <div id="log"></div>
@@ -303,7 +322,115 @@ $("btn-healthdb").onclick = () => guard("healthdb", async () => {
   await call("GET", "/health/db");
 });
 
-$("btn-clear").onclick = () => { logEl.innerHTML = ""; };
+$("btn-logout").onclick = () => guard("logout", async () => {
+  blank();
+  log("=== SIGN OUT (this session) ===");
+  await call("POST", "/auth/logout");
+  log("cookie cleared by the response; 'Check session' should now fail", "dim");
+});
+
+$("btn-logout-all").onclick = () => guard("logout-all", async () => {
+  blank();
+  log("=== SIGN OUT EVERYWHERE ===");
+  const out = await call("POST", "/auth/logout/everywhere");
+  if (out.body && typeof out.body.revoked_count === "number") {
+    log(`revoked ${out.body.revoked_count} session(s) -- every device, not just this one`,
+      out.body.revoked_count > 0 ? "ok" : "dim");
+  }
+});
+
+// --- TOTP -----------------------------------------------------------------
+$("btn-totp-begin").onclick = () => guard("totp-begin", async () => {
+  blank();
+  log("=== TOTP ENROLMENT: BEGIN ===");
+  const out = await call("POST", "/auth/totp/enroll/begin");
+  if (!out.res.ok || !out.body || !out.body.secret) {
+    log("no secret returned. A 401 means you need to sign in first; a 503 means "
+      + "the server has no TOTP_ENCRYPTION_KEY set.", "dim");
+    $("totp-qr").replaceChildren();
+    return;
+  }
+
+  // No QR image: this page ships no libraries and hand-rolling a QR encoder
+  // would be absurd. Manual entry is universally supported, and the
+  // otpauth:// link opens an installed authenticator directly on most
+  // desktops.
+  //
+  // Built with DOM calls rather than innerHTML. The secret is base32 and the
+  // URI is server-generated, so nothing here is attacker-controlled today --
+  // but assigning a *credential* into innerHTML is a habit worth not having,
+  // and textContent removes the question entirely.
+  const box = $("totp-qr");
+  box.replaceChildren();
+
+  const heading = document.createElement("p");
+  heading.style.margin = ".25rem 0";
+  const strong = document.createElement("strong");
+  strong.textContent = "Type this into your authenticator app:";
+  heading.appendChild(strong);
+
+  const secret = document.createElement("p");
+  secret.style.cssText =
+    "font-family:ui-monospace,monospace;font-size:1.15rem;letter-spacing:.08em;word-break:break-all";
+  secret.textContent = out.body.secret;
+
+  const linkLine = document.createElement("p");
+  linkLine.style.margin = ".5rem 0 .25rem";
+  const link = document.createElement("a");
+  link.href = out.body.provisioning_uri;
+  link.textContent = "open in an authenticator app";
+  linkLine.append(link, document.createTextNode(" (otpauth:// link)"));
+
+  box.append(heading, secret, linkLine);
+
+  log("secret issued and stored UNCONFIRMED -- it cannot be used to sign in "
+    + "until you confirm a code below", "ok");
+  log("re-running this replaces the secret, so the old app entry stops working "
+    + "immediately", "dim");
+});
+
+$("btn-totp-confirm").onclick = () => guard("totp-confirm", async () => {
+  blank();
+  log("=== TOTP ENROLMENT: CONFIRM ===");
+  const code = $("totp-code").value.trim();
+  if (!code) { log("enter the 6-digit code from your app first.", "bad"); return; }
+
+  const out = await call("POST", "/auth/totp/enroll/confirm", { code });
+  if (out.res.ok) {
+    log("TOTP confirmed -- it is now usable as a fallback factor", "ok");
+  } else {
+    log("not confirmed. Check the code, and that your phone's clock is right "
+      + "(a wrong clock is the usual cause).", "dim");
+  }
+});
+
+$("btn-totp-login").onclick = () => guard("totp-login", async () => {
+  blank();
+  log("=== SIGN IN WITH TOTP ===");
+  const code = $("totp-code").value.trim();
+  const email = $("email").value.trim();
+  if (!code) { log("enter the 6-digit code first.", "bad"); return; }
+
+  log("no passkey involved -- this is the fallback path for a device with none", "dim");
+  const out = await call("POST", "/auth/login/totp", { email, code });
+  if (out.res.ok) {
+    log("signed in via TOTP -- try Check session", "ok");
+  } else {
+    log("refused. Every reason looks identical on purpose: unknown address, no "
+      + "confirmed TOTP, wrong code, and locked-out are one response. Five wrong "
+      + "codes locks the fallback for 15 minutes (your passkey still works).", "dim");
+  }
+});
+
+$("btn-totp-disable").onclick = () => guard("totp-disable", async () => {
+  blank();
+  log("=== REMOVE TOTP ===");
+  await call("POST", "/auth/totp/disable");
+  $("totp-qr").replaceChildren();
+  log("removing a factor that is not there is also a success -- idempotent", "dim");
+});
+
+$("btn-clear").onclick = () => { logEl.innerHTML = ""; $("totp-qr").replaceChildren(); };
 
 log("Ready. Page origin: " + window.location.origin, "dim");
 log("Registering a FIRST passkey needs an invite token in the field above. "

@@ -7,6 +7,40 @@ versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **TOTP as a fallback factor** — `POST /auth/totp/enroll/begin`,
+  `/enroll/confirm`, `/disable`, and `POST /auth/login/totp`. A fallback for a
+  device with no passkey, **not** a second step stacked on one: a passkey is
+  already multi-factor and phishing-resistant, and requiring both would add
+  friction to every sign-in in exchange for the weaker property.
+  Authenticator apps only, never SMS.
+
+  Enrolment is two steps and the second is the point — a secret is stored
+  with `confirmed_at` NULL and only counts once a real code verifies.
+  Otherwise a user could believe they had a working fallback while having
+  mis-scanned the secret, and would discover it at the moment they needed it
+  and had no other way in.
+
+  **Encryption at rest, the decision the schema deferred to this task:**
+  ChaCha20-Poly1305 with a 32-byte key from `TOTP_ENCRYPTION_KEY`. This is
+  the one credential in the schema that cannot be hashed — the server holds
+  the whole secret and must reproduce it on every verification — which is why
+  the column was named `secret_encrypted` before anything could write to it.
+  The ciphertext is bound to its `user_id` through the AEAD's additional
+  data, so a secret grafted onto another user's row fails to decrypt rather
+  than working. A version byte prefixes the blob so key rotation is possible
+  later without guessing which ciphertexts are which.
+
+  Labelled honestly as an **app-level stopgap**: the key lives in the
+  environment, so a dump *plus* the key is as good as plaintext. What it
+  defends is the realistic case — a leaked backup, a shared database branch,
+  a logged query result. Real KMS stays trigger-gated.
+
+  Sign-in is rate-limited (five failures, then a 15-minute lock) because a
+  six-digit code is guessable in a way a passkey assertion is not. The lock
+  is time-bounded and applies only to the fallback, so it cannot be used to
+  deny someone their account — the passkey path consults none of it. **If
+  TOTP ever becomes primary or mandatory, that reasoning stops holding and
+  the lockout needs revisiting.**
 - **Sign-out and sign-out-everywhere** — `POST /auth/logout` and
   `POST /auth/logout/everywhere`. Sessions were previously unrevocable and
   simply accumulated. Revocation goes through two new `SECURITY DEFINER`

@@ -68,6 +68,23 @@ pub mod event {
     /// answers "did this person sign out, or did they sign out because
     /// something was wrong", which one session id alone cannot.
     pub const SESSION_REVOKED: &str = "session_revoked";
+
+    /// A user began TOTP enrolment: a secret was written but not yet proven.
+    /// Recorded separately from `TOTP_ENROLLED` because the gap between the
+    /// two is where a mis-scanned secret lives, and a begin with no matching
+    /// enrolled event is the signature of exactly that.
+    pub const TOTP_ENROLMENT_STARTED: &str = "totp_enrolment_started";
+
+    /// A confirmation code was rejected during enrolment. Distinct from
+    /// `LOGIN_FAILED`: nobody was trying to sign in, so counting it as a
+    /// failed login would inflate that number with ordinary setup fumbles.
+    pub const TOTP_ENROLMENT_FAILED: &str = "totp_enrolment_failed";
+
+    /// TOTP is confirmed and usable as a fallback factor.
+    pub const TOTP_ENROLLED: &str = "totp_enrolled";
+
+    /// The user removed their own TOTP credential.
+    pub const TOTP_REMOVED: &str = "totp_removed";
 }
 
 /// Who did it, and who it was done to.
