@@ -30,25 +30,43 @@ pub struct RegistrationCeremony {
     /// indistinguishable in the log.
     pub correlation_id: Uuid,
 
-    /// True when this ceremony was started through the unauthenticated
-    /// bootstrap path rather than by an already-signed-in user adding an
-    /// additional passkey. Decided at `begin` and carried here rather
-    /// than re-derived at `finish`: whether a session cookie happens to
-    /// be present on the *second* request is a different question from
-    /// which path this ceremony was authorized under, and only the
-    /// bootstrap case should end with a newly issued session (an
-    /// already-authenticated caller keeps the session they arrived with).
-    pub is_bootstrap: bool,
+    /// `Some` when this ceremony was authorized by an **invite token**
+    /// rather than by an existing session, holding that token's hash so
+    /// `finish` can consume the invite in the same transaction that writes
+    /// the credential.
+    ///
+    /// This replaced an `is_bootstrap: bool` and is strictly better for
+    /// two reasons. It carries what `finish` actually needs instead of
+    /// only asserting that something exists, and `Option` makes the
+    /// invariant structural: there is no way to represent "invite
+    /// enrolment" without also having the token to consume.
+    ///
+    /// Decided at `begin` and carried here rather than re-derived at
+    /// `finish`: whether a session cookie happens to be present on the
+    /// *second* request is a different question from which path this
+    /// ceremony was authorized under, and only the invite case should end
+    /// with a newly issued session (an already-authenticated caller keeps
+    /// the session they arrived with).
+    ///
+    /// It holds the **hash**, never the raw token. The raw value is a
+    /// bearer credential and has no business living in server-side state
+    /// any longer than the request that carried it.
+    pub invite_token_hash: Option<Vec<u8>>,
 }
 
 impl RegistrationCeremony {
-    pub fn new(id: String, user_id: Uuid, webauthn_state: Vec<u8>, is_bootstrap: bool) -> Self {
+    pub fn new(
+        id: String,
+        user_id: Uuid,
+        webauthn_state: Vec<u8>,
+        invite_token_hash: Option<Vec<u8>>,
+    ) -> Self {
         Self {
             metadata: SessionMetadata::new(id, Some(user_id)),
             user_id,
             correlation_id: Uuid::new_v4(),
             webauthn_state,
-            is_bootstrap,
+            invite_token_hash,
         }
     }
 }
@@ -77,7 +95,7 @@ mod tests {
             "ceremony-cookie-value".to_string(),
             Uuid::new_v4(),
             Vec::new(),
-            false,
+            None,
         );
 
         assert_ne!(
@@ -94,8 +112,8 @@ mod tests {
     fn two_ceremonies_for_one_user_get_different_correlation_ids() {
         let user_id = Uuid::new_v4();
 
-        let first = RegistrationCeremony::new("a".to_string(), user_id, Vec::new(), false);
-        let second = RegistrationCeremony::new("b".to_string(), user_id, Vec::new(), false);
+        let first = RegistrationCeremony::new("a".to_string(), user_id, Vec::new(), None);
+        let second = RegistrationCeremony::new("b".to_string(), user_id, Vec::new(), None);
 
         assert_ne!(first.correlation_id, second.correlation_id);
     }

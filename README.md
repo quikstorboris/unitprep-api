@@ -204,10 +204,18 @@ see `src/bootstrap.rs` for the reasoning behind each constraint. In short:
   audit history, it cannot be hard-deleted by anyone, including the owner
   role.
 
-Note that `AUTH_BOOTSTRAP_ENABLED` also exists and opens an
-env-var-gated unauthenticated first-passkey path. That is a development
-crutch from before this command existed, is being retired once invite
-acceptance lands, and **must stay unset anywhere that matters.**
+The printed token is then redeemed against `POST /auth/register/begin`,
+which enrols the first passkey and signs the account in. That is the same
+endpoint every later invited user goes through — the first administrator
+gets no special path, so the enrolment route is exercised from the very
+first account rather than being a one-time special case nobody tests
+again.
+
+> **Removed:** an earlier `AUTH_BOOTSTRAP_ENABLED` environment variable
+> opened an unauthenticated first-passkey path keyed on an email address.
+> It has been deleted along with its database lookup — setting it now does
+> nothing. Possession of an unguessable invite token is the authorization,
+> which cannot be left switched on by a misconfigured deployment.
 
 ## Project layout
 

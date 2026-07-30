@@ -6,6 +6,37 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Invitation acceptance.** An invited user enrols their first passkey by
+  presenting the token from their invitation link to
+  `POST /auth/register/begin`, and finishes signed in. Eligibility is
+  enforced entirely inside a new `auth.resolve_invite_registration`
+  SECURITY DEFINER lookup — the invite must be unused and unexpired, the
+  user must still be `invited`, and they must hold zero credentials — so an
+  anonymous caller can neither enumerate users nor enrol over an existing
+  credential. The invite is consumed at `/finish`, after the credential
+  verifies, in the same transaction that writes it: cancelling the
+  authenticator prompt therefore costs nothing, leaving the user `invited`
+  with a live invite and a retry that just works.
+
+### Removed
+- **`AUTH_BOOTSTRAP_ENABLED`, and the unauthenticated bootstrap enrolment
+  path it gated.** Deleted rather than left unset — setting it now does
+  nothing. It keyed first-passkey enrolment on an email address, so the
+  endpoint was answerable by anyone who could guess one, with an
+  environment variable as the only thing standing in the way. Possession of
+  an unguessable invite token replaces it, which cannot be accidentally
+  switched on by a misconfigured deployment.
+- `auth.resolve_bootstrap_registration`, dropped in the same migration.
+  Leaving it would have left a callable SECURITY DEFINER function matching
+  any active user with no credentials by email alone, with its only guard
+  removed.
+
+  The first administrator is unaffected: `bootstrap-admin` already creates
+  them as an `invited` user holding an invite, so they now walk the same
+  enrolment route as everyone after them instead of a special case that
+  runs once and is never exercised again.
+
 ### Fixed
 - A refused passkey registration is now recorded. Previously a
   `403 registration_not_available` wrote no audit row and emitted no log

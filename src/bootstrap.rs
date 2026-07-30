@@ -10,8 +10,9 @@
 //! defence is an environment variable being right, everywhere, forever.
 //! A subcommand has no remote surface at all: the guard is structural
 //! rather than configured. (`AUTH_BOOTSTRAP_ENABLED` on the registration
-//! path is exactly the shape being retired -- once this and invite
-//! acceptance exist, that variable should never be set again.)
+//! path was exactly the shape this argument objects to, and it has since
+//! been deleted outright -- see `api::auth_register`. The invite token this
+//! command mints is now the only way to enrol a first credential.)
 //!
 //! It is a subcommand of the main binary rather than a `src/bin/` target
 //! because this crate has no library target, so a separate binary could
