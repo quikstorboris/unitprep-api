@@ -6,30 +6,133 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.2.0] - 2026-07-29
+
+Passkey registration and sign-in work end to end. A user with a record in
+`auth.users` can enrol a passkey and then authenticate with it, receiving a
+session cookie later requests are verified against. Confirmed against a
+real browser and real authenticators (Windows Hello, and independently
+Proton Pass) talking to a real Postgres branch, not only in tests.
+
+**What is NOT here yet**, since "auth works" would overstate it: no
+sign-out, no invitation flow, no first-admin bootstrap beyond the env-gated
+path below, no TOTP fallback, no admin UI. Enrolling the very first passkey
+for an account still requires `AUTH_BOOTSTRAP_ENABLED`, which must stay
+unset in any environment that matters. Five of the eleven planned
+identity/session steps are done.
+
 ### Added
-- Postgres connectivity via sqlx, connecting as a dedicated
-  app_service role rather than the migration/owner role, so row-level
-  security actually applies to application traffic. DATABASE_URL
-  configures the connection pool, built lazily so a missing or
-  incorrect credential does not block application startup. GET
-  /health/db reports connectivity and confirms which role the pool is
-  actually authenticating as.
+- Postgres connectivity via sqlx, connecting as a dedicated app_service
+  role rather than the migration/owner role, so row-level security actually
+  applies to application traffic. DATABASE_URL configures the connection
+  pool, built lazily so a missing or incorrect credential does not block
+  application startup. GET /health/db reports connectivity and confirms
+  which role the pool is actually authenticating as.
 - AuthBackend trait plus a webauthn-rs-backed implementation
-  (WebauthnRsBackend), stored in AppState behind Arc<dyn ...> the same
-  way the existing session stores are -- no HTTP endpoints call it yet,
-  this is the interface and one implementation behind it, per the
-  standing interface-first design rule.
+  (WebauthnRsBackend), held in AppState behind Arc<dyn ...> the same way
+  the existing session stores are, per the standing interface-first design
+  rule.
 - Session cookie plumbing: opaque token generation and hashing
-  (session_token.rs) and httpOnly/Secure/SameSite cookie issuance,
-  reading, and clearing (session_cookie.rs). Deliberately unsigned and
-  unencrypted -- the cookie carries an opaque random token that is only
-  ever trusted after a database round-trip, never decoded as a claim.
-- AuthenticatedUser, an axum extractor resolving the session cookie
-  into a verified user id and role via resolve_session(), plus
-  begin_rls_transaction for handlers that need to run further
-  RLS-scoped queries under that identity. GET /health/whoami exercises
-  the whole chain end to end for now, since no real protected endpoint
-  exists yet to exercise it through.
+  (session_token.rs) and httpOnly/Secure/SameSite cookie issuance, reading
+  and clearing (session_cookie.rs). Deliberately unsigned and unencrypted --
+  the cookie carries an opaque random token only ever trusted after a
+  database round-trip, never decoded as a claim.
+- AuthenticatedUser, an axum extractor resolving the session cookie into a
+  verified user id and role via resolve_session(), plus
+  begin_rls_transaction for handlers running further RLS-scoped queries
+  under that identity. GET /health/whoami exercises the chain end to end.
+- POST /auth/register/begin and /auth/register/finish. An authenticated
+  caller enrols an additional passkey for themselves, taken from their
+  session -- any email in the body is ignored, since honouring it would let
+  a signed-in user write a credential onto another account. Otherwise the
+  request falls to an env-gated bootstrap path, which exists only because
+  nothing can sign a user in before a first credential exists.
+- POST /auth/login/begin and /auth/login/finish. Verifying an assertion
+  persists the credential state the ceremony advanced along with
+  last_used_at; a frozen stored value would make the anti-cloning check
+  pass indefinitely on authenticators that do implement a counter.
+- Audit-event recording (auth/audit_log.rs) for login_succeeded,
+  login_failed and passkey_registered, wired in from the start rather than
+  switched on later so the record has no gap. Recording is deliberately
+  infallible to callers: propagating a logging failure would let anyone who
+  could break audit writes deny logins.
+- SECURITY DEFINER lookups behind the unauthenticated paths
+  (resolve_bootstrap_registration, resolve_login_candidate) enforcing
+  eligibility in the database rather than in a handler, so a future
+  endpoint that forgets to check cannot become a hole. Each answers every
+  ineligible case identically, so neither can be used to discover which
+  addresses have accounts.
+
+### Security
+- app_service held table-level UPDATE on auth.users, and
+  users_update_own_or_admin is row-scoped rather than column-scoped, so a
+  caller could have updated their own row with `SET role = 'admin'`. Not
+  reachable today only because every existing user is already admin; it
+  would have become live the moment a second role existed. UPDATE is now
+  granted on first_name, last_name and job_title only -- role, status,
+  company, email, deleted_at and deletion_reason are administrative and
+  must go through a SECURITY DEFINER function that checks the caller.
+- app_service likewise held UPDATE on auth.sessions, where the same
+  row-scoped policy would have let a caller clear their own revoked_at --
+  undoing "sign out everywhere" -- or extend expires_at indefinitely. Both
+  defeat the reason an opaque token was chosen over a JWT: revocation that
+  is instant and complete. The grant is revoked outright with no
+  column-level replacement, since every sanctioned session mutation already
+  runs through a SECURITY DEFINER function.
+- scripts/setup_app_service_role.sql silently undid the auth.users fix.
+  Its blanket `GRANT ... ON ALL TABLES IN SCHEMA auth` re-granted
+  table-level UPDATE, so running a script documented as safe to re-run
+  reopened the escalation vector with no error and no output. It now
+  re-asserts the narrow grants.
+- UPDATE and DELETE on auth_audit_logs are revoked from app_service,
+  completing the append-only intent. A third barrier rather than a hole
+  closed -- RLS default-deny and the append-only triggers already blocked
+  both -- but it does not depend on policy evaluation being configured
+  correctly, which is worth having on the one table whose whole value is
+  being untamperable.
+
+### Fixed
+- The application could not talk to Neon's pooled endpoint at all. db.rs
+  set `search_path` as a connection option, which travels in the Postgres
+  startup packet and is rejected by the pooler ("unsupported startup
+  parameter in options: search_path"), failing every query including
+  /health/db. All application SQL is now schema-qualified and no
+  search_path is set. Moving it to a per-connection SET would not have
+  worked either: the pooler is transaction-mode, so a session-level SET is
+  not reliably bound to the client that issued it and would have started
+  leaking under concurrency. Not caught earlier because the unit tests use
+  an unreachable lazy pool and execute no SQL, and because a direct
+  connection accepts the parameter happily -- identical code worked or
+  failed purely on which endpoint DATABASE_URL named.
+- webauthn_credentials.device_bound is now written from the credential
+  rather than left to the column's DEFAULT true, which had every row
+  asserting the key could not leave its hardware. The first real passkey
+  was backup-eligible -- a synced credential -- while its row said
+  otherwise. No security decision reads the column, so nothing was
+  bypassable; the value was simply false, and the planned admin
+  enrolled-factor view would have shown it as fact.
+- scripts/setup_app_service_role.sql could not bootstrap a fresh branch in
+  any order: the role must exist before migrations run, because the RLS
+  migrations end with GRANT EXECUTE to it, but its grants can only be
+  applied after, since the schema and tables do not exist until then. Every
+  schema- and table-dependent statement is now guarded, so the file is safe
+  to run at any point -- run it, migrate, run it again.
+
+### Changed
+- Requiring device-bound (non-syncable) passkeys for accounts holding
+  third-party credentials is dropped rather than deferred. Enforcing it
+  would reject what Windows Hello and password managers produce by default,
+  and break working from more than one machine, to protect secrets that do
+  not exist yet. device_bound is recorded for visibility; nothing refuses a
+  credential on it.
+- The shared test pool's acquire_timeout is 50ms instead of sqlx's 30s
+  default. The pool is lazy, so a handler path that unexpectedly reaches
+  the database does not error -- it stalls for the full timeout and then
+  errors, leaving the test passing and only the suite slower. Five login
+  tests took 30.00s between them before this; they now take 0.05s and an
+  unintended query fails fast instead of hiding.
 
 ## [1.1.5] - 2026-07-29
 
