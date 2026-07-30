@@ -18,9 +18,13 @@ pub use ceremony_cookie::{
     REGISTRATION_CEREMONY_COOKIE,
 };
 pub use registration_ceremony::RegistrationCeremony;
-pub use session_cookie::{
-    clear_session_cookie, issue_session_cookie, read_session_cookie, SESSION_COOKIE_NAME,
-};
+// SESSION_COOKIE_NAME is deliberately NOT re-exported. Nothing outside
+// session_cookie.rs needs the raw name -- issue/read/clear all take and
+// return jars, which is the point of having them -- and re-exporting it left
+// an unused import warning standing in for "someone will need this
+// eventually". The ceremony-cookie constants are re-exported because callers
+// genuinely pass them, choosing between the login and registration cookie.
+pub use session_cookie::{clear_session_cookie, issue_session_cookie, read_session_cookie};
 pub use session_token::{generate_token, hash_token};
 pub use webauthn_backend::WebauthnRsBackend;
 

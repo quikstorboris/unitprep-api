@@ -7,6 +7,26 @@ versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Sign-out and sign-out-everywhere** — `POST /auth/logout` and
+  `POST /auth/logout/everywhere`. Sessions were previously unrevocable and
+  simply accumulated. Revocation goes through two new `SECURITY DEFINER`
+  functions because `app_service` holds no `UPDATE` on `auth.sessions` and
+  must not: a column grant would permit writing `NULL` as readily as a
+  timestamp, handing the application an *un-revoke* primitive and defeating
+  the reason an opaque session token was chosen over a JWT. Both functions
+  can only move `revoked_at` from `NULL` to `now()`, so a replayed sign-out
+  cannot even shift the timestamp to obscure when the real one happened.
+
+  Both take a **token hash rather than a user id**, which makes them
+  self-authorizing — they can only act on the account whose live token the
+  caller actually holds, so "sign this other user out of everything" is not
+  a request that can be expressed. Sign-out-everywhere additionally requires
+  the presented session to be currently valid, so a leaked expired cookie
+  cannot be used to sign someone out of every device.
+
+  Neither endpoint sits behind the authentication extractor, deliberately:
+  signing out must succeed with a stale or missing cookie, or the one moment
+  a user most needs the cookie gone is the moment it 401s.
 - **Invitation creation**, `POST /auth/invites`, admin-only. Creates the
   account as `invited` and returns a one-time token, or reissues for an
   account that already exists and has not enrolled yet — retiring any
@@ -71,6 +91,22 @@ versioning follows [Semantic Versioning](https://semver.org/).
   runs once and is never exercised again.
 
 ### Fixed
+- **The session cookie was not actually being cleared in a browser.**
+  Clearing emitted a `Set-Cookie` with **no `Path`**, which per RFC 6265
+  defaults to the requesting URI's directory rather than "everywhere" — so
+  logging out at `/auth/logout` produced a deletion scoped to `/auth`, which
+  never matched the real cookie's `Path=/`. Nothing was exposed (the session
+  is revoked server-side) but the browser kept presenting a dead token, so
+  every later request 401'd with a cookie attached.
+
+  It survived because the existing test asserted "the cookie no longer reads
+  back" against an in-memory jar, which models no path semantics at all and
+  passes either way. Clearing now also *adds an expired cookie* rather than
+  removing an entry, because removal is a no-op unless the cookie was parsed
+  from the request — the case where a browser holds a cookie the server did
+  not receive is exactly when telling it to drop one matters most. New tests
+  assert the emitted header's attributes, which is the only part a browser
+  consults.
 - A refused passkey registration is now recorded. Previously a
   `403 registration_not_available` wrote no audit row and emitted no log
   line at all, while a failed *login* wrote a `login_failed` row -- so

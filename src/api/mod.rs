@@ -2,6 +2,7 @@ mod acknowledge_group_warnings;
 mod analyze;
 mod auth_invites;
 mod auth_login;
+mod auth_logout;
 mod auth_register;
 mod cancel_session;
 mod correct;
@@ -221,6 +222,15 @@ pub fn router(state: AppState) -> Router {
         // route-level guard -- there is no middleware layer that could be
         // reordered away from this path.
         .route("/auth/invites", post(auth_invites::create_invite))
+        // Deliberately NOT behind the AuthenticatedUser extractor: signing
+        // out must succeed with a stale or missing cookie, or the one case
+        // where a user most needs to clear it is the case that 401s. See
+        // auth_logout's module docs.
+        .route("/auth/logout", post(auth_logout::logout))
+        .route(
+            "/auth/logout/everywhere",
+            post(auth_logout::logout_everywhere),
+        )
         .route("/upload", post(upload::upload))
         .route("/discover", post(discover::discover))
         .route("/validate", post(validate::validate))

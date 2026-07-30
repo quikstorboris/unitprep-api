@@ -61,6 +61,13 @@ pub mod event {
     /// where the actor and the subject are *different people*, which is
     /// what `target_user_id` exists for -- see `Subjects`.
     pub const INVITE_CREATED: &str = "invite_created";
+
+    /// One or more sessions were revoked. `metadata.scope` distinguishes
+    /// signing out of the current session from signing out everywhere, and
+    /// `metadata.revoked_count` says how many rows it reached -- the pair
+    /// answers "did this person sign out, or did they sign out because
+    /// something was wrong", which one session id alone cannot.
+    pub const SESSION_REVOKED: &str = "session_revoked";
 }
 
 /// Who did it, and who it was done to.
