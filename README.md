@@ -155,13 +155,59 @@ worth building, not speculatively ahead of that.
 
 ## Current security posture
 
-**No authentication or authorization exists on any endpoint.** Any
-client that can reach this API can create, read, correct, and export any
-session if it has (or guesses) the `session_id`. Session ids are random
-UUIDs, so this isn't trivially exploitable, but it is not a security
-boundary. This is an accepted, deliberate gap for the current internal,
-single-operator usage pattern — not an oversight — but it needs to be
-closed before this is exposed beyond that.
+Authentication exists but **is not yet enforced on the tool endpoints.**
+
+What works: passkey (WebAuthn) registration and sign-in, issuing an opaque
+session cookie that `GET /health/whoami` verifies. See `src/auth/` and the
+`/auth/*` routes.
+
+What does not: **none of the working endpoints require it.** Upload,
+discover, validate, correct, analyze, export and the dedup routes are all
+still open — any client that can reach this API can drive any session it
+has (or guesses) the `session_id` for. Session ids are random UUIDs, so
+this isn't trivially exploitable, but it is not a security boundary. That
+was an accepted gap for single-operator internal use; closing it is now a
+matter of requiring the extractor on those handlers, not of building
+anything new.
+
+Also still open: no sign-out, no invitation flow, no TOTP fallback, and no
+admin UI.
+
+### Creating the first administrator
+
+There is deliberately **no HTTP endpoint that can create an
+administrator**, and there never should be. An endpoint like that is only
+ever as safe as an environment variable being correct in every
+environment, forever; a command has no remote surface to get wrong. The
+first account is created on the host instead:
+
+```bash
+unitprep bootstrap-admin \
+  --email you@example.com --first-name You --last-name Example \
+  --company quikstor
+```
+
+Run `unitprep bootstrap-admin` with no arguments for the full usage, and
+see `src/bootstrap.rs` for the reasoning behind each constraint. In short:
+
+- It requires `BOOTSTRAP_DATABASE_URL`, which must be the **owner/direct**
+  connection string, not the application's `DATABASE_URL`. The
+  application's database role deliberately cannot create users, so
+  pointing this at it fails on row-level security rather than half-working.
+- It **refuses to run if any user already exists.** It is one-time setup,
+  not a way to add people — for that, an existing administrator issues an
+  invite.
+- The account is created `invited`, not active. It prints a **setup token,
+  once**, valid for 24 hours. Only the token's hash is stored, so a lost
+  token cannot be recovered — use `--reissue-invite` to mint a fresh one.
+  Do **not** try to delete the account and start over: once it has any
+  audit history, it cannot be hard-deleted by anyone, including the owner
+  role.
+
+Note that `AUTH_BOOTSTRAP_ENABLED` also exists and opens an
+env-var-gated unauthenticated first-passkey path. That is a development
+crutch from before this command existed, is being retired once invite
+acceptance lands, and **must stay unset anywhere that matters.**
 
 ## Project layout
 
