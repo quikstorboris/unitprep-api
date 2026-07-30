@@ -65,7 +65,7 @@ const DEFAULT_INVITE_HOURS: i64 = 24;
 /// Postgres type. Validated here so a typo fails before any connection is
 /// opened, with a message naming the valid options -- rather than
 /// surfacing as a Postgres enum cast error.
-const VALID_COMPANIES: [&str; 3] = ["trojan", "cobre", "quikstor"];
+pub const VALID_COMPANIES: [&str; 3] = ["trojan", "cobre", "quikstor"];
 
 pub const USAGE: &str = "\
 Create the first administrator and print a one-time setup link.
@@ -234,7 +234,7 @@ pub fn parse_args(argv: &[String]) -> Result<BootstrapArgs, String> {
     })
 }
 
-fn invite_hours() -> i64 {
+pub fn invite_hours() -> i64 {
     std::env::var("BOOTSTRAP_INVITE_HOURS")
         .ok()
         .and_then(|v| v.parse::<i64>().ok())

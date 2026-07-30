@@ -56,6 +56,59 @@ pub mod event {
     /// the attacker cannot tell apart and what the operator cannot see
     /// are separate properties, and only the first one is deliberate.
     pub const REGISTRATION_FAILED: &str = "registration_failed";
+
+    /// An administrator issued an invitation. The first event in this set
+    /// where the actor and the subject are *different people*, which is
+    /// what `target_user_id` exists for -- see `Subjects`.
+    pub const INVITE_CREATED: &str = "invite_created";
+}
+
+/// Who did it, and who it was done to.
+///
+/// These are two columns (`actor_user_id`, `target_user_id`) and they are
+/// both nullable `uuid`, so passing them as bare adjacent parameters means
+/// a transposition compiles cleanly and silently misattributes an
+/// administrative action to the person it was performed *on*. In an audit
+/// trail that is close to the worst available bug: it is wrong in exactly
+/// the direction that matters and nothing about the row looks off.
+///
+/// Naming them at every call site removes the possibility rather than
+/// documenting it away.
+pub struct Subjects {
+    pub actor: Option<Uuid>,
+    pub target: Option<Uuid>,
+}
+
+impl Subjects {
+    /// No established identity -- a login attempt against an address that
+    /// may not correspond to any account, or a registration refused before
+    /// anyone was resolved.
+    pub fn anonymous() -> Self {
+        Self {
+            actor: None,
+            target: None,
+        }
+    }
+
+    /// Something a user did to their own account: signing in, enrolling
+    /// their own passkey. `target` stays null deliberately -- repeating the
+    /// same id in both columns would imply a distinction that does not
+    /// exist, and would make "administrative acts" impossible to filter for
+    /// later by asking for rows where the two differ.
+    pub fn by(actor: Uuid) -> Self {
+        Self {
+            actor: Some(actor),
+            target: None,
+        }
+    }
+
+    /// An administrative act: `by(admin).about(subject)`.
+    pub fn about(self, target: Uuid) -> Self {
+        Self {
+            target: Some(target),
+            ..self
+        }
+    }
 }
 
 /// Records one audit event.
@@ -68,22 +121,24 @@ pub mod event {
 /// denial-of-service on login. The audit trail is important, but it is
 /// not more important than the operation it describes.
 ///
-/// `actor_user_id` is `None` for events with no established identity --
-/// a login attempt against an unknown address, for instance.
+/// `subjects` carries who acted and who was acted upon -- see `Subjects`
+/// for why they are named rather than positional.
 pub async fn record(
     db: &PgPool,
     event_type: &str,
-    actor_user_id: Option<Uuid>,
+    subjects: Subjects,
     user_agent: Option<&str>,
     metadata: Value,
 ) {
     // No RETURNING -- see the module doc above.
     let result = sqlx::query(
-        "INSERT INTO auth.auth_audit_logs (event_type, actor_user_id, user_agent, metadata)
-         VALUES ($1, $2, $3, $4)",
+        "INSERT INTO auth.auth_audit_logs
+             (event_type, actor_user_id, target_user_id, user_agent, metadata)
+         VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(event_type)
-    .bind(actor_user_id)
+    .bind(subjects.actor)
+    .bind(subjects.target)
     .bind(user_agent)
     .bind(&metadata)
     .execute(db)
@@ -96,7 +151,8 @@ pub async fn record(
         tracing::error!(
             error = %err,
             event_type,
-            actor_user_id = ?actor_user_id,
+            actor_user_id = ?subjects.actor,
+            target_user_id = ?subjects.target,
             "failed to write audit log event"
         );
     }

@@ -155,7 +155,7 @@ pub async fn login_begin(
             audit_log::record(
                 &state.db,
                 audit_log::event::LOGIN_FAILED,
-                None,
+                audit_log::Subjects::anonymous(),
                 user_agent,
                 serde_json::json!({ "reason": "no_usable_credential", "email": email }),
             )
@@ -303,7 +303,7 @@ pub async fn login_finish(
             audit_log::record(
                 &state.db,
                 audit_log::event::LOGIN_FAILED,
-                Some(user_id),
+                audit_log::Subjects::by(user_id),
                 user_agent,
                 serde_json::json!({
                     "reason": "credentials_removed_mid_ceremony",
@@ -345,7 +345,7 @@ pub async fn login_finish(
                 audit_log::record(
                     &state.db,
                     audit_log::event::LOGIN_FAILED,
-                    Some(user_id),
+                    audit_log::Subjects::by(user_id),
                     user_agent,
                     serde_json::json!({
                         "reason": "assertion_rejected",
@@ -393,7 +393,7 @@ pub async fn login_finish(
             audit_log::record(
                 &state.db,
                 audit_log::event::LOGIN_SUCCEEDED,
-                Some(user_id),
+                audit_log::Subjects::by(user_id),
                 user_agent,
                 serde_json::json!({
                     "session_id": session_id,

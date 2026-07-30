@@ -1,5 +1,6 @@
 mod acknowledge_group_warnings;
 mod analyze;
+mod auth_invites;
 mod auth_login;
 mod auth_register;
 mod cancel_session;
@@ -215,6 +216,11 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/auth/login/begin", post(auth_login::login_begin))
         .route("/auth/login/finish", post(auth_login::login_finish))
+        // Admin-only. Authorization is the `AuthenticatedUser` extractor in
+        // the handler plus the admin-only RLS policies underneath it, not a
+        // route-level guard -- there is no middleware layer that could be
+        // reordered away from this path.
+        .route("/auth/invites", post(auth_invites::create_invite))
         .route("/upload", post(upload::upload))
         .route("/discover", post(discover::discover))
         .route("/validate", post(validate::validate))

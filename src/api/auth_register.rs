@@ -210,7 +210,13 @@ async fn reject_registration(
     audit_log::record(
         &state.db,
         audit_log::event::REGISTRATION_FAILED,
-        actor_user_id,
+        // Whatever the caller resolved to, which is `None` on the paths that
+        // refused before any user was identified. Never a target: nobody had
+        // anything done *to* them here.
+        audit_log::Subjects {
+            actor: actor_user_id,
+            target: None,
+        },
         user_agent,
         serde_json::json!({ "reason": reason }),
     )
@@ -522,7 +528,7 @@ pub async fn register_finish(
             audit_log::record(
                 &state.db,
                 audit_log::event::REGISTRATION_FAILED,
-                Some(user_id),
+                audit_log::Subjects::by(user_id),
                 user_agent,
                 serde_json::json!({
                     "reason": "credential_rejected",
@@ -563,7 +569,7 @@ pub async fn register_finish(
             audit_log::record(
                 &state.db,
                 audit_log::event::REGISTRATION_FAILED,
-                Some(user_id),
+                audit_log::Subjects::by(user_id),
                 user_agent,
                 serde_json::json!({
                     "reason": "invite_consumed_elsewhere",
@@ -589,7 +595,7 @@ pub async fn register_finish(
     audit_log::record(
         &state.db,
         audit_log::event::PASSKEY_REGISTERED,
-        Some(user_id),
+        audit_log::Subjects::by(user_id),
         user_agent,
         // `device_bound` is captured here rather than left to be read off
         // the credential row later. The flag exists purely for admin

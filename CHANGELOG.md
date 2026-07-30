@@ -7,6 +7,39 @@ versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Invitation creation**, `POST /auth/invites`, admin-only. Creates the
+  account as `invited` and returns a one-time token, or reissues for an
+  account that already exists and has not enrolled yet — retiring any
+  outstanding invite first, so at most one link is ever live per account.
+  Needs no new database objects: the existing `users_insert_admin_only` and
+  `user_invites_admin_only` policies already permit it under an admin
+  identity, so the database enforces admin-ness independently of the
+  handler's own check. `user_invites.created_by` populates itself from the
+  identity GUC, which is what that column default was written for.
+
+  Refusals mirror `bootstrap-admin --reissue-invite` exactly — an account
+  with a passkey enrolled, or one not in `invited` status, is declined with
+  a reason. Unlike the unauthenticated endpoints these say *why*: the caller
+  is an administrator who can already list users, so withholding it protects
+  nothing.
+
+  No `role` field is accepted. Only `admin` exists, so accepting one would
+  add a client-controlled path to choosing a new account's privilege level
+  for no capability gained.
+- Audit events now record **`target_user_id`**, not just the actor. Invite
+  creation is the first event where the two are different people, and they
+  are passed as a named `Subjects` value rather than two adjacent
+  `Option<Uuid>` parameters — a transposition there would misattribute an
+  administrative action to the person it was performed on, compile cleanly,
+  and look entirely normal in the row.
+
+  **Consequence worth knowing:** because both audit foreign keys are
+  `RESTRICT` and the table is append-only, an invited account becomes
+  permanently un-hard-deletable the moment an invitation is issued for it.
+  Previously that only happened once someone *did* something. A mistyped
+  address therefore leaves a permanent row that can be soft-deleted but
+  never removed.
+
 - **Invitation acceptance.** An invited user enrols their first passkey by
   presenting the token from their invitation link to
   `POST /auth/register/begin`, and finishes signed in. Eligibility is
