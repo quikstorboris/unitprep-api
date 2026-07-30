@@ -29,13 +29,17 @@ ORIGIN="http://localhost:${HARNESS_PORT}"
 #                        browser silently drops over plain http. The ceremony
 #                        would then "work" while losing its cookie between
 #                        the two requests.
-#   AUTH_BOOTSTRAP_ENABLED=true  opens the unauthenticated first-passkey
-#                        path. Leave it OFF outside this harness.
+#
+# There is deliberately no AUTH_BOOTSTRAP_ENABLED here any more. Phase 2 task 6
+# deleted that variable along with the unauthenticated path it gated, so
+# exporting it would do nothing except mislead the next reader. Enrolling a
+# first passkey now needs an invite token pasted into the harness page --
+# printed by `unitprep bootstrap-admin` (or its --reissue-invite), and once
+# task 7 lands, issued by an admin.
 export WEBAUTHN_RP_ID="localhost"
 export WEBAUTHN_RP_ORIGIN="$ORIGIN"
 export CORS_ALLOWED_ORIGINS="$ORIGIN"
 export SESSION_COOKIE_SECURE="false"
-export AUTH_BOOTSTRAP_ENABLED="true"
 export PORT="$API_PORT"
 
 echo "building..."

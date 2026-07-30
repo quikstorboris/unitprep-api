@@ -47,8 +47,10 @@
   <legend>Target</legend>
   <label for="api">API base URL</label>
   <input type="text" id="api" value="http://localhost:8080">
-  <label for="email" style="margin-top:.75rem">Email</label>
+  <label for="email" style="margin-top:.75rem">Email <span style="opacity:.6">(sign-in only)</span></label>
   <input type="text" id="email" value="bmaksimov@quikstor.com">
+  <label for="invite" style="margin-top:.75rem">Invite token <span style="opacity:.6">(registration only &mdash; leave blank to add a passkey to the account you are already signed in as)</span></label>
+  <input type="text" id="invite" value="" placeholder="paste the token from bootstrap-admin or an invite link">
 </fieldset>
 
 <fieldset>
@@ -207,10 +209,42 @@ $("btn-register").onclick = () => guard("register", async () => {
   log("=== REGISTER ===");
   if (!window.PublicKeyCredential) { log("This browser has no WebAuthn support.", "bad"); return; }
 
-  const begun = await call("POST", "/auth/register/begin", { email: $("email").value.trim() });
+  // Two paths, and the endpoint decides which by whether a session cookie
+  // arrives -- not by what is sent here. A token is included only when the
+  // field has one, so the same button covers both: an invited user enrolling
+  // their first passkey, and a signed-in user adding another (whose token,
+  // if any, is ignored server-side by design).
+  const inviteToken = $("invite").value.trim();
+  const body = inviteToken ? { invite_token: inviteToken } : {};
+  log(inviteToken
+    ? "sending an invite token -- if a session cookie is also present, the SESSION wins and this token is ignored"
+    : "no invite token -- relying on an existing session to add another passkey", "dim");
+  if (inviteToken) {
+    log("the line after /begin says which account the server actually picked -- trust that, not this", "dim");
+  }
+
+  const begun = await call("POST", "/auth/register/begin", body);
   if (!begun.res.ok || !begun.body || !begun.body.challenge) {
     log("register/begin did not return a challenge -- stopping.", "bad");
+    log("A 403 here means the invite is not usable (unknown, expired, already used, "
+      + "account no longer 'invited', or it already has a passkey) -- or that there is "
+      + "no token AND no session. Every one of those looks identical on purpose.", "dim");
     return;
+  }
+
+  // Say out loud WHO the server decided this ceremony is for, before the
+  // prompt appears. The server picks the target from the session cookie when
+  // there is one, so sending an invite token is not the same as using it --
+  // and without this line the two cases are indistinguishable until you go
+  // reading audit rows afterwards. Learned the hard way: a stale session
+  // silently turned an invite test into "add a third passkey to my own
+  // account", and the page cheerfully reported success.
+  const who = begun.body.challenge.publicKey.user;
+  log("server says this ceremony is for: " + who.name + "  (" + who.displayName + ")",
+    inviteToken && who.name !== "" ? "ok" : "dim");
+  if (inviteToken) {
+    log("^ if that is NOT the invited account, a session cookie won and the invite was ignored. "
+      + "The invite is still unused -- retry in incognito.", "dim");
   }
 
   log("calling navigator.credentials.create() -- expect a Windows Hello / passkey prompt now", "dim");
@@ -272,7 +306,15 @@ $("btn-healthdb").onclick = () => guard("healthdb", async () => {
 $("btn-clear").onclick = () => { logEl.innerHTML = ""; };
 
 log("Ready. Page origin: " + window.location.origin, "dim");
-log("Registering the FIRST passkey needs AUTH_BOOTSTRAP_ENABLED=true on the API.", "dim");
+log("Registering a FIRST passkey needs an invite token in the field above. "
+  + "AUTH_BOOTSTRAP_ENABLED no longer exists -- it was deleted with the "
+  + "bootstrap path in Phase 2 task 6, and setting it does nothing.", "dim");
+log("Testing an invite? No session cookie must reach the API, or it wins and the "
+  + "ceremony silently becomes 'add another passkey to whoever is signed in'. "
+  + "Best way: CLEAR COOKIES for localhost in a normal window. Incognito also "
+  + "works but disables extensions, so a passkey held in a password manager "
+  + "(Proton Pass, 1Password) becomes unreachable and only Windows Hello or a "
+  + "security key will be offered.", "dim");
 </script>
 
 </body>
