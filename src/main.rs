@@ -2,6 +2,7 @@ mod ai;
 mod api;
 mod application;
 mod auth;
+mod bootstrap;
 mod db;
 mod infrastructure;
 
@@ -24,6 +25,32 @@ async fn main() {
         Err(dotenvy::Error::Io(_)) => {}
         Err(err) => {
             eprintln!("Warning: failed to parse .env.local: {err}");
+        }
+    }
+
+    // Subcommand dispatch, before any server setup. `bootstrap-admin` is a
+    // one-shot administrative command that must not start a listener, open
+    // the application pool, or need a WebAuthn configuration -- see
+    // src/bootstrap.rs for why it is a subcommand rather than an endpoint.
+    //
+    // Deliberately a plain argv check rather than an argument-parsing
+    // dependency: there is exactly one subcommand, and everything else is
+    // "serve", which takes no arguments at all.
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(first) = argv.first() {
+        match first.as_str() {
+            "bootstrap-admin" => {
+                run_bootstrap(&argv[1..]).await;
+                return;
+            }
+            "--help" | "-h" | "help" => {
+                println!("{}", bootstrap::USAGE);
+                return;
+            }
+            other => {
+                eprintln!("unknown subcommand {other:?}\n\n{}", bootstrap::USAGE);
+                std::process::exit(2);
+            }
         }
     }
 
@@ -152,4 +179,25 @@ async fn main() {
     );
 
     axum::serve(listener, app).await.unwrap();
+}
+
+/// Runs the `bootstrap-admin` subcommand and exits with a status the shell
+/// can branch on -- 2 for a bad invocation, 1 for a refusal or failure,
+/// 0 on success. Kept out of `main` so the serve path stays one flow.
+async fn run_bootstrap(argv: &[String]) {
+    let args = match bootstrap::parse_args(argv) {
+        Ok(args) => args,
+        Err(message) => {
+            eprintln!("error: {message}\n\n{}", bootstrap::USAGE);
+            std::process::exit(2);
+        }
+    };
+
+    match bootstrap::run(args).await {
+        Ok(message) => println!("{message}"),
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(1);
+        }
+    }
 }
