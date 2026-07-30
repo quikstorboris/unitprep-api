@@ -25,6 +25,12 @@ pub struct AuthenticationCeremony {
     pub metadata: SessionMetadata,
     pub user_id: Uuid,
 
+    /// Non-secret id for correlating this ceremony's two halves in the
+    /// logs -- same reasoning as `RegistrationCeremony::correlation_id`,
+    /// and deliberately not `metadata.id`, which is the ceremony cookie's
+    /// contents.
+    pub correlation_id: Uuid,
+
     /// webauthn-rs's own serialized PasskeyAuthentication state, opaque to
     /// everything except AuthBackend::finish_authentication -- see
     /// AuthenticationChallenge in auth/mod.rs.
@@ -36,6 +42,7 @@ impl AuthenticationCeremony {
         Self {
             metadata: SessionMetadata::new(id, Some(user_id)),
             user_id,
+            correlation_id: Uuid::new_v4(),
             webauthn_state,
         }
     }
@@ -48,5 +55,37 @@ impl HasSessionMetadata for AuthenticationCeremony {
 
     fn metadata_mut(&mut self) -> &mut SessionMetadata {
         &mut self.metadata
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Same guard as the registration ceremony's: the id that gets logged
+    /// must not be the id that gets put in a cookie.
+    #[test]
+    fn the_correlation_id_is_not_the_ceremony_id() {
+        let ceremony = AuthenticationCeremony::new(
+            "login-cookie-value".to_string(),
+            Uuid::new_v4(),
+            Vec::new(),
+        );
+
+        assert_ne!(
+            ceremony.correlation_id.to_string(),
+            ceremony.metadata.id,
+            "the logged correlation id must never be the ceremony cookie's value"
+        );
+    }
+
+    #[test]
+    fn two_ceremonies_for_one_user_get_different_correlation_ids() {
+        let user_id = Uuid::new_v4();
+
+        let first = AuthenticationCeremony::new("a".to_string(), user_id, Vec::new());
+        let second = AuthenticationCeremony::new("b".to_string(), user_id, Vec::new());
+
+        assert_ne!(first.correlation_id, second.correlation_id);
     }
 }

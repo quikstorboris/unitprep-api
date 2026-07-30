@@ -20,6 +20,16 @@ pub struct RegistrationCeremony {
     /// RegistrationChallenge in auth/mod.rs.
     pub webauthn_state: Vec<u8>,
 
+    /// Non-secret id for correlating this ceremony's two halves in the
+    /// logs. Deliberately NOT `metadata.id`: that value is the ceremony
+    /// cookie's contents, so logging it would put a live bearer value into
+    /// ops output that is routinely shipped somewhere less protected than
+    /// the database. This one is generated alongside it, never leaves the
+    /// server, and is safe to log -- which is the whole point, since two
+    /// concurrent ceremonies for the same user are otherwise
+    /// indistinguishable in the log.
+    pub correlation_id: Uuid,
+
     /// True when this ceremony was started through the unauthenticated
     /// bootstrap path rather than by an already-signed-in user adding an
     /// additional passkey. Decided at `begin` and carried here rather
@@ -36,6 +46,7 @@ impl RegistrationCeremony {
         Self {
             metadata: SessionMetadata::new(id, Some(user_id)),
             user_id,
+            correlation_id: Uuid::new_v4(),
             webauthn_state,
             is_bootstrap,
         }
@@ -49,5 +60,43 @@ impl HasSessionMetadata for RegistrationCeremony {
 
     fn metadata_mut(&mut self) -> &mut SessionMetadata {
         &mut self.metadata
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The reason `correlation_id` exists at all: the log-safe id must not
+    /// be the cookie's value. A later "simplification" that logged
+    /// `metadata.id` instead, or assigned it here, would put a live bearer
+    /// value into ops output -- and would look like a tidy-up in review.
+    #[test]
+    fn the_correlation_id_is_not_the_ceremony_id() {
+        let ceremony = RegistrationCeremony::new(
+            "ceremony-cookie-value".to_string(),
+            Uuid::new_v4(),
+            Vec::new(),
+            false,
+        );
+
+        assert_ne!(
+            ceremony.correlation_id.to_string(),
+            ceremony.metadata.id,
+            "the logged correlation id must never be the ceremony cookie's value"
+        );
+    }
+
+    /// Two ceremonies for the SAME user must be tellable apart, which is
+    /// the property that makes the id worth logging -- two browser tabs
+    /// enrolling at once are indistinguishable by `user_id` alone.
+    #[test]
+    fn two_ceremonies_for_one_user_get_different_correlation_ids() {
+        let user_id = Uuid::new_v4();
+
+        let first = RegistrationCeremony::new("a".to_string(), user_id, Vec::new(), false);
+        let second = RegistrationCeremony::new("b".to_string(), user_id, Vec::new(), false);
+
+        assert_ne!(first.correlation_id, second.correlation_id);
     }
 }

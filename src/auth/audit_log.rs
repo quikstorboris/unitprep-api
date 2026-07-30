@@ -45,6 +45,17 @@ pub mod event {
     pub const LOGIN_SUCCEEDED: &str = "login_succeeded";
     pub const LOGIN_FAILED: &str = "login_failed";
     pub const PASSKEY_REGISTERED: &str = "passkey_registered";
+
+    /// The registration-side counterpart of `LOGIN_FAILED`, covering both
+    /// a refused `/register/begin` and a `/register/finish` whose
+    /// credential did not verify. It exists because its absence was an
+    /// asymmetry rather than a decision: probing login across a list of
+    /// addresses was recorded and probing registration was not, so one
+    /// class of the same attack was invisible to the operator. The HTTP
+    /// response stays indistinguishable to the caller either way -- what
+    /// the attacker cannot tell apart and what the operator cannot see
+    /// are separate properties, and only the first one is deliberate.
+    pub const REGISTRATION_FAILED: &str = "registration_failed";
 }
 
 /// Records one audit event.

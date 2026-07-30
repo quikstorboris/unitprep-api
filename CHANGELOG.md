@@ -6,7 +6,34 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+- A refused passkey registration is now recorded. Previously a
+  `403 registration_not_available` wrote no audit row and emitted no log
+  line at all, while a failed *login* wrote a `login_failed` row -- so
+  probing registration across a list of addresses was untraceable while
+  the identical probing against login was recorded. That asymmetry was an
+  oversight, not a policy. Refusals now write a `registration_failed`
+  audit row naming the reason (`bootstrap_disabled`, `missing_email`,
+  `not_eligible`) plus the attempted address, and log a `warn`. The HTTP
+  response is unchanged and still byte-identical across every reason, so
+  the endpoint remains useless for user enumeration -- what an attacker
+  cannot distinguish and what an operator cannot see are separate
+  properties, and only the first was ever intended.
+- A registration whose credential fails verification also writes a
+  `registration_failed` row (reason `credential_rejected`), matching
+  login's existing `assertion_rejected`.
+
+### Added
+- Both halves of a WebAuthn ceremony now log a shared `correlation_id`,
+  and it is recorded in the audit metadata of every ceremony outcome. Two
+  concurrent ceremonies for the same user were previously
+  indistinguishable in the log, since both lines carried only `user_id`.
+  This is a *separate* id from the ceremony's own, deliberately: the
+  ceremony id is the contents of the ceremony cookie, so logging that
+  would put a live bearer value into ops output.
+- `passkey_registered` audit metadata now records `device_bound` as
+  reported by the authenticator at enrolment, rather than leaving it to be
+  read off the credential row later.
 
 ## [1.2.0] - 2026-07-29
 

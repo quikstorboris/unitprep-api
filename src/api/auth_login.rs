@@ -179,13 +179,15 @@ pub async fn login_begin(
 
     let ceremony_id = Uuid::new_v4().to_string();
 
-    state
-        .authentication_ceremonies
-        .save(AuthenticationCeremony::new(
-            ceremony_id.clone(),
-            credentials.user_id,
-            challenge.state,
-        ));
+    let ceremony =
+        AuthenticationCeremony::new(ceremony_id.clone(), credentials.user_id, challenge.state);
+
+    // Read before the store takes ownership. Logged in place of
+    // `ceremony_id`, which is the cookie's own value -- see
+    // `AuthenticationCeremony::correlation_id`.
+    let correlation_id = ceremony.correlation_id;
+
+    state.authentication_ceremonies.save(ceremony);
 
     let jar = issue_ceremony_cookie(
         jar,
@@ -194,7 +196,11 @@ pub async fn login_begin(
         time::Duration::minutes(CEREMONY_TTL_MINUTES),
     );
 
-    tracing::info!(user_id = %credentials.user_id, "passkey login ceremony started");
+    tracing::info!(
+        user_id = %credentials.user_id,
+        correlation_id = %correlation_id,
+        "passkey login ceremony started"
+    );
 
     (
         jar,
@@ -260,10 +266,14 @@ pub async fn login_finish(
     // Read and release before any `.await` -- holding a session lock
     // across an await point is forbidden by `SessionStore`'s documented
     // locking invariants.
-    let Some((user_id, webauthn_state)) = state
+    let Some((user_id, correlation_id, webauthn_state)) = state
         .authentication_ceremonies
         .with_session(&ceremony_id, |ceremony| {
-            (ceremony.user_id, ceremony.webauthn_state.clone())
+            (
+                ceremony.user_id,
+                ceremony.correlation_id,
+                ceremony.webauthn_state.clone(),
+            )
         })
     else {
         return (
@@ -295,14 +305,22 @@ pub async fn login_finish(
                 audit_log::event::LOGIN_FAILED,
                 Some(user_id),
                 user_agent,
-                serde_json::json!({ "reason": "credentials_removed_mid_ceremony" }),
+                serde_json::json!({
+                    "reason": "credentials_removed_mid_ceremony",
+                    "correlation_id": correlation_id,
+                }),
             )
             .await;
 
             return (jar, ceremony_failed()).into_response();
         }
         Err(err) => {
-            tracing::error!(error = %err, user_id = %user_id, "failed to reload credentials");
+            tracing::error!(
+                error = %err,
+                user_id = %user_id,
+                correlation_id = %correlation_id,
+                "failed to reload credentials"
+            );
             return (jar, internal_error("Could not complete sign-in")).into_response();
         }
     };
@@ -319,6 +337,7 @@ pub async fn login_finish(
                 // challenge), not a server fault.
                 tracing::warn!(
                     user_id = %user_id,
+                    correlation_id = %correlation_id,
                     error = %err,
                     "passkey login ceremony failed verification"
                 );
@@ -328,7 +347,10 @@ pub async fn login_finish(
                     audit_log::event::LOGIN_FAILED,
                     Some(user_id),
                     user_agent,
-                    serde_json::json!({ "reason": "assertion_rejected" }),
+                    serde_json::json!({
+                        "reason": "assertion_rejected",
+                        "correlation_id": correlation_id,
+                    }),
                 )
                 .await;
 
@@ -343,6 +365,7 @@ pub async fn login_finish(
         tracing::error!(
             error = %err,
             user_id = %user_id,
+            correlation_id = %correlation_id,
             "failed to persist post-authentication credential state"
         );
         return (jar, internal_error("Could not complete sign-in")).into_response();
@@ -372,13 +395,17 @@ pub async fn login_finish(
                 audit_log::event::LOGIN_SUCCEEDED,
                 Some(user_id),
                 user_agent,
-                serde_json::json!({ "session_id": session_id }),
+                serde_json::json!({
+                    "session_id": session_id,
+                    "correlation_id": correlation_id,
+                }),
             )
             .await;
 
             tracing::info!(
                 user_id = %user_id,
                 session_id = %session_id,
+                correlation_id = %correlation_id,
                 "passkey login succeeded"
             );
 
@@ -394,6 +421,7 @@ pub async fn login_finish(
             tracing::error!(
                 error = %err,
                 user_id = %user_id,
+                correlation_id = %correlation_id,
                 "passkey verified but session creation failed"
             );
 

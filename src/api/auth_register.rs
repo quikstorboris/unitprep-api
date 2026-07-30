@@ -36,6 +36,19 @@
 //!
 //! Once tasks 5-8 land, the bootstrap path stops being the only way in
 //! and `AUTH_BOOTSTRAP_ENABLED` should be left unset.
+//!
+//! ## Rejections are recorded even though they are not explained
+//!
+//! Every refusal here returns the same opaque 403 (see
+//! `bootstrap_rejected`) *and* writes a `registration_failed` audit row
+//! naming the actual reason. Those are not in tension: the response is
+//! deliberately indistinguishable so this endpoint cannot be used to
+//! enumerate users, while the audit row exists so an operator can see
+//! probing that the attacker believes is silent. Recording it server-side
+//! leaks nothing. Before this existed, a refused registration was written
+//! nowhere at all while a failed *login* wrote a row -- so the identical
+//! attack was visible against one endpoint and invisible against the
+//! other, which was an oversight rather than a policy.
 
 use axum::{
     extract::{Json, State},
@@ -146,6 +159,44 @@ fn bootstrap_rejected() -> Response {
         .into_response()
 }
 
+/// The rejection above, plus the audit row that makes it visible to an
+/// operator.
+///
+/// Every rejection path goes through here rather than calling
+/// `bootstrap_rejected` directly, so "refused but recorded nowhere"
+/// cannot be reintroduced by adding a fourth reason later and forgetting
+/// the audit call. `reason` lands in the audit table and never in the
+/// response.
+///
+/// The attempted address goes in `metadata`, not into the tracing line:
+/// the audit table is admin-only and an unmatched address there is data
+/// about the attempt rather than an identity, whereas ops logs are
+/// deliberately kept free of PII (`user_id` UUIDs only) because they get
+/// shipped somewhere with weaker access control.
+async fn reject_bootstrap(
+    state: &AppState,
+    reason: &'static str,
+    email: Option<&str>,
+    user_agent: Option<&str>,
+) -> Response {
+    // `warn`, matching a failed login ceremony: an ordinary client-side
+    // outcome, not a server fault.
+    tracing::warn!(reason, "passkey registration refused");
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::REGISTRATION_FAILED,
+        // No actor id: there may be no user behind this address at all,
+        // and on the gate-closed path we deliberately never look.
+        None,
+        user_agent,
+        serde_json::json!({ "reason": reason, "email": email }),
+    )
+    .await;
+
+    bootstrap_rejected()
+}
+
 fn ceremony_not_found() -> Response {
     (
         StatusCode::BAD_REQUEST,
@@ -186,8 +237,13 @@ struct RegistrationTarget {
 pub async fn register_begin(
     State(state): State<AppState>,
     jar: CookieJar,
+    headers: HeaderMap,
     Json(request): Json<RegisterBeginRequest>,
 ) -> Response {
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok());
+
     // Resolved ONCE. Asking twice (a second call to decide
     // `is_bootstrap`) would both waste a round trip and open a window
     // where the two answers disagree -- the path a ceremony is
@@ -212,7 +268,13 @@ pub async fn register_begin(
 
         None => {
             if !bootstrap_enabled() {
-                return bootstrap_rejected();
+                return reject_bootstrap(
+                    &state,
+                    "bootstrap_disabled",
+                    request.email.as_deref(),
+                    user_agent,
+                )
+                .await;
             }
 
             let Some(email) = request
@@ -221,12 +283,14 @@ pub async fn register_begin(
                 .map(str::trim)
                 .filter(|email| !email.is_empty())
             else {
-                return bootstrap_rejected();
+                return reject_bootstrap(&state, "missing_email", None, user_agent).await;
             };
 
             match bootstrap_target(&state, email).await {
                 Ok(Some(target)) => target,
-                Ok(None) => return bootstrap_rejected(),
+                Ok(None) => {
+                    return reject_bootstrap(&state, "not_eligible", Some(email), user_agent).await
+                }
                 Err(err) => {
                     tracing::error!(error = %err, "bootstrap registration lookup failed");
                     return internal_error("Could not start passkey registration");
@@ -250,14 +314,19 @@ pub async fn register_begin(
 
     let ceremony_id = Uuid::new_v4().to_string();
 
-    state
-        .registration_ceremonies
-        .save(RegistrationCeremony::new(
-            ceremony_id.clone(),
-            target.user_id,
-            challenge.state,
-            is_bootstrap,
-        ));
+    let ceremony = RegistrationCeremony::new(
+        ceremony_id.clone(),
+        target.user_id,
+        challenge.state,
+        is_bootstrap,
+    );
+
+    // Read before the store takes ownership. Logged in place of
+    // `ceremony_id`, which is the cookie's own value -- see
+    // `RegistrationCeremony::correlation_id`.
+    let correlation_id = ceremony.correlation_id;
+
+    state.registration_ceremonies.save(ceremony);
 
     let jar = issue_ceremony_cookie(
         jar,
@@ -268,6 +337,7 @@ pub async fn register_begin(
 
     tracing::info!(
         user_id = %target.user_id,
+        correlation_id = %correlation_id,
         is_bootstrap,
         "passkey registration ceremony started"
     );
@@ -351,6 +421,14 @@ pub async fn register_finish(
     headers: HeaderMap,
     Json(request): Json<RegisterFinishRequest>,
 ) -> Response {
+    // Read up front rather than at the point of the success audit row:
+    // the failure path below needs it too, and a value extracted twice is
+    // a value that eventually gets extracted differently in one of the
+    // two places.
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok());
+
     let Some(ceremony_id) = read_ceremony_cookie(&jar, REGISTRATION_CEREMONY_COOKIE) else {
         return ceremony_not_found();
     };
@@ -359,16 +437,16 @@ pub async fn register_finish(
     // holding a session lock across an await point is explicitly
     // forbidden by `SessionStore`'s documented locking invariants, and
     // everything below this point is async.
-    let Some((user_id, webauthn_state, is_bootstrap)) =
-        state
-            .registration_ceremonies
-            .with_session(&ceremony_id, |ceremony| {
-                (
-                    ceremony.user_id,
-                    ceremony.webauthn_state.clone(),
-                    ceremony.is_bootstrap,
-                )
-            })
+    let Some((user_id, correlation_id, webauthn_state, is_bootstrap)) = state
+        .registration_ceremonies
+        .with_session(&ceremony_id, |ceremony| {
+            (
+                ceremony.user_id,
+                ceremony.correlation_id,
+                ceremony.webauthn_state.clone(),
+                ceremony.is_bootstrap,
+            )
+        })
     else {
         return (
             clear_ceremony_cookie(jar, REGISTRATION_CEREMONY_COOKIE),
@@ -395,9 +473,27 @@ pub async fn register_finish(
             // challenge), not a server fault.
             tracing::warn!(
                 user_id = %user_id,
+                correlation_id = %correlation_id,
                 error = %err,
                 "passkey registration ceremony failed verification"
             );
+
+            // The registration-side counterpart of login's
+            // `assertion_rejected` row. Without it, a ceremony that
+            // started and then failed verification appeared in the ops
+            // log and nowhere permanent -- the same gap as the refused
+            // `/begin`, one step further along.
+            audit_log::record(
+                &state.db,
+                audit_log::event::REGISTRATION_FAILED,
+                Some(user_id),
+                user_agent,
+                serde_json::json!({
+                    "reason": "credential_rejected",
+                    "correlation_id": correlation_id,
+                }),
+            )
+            .await;
 
             return (jar, ceremony_failed()).into_response();
         }
@@ -405,25 +501,40 @@ pub async fn register_finish(
 
     if let Err(err) = insert_credential(&state, user_id, &stored, request.nickname.as_deref()).await
     {
-        tracing::error!(error = %err, user_id = %user_id, "failed to persist passkey credential");
+        tracing::error!(
+            error = %err,
+            user_id = %user_id,
+            correlation_id = %correlation_id,
+            "failed to persist passkey credential"
+        );
         return (jar, internal_error("Could not save the passkey")).into_response();
     }
-
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
 
     audit_log::record(
         &state.db,
         audit_log::event::PASSKEY_REGISTERED,
         Some(user_id),
         user_agent,
-        serde_json::json!({ "bootstrap": is_bootstrap }),
+        // `device_bound` is captured here rather than left to be read off
+        // the credential row later. The flag exists purely for admin
+        // visibility, and what an admin wants to know is what the
+        // authenticator claimed *at enrolment* -- a value re-read from the
+        // row months later cannot distinguish "enrolled as synced" from
+        // "row edited since".
+        serde_json::json!({
+            "bootstrap": is_bootstrap,
+            "device_bound": stored.device_bound,
+            "correlation_id": correlation_id,
+        }),
     )
     .await;
 
     if !is_bootstrap {
-        tracing::info!(user_id = %user_id, "additional passkey registered");
+        tracing::info!(
+            user_id = %user_id,
+            correlation_id = %correlation_id,
+            "additional passkey registered"
+        );
 
         return (
             jar,
@@ -464,6 +575,7 @@ pub async fn register_finish(
             tracing::info!(
                 user_id = %user_id,
                 session_id = %session_id,
+                correlation_id = %correlation_id,
                 "bootstrap passkey registered and session issued"
             );
 
@@ -489,6 +601,7 @@ pub async fn register_finish(
             tracing::error!(
                 error = %err,
                 user_id = %user_id,
+                correlation_id = %correlation_id,
                 "passkey saved but session creation failed"
             );
 
@@ -558,6 +671,7 @@ mod tests {
         let response = register_begin(
             State(empty_state()),
             CookieJar::new(),
+            HeaderMap::new(),
             Json(RegisterBeginRequest {
                 email: Some("bmaksimov@quikstor.com".to_string()),
             }),
@@ -576,11 +690,81 @@ mod tests {
         let response = register_begin(
             State(empty_state()),
             CookieJar::new(),
+            HeaderMap::new(),
             Json(RegisterBeginRequest { email: None }),
         )
         .await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Every rejection reason must produce a byte-identical response.
+    /// This is the anti-enumeration property, and it is exactly what the
+    /// new audit rows could have broken -- recording a distinct `reason`
+    /// server-side is only safe while none of it reaches the caller. The
+    /// body is compared, not just the status: a `reason` leaking into the
+    /// error payload would keep the status at 403 and still hand an
+    /// attacker the oracle.
+    #[tokio::test]
+    async fn every_rejection_reason_returns_an_identical_response() {
+        async fn body_of(response: Response) -> (StatusCode, Vec<u8>) {
+            let status = response.status();
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("response body should be readable");
+            (status, bytes.to_vec())
+        }
+
+        // Gate closed, with an address supplied.
+        std::env::remove_var("AUTH_BOOTSTRAP_ENABLED");
+        let disabled = body_of(
+            register_begin(
+                State(empty_state()),
+                CookieJar::new(),
+                HeaderMap::new(),
+                Json(RegisterBeginRequest {
+                    email: Some("someone@example.com".to_string()),
+                }),
+            )
+            .await,
+        )
+        .await;
+
+        // Gate closed, no address at all.
+        let no_email = body_of(
+            register_begin(
+                State(empty_state()),
+                CookieJar::new(),
+                HeaderMap::new(),
+                Json(RegisterBeginRequest { email: None }),
+            )
+            .await,
+        )
+        .await;
+
+        // Whitespace-only, which trims to nothing.
+        let blank_email = body_of(
+            register_begin(
+                State(empty_state()),
+                CookieJar::new(),
+                HeaderMap::new(),
+                Json(RegisterBeginRequest {
+                    email: Some("   ".to_string()),
+                }),
+            )
+            .await,
+        )
+        .await;
+
+        assert_eq!(disabled.0, StatusCode::FORBIDDEN);
+        assert_eq!(
+            disabled, no_email,
+            "a refused address and a missing one must be indistinguishable"
+        );
+        assert_eq!(
+            no_email, blank_email,
+            "a blank address must not be distinguishable from a missing one"
+        );
     }
 
     /// No cookie means there is no ceremony to finish -- and critically,
