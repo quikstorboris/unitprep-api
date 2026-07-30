@@ -91,6 +91,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
   runs once and is never exercised again.
 
 ### Fixed
+- **Deactivating an account now revokes its sessions.** The deactivation
+  trigger removed passkeys and TOTP secrets, and (as of the previous change)
+  retired pending invites, but left live sessions alone — while being named
+  after revoking every access path. Not exploitable, because
+  `auth.resolve_session` already requires `status = 'active'` and
+  `deleted_at IS NULL`, so a deactivated user's token resolved to nothing.
+  What existed was a row that looked live and was not, which misleads anyone
+  asking "who is signed in right now". Includes a backfill for accounts
+  deactivated before this covered them.
 - **The session cookie was not actually being cleared in a browser.**
   Clearing emitted a `Set-Cookie` with **no `Path`**, which per RFC 6265
   defaults to the requesting URI's directory rather than "everywhere" — so
