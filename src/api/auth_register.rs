@@ -55,7 +55,7 @@ use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{
     audit_log, begin_owner_rls_transaction, begin_rls_transaction, clear_ceremony_cookie,
     generate_token, issue_ceremony_cookie, issue_session_cookie, read_ceremony_cookie,
-    try_authenticated_user, RegistrationCeremony, Role, StoredCredential,
+    try_authenticated_user, RegisteredCredential, RegistrationCeremony, Role,
     REGISTRATION_CEREMONY_COOKIE,
 };
 
@@ -511,19 +511,28 @@ pub async fn register_finish(
 async fn insert_credential(
     state: &AppState,
     user_id: Uuid,
-    stored: &StoredCredential,
+    registered: &RegisteredCredential,
     nickname: Option<&str>,
 ) -> Result<(), sqlx::Error> {
     let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
 
+    // device_bound is written explicitly rather than left to the column's
+    // `DEFAULT true`. Relying on the default meant every row claimed the
+    // credential could not leave its hardware, including synced passkeys
+    // where that is simply false -- a fabricated value, which is worse
+    // than a null one because nothing about it looks wrong. Found when the
+    // first real Windows Hello credential turned out to be
+    // backup-eligible while its row said otherwise.
     sqlx::query(
-        "INSERT INTO auth.webauthn_credentials (user_id, credential_id, passkey_data, nickname)
-         VALUES ($1, $2, $3, $4)",
+        "INSERT INTO auth.webauthn_credentials
+             (user_id, credential_id, passkey_data, nickname, device_bound)
+         VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(user_id)
-    .bind(&stored.credential_id)
-    .bind(&stored.passkey_data)
+    .bind(&registered.credential_id)
+    .bind(&registered.passkey_data)
     .bind(nickname)
+    .bind(registered.device_bound)
     .execute(&mut *tx)
     .await?;
 

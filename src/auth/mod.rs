@@ -40,14 +40,47 @@ pub struct AuthenticationChallenge {
     pub state: Vec<u8>,
 }
 
-/// What gets persisted in webauthn_credentials after a successful
-/// registration. passkey_data is opaque to everything except the
-/// backend that produced it -- see the schema-correction migration
+/// A credential loaded back out of storage, for verifying an
+/// authentication against. passkey_data is opaque to everything except
+/// the backend that produced it -- see the schema-correction migration
 /// (fix_webauthn_credentials_storage) for why this is not decomposed
 /// into separate typed fields.
 pub struct StoredCredential {
     pub credential_id: Vec<u8>,
     pub passkey_data: serde_json::Value,
+}
+
+/// What a successful registration ceremony produced, ready to be
+/// inserted.
+///
+/// Deliberately a separate type from `StoredCredential` rather than
+/// extra fields on it. The two are used in opposite directions -- this
+/// is what the ceremony just created, `StoredCredential` is what we
+/// loaded to verify against -- and only the creating direction can know
+/// properties like `device_bound`. Folding them together would force
+/// every load site to invent a value for a field it has no business
+/// having.
+pub struct RegisteredCredential {
+    pub credential_id: Vec<u8>,
+    pub passkey_data: serde_json::Value,
+
+    /// True when the private key cannot leave the hardware that created
+    /// it (a TPM or hardware key), false for a synced/backup-eligible
+    /// passkey such as one held in iCloud Keychain or Google Password
+    /// Manager.
+    ///
+    /// Derived from WebAuthn's Backup Eligibility (BE) flag as
+    /// `!backup_eligible`: a credential the authenticator declares
+    /// ineligible for backup is, by definition, one that cannot be
+    /// copied off the device.
+    ///
+    /// Recorded for visibility only -- nothing refuses a synced passkey.
+    /// See the architecture notes: requiring device-bound credentials was
+    /// considered and dropped, because people legitimately work from more
+    /// than one machine and Windows Hello produces a synced credential by
+    /// default, so enforcing it would block the common case to defend
+    /// secrets that do not exist yet.
+    pub device_bound: bool,
 }
 
 /// What a successful authentication tells the caller: which stored
@@ -104,7 +137,7 @@ pub trait AuthBackend: Send + Sync {
         &self,
         response: serde_json::Value,
         state: &[u8],
-    ) -> Result<StoredCredential, AuthError>;
+    ) -> Result<RegisteredCredential, AuthError>;
 
     /// Begins authentication against a user's existing credentials.
     fn start_authentication(

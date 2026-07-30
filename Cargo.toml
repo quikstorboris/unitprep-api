@@ -93,6 +93,7 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres",
 dotenvy = "0.15"
 
 # Passkey/WebAuthn registration and authentication -- see src/auth.
+#
 # danger-allow-state-serialisation is needed because the ceremony
 # state returned between the begin and finish steps of a registration
 # or authentication must be persisted across two separate HTTP
@@ -101,7 +102,26 @@ dotenvy = "0.15"
 # default-on attestation feature -- unrelated to sqlx's own tls-rustls
 # choice above, just a second, independent dependency tree, needed
 # for attestation certificate-chain verification.
-webauthn-rs = { version = "0.5.5", features = ["danger-allow-state-serialisation"] }
+#
+# danger-credential-internals exposes the `Credential` type via
+# From<Passkey>, which is the only supported way to read a credential's
+# Backup Eligibility flag -- `Passkey` itself exposes just cred_id,
+# algorithm, public key and update_credential. We need it to record
+# whether a registered passkey is device-bound or synced
+# (webauthn_credentials.device_bound); without it the alternative is
+# parsing webauthn-rs's serialized blob, whose shape is explicitly not
+# guaranteed and which would fail silently rather than at compile time.
+#
+# The crate's warning on this feature is specifically about *changing*
+# internal Credential values ("you do not change internal Credential
+# values without understanding the implications") and it names reading
+# internals for storage purposes as an intended use. We only ever read
+# one boolean and never mutate a Credential, so that risk does not
+# apply here.
+webauthn-rs = { version = "0.5.5", features = [
+    "danger-allow-state-serialisation",
+    "danger-credential-internals",
+] }
 
 # Used for AuthError (src/auth/mod.rs) -- ergonomic #[error(...)] derive
 # rather than hand-writing Display impls.
