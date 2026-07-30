@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>UnitPrep auth harness (dev only)</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 900px; margin: 2rem auto; padding: 0 1rem;
+  }
+  h1 { font-size: 1.1rem; margin-bottom: .25rem; }
+  .sub { opacity: .7; margin-bottom: 1.5rem; }
+  .warn {
+    border-left: 3px solid #d97706; background: rgba(217,119,6,.08);
+    padding: .6rem .9rem; margin-bottom: 1.5rem; border-radius: 3px;
+  }
+  fieldset { border: 1px solid rgba(128,128,128,.35); border-radius: 4px; padding: 1rem; margin-bottom: 1rem; }
+  legend { padding: 0 .4rem; opacity: .8; }
+  label { display: block; margin-bottom: .35rem; }
+  input[type=text] { width: 100%; padding: .45rem .55rem; font: inherit; box-sizing: border-box; }
+  .row { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .75rem; }
+  button { font: inherit; padding: .45rem .9rem; cursor: pointer; border-radius: 4px; }
+  button:disabled { opacity: .5; cursor: default; }
+  #log {
+    white-space: pre-wrap; word-break: break-word;
+    background: rgba(128,128,128,.1); border-radius: 4px;
+    padding: .9rem; min-height: 12rem; max-height: 30rem; overflow-y: auto;
+    font: 12px/1.55 ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  .ok { color: #16a34a; } .bad { color: #dc2626; } .dim { opacity: .6; }
+</style>
+</head>
+<body>
+
+<h1>UnitPrep auth harness</h1>
+<div class="sub">Dev-only scratch page for driving the WebAuthn ceremonies by hand. Not product code.</div>
+
+<div class="warn">
+  <strong>Origin matters.</strong> WebAuthn binds a credential to the page's origin, so this page must be
+  loaded from exactly the origin the API was started with as <code>WEBAUTHN_RP_ORIGIN</code>.
+  If they disagree the browser rejects the ceremony before the server ever sees it.
+  Use <code>dev-tools/run-auth-harness.sh</code>, which starts both halves with matching values.
+</div>
+
+<fieldset>
+  <legend>Target</legend>
+  <label for="api">API base URL</label>
+  <input type="text" id="api" value="http://localhost:8080">
+  <label for="email" style="margin-top:.75rem">Email</label>
+  <input type="text" id="email" value="bmaksimov@quikstor.com">
+</fieldset>
+
+<fieldset>
+  <legend>Ceremonies</legend>
+  <div class="row">
+    <button id="btn-register">Register passkey</button>
+    <button id="btn-login">Sign in with passkey</button>
+    <button id="btn-whoami">Check session (/health/whoami)</button>
+    <button id="btn-healthdb">Check DB (/health/db)</button>
+    <button id="btn-clear">Clear log</button>
+  </div>
+</fieldset>
+
+<div id="log"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const logEl = $("log");
+
+function log(msg, cls) {
+  const line = document.createElement("div");
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+const blank = () => log(" ");
+const dump = (label, obj) => log(label + " " + JSON.stringify(obj, null, 2), "dim");
+
+// --- base64url <-> ArrayBuffer -------------------------------------------
+// webauthn-rs emits and expects unpadded base64url for every binary field.
+// The browser hands us ArrayBuffers. Neither side will coerce for us, and a
+// wrong conversion here surfaces as an opaque browser-side failure, so both
+// directions are explicit.
+function b64urlToBytes(s) {
+  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
+  const b64 = (s + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+function bytesToB64url(buf) {
+  const bytes = new Uint8Array(buf);
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// Convert the fields the spec defines as BufferSource. Done field-by-field
+// rather than by walking every string in the object: a blind walk would also
+// mangle genuinely-textual fields like `rp.name` or `user.displayName`.
+function decodeCreationOptions(publicKey) {
+  const out = { ...publicKey };
+  out.challenge = b64urlToBytes(publicKey.challenge);
+  out.user = { ...publicKey.user, id: b64urlToBytes(publicKey.user.id) };
+  if (Array.isArray(publicKey.excludeCredentials)) {
+    out.excludeCredentials = publicKey.excludeCredentials.map((c) => ({
+      ...c, id: b64urlToBytes(c.id),
+    }));
+  }
+  return out;
+}
+function decodeRequestOptions(publicKey) {
+  const out = { ...publicKey };
+  out.challenge = b64urlToBytes(publicKey.challenge);
+  if (Array.isArray(publicKey.allowCredentials)) {
+    out.allowCredentials = publicKey.allowCredentials.map((c) => ({
+      ...c, id: b64urlToBytes(c.id),
+    }));
+  }
+  return out;
+}
+
+function encodeAttestation(cred) {
+  return {
+    id: cred.id,
+    rawId: bytesToB64url(cred.rawId),
+    type: cred.type,
+    response: {
+      clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+      attestationObject: bytesToB64url(cred.response.attestationObject),
+    },
+    extensions: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
+  };
+}
+function encodeAssertion(cred) {
+  return {
+    id: cred.id,
+    rawId: bytesToB64url(cred.rawId),
+    type: cred.type,
+    response: {
+      clientDataJSON: bytesToB64url(cred.response.clientDataJSON),
+      authenticatorData: bytesToB64url(cred.response.authenticatorData),
+      signature: bytesToB64url(cred.response.signature),
+      // Null for a non-discoverable credential; the field must still be
+      // present, and must be null rather than absent or "".
+      userHandle: cred.response.userHandle ? bytesToB64url(cred.response.userHandle) : null,
+    },
+    extensions: cred.getClientExtensionResults ? cred.getClientExtensionResults() : {},
+  };
+}
+
+// --- HTTP ---------------------------------------------------------------
+// credentials:"include" on every call. The session and ceremony cookies are
+// httpOnly, so JS never reads them -- but the browser will not SEND them
+// cross-origin without this, and every ceremony spans two requests that must
+// share the same cookie.
+async function call(method, path, body) {
+  const url = $("api").value.replace(/\/$/, "") + path;
+  const init = { method, credentials: "include", headers: {} };
+  if (body !== undefined) {
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, init);
+  const text = await res.text();
+  let parsed = null;
+  try { parsed = text ? JSON.parse(text) : null; } catch { /* keep raw */ }
+  log(`${method} ${path} -> ${res.status}`, res.ok ? "ok" : "bad");
+  if (parsed !== null) dump("   ", parsed);
+  else if (text) log("   " + text, "dim");
+  return { res, body: parsed, raw: text };
+}
+
+function setBusy(busy) {
+  for (const id of ["btn-register", "btn-login", "btn-whoami", "btn-healthdb"]) {
+    $(id).disabled = busy;
+  }
+}
+
+async function guard(name, fn) {
+  setBusy(true);
+  try {
+    await fn();
+  } catch (err) {
+    // A DOMException from navigator.credentials is where an origin/rp_id
+    // mismatch, a user cancellation, or an unavailable authenticator all
+    // land -- report the name, not just the message, since the message is
+    // often empty.
+    log(`${name} threw: ${err && err.name ? err.name : "Error"}: ${err && err.message ? err.message : err}`, "bad");
+    if (err && err.name === "NotAllowedError") {
+      log("   NotAllowedError usually means: cancelled/timed out, or the page origin does not match WEBAUTHN_RP_ORIGIN.", "dim");
+    }
+    if (err && err.name === "SecurityError") {
+      log("   SecurityError usually means rp_id is not a valid domain suffix of this page's origin.", "dim");
+    }
+  } finally {
+    setBusy(false);
+  }
+}
+
+// --- flows --------------------------------------------------------------
+$("btn-register").onclick = () => guard("register", async () => {
+  blank();
+  log("=== REGISTER ===");
+  if (!window.PublicKeyCredential) { log("This browser has no WebAuthn support.", "bad"); return; }
+
+  const begun = await call("POST", "/auth/register/begin", { email: $("email").value.trim() });
+  if (!begun.res.ok || !begun.body || !begun.body.challenge) {
+    log("register/begin did not return a challenge -- stopping.", "bad");
+    return;
+  }
+
+  log("calling navigator.credentials.create() -- expect a Windows Hello / passkey prompt now", "dim");
+  const cred = await navigator.credentials.create(
+    { publicKey: decodeCreationOptions(begun.body.challenge.publicKey) }
+  );
+  if (!cred) { log("authenticator returned nothing.", "bad"); return; }
+  log("authenticator produced a credential", "ok");
+
+  const finished = await call("POST", "/auth/register/finish", {
+    credential: encodeAttestation(cred),
+    nickname: "harness-" + navigator.platform,
+  });
+
+  if (finished.res.ok) {
+    log("registration complete" + (finished.body && finished.body.session_issued
+      ? " -- a session cookie was issued, try Check session" : ""), "ok");
+  }
+});
+
+$("btn-login").onclick = () => guard("login", async () => {
+  blank();
+  log("=== LOGIN ===");
+  if (!window.PublicKeyCredential) { log("This browser has no WebAuthn support.", "bad"); return; }
+
+  const begun = await call("POST", "/auth/login/begin", { email: $("email").value.trim() });
+  if (!begun.res.ok || !begun.body || !begun.body.challenge) {
+    log("login/begin did not return a challenge. A 401 here is expected if this account has no passkey yet -- register first.", "bad");
+    return;
+  }
+
+  log("calling navigator.credentials.get() -- expect a passkey prompt now", "dim");
+  const cred = await navigator.credentials.get(
+    { publicKey: decodeRequestOptions(begun.body.challenge.publicKey) }
+  );
+  if (!cred) { log("authenticator returned nothing.", "bad"); return; }
+  log("authenticator produced an assertion", "ok");
+
+  const finished = await call("POST", "/auth/login/finish", {
+    credential: encodeAssertion(cred),
+  });
+
+  if (finished.res.ok) log("signed in -- try Check session", "ok");
+});
+
+$("btn-whoami").onclick = () => guard("whoami", async () => {
+  blank();
+  log("=== SESSION CHECK ===");
+  const r = await call("GET", "/health/whoami");
+  if (r.res.status === 401) log("401 = no valid session cookie. Register or sign in first.", "dim");
+});
+
+$("btn-healthdb").onclick = () => guard("healthdb", async () => {
+  blank();
+  log("=== DB CHECK ===");
+  await call("GET", "/health/db");
+});
+
+$("btn-clear").onclick = () => { logEl.innerHTML = ""; };
+
+log("Ready. Page origin: " + window.location.origin, "dim");
+log("Registering the FIRST passkey needs AUTH_BOOTSTRAP_ENABLED=true on the API.", "dim");
+</script>
+
+</body>
+</html>
