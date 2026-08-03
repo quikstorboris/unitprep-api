@@ -414,6 +414,263 @@ async fn issue_invite(
     Ok(Outcome::Issued { user_id, reissued })
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RecoverAccountRequest {
+    pub email: String,
+}
+
+/// Unlike `conflict` above, this is a genuine 404 -- there really is no
+/// account behind the address, which an authenticated admin is entitled
+/// to be told plainly, same reasoning `conflict` already applies to every
+/// other refusal on this endpoint.
+fn account_not_found(email: &str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ApiErrorBody {
+            error: "account_not_found",
+            message: format!("No account found for {email}."),
+        }),
+    )
+        .into_response()
+}
+
+/// Revokes every existing access path on an already-active account and
+/// issues a fresh invite in its place -- the admin-mediated recovery
+/// workflow for someone who has lost their only passkey (see
+/// AUTHENTICATION.md's "Losing your device" section). Deliberately its
+/// own endpoint rather than a flag on `create_invite`: the two operations
+/// have very different blast radii if triggered by accident, and a
+/// separate route makes the admin's intent unambiguous at the point of
+/// the request rather than resting on a boolean default.
+pub async fn recover_account(
+    State(state): State<AppState>,
+    admin: AuthenticatedUser,
+    headers: HeaderMap,
+    Json(request): Json<RecoverAccountRequest>,
+) -> Response {
+    // Redundant with the RLS policy by design -- see create_invite above
+    // for why.
+    match admin.role {
+        Role::Admin => {}
+    }
+
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok());
+
+    let email = request.email.trim().to_ascii_lowercase();
+
+    if email.is_empty() || !email.contains('@') || email.split_whitespace().count() > 1 {
+        return bad_request("invalid_email", "A valid email address is required.".into());
+    }
+
+    let (raw_token, token_hash) = generate_token();
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(invite_hours());
+
+    let outcome = recover_account_tx(&state, &admin, &email, &token_hash, expires_at).await;
+
+    let user_id = match outcome {
+        Ok(RecoveryOutcome::Recovered { user_id }) => user_id,
+
+        Ok(RecoveryOutcome::Refused {
+            user_id,
+            reason,
+            message,
+        }) => {
+            // Only a refusal naming a real account is worth a permanent
+            // row -- "the admin mistyped an email" is not a
+            // security-relevant event, the same reasoning that keeps
+            // create_invite's own input-validation failures unaudited.
+            if let Some(target_user_id) = user_id {
+                audit_log::record(
+                    &state.db,
+                    audit_log::event::INVITE_REFUSED,
+                    audit_log::Subjects::by(admin.user_id).about(target_user_id),
+                    user_agent,
+                    serde_json::json!({ "reason": reason, "action": "recovery" }),
+                )
+                .await;
+            }
+
+            tracing::info!(
+                admin_user_id = %admin.user_id,
+                target_user_id = ?user_id,
+                reason,
+                "account recovery refused"
+            );
+
+            return match user_id {
+                Some(_) => conflict(message),
+                None => account_not_found(&email),
+            };
+        }
+
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                admin_user_id = %admin.user_id,
+                "failed to recover an account"
+            );
+            return internal_error("Could not recover this account");
+        }
+    };
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::ACCOUNT_RECOVERY_INITIATED,
+        audit_log::Subjects::by(admin.user_id).about(user_id),
+        user_agent,
+        serde_json::json!({ "expires_at": expires_at }),
+    )
+    .await;
+
+    tracing::info!(
+        admin_user_id = %admin.user_id,
+        recovered_user_id = %user_id,
+        "account recovery initiated"
+    );
+
+    (
+        StatusCode::CREATED,
+        Json(CreateInviteResponse {
+            user_id,
+            invite_token: raw_token,
+            expires_at,
+            reissued: true,
+        }),
+    )
+        .into_response()
+}
+
+enum RecoveryOutcome {
+    Recovered {
+        user_id: Uuid,
+    },
+    /// `user_id` is `None` only when no account with this email exists at
+    /// all -- every other refusal reason resolves to a real account
+    /// first.
+    Refused {
+        user_id: Option<Uuid>,
+        reason: &'static str,
+        message: String,
+    },
+}
+
+/// All of it in one transaction, same reasoning as `issue_invite`: the
+/// status flip and the new invite must not be separable, or a failure
+/// between them leaves the account `invited` with none of the credentials
+/// it started with and no usable way back in.
+async fn recover_account_tx(
+    state: &AppState,
+    admin: &AuthenticatedUser,
+    email: &str,
+    token_hash: &[u8],
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> Result<RecoveryOutcome, sqlx::Error> {
+    let mut tx = begin_rls_transaction(&state.db, admin.user_id, admin.role).await?;
+
+    let existing: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, status::text FROM auth.users WHERE email = $1::citext AND deleted_at IS NULL",
+    )
+    .bind(email)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some((user_id, status)) = existing else {
+        tx.rollback().await?;
+        return Ok(RecoveryOutcome::Refused {
+            user_id: None,
+            reason: "no_such_account",
+            message: format!("No account found for {email}."),
+        });
+    };
+
+    if status != "active" {
+        tx.rollback().await?;
+
+        let (reason, message) = match status.as_str() {
+            "invited" => (
+                "not_yet_enrolled",
+                format!(
+                    "{email} has not completed enrolment yet -- reissue their setup link with \
+                     the regular invite endpoint instead of recovering an account."
+                ),
+            ),
+            "deactivated" => (
+                "account_deactivated",
+                format!(
+                    "{email} is deactivated. Reactivating an account is a separate decision \
+                     from recovering a lost credential."
+                ),
+            ),
+            other => (
+                "unrecognised_status",
+                format!("{email} has an unexpected status \"{other}\"."),
+            ),
+        };
+
+        return Ok(RecoveryOutcome::Refused {
+            user_id: Some(user_id),
+            reason,
+            message,
+        });
+    }
+
+    // Cycle through `deactivated` so the existing revoke-all-access-paths
+    // trigger (migrations/20260730*_*.sql) does the work of wiping
+    // passkeys, TOTP, live sessions, and any outstanding invite for this
+    // account -- writing a second copy of those DELETEs here would be
+    // exactly the kind of second place those migrations' own comments
+    // warn against.
+    //
+    // `set_user_status` returns whether it actually updated a row, and
+    // this checks it: a `false` here means the account stopped being
+    // recoverable between the SELECT above and now (soft-deleted by a
+    // concurrent action, in practice, given both ran inside one
+    // transaction), and proceeding to insert a fresh invite for a status
+    // flip that never happened would be worse than refusing.
+    let deactivated: bool =
+        sqlx::query_scalar("SELECT auth.set_user_status($1, 'deactivated'::auth.user_status)")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    if !deactivated {
+        tx.rollback().await?;
+        return Ok(RecoveryOutcome::Refused {
+            user_id: Some(user_id),
+            reason: "account_changed_concurrently",
+            message: format!(
+                "{email} could not be recovered -- its status changed while this request was \
+                 in progress. Check its current state and try again."
+            ),
+        });
+    }
+
+    // The row is now locked by the UPDATE inside the call above and held
+    // until this transaction commits or rolls back, so nothing can
+    // interleave between here and the commit -- this second call cannot
+    // race the way the first one could.
+    sqlx::query("SELECT auth.set_user_status($1, 'invited'::auth.user_status)")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query(
+        "INSERT INTO auth.user_invites (user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(user_id)
+    .bind(token_hash)
+    .bind(expires_at)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(RecoveryOutcome::Recovered { user_id })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,5 +759,50 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR,
             "validation should have passed and the call should have reached the database"
         );
+    }
+
+    fn recover_request(email: &str) -> RecoverAccountRequest {
+        RecoverAccountRequest {
+            email: email.to_string(),
+        }
+    }
+
+    /// Same property as `invalid_input_is_refused_without_touching_the_database`
+    /// above, for the one field this endpoint takes.
+    #[tokio::test]
+    async fn recovery_rejects_an_invalid_email_without_touching_the_database() {
+        let cases = [
+            (recover_request(""), "empty email"),
+            (recover_request("   "), "whitespace email"),
+            (recover_request("not-an-address"), "no @ sign"),
+            (recover_request("a b@example.com"), "embedded whitespace"),
+        ];
+
+        for (body, label) in cases {
+            let response =
+                recover_account(State(empty_state()), admin(), HeaderMap::new(), Json(body)).await;
+
+            assert_eq!(
+                response.status(),
+                StatusCode::BAD_REQUEST,
+                "expected a 400 for {label}"
+            );
+        }
+    }
+
+    /// A syntactically valid email must reach the database -- the 500 here
+    /// (against the unreachable test pool) is the success signal, same
+    /// convention as `company_and_email_casing_are_normalised_not_rejected`.
+    #[tokio::test]
+    async fn recovery_with_a_valid_email_reaches_the_database() {
+        let response = recover_account(
+            State(empty_state()),
+            admin(),
+            HeaderMap::new(),
+            Json(recover_request("someone@example.com")),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

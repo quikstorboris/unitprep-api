@@ -299,6 +299,11 @@ pub fn router(state: AppState) -> Router {
         // route-level guard -- there is no middleware layer that could be
         // reordered away from this path.
         .route("/auth/invites", post(auth_invites::create_invite))
+        // Account recovery shares this bucket rather than the anonymous
+        // auth_routes one above -- same trust level as invite creation
+        // (authenticated admin), same "bound accidental/scripted
+        // hammering by a trusted caller" rationale.
+        .route("/auth/invites/recover", post(auth_invites::recover_account))
         .layer(GovernorLayer::new(invite_rate_limit).error_handler(rate_limit_exceeded));
 
     Router::new()

@@ -94,6 +94,17 @@ pub mod event {
 
     /// The user removed their own TOTP credential.
     pub const TOTP_REMOVED: &str = "totp_removed";
+
+    /// An administrator initiated account recovery: every existing access
+    /// path on the target account (passkeys, TOTP, live sessions, any
+    /// outstanding invite) was revoked and a fresh invite issued in its
+    /// place. Distinct from `INVITE_CREATED` -- this is materially more
+    /// consequential, since unlike an ordinary invite it destroys existing
+    /// credentials rather than only adding a path for someone who never
+    /// had one. Kept as its own event rather than `INVITE_CREATED` with a
+    /// flag so a review of "who got their credentials revoked and why"
+    /// never has to filter a mixed-purpose event to find out.
+    pub const ACCOUNT_RECOVERY_INITIATED: &str = "account_recovery_initiated";
 }
 
 /// Who did it, and who it was done to.
