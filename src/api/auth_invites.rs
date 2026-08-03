@@ -180,8 +180,34 @@ pub async fn create_invite(
     let (user_id, reissued) = match outcome {
         Ok(Outcome::Issued { user_id, reissued }) => (user_id, reissued),
 
-        Ok(Outcome::Refused(message)) => {
-            tracing::info!(admin_user_id = %admin.user_id, "invite refused");
+        Ok(Outcome::Refused {
+            user_id,
+            reason,
+            message,
+        }) => {
+            // Unlike the unauthenticated registration/login paths, there is
+            // no anti-enumeration reason to withhold this from the caller
+            // (an authenticated admin who can already see the user list) --
+            // but the attempt itself is still worth a permanent row, for
+            // the same reason a successful invite gets one: it is an
+            // administrative act performed on a specific account, and
+            // "attempted but refused" is a different fact from "never
+            // attempted at all".
+            audit_log::record(
+                &state.db,
+                audit_log::event::INVITE_REFUSED,
+                audit_log::Subjects::by(admin.user_id).about(user_id),
+                user_agent,
+                serde_json::json!({ "reason": reason }),
+            )
+            .await;
+
+            tracing::info!(
+                admin_user_id = %admin.user_id,
+                target_user_id = %user_id,
+                reason,
+                "invite refused"
+            );
             return conflict(message);
         }
 
@@ -250,8 +276,16 @@ enum Outcome {
         user_id: Uuid,
         reissued: bool,
     },
-    /// A legitimate "no", with a reason safe to show an administrator.
-    Refused(String),
+    /// A legitimate "no", with a message safe to show an administrator.
+    /// `user_id` names the existing account the attempt was about --
+    /// `Refused` only ever happens once an existing row was found -- and
+    /// `reason` is the structured counterpart of `message`: the audit
+    /// trail gets a stable code, the admin gets a full sentence.
+    Refused {
+        user_id: Uuid,
+        reason: &'static str,
+        message: String,
+    },
 }
 
 /// Creates the account if the address is new, or reissues for an account
@@ -309,20 +343,28 @@ async fn issue_invite(
             // support conversation.
             if credential_count > 0 {
                 tx.rollback().await?;
-                return Ok(Outcome::Refused(format!(
-                    "{} already has {credential_count} passkey(s) enrolled and can sign in \
-                     normally. An invitation is only for an account that has never enrolled.",
-                    input.email
-                )));
+                return Ok(Outcome::Refused {
+                    user_id: id,
+                    reason: "already_credentialed",
+                    message: format!(
+                        "{} already has {credential_count} passkey(s) enrolled and can sign in \
+                         normally. An invitation is only for an account that has never enrolled.",
+                        input.email
+                    ),
+                });
             }
 
             if status != "invited" {
                 tx.rollback().await?;
-                return Ok(Outcome::Refused(format!(
-                    "{} has status \"{status}\", not \"invited\". An invitation is only for an \
-                     account still awaiting its first enrolment.",
-                    input.email
-                )));
+                return Ok(Outcome::Refused {
+                    user_id: id,
+                    reason: "not_invited_status",
+                    message: format!(
+                        "{} has status \"{status}\", not \"invited\". An invitation is only for \
+                         an account still awaiting its first enrolment.",
+                        input.email
+                    ),
+                });
             }
 
             // Retiring outstanding invites is what keeps at most one live

@@ -83,6 +83,15 @@ pub mod event {
     /// TOTP is confirmed and usable as a fallback factor.
     pub const TOTP_ENROLLED: &str = "totp_enrolled";
 
+    /// An administrator attempted to issue an invitation to an account
+    /// that was not eligible -- already credentialed, or not in `invited`
+    /// status. Distinct from `INVITE_CREATED` for the same reason
+    /// `REGISTRATION_FAILED` is distinct from `PASSKEY_REGISTERED`: a
+    /// refusal and a success are different facts, and collapsing them
+    /// into "something happened to this invite" would hide which one it
+    /// was.
+    pub const INVITE_REFUSED: &str = "invite_refused";
+
     /// The user removed their own TOTP credential.
     pub const TOTP_REMOVED: &str = "totp_removed";
 }

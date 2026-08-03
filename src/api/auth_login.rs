@@ -141,6 +141,20 @@ pub async fn login_begin(
     let email = request.email.trim();
 
     if email.is_empty() {
+        // No actor, for the same reason the lookup-came-back-empty case
+        // just below has none -- and recorded for the same reason that one
+        // is: an empty address is exactly as much "no usable credential"
+        // as one that fails to resolve, and leaving this specific shape of
+        // the same probe unaudited would be an asymmetry, not a decision.
+        audit_log::record(
+            &state.db,
+            audit_log::event::LOGIN_FAILED,
+            audit_log::Subjects::anonymous(),
+            user_agent,
+            serde_json::json!({ "reason": "empty_email" }),
+        )
+        .await;
+
         return login_unavailable();
     }
 

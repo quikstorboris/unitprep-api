@@ -327,10 +327,36 @@ pub async fn login(
 
     let email = request.email.trim().to_ascii_lowercase();
 
-    // Refused before any query, and folded into the same opaque response as
-    // everything else -- an unconfigured deployment must not be detectable
-    // from an unauthenticated endpoint.
-    if email.is_empty() || !totp_configured() {
+    if email.is_empty() {
+        // Same reasoning as the passkey login path's equivalent case: an
+        // empty address is exactly as much a login attempt as one that
+        // fails to resolve to an account, so it gets the same audit row.
+        audit_log::record(
+            &state.db,
+            audit_log::event::LOGIN_FAILED,
+            audit_log::Subjects::anonymous(),
+            user_agent,
+            serde_json::json!({ "reason": "empty_email", "factor": "totp" }),
+        )
+        .await;
+        return login_unavailable();
+    }
+
+    // The HTTP response is folded into the same opaque rejection as
+    // everything else -- an unconfigured deployment must not be
+    // detectable from an unauthenticated endpoint. The audit row is not
+    // under that constraint: it is never visible to the caller, and an
+    // operator watching it genuinely benefits from telling "TOTP is off
+    // here" apart from "someone tried a bad address".
+    if !totp_configured() {
+        audit_log::record(
+            &state.db,
+            audit_log::event::LOGIN_FAILED,
+            audit_log::Subjects::anonymous(),
+            user_agent,
+            serde_json::json!({ "reason": "totp_not_configured", "factor": "totp" }),
+        )
+        .await;
         return login_unavailable();
     }
 
