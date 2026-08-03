@@ -190,6 +190,16 @@ chacha20poly1305 = "0.10.1"
 # +/= characters that get mangled in shell quoting and .env parsing.
 hex = "0.4.3"
 
+# Rate limiting for the unauthenticated auth endpoints (Phase I item 2) --
+# a Tower/Axum middleware over the `governor` crate's in-process token
+# bucket. Deliberately not a hosted/edge rate-limiting service: this is
+# the same self-hosted-library-over-service preference as the rest of
+# auth (see AUTHENTICATION.md), and an in-process limiter needs no new
+# infrastructure decision to ship now. default-features = false drops the
+# `tonic` feature (gRPC support, unused here); "axum" is the integration
+# itself, "tracing" matches every other subsystem's instrumentation.
+tower_governor = { version = "0.8", default-features = false, features = ["axum", "tracing"] }
+
 [dev-dependencies]
 
 # Reads the xlsx exporter's own output back in its tests, so those

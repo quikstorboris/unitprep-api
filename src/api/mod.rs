@@ -25,6 +25,7 @@ mod upload;
 pub(crate) mod validate;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     body::Body,
@@ -38,6 +39,7 @@ use axum::{
 
 use serde::Serialize;
 
+use tower_governor::{governor::GovernorConfigBuilder, GovernorError, GovernorLayer};
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
@@ -207,10 +209,80 @@ pub fn router(state: AppState) -> Router {
         // requires regardless.
         .allow_credentials(true);
 
-    Router::new()
-        .route("/health", get(health))
-        .route("/health/db", get(health_db))
-        .route("/health/whoami", get(whoami))
+    // Rate limit for the endpoints an anonymous caller can reach without
+    // ever having a valid session: passkey registration (both the
+    // invite-redemption and add-a-second-key paths), passkey login, and
+    // the TOTP fallback login. One shared bucket across all of them,
+    // keyed by peer IP -- deliberately not one bucket per route, so a
+    // script cannot get five times the budget just by spreading its
+    // attempts across five endpoints instead of one.
+    //
+    // Ten requests answered immediately, one more every three seconds
+    // after that (~20/min sustained). Generous enough that a real person
+    // retrying a cancelled Windows Hello prompt or fumbling a TOTP code a
+    // few times in a row never notices this exists, while bounding how
+    // fast an anonymous caller can iterate through addresses or guess
+    // codes against these endpoints.
+    //
+    // Keying is by the TCP peer address (`tower_governor`'s default
+    // `PeerIpKeyExtractor`), never a client-supplied header -- this
+    // deliberately does not attempt to trust `X-Forwarded-For`, since no
+    // trusted-reverse-proxy policy exists yet (see the `ip_address` NULL
+    // comments in auth_register.rs / auth_login.rs for the same open
+    // question). Once real client IPs need trusting for any reason, this
+    // and that NULL should be revisited together, not separately -- they
+    // are the same unresolved question in two places. Until then, behind
+    // a reverse proxy that does not preserve the original TCP peer, this
+    // still limits correctly, just coarsely: every client behind that
+    // proxy shares one bucket rather than getting one each, which is
+    // strictly more restrictive than intended, never less.
+    let auth_rate_limit = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(3)
+            .burst_size(10)
+            .finish()
+            .expect("auth rate-limit config: burst size and period are both non-zero constants"),
+    );
+
+    // A separate, more generous bucket for invite creation: authenticated
+    // and admin-only already, so this is bounding accidental or scripted
+    // hammering by a trusted caller, not probing by an anonymous one.
+    let invite_rate_limit = Arc::new(
+        GovernorConfigBuilder::default()
+            .per_second(2)
+            .burst_size(20)
+            .finish()
+            .expect("invite rate-limit config: burst size and period are both non-zero constants"),
+    );
+
+    // The keyed limiter accumulates one entry per distinct peer IP it has
+    // ever seen and nothing prunes that on its own -- `retain_recent()` is
+    // `governor`'s own answer, and it has to be called from somewhere.
+    // Mirrors `InMemorySessionStore::start_cleanup_task`: a background
+    // tick that must keep running even if one iteration panics, since the
+    // alternative is the rate limiter quietly becoming a slow memory leak
+    // for the life of the process.
+    {
+        let auth_limiter = auth_rate_limit.limiter().clone();
+        let invite_limiter = invite_rate_limit.limiter().clone();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+
+            loop {
+                interval.tick().await;
+                auth_limiter.retain_recent();
+                invite_limiter.retain_recent();
+            }
+        });
+    }
+
+    // Split out as their own routers purely so the rate-limit layer
+    // applies to exactly these paths and nothing else -- merged back into
+    // the main router below while it is still `Router<AppState>`, since
+    // `.merge` requires matching state types and `.with_state` further
+    // down converts the main chain to `Router<()>`.
+    let auth_routes = Router::new()
         .route("/auth/register/begin", post(auth_register::register_begin))
         .route(
             "/auth/register/finish",
@@ -218,27 +290,40 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/auth/login/begin", post(auth_login::login_begin))
         .route("/auth/login/finish", post(auth_login::login_finish))
+        .route("/auth/login/totp", post(auth_totp::login))
+        .layer(GovernorLayer::new(auth_rate_limit).error_handler(rate_limit_exceeded));
+
+    let invite_routes = Router::new()
         // Admin-only. Authorization is the `AuthenticatedUser` extractor in
         // the handler plus the admin-only RLS policies underneath it, not a
         // route-level guard -- there is no middleware layer that could be
         // reordered away from this path.
         .route("/auth/invites", post(auth_invites::create_invite))
+        .layer(GovernorLayer::new(invite_rate_limit).error_handler(rate_limit_exceeded));
+
+    Router::new()
+        .route("/health", get(health))
+        .route("/health/db", get(health_db))
+        .route("/health/whoami", get(whoami))
         // Deliberately NOT behind the AuthenticatedUser extractor: signing
         // out must succeed with a stale or missing cookie, or the one case
         // where a user most needs to clear it is the case that 401s. See
         // auth_logout's module docs.
-        // TOTP: enrolment and removal are authenticated (the extractor is in
-        // the handler); the sign-in path is not, and is deliberately as
-        // opaque as the passkey login path.
+        // TOTP: enrolment and removal are authenticated (the extractor is
+        // in the handler); the sign-in path is not, and is deliberately as
+        // opaque as the passkey login path -- and merged in below (see
+        // auth_routes) with the other unauthenticated auth endpoints,
+        // sharing their rate limit.
         .route("/auth/totp/enroll/begin", post(auth_totp::enroll_begin))
         .route("/auth/totp/enroll/confirm", post(auth_totp::enroll_confirm))
         .route("/auth/totp/disable", post(auth_totp::disable))
-        .route("/auth/login/totp", post(auth_totp::login))
         .route("/auth/logout", post(auth_logout::logout))
         .route(
             "/auth/logout/everywhere",
             post(auth_logout::logout_everywhere),
         )
+        .merge(auth_routes)
+        .merge(invite_routes)
         .route("/upload", post(upload::upload))
         .route("/discover", post(discover::discover))
         .route("/validate", post(validate::validate))
@@ -298,6 +383,45 @@ pub fn router(state: AppState) -> Router {
         // ApiErrorBody 500 shape instead of silently dropping the
         // connection with no response at all.
         .layer(CatchPanicLayer::custom(handle_panic))
+}
+
+/// `tower_governor`'s own default rejection is plain text (e.g. `"Too Many
+/// Requests! Wait for 3s"`), which is exactly the inconsistency
+/// `normalize_extraction_rejection_body` above already exists to close for
+/// a different auto-generated rejection class. Rather than reintroduce a
+/// third response shape, this maps a governor rejection onto the same
+/// `ApiErrorBody` every handler-level error already uses.
+fn rate_limit_exceeded(error: GovernorError) -> Response {
+    match error {
+        GovernorError::TooManyRequests { wait_time, headers } => {
+            let mut response = (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(ApiErrorBody {
+                    error: "rate_limited",
+                    message: format!("Too many requests. Try again in {wait_time} second(s)."),
+                }),
+            )
+                .into_response();
+
+            if let Some(headers) = headers {
+                response.headers_mut().extend(headers);
+            }
+
+            response
+        }
+
+        // Both are effectively "the rate limiter itself is misconfigured
+        // or malfunctioning" rather than anything about the caller's
+        // request, so they get the project's own internal_error path
+        // instead of inventing a fourth shape for a case that should not
+        // occur -- `UnableToExtractKey` cannot happen with the peer-IP
+        // extractor used here (it never fails to extract), and `Other` is
+        // never constructed by anything in this codebase.
+        GovernorError::UnableToExtractKey | GovernorError::Other { .. } => {
+            tracing::error!(?error, "rate limiter returned an unexpected error");
+            internal_error("Could not process this request")
+        }
+    }
 }
 
 /// See the doc comment on its `.layer(...)` call site in `router` above.

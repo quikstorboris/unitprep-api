@@ -6,6 +6,7 @@ mod bootstrap;
 mod db;
 mod infrastructure;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
@@ -188,7 +189,15 @@ async fn main() {
         "UnitPrep API listening on http://{addr}"
     );
 
-    axum::serve(listener, app).await.unwrap();
+    // `with_connect_info` rather than plain `into_make_service` -- the
+    // auth rate limiter (api::router) keys by peer IP via
+    // `ConnectInfo<SocketAddr>`, which only ever gets populated this way.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 /// Runs the `bootstrap-admin` subcommand and exits with a status the shell
