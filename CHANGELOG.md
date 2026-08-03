@@ -6,6 +6,28 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.3.0] - 2026-08-03
+
+Phase 2 identity/session work is complete: all eleven originally-planned
+steps now exist (bootstrap-admin, registration, login, invitations,
+sign-out, TOTP fallback, and the deactivation/soft-delete cascades that
+retire every access path they leave behind). Phase 1 hardening has also
+begun — the unauthenticated auth endpoints and invite creation are rate
+limited, a misconfigured deployment can no longer silently serve session
+cookies over plain HTTP, a deliberate audit-coverage sweep closed three
+rejection paths that wrote no row while a comparable one did, and an
+admin can now recover an account that has lost its only passkey without a
+password reset ever existing to lose in the first place.
+
+**What is NOT here yet**: no frontend at all — no login page, no invite
+redemption, no route gating. Auth exists and is fully exercised by a
+backend test harness; nothing outside the auth endpoints themselves
+requires a session yet, so this is not an enforced product. See
+`AUTHENTICATION.md` for the full architecture, audit posture, and the
+remaining roadmap.
+
 ### Added
 - **TOTP as a fallback factor** — `POST /auth/totp/enroll/begin`,
   `/enroll/confirm`, `/disable`, and `POST /auth/login/totp`. A fallback for a
@@ -165,6 +187,18 @@ versioning follows [Semantic Versioning](https://semver.org/).
 - A registration whose credential fails verification also writes a
   `registration_failed` row (reason `credential_rejected`), matching
   login's existing `assertion_rejected`.
+- Three more of the same asymmetry, found in a deliberate audit-coverage
+  sweep rather than by accident: passkey `login_begin` wrote no row for an
+  empty/whitespace email while the very next case (an address that fails
+  to resolve to a credential) already logged `login_failed`; TOTP login's
+  combined `email.is_empty() || !totp_configured()` check was one
+  unaudited early return covering two distinct reasons, now split so each
+  logs its own (`empty_email` / `totp_not_configured`); and an admin's
+  attempt to re-invite an already-credentialed or wrong-status account
+  produced a `tracing` line and nothing permanent. All three now write an
+  audit row — the last one under a new `invite_refused` event, the
+  refusal type carrying a structured reason rather than only a free-text
+  message.
 
 ### Added
 - Both halves of a WebAuthn ceremony now log a shared `correlation_id`,
@@ -177,6 +211,44 @@ versioning follows [Semantic Versioning](https://semver.org/).
 - `passkey_registered` audit metadata now records `device_bound` as
   reported by the authenticator at enrolment, rather than leaving it to be
   read off the credential row later.
+- **Rate limiting on the unauthenticated auth endpoints and on invite
+  creation.** The single biggest live gap flagged by both an internal
+  review and external LLM review of AUTHENTICATION.md. `tower_governor`
+  (an in-process token-bucket limiter over the `governor` crate) rather
+  than a hosted or edge rate-limiting service, matching the
+  library-over-service preference already established for the rest of
+  auth. One shared bucket covers passkey register begin/finish, passkey
+  login begin/finish, and TOTP login — deliberately one bucket for all
+  five rather than one each, so a script cannot multiply its budget by
+  spreading attempts across endpoints. Invite creation gets its own,
+  more generous bucket, verified genuinely independent of the first with
+  a real test rather than assumed. Keyed by real TCP peer address
+  (`axum::serve`'s `ConnectInfo`), not a client-supplied header — there is
+  no trusted-reverse-proxy policy yet, so behind a proxy that does not
+  preserve the real peer this still limits correctly, just coarsely.
+- **Admin-mediated account recovery**, `POST /auth/invites/recover`. An
+  admin can now revoke every existing access path on an already-active
+  account (passkeys, TOTP, live sessions, any outstanding invite) and
+  issue a fresh invite in its place — the piece that makes "someone lost
+  their only passkey" actually recoverable rather than only described.
+  Deliberately its own endpoint, not a flag on invite creation: the two
+  operations have very different blast radii if triggered by accident.
+  Reuses the existing deactivation trigger by cycling the account's
+  status through `deactivated` and back to `invited` inside one
+  transaction, rather than writing a second copy of the credential/
+  session/invite cleanup those migrations already implement. Backed by a
+  new `auth.set_user_status` function — the first `SECURITY DEFINER`
+  function in this schema whose safety depends on checking the caller's
+  *role* rather than being scoped by a token or the caller's own id, since
+  there is no such scoping available for "an admin changes someone else's
+  status."
+
+### Security
+- `SESSION_COOKIE_SECURE=false` (the local-HTTP-dev escape hatch) could
+  reach a real deployment silently — nothing checked it against
+  `WEBAUTHN_RP_ORIGIN`. The server now refuses to start with that
+  combination paired with a non-localhost origin, alongside the other
+  fatal misconfiguration checks (database pool, WebAuthn backend).
 
 ## [1.2.0] - 2026-07-29
 
