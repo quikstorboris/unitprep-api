@@ -278,6 +278,7 @@ pub fn verify_code(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// A key fixed for the test process. Set rather than assumed so these do
     /// not pass or fail based on the developer's ambient environment -- the
@@ -302,6 +303,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(totp_env)]
     fn a_secret_round_trips_through_encryption() {
         with_key();
         let user = Uuid::new_v4();
@@ -322,6 +324,7 @@ mod tests {
     /// different user_id must not decrypt. Without the AEAD's additional
     /// data this passes silently and the secret is portable between rows.
     #[test]
+    #[serial(totp_env)]
     fn a_blob_does_not_decrypt_for_a_different_user() {
         with_key();
         let owner = Uuid::new_v4();
@@ -336,6 +339,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(totp_env)]
     fn tampering_with_the_ciphertext_is_detected() {
         with_key();
         let user = Uuid::new_v4();
@@ -348,6 +352,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(totp_env)]
     fn an_unknown_format_version_is_refused() {
         with_key();
         let user = Uuid::new_v4();
@@ -361,6 +366,7 @@ mod tests {
     /// Two encryptions of the same secret must differ, or the nonce is being
     /// reused -- which for a stream cipher leaks the XOR of the plaintexts.
     #[test]
+    #[serial(totp_env)]
     fn encrypting_twice_produces_different_blobs() {
         with_key();
         let user = Uuid::new_v4();
@@ -373,6 +379,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(totp_env)]
     fn a_malformed_key_is_reported_as_not_configured() {
         std::env::set_var(KEY_ENV, "not-hex");
         assert!(matches!(load_key(), Err(TotpError::NotConfigured(_))));
@@ -390,6 +397,7 @@ mod tests {
     /// Malformed submissions must be a plain "no", never an error and never
     /// a panic -- this input comes straight from a form field.
     #[test]
+    #[serial(totp_env)]
     fn malformed_codes_are_rejected_without_touching_the_secret() {
         with_key();
         let user = Uuid::new_v4();
@@ -406,6 +414,7 @@ mod tests {
 
     /// A code copied with the space an authenticator app displays must work.
     #[test]
+    #[serial(totp_env)]
     fn whitespace_in_a_submitted_code_is_tolerated() {
         with_key();
         let user = Uuid::new_v4();

@@ -619,6 +619,7 @@ async fn delete_own_secret(state: &AppState, user_id: Uuid) -> Result<bool, sqlx
 mod tests {
     use super::*;
     use crate::api::test_support::empty_state;
+    use serial_test::serial;
 
     fn set_key() {
         std::env::set_var(
@@ -630,6 +631,7 @@ mod tests {
     /// An empty address must not reach the database, and must land on the
     /// same opaque rejection as everything else.
     #[tokio::test]
+    #[serial(totp_env)]
     async fn totp_login_refuses_an_empty_email_without_touching_the_database() {
         set_key();
 
@@ -651,6 +653,7 @@ mod tests {
     /// like any other refusal -- not a 503, which would advertise the
     /// deployment's configuration to anyone who asked.
     #[tokio::test]
+    #[serial(totp_env)]
     async fn an_unconfigured_deployment_is_indistinguishable_on_the_login_path() {
         std::env::remove_var("TOTP_ENCRYPTION_KEY");
 
@@ -677,6 +680,7 @@ mod tests {
     /// The enrolment path, by contrast, tells an authenticated caller
     /// plainly -- they can act on it, and hiding it would look like a bug.
     #[tokio::test]
+    #[serial(totp_env)]
     async fn an_unconfigured_deployment_says_so_on_the_enrolment_path() {
         std::env::remove_var("TOTP_ENCRYPTION_KEY");
 

@@ -213,3 +213,11 @@ calamine = "0.36"
 # credentials gap) only ever show up at the router/middleware layer, not
 # from calling a handler function directly.
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
+
+# Several TOTP tests (src/auth/totp.rs and src/api/auth_totp.rs) set or
+# remove the process-global TOTP_ENCRYPTION_KEY env var, which races under
+# the default parallel test runner -- one test's mutation is visible to
+# another mid-assertion. #[serial(totp_env)] gives them a shared named lock
+# so they run one-at-a-time relative to each other without serializing the
+# whole suite.
+serial_test = "4"
