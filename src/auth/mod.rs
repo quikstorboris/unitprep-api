@@ -25,7 +25,9 @@ pub use registration_ceremony::RegistrationCeremony;
 // an unused import warning standing in for "someone will need this
 // eventually". The ceremony-cookie constants are re-exported because callers
 // genuinely pass them, choosing between the login and registration cookie.
-pub use session_cookie::{clear_session_cookie, issue_session_cookie, read_session_cookie};
+pub use session_cookie::{
+    clear_session_cookie, issue_session_cookie, read_session_cookie, validate_cookie_security,
+};
 pub use session_token::{generate_token, hash_token};
 // `decrypt_secret` and `TotpError` are intentionally not re-exported: the
 // only callers outside `totp` verify codes rather than handling raw secrets,

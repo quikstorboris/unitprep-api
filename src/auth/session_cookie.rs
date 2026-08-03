@@ -12,6 +12,39 @@ fn cookie_is_secure() -> bool {
         .unwrap_or(true)
 }
 
+/// True when `origin` names localhost by IP or hostname, over any scheme
+/// or port -- the one case where an insecure session cookie is expected
+/// and harmless (WebAuthn itself already treats localhost as a secure
+/// context, which is why local dev works without HTTPS at all).
+fn is_localhost_origin(origin: &str) -> bool {
+    origin
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split(['/', ':']).next())
+        .is_some_and(|host| host == "localhost" || host == "127.0.0.1")
+}
+
+/// Refuses to start with a real, non-localhost origin serving an
+/// insecure session cookie -- that combination means every session token
+/// travels in plaintext over the network, not just on a developer's own
+/// machine. `SESSION_COOKIE_SECURE=false` exists as a local-HTTP-dev
+/// escape hatch (see `cookie_is_secure` above); this is what stops that
+/// escape hatch from surviving unnoticed into a real deployment. Called
+/// once from `main.rs` at startup, alongside the other fatal
+/// misconfiguration checks (database pool, WebAuthn backend).
+pub fn validate_cookie_security(rp_origin: &str) -> Result<(), String> {
+    if !cookie_is_secure() && !is_localhost_origin(rp_origin) {
+        return Err(format!(
+            "SESSION_COOKIE_SECURE=false with a non-localhost WEBAUTHN_RP_ORIGIN \
+             ({rp_origin}) -- session cookies would travel over plain HTTP outside \
+             local dev. Set SESSION_COOKIE_SECURE=true (the default -- just unset \
+             it) or point WEBAUTHN_RP_ORIGIN at localhost."
+        ));
+    }
+
+    Ok(())
+}
+
 /// Builds the Set-Cookie response for a freshly issued session --
 /// httpOnly (unreadable to page JS, so an XSS bug cannot exfiltrate
 /// it), SameSite=Lax (sent on top-level navigation, not on cross-site
@@ -105,6 +138,50 @@ pub fn clear_session_cookie(jar: CookieJar) -> CookieJar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Env-var tests here follow the same set-then-remove pattern as
+    /// `auth_register.rs`'s bootstrap-env tests -- `cookie_is_secure`
+    /// reads `SESSION_COOKIE_SECURE` directly, so exercising
+    /// `validate_cookie_security`'s branches means setting it for the
+    /// duration of one assertion and removing it immediately after.
+    #[test]
+    fn localhost_origin_is_allowed_even_with_an_insecure_cookie() {
+        std::env::set_var("SESSION_COOKIE_SECURE", "false");
+        let result = validate_cookie_security("http://localhost:3000");
+        std::env::remove_var("SESSION_COOKIE_SECURE");
+
+        assert!(
+            result.is_ok(),
+            "localhost must remain usable for local HTTP dev"
+        );
+    }
+
+    #[test]
+    fn a_real_origin_with_an_insecure_cookie_is_refused() {
+        std::env::set_var("SESSION_COOKIE_SECURE", "false");
+        let result = validate_cookie_security("https://app.example.com");
+        std::env::remove_var("SESSION_COOKIE_SECURE");
+
+        assert!(
+            result.is_err(),
+            "a non-localhost origin must never pair with an insecure session cookie"
+        );
+    }
+
+    #[test]
+    fn a_real_origin_with_the_default_secure_cookie_is_allowed() {
+        std::env::remove_var("SESSION_COOKIE_SECURE");
+        assert!(validate_cookie_security("https://app.example.com").is_ok());
+    }
+
+    #[test]
+    fn loopback_ip_origin_counts_as_localhost() {
+        std::env::set_var("SESSION_COOKIE_SECURE", "false");
+        let result = validate_cookie_security("http://127.0.0.1:3000");
+        std::env::remove_var("SESSION_COOKIE_SECURE");
+
+        assert!(result.is_ok());
+    }
 
     #[test]
     fn issued_cookie_reads_back_the_same_token() {

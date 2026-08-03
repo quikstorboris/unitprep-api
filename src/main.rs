@@ -102,6 +102,16 @@ async fn main() {
     let rp_origin =
         std::env::var("WEBAUTHN_RP_ORIGIN").unwrap_or_else(|_| "http://localhost:3000".to_string());
 
+    // Fatal, not a warning: a non-localhost origin serving session
+    // cookies without the Secure attribute means every session token
+    // travels in plaintext over the network. SESSION_COOKIE_SECURE=false
+    // is a legitimate local-HTTP-dev escape hatch, so it must not be able
+    // to reach a real deployment silently -- see
+    // `auth::validate_cookie_security`.
+    if let Err(message) = auth::validate_cookie_security(&rp_origin) {
+        panic!("{message}");
+    }
+
     let auth_backend: Arc<dyn auth::AuthBackend> = Arc::new(
         auth::WebauthnRsBackend::new(&rp_id, &rp_origin).unwrap_or_else(|err| {
             panic!("Failed to configure the WebAuthn backend: {err}");
