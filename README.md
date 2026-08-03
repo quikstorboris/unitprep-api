@@ -24,6 +24,11 @@ Two tools exist today:
 This project has no CLI — it is a session-oriented web service. The
 frontend is [`unitprep-ui`](../unitprep-ui) (Next.js).
 
+Authentication is self-hosted, passwordless WebAuthn/passkeys with a
+TOTP fallback — see [AUTHENTICATION.md](AUTHENTICATION.md) for the full
+architecture, reasoning, user-facing workflows, audit posture, and the
+remaining build plan.
+
 ## Running
 
 ```bash
