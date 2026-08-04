@@ -37,15 +37,40 @@ route gating in `unitprep-ui`. Nothing is enforced as a product yet; see
   decrypt successfully) and a version byte for future key rotation.
   Enrollment is two-step — `confirmed_at` stays `NULL` until a real code
   verifies — so a mis-scanned secret is caught at enrollment, not the
-  first time it's actually needed. Sign-in is rate-limited: 5 failed
-  codes locks the fallback for 15 minutes. This lockout is only safe
-  *because* TOTP is a fallback — the passkey path never consults it, so
-  a lockout inconveniences the account owner rather than denying them
-  entirely. If TOTP is ever promoted to a primary or mandatory factor,
-  this reasoning breaks and the lockout becomes an account-denial
-  vector.
+  first time it's actually needed. Step-up verification is rate-limited:
+  5 failed codes locks the factor for 15 minutes. This lockout is only
+  safe *because* TOTP is a fallback — the passkey path never consults
+  it, so a lockout inconveniences the account owner rather than denying
+  them entirely. If TOTP is ever promoted to a primary or mandatory
+  factor, this reasoning breaks and the lockout becomes an
+  account-denial vector.
+- **Re-enrolling keeps the old factor live until the new one is proven
+  (2026-08-04).** `auth.totp_credentials.pending_secret_encrypted` holds
+  the candidate secret from `/enroll/begin`; the existing confirmed
+  secret is untouched until `/enroll/confirm` verifies a code against
+  the *pending* one, at which point it's promoted in the same statement.
+  Before this, `/enroll/begin` overwrote the live secret immediately, so
+  an abandoned re-enrollment left the account with no working step-up
+  factor at all until it was finished. There is also no "disable TOTP"
+  action any more — TOTP is step-up-only, never a login factor, so
+  there was no security upside to letting an account have zero step-up
+  factor, only a self-inflicted-lockout risk. Re-enrolling replaces a
+  factor; it never removes one with nothing to replace it.
 - **No SMS, ever.** Explicitly out of scope — phishable and
   SIM-swappable, with no upside over TOTP.
+- **Which actions require step-up is admin-configurable, not hardcoded
+  (2026-08-04).** `auth.auth_configuration.step_up_actions` (a JSONB
+  array) is now the source of truth — the first, and so far only,
+  entry is `add_passkey` (adding a new passkey to an account that
+  already has one). Read via `auth::step_up_policy::action_requires_step_up`
+  under the caller's own identity — `auth_configuration` was previously
+  admin-only-readable under RLS, which would have made this check
+  impossible for an ordinary (non-admin) caller checking their own
+  action; a second, narrower RLS policy now permits `SELECT` for any
+  authenticated caller, while `INSERT`/`UPDATE`/`DELETE` stay
+  admin-only. `auth_configuration.mandatory_passkey_enrollment` was
+  dropped the same day — no code path ever made passkey enrollment
+  optional, so the column implied a control that didn't exist.
 
 ### Sessions
 

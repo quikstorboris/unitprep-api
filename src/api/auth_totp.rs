@@ -1,5 +1,5 @@
-//! TOTP enrolment, removal, and step-up verification for sensitive
-//! in-session actions.
+//! TOTP enrolment and step-up verification for sensitive in-session
+//! actions.
 //!
 //! The cryptography and the encryption-at-rest decision live in
 //! `auth::totp`; this is orchestration.
@@ -31,16 +31,26 @@
 //! the credential counts turns that from a latent problem into an immediate,
 //! obvious one.
 //!
-//! ## Re-enrolling replaces the previous secret immediately
+//! ## Re-enrolling keeps the old secret live until the new one is proven
 //!
-//! `/enroll/begin` on an account that already has TOTP overwrites the secret
-//! and clears `confirmed_at`, so the old authenticator stops working at once
-//! rather than when the new one is confirmed. That is a deliberate
-//! simplification -- `totp_credentials.user_id` is UNIQUE, so holding both
-//! would need a second row and a rule for which wins -- and it is affordable
-//! precisely because losing a half-finished re-enrolment costs the step-up
-//! factor, not access to the account (unlike the login-fallback framing this
-//! reasoning originally shipped under).
+//! `/enroll/begin` writes the new candidate into
+//! `totp_credentials.pending_secret_encrypted`, not `secret_encrypted` --
+//! the existing confirmed secret (if any) is completely untouched until
+//! `/enroll/confirm` verifies a code against the *pending* one, at which
+//! point it's promoted into `secret_encrypted` in the same statement that
+//! clears `pending_secret_encrypted`. This used to overwrite
+//! `secret_encrypted` immediately at `/enroll/begin`, so an abandoned
+//! re-enrolment (closed tab, dead battery, anything) left the account with
+//! no working step-up factor at all until it was finished -- not a large
+//! window, but a real and entirely avoidable one, closed by holding the
+//! candidate separately instead of shortening the gap.
+//!
+//! There is no "disable TOTP" action any more (removed 2026-08-04): TOTP is
+//! step-up-only, never a login factor, so there was no security benefit to
+//! letting an account have zero step-up factor -- only a self-inflicted
+//! friction risk (locking yourself out of step-up-gated actions like
+//! adding a passkey until you re-enrol). Re-enrolling replaces a factor;
+//! it never removes one with nothing to replace it.
 
 use axum::{
     extract::{Json, State},
@@ -292,47 +302,6 @@ pub async fn enroll_confirm(
     Json(TotpConfirmResponse { confirmed: true }).into_response()
 }
 
-/// Removes the caller's TOTP credential.
-///
-/// Exists because a factor you cannot remove is a factor you cannot rotate
-/// away from after losing the device holding it -- and the alternative for
-/// the user would be asking an administrator to do it, which is a
-/// social-engineering surface for no benefit. Safe to expose because it only
-/// ever removes the *fallback* for the account making the request.
-pub async fn disable(
-    State(state): State<AppState>,
-    user: AuthenticatedUser,
-    headers: HeaderMap,
-) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
-
-    let removed = match delete_own_secret(&state, user.user_id).await {
-        Ok(removed) => removed,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to remove a TOTP secret");
-            return internal_error("Could not remove TOTP");
-        }
-    };
-
-    if removed {
-        audit_log::record(
-            &state.db,
-            audit_log::event::TOTP_REMOVED,
-            audit_log::Subjects::by(user.user_id),
-            user_agent,
-            serde_json::json!({}),
-        )
-        .await;
-        tracing::info!(user_id = %user.user_id, "TOTP removed");
-    }
-
-    // Idempotent: removing a factor that is not there is a success, for the
-    // same reason signing out without a session is.
-    Json(TotpConfirmResponse { confirmed: false }).into_response()
-}
-
 /// Elevates the caller's own session for `STEP_UP_MINUTES`, given a code
 /// from a confirmed authenticator app. Never issues a session and never
 /// touches the cookie jar -- the caller is already signed in, or this
@@ -508,8 +477,12 @@ async fn own_email(state: &AppState, user_id: Uuid) -> Result<Option<String>, sq
     Ok(email)
 }
 
-/// Reads the caller's own TOTP secret. Confirmed or not: this serves the
-/// confirmation step, which by definition runs against an unconfirmed row.
+/// Reads the caller's own *pending* (unconfirmed) TOTP secret -- the
+/// candidate `/enroll/begin` wrote, not the live `secret_encrypted` a
+/// confirmed step-up factor uses. `pending_secret_encrypted IS NOT NULL`
+/// in the WHERE clause means "no enrolment in progress" reads the same
+/// as "no row at all" -- both are `wrong_code()` to the confirm handler,
+/// which is the correct response either way.
 async fn load_own_secret(
     state: &AppState,
     user_id: Uuid,
@@ -517,10 +490,10 @@ async fn load_own_secret(
     let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
 
     let row: Option<(Vec<u8>, String)> = sqlx::query_as(
-        "SELECT t.secret_encrypted, u.email::text
+        "SELECT t.pending_secret_encrypted, u.email::text
            FROM auth.totp_credentials t
            JOIN auth.users u ON u.id = t.user_id
-          WHERE t.user_id = $1",
+          WHERE t.user_id = $1 AND t.pending_secret_encrypted IS NOT NULL",
     )
     .bind(user_id)
     .fetch_optional(&mut *tx)
@@ -577,13 +550,20 @@ async fn load_own_confirmed_secret(
     ))
 }
 
-/// Writes a fresh unconfirmed secret, replacing any existing row.
+/// Writes a fresh candidate secret into `pending_secret_encrypted`,
+/// replacing any earlier unconfirmed candidate. Deliberately does NOT
+/// touch `secret_encrypted`, `confirmed_at`, `failed_attempts`,
+/// `locked_until`, or `last_used_at`/`last_used_step` -- an existing
+/// confirmed secret (if any) must keep working as a step-up factor for
+/// the entire re-enrolment window, not just until this call. See
+/// `confirm_own_secret`, the only place `pending_secret_encrypted` is
+/// ever promoted into the live column.
 ///
-/// `ON CONFLICT` on the unique `user_id` rather than delete-then-insert, so
-/// re-enrolment is one statement and cannot leave the account with no row at
-/// all if it fails halfway. `confirmed_at` is explicitly reset -- the new
-/// secret has never been proven, and inheriting the old confirmation would
-/// mean an unverified secret counted as a working factor.
+/// `ON CONFLICT` on the unique `user_id` rather than delete-then-insert,
+/// so this is one statement and cannot leave the account with no row at
+/// all if it fails halfway -- and it doubles as the first-enrolment path
+/// too, since `secret_encrypted` is nullable specifically so a brand-new
+/// row can exist with nothing confirmed yet.
 async fn store_unconfirmed_secret(
     state: &AppState,
     user_id: Uuid,
@@ -592,14 +572,10 @@ async fn store_unconfirmed_secret(
     let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
 
     sqlx::query(
-        "INSERT INTO auth.totp_credentials (user_id, secret_encrypted)
+        "INSERT INTO auth.totp_credentials (user_id, pending_secret_encrypted)
          VALUES ($1, $2)
          ON CONFLICT (user_id) DO UPDATE
-            SET secret_encrypted = EXCLUDED.secret_encrypted,
-                confirmed_at = NULL,
-                failed_attempts = 0,
-                locked_until = NULL,
-                last_used_at = NULL",
+            SET pending_secret_encrypted = EXCLUDED.pending_secret_encrypted",
     )
     .bind(user_id)
     .bind(encrypted)
@@ -609,6 +585,9 @@ async fn store_unconfirmed_secret(
     tx.commit().await
 }
 
+/// Promotes `pending_secret_encrypted` into `secret_encrypted` -- the one
+/// and only moment a candidate becomes the live step-up factor, and the
+/// one and only place an existing confirmed secret is ever replaced.
 /// `matched_step` is the step the confirming code was accepted at --
 /// recorded as `last_used_step` immediately, so the same code cannot be
 /// replayed as a step-up the instant enrolment finishes (see auth::totp's
@@ -622,7 +601,11 @@ async fn confirm_own_secret(
 
     sqlx::query(
         "UPDATE auth.totp_credentials
-            SET confirmed_at = now(), failed_attempts = 0, locked_until = NULL,
+            SET secret_encrypted = pending_secret_encrypted,
+                pending_secret_encrypted = NULL,
+                confirmed_at = now(),
+                failed_attempts = 0,
+                locked_until = NULL,
                 last_used_step = $2
           WHERE user_id = $1",
     )
@@ -632,19 +615,6 @@ async fn confirm_own_secret(
     .await?;
 
     tx.commit().await
-}
-
-async fn delete_own_secret(state: &AppState, user_id: Uuid) -> Result<bool, sqlx::Error> {
-    let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
-
-    let removed = sqlx::query("DELETE FROM auth.totp_credentials WHERE user_id = $1")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-
-    tx.commit().await?;
-    Ok(removed > 0)
 }
 
 #[cfg(test)]
@@ -691,9 +661,9 @@ mod tests {
 
     // step_up's "no confirmed TOTP" / "locked out" / "code verified,
     // session gone" branches all require a real database to distinguish
-    // "no row" from "connection error" -- like enroll_confirm and disable,
-    // they're exercised against the real dev database rather than as a
-    // unit test against test_support::empty_state()'s intentionally-lazy,
+    // "no row" from "connection error" -- like enroll_confirm, they're
+    // exercised against the real dev database rather than as a unit test
+    // against test_support::empty_state()'s intentionally-lazy,
     // fails-fast-in-50ms pool (see that pool's own doc comment).
 
     /// The enrolment path, by contrast, tells an authenticated caller

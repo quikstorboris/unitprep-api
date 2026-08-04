@@ -6,6 +6,7 @@ mod ceremony_cookie;
 mod registration_ceremony;
 mod session_cookie;
 mod session_token;
+mod step_up_policy;
 mod totp;
 mod webauthn_backend;
 
@@ -29,6 +30,7 @@ pub use session_cookie::{
     clear_session_cookie, issue_session_cookie, read_session_cookie, validate_cookie_security,
 };
 pub use session_token::{generate_token, hash_token};
+pub use step_up_policy::{action_requires_step_up, ADD_PASSKEY};
 // `decrypt_secret` and `TotpError` are intentionally not re-exported: the
 // only callers outside `totp` verify codes rather than handling raw secrets,
 // and re-exporting a decrypt primitive invites someone to reach for it.

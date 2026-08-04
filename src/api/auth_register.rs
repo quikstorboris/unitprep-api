@@ -95,10 +95,10 @@ use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{
-    audit_log, begin_owner_rls_transaction, begin_rls_transaction, clear_ceremony_cookie,
-    generate_token, hash_token, issue_ceremony_cookie, issue_session_cookie, read_ceremony_cookie,
-    step_up_required, try_authenticated_user, RegisteredCredential, RegistrationCeremony, Role,
-    REGISTRATION_CEREMONY_COOKIE,
+    action_requires_step_up, audit_log, begin_owner_rls_transaction, begin_rls_transaction,
+    clear_ceremony_cookie, generate_token, hash_token, issue_ceremony_cookie, issue_session_cookie,
+    read_ceremony_cookie, step_up_required, try_authenticated_user, RegisteredCredential,
+    RegistrationCeremony, Role, ADD_PASSKEY, REGISTRATION_CEREMONY_COOKIE,
 };
 
 /// How long a started-but-unfinished ceremony stays valid. Deliberately
@@ -290,26 +290,50 @@ pub async fn register_begin(
     let authenticated = try_authenticated_user(&jar, &state).await;
 
     let target = match authenticated {
-        // Adding a passkey to an account that already has one is exactly
-        // the kind of sensitive, high-blast-radius action step-up exists
-        // for -- a hijacked session cookie alone must not be enough to
-        // plant a durable new credential. The invite path below needs no
-        // equivalent check: possession of the (unguessable) token *is*
-        // its authorization, and there is no existing session to step up.
-        Some(user) if !user.is_elevated() => return step_up_required(),
+        Some(user) => {
+            // Adding a passkey to an account that already has one is
+            // exactly the kind of sensitive, high-blast-radius action
+            // step-up exists for -- a hijacked session cookie alone must
+            // not be enough to plant a durable new credential. The
+            // invite path below needs no equivalent check: possession of
+            // the (unguessable) token *is* its authorization, and there
+            // is no existing session to step up.
+            //
+            // Gated by admin-configurable policy
+            // (auth.auth_configuration.step_up_actions) rather than a
+            // hardcoded `true`, so which self-service actions require
+            // step-up can be tuned without a code change -- see
+            // auth::step_up_policy.
+            let requires_step_up =
+                match action_requires_step_up(&state.db, user.user_id, ADD_PASSKEY).await {
+                    Ok(requires_step_up) => requires_step_up,
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            user_id = %user.user_id,
+                            "failed to read step-up policy for add_passkey"
+                        );
+                        return internal_error("Could not start passkey registration");
+                    }
+                };
 
-        Some(user) => match authenticated_target(&state, user.user_id, user.role).await {
-            Ok(Some(target)) => target,
-            // A session that resolved but whose user row is missing or
-            // invisible is a real inconsistency, not a bad request --
-            // `resolve_session` already vouched for that user being
-            // active and non-deleted.
-            Ok(None) => return internal_error("Could not load the signed-in user"),
-            Err(err) => {
-                tracing::error!(error = %err, "failed to load authenticated registration target");
-                return internal_error("Could not load the signed-in user");
+            if requires_step_up && !user.is_elevated() {
+                return step_up_required();
             }
-        },
+
+            match authenticated_target(&state, user.user_id, user.role).await {
+                Ok(Some(target)) => target,
+                // A session that resolved but whose user row is missing or
+                // invisible is a real inconsistency, not a bad request --
+                // `resolve_session` already vouched for that user being
+                // active and non-deleted.
+                Ok(None) => return internal_error("Could not load the signed-in user"),
+                Err(err) => {
+                    tracing::error!(error = %err, "failed to load authenticated registration target");
+                    return internal_error("Could not load the signed-in user");
+                }
+            }
+        }
 
         None => {
             let Some(raw_token) = request

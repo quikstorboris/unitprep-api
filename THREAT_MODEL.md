@@ -79,6 +79,8 @@ These are load-bearing and should be re-checked if the deployment changes:
 | TOTP code phishing / real-time relay | TOTP is step-up-only for an already-authenticated session, never a login factor — see `auth_totp.rs`'s module docs. A relayed code can extend a session that's already gated, not create one. | `src/api/auth_totp.rs` | Accepted residual risk, explicitly documented: TOTP is "neither phishing-resistant nor MFA-strength on its own," which is why it's never allowed to be a full login path. |
 | TOTP code brute force | 6-digit code, 3-step (90s) acceptance window; 5 failed attempts locks the credential for 15 minutes. Lockout is safe only because TOTP is never the sole path to an account (passkey login doesn't consult it). | `auth.record_totp_failure`, `auth.totp_credentials.locked_until` | If TOTP is ever promoted to a mandatory/primary factor, this lockout becomes an account-denial primitive — flagged explicitly in code comments as a re-evaluation trigger. |
 | TOTP code replay (same code submitted twice inside its window) | `auth.totp_credentials.last_used_step` — a submitted code matching an already-accepted step or earlier is refused, even inside the ordinary skew window. | `auth::totp::verify_code`, migration `20260804130000` | Closed 2026-08-04 (Phase II item 2). |
+| Account left with no working step-up factor mid-re-enrollment (abandoned tab, dead battery, anything) | `auth.totp_credentials.pending_secret_encrypted` holds the re-enrollment candidate separately — the existing confirmed `secret_encrypted` is untouched until a code verifies against the *pending* one, at which point it's promoted. Previously the candidate overwrote the live secret immediately at `/enroll/begin`. | `src/api/auth_totp.rs`, migration `20260804150000` | Closed 2026-08-04. There is also no "disable TOTP" action any more (same migration) — no security upside to a zero-step-up-factor state, only a self-lockout risk. |
+| An admin misconfiguring or accidentally emptying `step_up_actions` disables step-up protection for a real action | None at the database layer beyond RLS restricting writes to admins — an admin who edits `auth.auth_configuration.step_up_actions` down to `[]` genuinely removes the `add_passkey` gate, by design (that's the point of making it configurable). | `auth::step_up_policy`, migration `20260804150000` | Accepted — this is a deliberate tradeoff (admin-tunable policy over a hardcoded check), not an oversight. No UI exists yet to edit this row at all, so it's a new risk only in the sense that direct SQL access could do it; revisit if/when an Admin > Security UI is built for it, since a UI presumably wants its own confirmation step for turning off a step-up gate. |
 | Session token theft (XSS, log leakage, DB dump) | `httpOnly` (unreadable to page JS); DB stores only a SHA-256 hash, never the raw token, so a DB read alone yields nothing usable. | `src/auth/session_cookie.rs`, `auth.sessions.token_hash` | An active XSS bug on the *same page* could still ride along on live requests — no defense in this system beats that; standard web XSS hardening (CSP, output encoding) is out of this document's scope. |
 | Session token theft via cross-site request | `SameSite=Strict` on session and ceremony cookies — never sent on a cross-site request, including a top-level navigation from another site. | `src/auth/session_cookie.rs`, `src/auth/ceremony_cookie.rs` | Closed 2026-08-04 (Phase II item 2). Cost: a signed-in user opening a link to the app from another site won't carry the cookie on that first hop — accepted tradeoff for an internal tool. |
 | Session fixation / cookie tampering | Token is 256 bits of CSPRNG output, generated server-side only, never accepted from a client-supplied value. | `src/auth/session_token.rs` | Closed by construction — there is no code path that accepts a client-chosen token. |
@@ -136,6 +138,15 @@ stays honest rather than only cataloguing what's already closed:
   (since the original schema) but `audit_log::record()` has never
   written any of them. Relevant if/when a frontend audit-log viewer with
   before/after diffing is built — see the vault for that discussion.
+- `auth.auth_configuration.step_up_actions` and `allowed_factors` have no
+  admin UI yet — the only way to edit either today is direct SQL. Fine
+  for now (one admin, low change frequency); revisit once an
+  Admin > Security policy tab is built, since a UI should presumably
+  confirm before someone turns off a step-up gate.
+- Rate-limit rejections (`429` from the auth/invite `GovernorLayer`) and
+  a session presented after it's expired aren't audited or even
+  `tracing`-logged yet — both flagged as gaps worth closing, not yet
+  built.
 
 ## Review cadence
 

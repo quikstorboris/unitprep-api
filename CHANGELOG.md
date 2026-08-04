@@ -38,6 +38,32 @@ scheduled, only trigger-gated.
   `ConnectInfo`, direct-exposure topology) instead of always `NULL`.
   `/auth/login/finish` and `/health/whoami` responses both gained a
   `step_up_required` field.
+- **Admin-configurable step-up policy.** `auth.auth_configuration.step_up_actions`
+  is now actually read (via `auth::step_up_policy`) instead of sitting
+  unused — gates "add a passkey to an account that already has one",
+  previously hardcoded as unconditional. Seeded with `["add_passkey"]`
+  so wiring this up doesn't silently disable existing protection. A new
+  RLS policy lets any authenticated caller (not just admins) read
+  `auth_configuration`, since an ordinary user needs to check whether
+  their own action is gated.
+- **TOTP re-enrollment no longer has a no-step-up-factor gap.**
+  `auth.totp_credentials.pending_secret_encrypted` holds the
+  re-enrollment candidate; the existing confirmed secret stays live
+  until a code verifies against the pending one and gets promoted.
+  Previously `/enroll/begin` overwrote the live secret immediately, so
+  an abandoned re-enrollment left the account with no working step-up
+  factor until it was finished.
+
+### Removed
+- **`POST /auth/totp/disable`** and the frontend's "Remove authenticator
+  app" button. TOTP is step-up-only, never a login factor, so there was
+  no security benefit to letting an account have zero step-up factor —
+  only a self-inflicted-lockout risk. The account page now offers
+  "Update authenticator app" (re-enrollment) instead, which replaces the
+  factor rather than removing it with nothing to replace it.
+- **`auth.auth_configuration.mandatory_passkey_enrollment`** — no code
+  path ever made passkey enrollment optional; the column implied a
+  control that didn't exist.
 
 ### Changed
 - Session and ceremony cookies now carry `SameSite=Strict` (was `Lax`).

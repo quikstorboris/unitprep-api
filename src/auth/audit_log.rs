@@ -94,9 +94,6 @@ pub mod event {
     /// was.
     pub const INVITE_REFUSED: &str = "invite_refused";
 
-    /// The user removed their own TOTP credential.
-    pub const TOTP_REMOVED: &str = "totp_removed";
-
     /// An administrator initiated account recovery: every existing access
     /// path on the target account (passkeys, TOTP, live sessions, any
     /// outstanding invite) was revoked and a fresh invite issued in its
