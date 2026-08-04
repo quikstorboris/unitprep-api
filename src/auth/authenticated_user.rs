@@ -131,9 +131,10 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 
         let token_hash = hash_token(&raw_token);
 
-        let row = query_session(&token_hash, &state.db)
-            .await
-            .map_err(|_| internal_error())?;
+        let row = query_session(&token_hash, &state.db).await.map_err(|err| {
+            tracing::error!(error = %err, "session resolution query failed");
+            internal_error()
+        })?;
 
         let (user_id, role_text, elevated_until, requires_step_up) =
             row.ok_or_else(unauthorized)?;
