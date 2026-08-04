@@ -8,6 +8,72 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [1.4.0] - 2026-08-04
+
+Phase 1 hardening is complete. Every product tool route now requires a
+real session, closing the last gap between "auth exists" and "auth is
+enforced" — and TOTP, which shipped last release as a login-fallback
+factor, has been repurposed into step-up verification for sensitive
+in-session actions instead, once admin-driven account recovery made the
+gap it was plugging redundant. See `AUTHENTICATION.md` for the updated
+architecture and roadmap.
+
+### Added
+- **Every tool route now requires `AuthenticatedUser`** — upload, discover,
+  validate, correct, correct-group, exempt-dimensions, exclude-group(s),
+  analyze, export, the group-file/unit-file selection and confirmation
+  endpoints, and session cancellation. Previously these were reachable by
+  anyone who could reach the API at all; a session is now the minimum bar
+  for touching any of them, matching what already held for every `/auth/*`
+  endpoint.
+- **Sessions record their creator.** `owner_id` on a tool session is
+  stamped from the caller's `AuthenticatedUser` at the two points a session
+  is actually created (`/upload`, `/dedup/check`) rather than left `None`.
+  Captured for attribution, not access control — nothing yet enforces "only
+  the owner may act on their own session", since every authenticated caller
+  in this v1 shares the one `admin` role and no product feature needs
+  narrower scoping yet. The column exists so that when a real ownership
+  model is needed (a usage/activity log, a multi-role future), the data
+  already exists back to this release rather than needing a backfill.
+- **`POST /auth/totp/step-up`.** Given a fresh code from a *confirmed*
+  authenticator app credential, elevates the caller's own session
+  (`auth.sessions.elevated_until`) for five minutes. Scoped to the one
+  session that presented the code — proving a code on one browser must not
+  silently elevate every other device the same user is signed in on
+  elsewhere.
+- **`/health/whoami` now reports `totp_enrolled`.** Lets a caller (in
+  practice, the frontend) show enrollment status accurately instead of
+  always presenting "enroll", which would risk walking an already-enrolled
+  user into silently replacing their working credential — re-enrolling
+  overwrites the secret immediately, with no warning at the point of
+  writing it.
+- Two new audit events: `totp_step_up_succeeded` and `totp_step_up_failed`,
+  replacing TOTP's participation in `login_succeeded`/`login_failed` now
+  that it no longer signs anyone in.
+
+### Changed
+- **Adding a passkey to an already-signed-in account now requires step-up.**
+  `POST /auth/register/begin`'s authenticated branch (add-a-passkey-to-
+  yourself) refuses with `403 step_up_required` unless the session is
+  currently elevated. Planting a durable new credential is exactly the
+  kind of sensitive, high-blast-radius action step-up exists to gate — a
+  hijacked session cookie alone must no longer be sufficient for it. The
+  unauthenticated invite path is unaffected: token possession is already
+  its own authorization there.
+
+### Removed
+- **`POST /auth/login/totp` — TOTP can no longer log anyone in.** It
+  shipped last release as a fallback for a device with no passkey
+  enrolled, reasoning that stopped holding once admin-driven account
+  recovery (also last release) started covering "lost your only passkey"
+  through a human-verified path instead. Keeping a self-service login path
+  through a static, phishable shared secret — fully capable of
+  authenticating alongside a hardware-bound passkey — meant the account's
+  real security floor was the weaker of the two factors, undercutting the
+  whole point of going passkey-first. The verification primitive itself
+  (`verify_code`, the lockout columns and functions) is unchanged and is
+  now step-up's own foundation instead.
+
 ## [1.3.0] - 2026-08-03
 
 Phase 2 identity/session work is complete: all eleven originally-planned
