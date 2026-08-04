@@ -12,19 +12,26 @@ use crate::api::{ApiErrorBody, AppState};
 
 use super::{hash_token, read_session_cookie};
 
-/// The one role that exists in v1 -- an enum with a single variant,
-/// not a bare String, so adding the other three roles later (per the
-/// architecture doc's extensible-role-column design) means adding a
-/// variant, not restructuring every call site that matches on a role.
+/// The roles that exist today -- an enum, not a bare String, so adding
+/// the remaining roles from the architecture doc's extensible-role-column
+/// design means adding a variant, not restructuring every call site that
+/// matches on a role. `OnboardingManager` is schema-only for now: nothing
+/// grants it any permission an admin-gated match doesn't already reject,
+/// and no invite-creation path can assign it yet (see
+/// `auth_invites::CreateInviteRequest`'s module doc) -- adding it here is
+/// deliberately just the enum/schema half of that backlog item, not a
+/// decision about what it can do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Admin,
+    OnboardingManager,
 }
 
 impl Role {
     fn from_db_text(value: &str) -> Option<Self> {
         match value {
             "admin" => Some(Role::Admin),
+            "onboarding_manager" => Some(Role::OnboardingManager),
             _ => None,
         }
     }
@@ -32,6 +39,7 @@ impl Role {
     pub fn as_db_text(&self) -> &'static str {
         match self {
             Role::Admin => "admin",
+            Role::OnboardingManager => "onboarding_manager",
         }
     }
 }
@@ -287,6 +295,23 @@ pub fn step_up_required() -> Response {
         .into_response()
 }
 
+/// Shared 403 for an authenticated caller whose role does not permit the
+/// action -- every admin-gated handler's `match admin.role` gains an arm
+/// for each new role, and this is what that arm returns once the caller
+/// also records an `AUTHORIZATION_FAILURE` audit row. A single shared
+/// response, not a per-handler one, so the body stays consistent across
+/// every place this can now happen.
+pub fn insufficient_role() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(ApiErrorBody {
+            error: "insufficient_role",
+            message: "Your role does not permit this action.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
 fn internal_error() -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -370,6 +395,14 @@ mod tests {
     #[test]
     fn unknown_db_text_does_not_match_any_role() {
         assert_eq!(Role::from_db_text("not_a_real_role"), None);
+    }
+
+    #[test]
+    fn onboarding_manager_round_trips_through_its_db_text_form() {
+        assert_eq!(
+            Role::from_db_text(Role::OnboardingManager.as_db_text()),
+            Some(Role::OnboardingManager)
+        );
     }
 
     fn user_with_elevation(elevated_until: Option<DateTime<Utc>>) -> AuthenticatedUser {

@@ -1,0 +1,17 @@
+-- Adds the second role named in the original architecture doc's
+-- extensible-role-column design (Admin, Implementation Manager,
+-- Department Manager, View-only), approved to add to the schema now.
+-- Deliberately schema-only: this migration does not grant Onboarding
+-- Manager any permissions, and nothing in the invite-creation flow can
+-- assign it yet (auth_invites.rs's CreateInviteRequest still has no role
+-- field, on purpose -- see its module doc). Every admin-gated endpoint's
+-- role match treats it as "authenticated, not admin" by default until a
+-- real allowlist decision is made.
+--
+-- ALTER TYPE ... ADD VALUE cannot run in the same transaction that goes
+-- on to use the new value (a hard Postgres restriction, not a project
+-- convention -- see the resolve_session/record_totp_success migration's
+-- own notes on the neighboring DROP FUNCTION/CREATE FUNCTION pattern for
+-- the same class of restriction). This migration only adds the value and
+-- uses it nowhere else, so it is safe as its own transaction.
+ALTER TYPE auth.auth_role ADD VALUE 'onboarding_manager';

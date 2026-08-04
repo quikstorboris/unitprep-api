@@ -11,8 +11,8 @@ mod totp;
 mod webauthn_backend;
 
 pub use authenticated_user::{
-    begin_owner_rls_transaction, begin_rls_transaction, step_up_required, try_authenticated_user,
-    AuthenticatedUser, Role,
+    begin_owner_rls_transaction, begin_rls_transaction, insufficient_role, step_up_required,
+    try_authenticated_user, AuthenticatedUser, Role,
 };
 pub use authentication_ceremony::AuthenticationCeremony;
 pub use ceremony_cookie::{

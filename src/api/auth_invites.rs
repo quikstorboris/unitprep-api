@@ -45,7 +45,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
-use crate::auth::{audit_log, begin_rls_transaction, generate_token, AuthenticatedUser, Role};
+use crate::auth::{
+    audit_log, begin_rls_transaction, generate_token, insufficient_role, AuthenticatedUser, Role,
+};
 use crate::bootstrap::{invite_hours, VALID_COMPANIES};
 
 #[derive(Debug, Deserialize)]
@@ -118,18 +120,30 @@ pub async fn create_invite(
     headers: HeaderMap,
     Json(request): Json<CreateInviteRequest>,
 ) -> Response {
-    // Redundant with the RLS policy by design, not by accident -- see the
-    // module docs. `Role` has one variant today, so this cannot currently
-    // fail; it is written as a match rather than an assumption so that
-    // adding a second role turns this into a compile-time decision instead
-    // of a silently-permissive endpoint.
-    match admin.role {
-        Role::Admin => {}
-    }
-
     let user_agent = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
+
+    // Redundant with the RLS policy by design, not by accident -- see the
+    // module docs. This used to be unreachable while `Role` had one
+    // variant; now that `OnboardingManager` exists, it is a real path,
+    // and one worth its own permanent row -- see `AUTHORIZATION_FAILURE`.
+    match admin.role {
+        Role::Admin => {}
+        Role::OnboardingManager => {
+            audit_log::record(
+                &state.db,
+                audit_log::event::AUTHORIZATION_FAILURE,
+                audit_log::Subjects::by(admin.user_id),
+                user_agent,
+                Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+                audit_log::Change::none(),
+                serde_json::json!({ "action": "create_invite" }),
+            )
+            .await;
+            return insufficient_role();
+        }
+    }
 
     let email = request.email.trim().to_ascii_lowercase();
     let first_name = request.first_name.trim();
@@ -456,15 +470,28 @@ pub async fn recover_account(
     headers: HeaderMap,
     Json(request): Json<RecoverAccountRequest>,
 ) -> Response {
-    // Redundant with the RLS policy by design -- see create_invite above
-    // for why.
-    match admin.role {
-        Role::Admin => {}
-    }
-
     let user_agent = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
+
+    // Redundant with the RLS policy by design -- see create_invite above
+    // for why, including why this arm is reachable now.
+    match admin.role {
+        Role::Admin => {}
+        Role::OnboardingManager => {
+            audit_log::record(
+                &state.db,
+                audit_log::event::AUTHORIZATION_FAILURE,
+                audit_log::Subjects::by(admin.user_id),
+                user_agent,
+                Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+                audit_log::Change::none(),
+                serde_json::json!({ "action": "recover_account" }),
+            )
+            .await;
+            return insufficient_role();
+        }
+    }
 
     let email = request.email.trim().to_ascii_lowercase();
 
@@ -720,6 +747,16 @@ mod tests {
         }
     }
 
+    fn onboarding_manager() -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: Uuid::new_v4(),
+            role: Role::OnboardingManager,
+            token_hash: vec![0u8; 32],
+            elevated_until: None,
+            requires_step_up: false,
+        }
+    }
+
     /// A stand-in peer address -- both handlers now take
     /// `ConnectInfo<SocketAddr>` (only populated for real by
     /// `into_make_service_with_connect_info` outside of tests), matching
@@ -795,6 +832,23 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
+    /// A non-admin authenticated caller (the only other role that exists
+    /// today) must be refused before any validation of the request body
+    /// even runs -- role-gating happens first.
+    #[tokio::test]
+    async fn create_invite_refuses_a_non_admin_role() {
+        let response = create_invite(
+            State(empty_state()),
+            onboarding_manager(),
+            test_addr(),
+            HeaderMap::new(),
+            Json(request("ada@example.com", "quikstor")),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
     /// Company matching must not depend on the caller's capitalisation, and
     /// the email is lowercased before it reaches a `citext` column so two
     /// spellings of one address cannot become two accounts. Reaching the
@@ -852,6 +906,22 @@ mod tests {
                 "expected a 400 for {label}"
             );
         }
+    }
+
+    /// Same role-gating property as `create_invite_refuses_a_non_admin_role`,
+    /// on the recovery endpoint.
+    #[tokio::test]
+    async fn recover_account_refuses_a_non_admin_role() {
+        let response = recover_account(
+            State(empty_state()),
+            onboarding_manager(),
+            test_addr(),
+            HeaderMap::new(),
+            Json(recover_request("someone@example.com")),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     /// A syntactically valid email must reach the database -- the 500 here

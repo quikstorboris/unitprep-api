@@ -1,10 +1,12 @@
 mod acknowledge_group_warnings;
 mod analyze;
+mod auth_audit_logs;
 mod auth_invites;
 mod auth_login;
 mod auth_logout;
 mod auth_register;
 mod auth_totp;
+mod auth_user_status;
 mod auth_users;
 mod cancel_session;
 mod correct;
@@ -332,6 +334,13 @@ pub fn router(state: AppState) -> Router {
         // isn't the "trusted caller hammering a write" case that
         // reasoning exists for.
         .route("/auth/users", get(auth_users::list_users))
+        .route(
+            "/auth/users/{id}/deactivate",
+            post(auth_user_status::deactivate_user),
+        )
+        // Admin-only, read-only -- same no-dedicated-bucket reasoning as
+        // /auth/users above.
+        .route("/auth/audit-logs", get(auth_audit_logs::list_audit_logs))
         .route("/auth/logout", post(auth_logout::logout))
         .route(
             "/auth/logout/everywhere",

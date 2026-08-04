@@ -143,6 +143,21 @@ pub mod event {
     /// limiter's own internal-error variants -- those are a server fault,
     /// not something about the caller worth a permanent row.
     pub const RATE_LIMIT_REJECTED: &str = "rate_limit_rejected";
+
+    /// An authenticated caller reached an admin-gated action without the
+    /// role it requires. Distinct from a bare 401/403 on the wire (which
+    /// stays the same either way) -- this is the durable record that lets
+    /// an operator see "a real, signed-in account tried this" rather than
+    /// only "someone with no session tried this", once more than one role
+    /// exists to make the distinction meaningful.
+    pub const AUTHORIZATION_FAILURE: &str = "authorization_failure";
+
+    /// An administrator deactivated another user's account through the
+    /// standalone disable-user action -- distinct from
+    /// `ACCOUNT_RECOVERY_INITIATED`, which also passes a user through
+    /// `deactivated` but as one step of reissuing an invite, not as the
+    /// action's own point.
+    pub const USER_DEACTIVATED: &str = "user_deactivated";
 }
 
 /// What changed, for the events that are a value transition rather than a
