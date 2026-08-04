@@ -15,6 +15,7 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
 async fn returns_404_for_missing_session() {
     let response = exclude_group(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupRequest {
             session_id: "missing".to_string(),
             group_name: "Hertz Office Space".to_string(),
@@ -38,6 +39,7 @@ async fn returns_409_before_discovery_completes() {
 
     let response = exclude_group(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupRequest {
             session_id: "s1".to_string(),
             group_name: "Hertz Office Space".to_string(),
@@ -66,6 +68,7 @@ async fn excluding_a_group_removes_its_units_from_validation() {
 
     let response = exclude_group(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupRequest {
             session_id: "s1".to_string(),
             group_name: "Hertz Office Space".to_string(),
@@ -111,6 +114,7 @@ async fn including_a_group_again_restores_its_units() {
 
     exclude_group(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupRequest {
             session_id: "s1".to_string(),
             group_name: "Hertz Office Space".to_string(),
@@ -121,6 +125,7 @@ async fn including_a_group_again_restores_its_units() {
 
     let response = exclude_group(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupRequest {
             session_id: "s1".to_string(),
             group_name: "Hertz Office Space".to_string(),

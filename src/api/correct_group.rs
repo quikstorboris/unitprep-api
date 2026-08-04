@@ -11,6 +11,7 @@ use crate::api::{
     session_not_found, stage_conflict, validate::run_validation, ApiErrorBody, AppState,
 };
 use crate::application::unit_group_session::StageError;
+use crate::auth::AuthenticatedUser;
 use unitprep_unit_group::CorrectionKey;
 
 #[derive(Debug, Deserialize)]
@@ -71,6 +72,7 @@ fn build_new_group_name(request: &CorrectGroupRequest) -> String {
 /// rather than a new storage mechanism.
 pub async fn correct_group(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<CorrectGroupRequest>,
 ) -> Response {
     let new_group_name = build_new_group_name(&request);

@@ -15,6 +15,7 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
 async fn returns_404_for_missing_session() {
     let response = exclude_groups(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupsRequest {
             session_id: "missing".to_string(),
             group_names: vec!["Hertz Office Space".to_string()],
@@ -38,6 +39,7 @@ async fn returns_409_before_discovery_completes() {
 
     let response = exclude_groups(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupsRequest {
             session_id: "s1".to_string(),
             group_names: vec!["Hertz Office Space".to_string()],
@@ -67,6 +69,7 @@ async fn excluding_multiple_groups_removes_all_of_their_units() {
 
     let response = exclude_groups(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupsRequest {
             session_id: "s1".to_string(),
             group_names: vec!["Hertz Office Space".to_string(), "Boat Slip".to_string()],
@@ -111,6 +114,7 @@ async fn including_multiple_groups_again_restores_all_of_their_units() {
 
     exclude_groups(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupsRequest {
             session_id: "s1".to_string(),
             group_names: vec!["Hertz Office Space".to_string(), "Boat Slip".to_string()],
@@ -121,6 +125,7 @@ async fn including_multiple_groups_again_restores_all_of_their_units() {
 
     let response = exclude_groups(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupsRequest {
             session_id: "s1".to_string(),
             group_names: vec!["Hertz Office Space".to_string(), "Boat Slip".to_string()],

@@ -30,6 +30,7 @@ fn request(
 async fn returns_404_for_missing_session() {
     let response = correct_group(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(request("Hertz Office Space", Some("10"), Some("15"), None)),
     )
     .await;
@@ -49,6 +50,7 @@ async fn returns_409_before_discovery_completes() {
 
     let response = correct_group(
         State(state),
+        crate::api::test_support::test_user(),
         Json(request("Hertz Office Space", Some("10"), Some("15"), None)),
     )
     .await;
@@ -68,6 +70,7 @@ async fn rejects_a_group_name_that_matches_no_unit() {
 
     let response = correct_group(
         State(state),
+        crate::api::test_support::test_user(),
         Json(request("Not A Real Group", Some("10"), Some("15"), None)),
     )
     .await;
@@ -96,6 +99,7 @@ async fn repeating_the_same_rename_is_a_no_op_success_not_an_error() {
 
     let first = correct_group(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(request("Hertz Office Space", Some("10"), Some("15"), None)),
     )
     .await;
@@ -104,6 +108,7 @@ async fn repeating_the_same_rename_is_a_no_op_success_not_an_error() {
 
     let second = correct_group(
         State(state),
+        crate::api::test_support::test_user(),
         Json(request("Hertz Office Space", Some("10"), Some("15"), None)),
     )
     .await;
@@ -129,6 +134,7 @@ async fn renames_using_width_and_length_only() {
 
     let response = correct_group(
         State(state),
+        crate::api::test_support::test_user(),
         Json(request("Hertz Office Space", Some("10"), Some("15"), None)),
     )
     .await;
@@ -177,6 +183,7 @@ async fn renames_using_additional_properties_only_appends_to_existing_name() {
 
     correct_group(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(request(
             "Hertz Office Space",
             None,
@@ -192,6 +199,7 @@ async fn renames_using_additional_properties_only_appends_to_existing_name() {
     // rename.
     let response = correct_group(
         State(state),
+        crate::api::test_support::test_user(),
         Json(request(
             "Hertz Office Space",
             None,
@@ -222,6 +230,7 @@ async fn renames_every_unit_sharing_the_group_name() {
 
     correct_group(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(request(
             "Hertz Office Space",
             Some("12"),
@@ -235,6 +244,7 @@ async fn renames_every_unit_sharing_the_group_name() {
     // the original name now matches nothing.
     let response = correct_group(
         State(state),
+        crate::api::test_support::test_user(),
         Json(request("Hertz Office Space", None, None, None)),
     )
     .await;

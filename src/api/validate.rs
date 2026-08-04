@@ -11,6 +11,7 @@ use unitprep_core::session_store::SessionStoreExt;
 use crate::{
     api::{session_not_found, stage_conflict, AppState},
     application::unit_group_session::{Session, StageError, WorkflowStage},
+    auth::AuthenticatedUser,
 };
 use unitprep_unit_group::{
     validate_document, FileValidationError, GroupCheckAcknowledgments, Severity,
@@ -189,6 +190,7 @@ pub fn run_validation(
 
 pub async fn validate(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<ValidateRequest>,
 ) -> Response {
     let response = state

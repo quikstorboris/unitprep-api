@@ -404,9 +404,8 @@ mod tests {
         let blob = encrypt_secret(user, &generate_secret()).expect("encryption must succeed");
 
         for bad in ["", "12345", "1234567", "abcdef", "12 34", "12345a"] {
-            assert_eq!(
-                verify_code(user, &blob, "user@example.com", bad).expect("must not error"),
-                false,
+            assert!(
+                !verify_code(user, &blob, "user@example.com", bad).expect("must not error"),
                 "expected {bad:?} to be rejected"
             );
         }

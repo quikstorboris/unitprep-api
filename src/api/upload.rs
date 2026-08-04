@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::api::{ApiErrorBody, AppState};
 use crate::application::session_service::SessionService;
+use crate::auth::AuthenticatedUser;
 use unitprep_core::uploaded_file::UploadedFile;
 
 /// The form field name the frontend sends its `File.lastModified` sidecar
@@ -30,7 +31,11 @@ pub struct UploadResponse {
     pub multipart_errors: usize,
 }
 
-pub async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+pub async fn upload(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    mut multipart: Multipart,
+) -> Response {
     let started = Instant::now();
 
     let mut uploaded_files: Vec<UploadedFile> = Vec::new();
@@ -187,15 +192,12 @@ pub async fn upload(State(state): State<AppState>, mut multipart: Multipart) -> 
             .into_response();
     }
 
-    let session_id = SessionService::new(Arc::clone(&state.unit_group_sessions)).create_session(
-        uploaded_files,
-        // No authenticated caller exists yet -- see
-        // SessionMetadata::owner_id's doc comment.
-        None,
-    );
+    let session_id = SessionService::new(Arc::clone(&state.unit_group_sessions))
+        .create_session(uploaded_files, Some(user.user_id));
 
     tracing::info!(
         session_id = %session_id,
+        owner_id = %user.user_id,
         files_uploaded,
         files_failed,
         multipart_errors,

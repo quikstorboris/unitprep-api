@@ -12,6 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::api::AppState;
+use crate::auth::AuthenticatedUser;
 use unitprep_core::session_store::SessionStoreExt;
 
 #[derive(Debug, Deserialize)]
@@ -34,6 +35,7 @@ pub struct CancelSessionResponse {
 
 pub async fn cancel_session(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<CancelSessionRequest>,
 ) -> impl IntoResponse {
     // Read the session's total lifetime AND mark it cancelled in the same
@@ -103,6 +105,7 @@ mod tests {
 
         let response = cancel_session(
             State(state.clone()),
+            crate::api::test_support::test_user(),
             Json(CancelSessionRequest {
                 session_id: "s1".to_string(),
             }),
@@ -126,6 +129,7 @@ mod tests {
     async fn cancel_stays_idempotent_but_reports_deleted_false_for_unknown_session() {
         let response = cancel_session(
             State(empty_state()),
+            crate::api::test_support::test_user(),
             Json(CancelSessionRequest {
                 session_id: "missing".to_string(),
             }),
@@ -155,6 +159,7 @@ mod tests {
     async fn cancel_handles_a_malformed_non_uuid_session_id_cleanly() {
         let response = cancel_session(
             State(empty_state()),
+            crate::api::test_support::test_user(),
             Json(CancelSessionRequest {
                 session_id: "not-a-uuid-!!!-🙃".to_string(),
             }),

@@ -34,6 +34,7 @@ use unitprep_core::session_store::SessionStoreExt;
 use crate::{
     api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
     application::unit_group_session::WorkflowStage,
+    auth::AuthenticatedUser,
     infrastructure::csv_export,
 };
 
@@ -42,7 +43,11 @@ pub struct ExportRequest {
     pub session_id: String,
 }
 
-pub async fn export(State(state): State<AppState>, Json(request): Json<ExportRequest>) -> Response {
+pub async fn export(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    Json(request): Json<ExportRequest>,
+) -> Response {
     let started = Instant::now();
 
     //

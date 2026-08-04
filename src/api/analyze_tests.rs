@@ -13,6 +13,7 @@ use crate::application::unit_group_session::WorkflowStage;
 async fn analyze_returns_404_for_missing_session() {
     let response = analyze(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(AnalyzeRequest {
             session_id: "missing".to_string(),
         }),
@@ -38,6 +39,7 @@ async fn analyze_returns_409_when_called_before_validation() {
 
     let response = analyze(
         State(state),
+        crate::api::test_support::test_user(),
         Json(AnalyzeRequest {
             session_id: "s1".to_string(),
         }),
@@ -59,6 +61,7 @@ async fn analyze_finds_net_new_groups_with_no_reference_file() {
 
     let response = analyze(
         State(state),
+        crate::api::test_support::test_user(),
         Json(AnalyzeRequest {
             session_id: "s1".to_string(),
         }),

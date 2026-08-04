@@ -28,6 +28,7 @@ fn has_group(issues: &[serde_json::Value], description: &str, group_name: &str) 
 async fn returns_404_for_missing_session() {
     let response = acknowledge_group_warnings(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(AcknowledgeGroupWarningsRequest {
             session_id: "missing".to_string(),
             check: ODD_UNITGROUP.to_string(),
@@ -52,6 +53,7 @@ async fn returns_409_before_discovery_completes() {
 
     let response = acknowledge_group_warnings(
         State(state),
+        crate::api::test_support::test_user(),
         Json(AcknowledgeGroupWarningsRequest {
             session_id: "s1".to_string(),
             check: ODD_UNITGROUP.to_string(),
@@ -81,6 +83,7 @@ async fn acknowledging_a_group_hides_it_from_that_check_only() {
 
     let response = acknowledge_group_warnings(
         State(state),
+        crate::api::test_support::test_user(),
         Json(AcknowledgeGroupWarningsRequest {
             session_id: "s1".to_string(),
             check: ODD_UNITGROUP.to_string(),
@@ -113,6 +116,7 @@ async fn unacknowledging_restores_the_warning() {
 
     acknowledge_group_warnings(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(AcknowledgeGroupWarningsRequest {
             session_id: "s1".to_string(),
             check: ODD_UNITGROUP.to_string(),
@@ -124,6 +128,7 @@ async fn unacknowledging_restores_the_warning() {
 
     let response = acknowledge_group_warnings(
         State(state),
+        crate::api::test_support::test_user(),
         Json(AcknowledgeGroupWarningsRequest {
             session_id: "s1".to_string(),
             check: ODD_UNITGROUP.to_string(),
@@ -153,6 +158,7 @@ async fn acknowledgment_is_scoped_to_the_named_check() {
 
     let response = acknowledge_group_warnings(
         State(state),
+        crate::api::test_support::test_user(),
         Json(AcknowledgeGroupWarningsRequest {
             session_id: "s1".to_string(),
             check: RARE_GROUP.to_string(),

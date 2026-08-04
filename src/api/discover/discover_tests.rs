@@ -12,6 +12,7 @@ use unitprep_core::csv_document::CsvDocument;
 async fn discover_returns_404_for_missing_session() {
     let response = discover(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "missing".to_string(),
         }),
@@ -56,6 +57,7 @@ async fn discover_classifies_unit_and_group_files_but_is_not_ready_until_format_
 
     let response = discover(
         State(state),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -102,6 +104,7 @@ async fn confirming_the_detected_vendor_makes_discovery_ready() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -110,6 +113,7 @@ async fn confirming_the_detected_vendor_makes_discovery_ready() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -150,6 +154,7 @@ async fn discover_is_ready_with_zero_group_files_once_format_is_confirmed() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -158,6 +163,7 @@ async fn discover_is_ready_with_zero_group_files_once_format_is_confirmed() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -215,6 +221,7 @@ async fn discover_lists_distinct_group_names_from_unit_files_once_format_is_conf
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -223,6 +230,7 @@ async fn discover_lists_distinct_group_names_from_unit_files_once_format_is_conf
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -267,6 +275,7 @@ async fn discover_classifies_unit_file_with_underscored_headers() {
 
     let response = discover(
         State(state),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -311,6 +320,7 @@ async fn discover_detects_door_swap_and_confirm_maps_unit_type_to_unitgroup() {
 
     let discover_response = discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -327,6 +337,7 @@ async fn discover_detects_door_swap_and_confirm_maps_unit_type_to_unitgroup() {
 
     let confirm_response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -382,6 +393,7 @@ async fn uncommon_group_names_are_surfaced_separately() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -390,6 +402,7 @@ async fn uncommon_group_names_are_surfaced_separately() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -458,6 +471,7 @@ async fn discovered_group_names_are_populated_before_group_file_is_resolved() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -466,6 +480,7 @@ async fn discovered_group_names_are_populated_before_group_file_is_resolved() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -515,6 +530,7 @@ async fn discovered_group_names_excludes_a_group_the_user_has_excluded() {
 
     let before = discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -533,6 +549,7 @@ async fn discovered_group_names_excludes_a_group_the_user_has_excluded() {
 
     exclude_group(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(ExcludeGroupRequest {
             session_id: "s1".to_string(),
             group_name: "5x5".to_string(),
@@ -543,6 +560,7 @@ async fn discovered_group_names_excludes_a_group_the_user_has_excluded() {
 
     let after = discover(
         State(state),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),

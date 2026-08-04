@@ -19,6 +19,7 @@ fn sample_record(unit: &str, email: &str) -> unitprep_dedup::TenantRecord {
 async fn report_returns_404_for_missing_session() {
     let response = report(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(DedupSessionRequest {
             session_id: "missing".to_string(),
         }),
@@ -45,6 +46,7 @@ async fn report_returns_the_stored_report() {
 
     let response = report(
         State(state),
+        crate::api::test_support::test_user(),
         Json(DedupSessionRequest {
             session_id: "s1".to_string(),
         }),
@@ -74,6 +76,7 @@ async fn report_returns_the_stored_report() {
 async fn export_returns_404_for_missing_session() {
     let response = export(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(DedupExportRequest {
             session_id: "missing".to_string(),
             format: ExportFormat::Csv,
@@ -104,6 +107,7 @@ async fn export_produces_csv_containing_the_flagged_group() {
 
     let response = export(
         State(state),
+        crate::api::test_support::test_user(),
         Json(DedupExportRequest {
             session_id: "s1".to_string(),
             format: ExportFormat::Csv,
@@ -137,6 +141,7 @@ async fn export_produces_xlsx_with_the_right_content_type() {
 
     let response = export(
         State(state),
+        crate::api::test_support::test_user(),
         Json(DedupExportRequest {
             session_id: "s1".to_string(),
             format: ExportFormat::Xlsx,
@@ -169,6 +174,7 @@ async fn export_produces_a_zip_containing_both_formats() {
 
     let response = export(
         State(state),
+        crate::api::test_support::test_user(),
         Json(DedupExportRequest {
             session_id: "s1".to_string(),
             format: ExportFormat::Both,

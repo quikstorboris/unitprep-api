@@ -7,6 +7,7 @@ use serde::Deserialize;
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{respond, validate::run_validation, AppState};
+use crate::auth::AuthenticatedUser;
 
 #[derive(Debug, Deserialize)]
 pub struct AcknowledgeGroupWarningsRequest {
@@ -36,6 +37,7 @@ pub struct AcknowledgeGroupWarningsRequest {
 /// needs its own, separate acknowledgment.
 pub async fn acknowledge_group_warnings(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<AcknowledgeGroupWarningsRequest>,
 ) -> Response {
     let response = state

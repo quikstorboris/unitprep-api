@@ -43,6 +43,7 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
 async fn returns_404_for_missing_session() {
     let response = select_group_file(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(SelectGroupFileRequest {
             session_id: "missing".to_string(),
             group_file_name: "a.csv".to_string(),
@@ -66,6 +67,7 @@ async fn returns_409_before_discovery_completes() {
 
     let response = select_group_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(SelectGroupFileRequest {
             session_id: "s1".to_string(),
             group_file_name: "a.csv".to_string(),
@@ -92,6 +94,7 @@ async fn selects_one_of_several_auto_discovered_candidates() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -100,6 +103,7 @@ async fn selects_one_of_several_auto_discovered_candidates() {
 
     let response = select_group_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(SelectGroupFileRequest {
             session_id: "s1".to_string(),
             group_file_name: "wave_root_groups.csv".to_string(),
@@ -132,6 +136,7 @@ async fn rejects_a_name_that_is_not_an_actual_candidate() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -140,6 +145,7 @@ async fn rejects_a_name_that_is_not_an_actual_candidate() {
 
     let response = select_group_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(SelectGroupFileRequest {
             session_id: "s1".to_string(),
             group_file_name: "not_a_real_candidate.csv".to_string(),
@@ -173,6 +179,7 @@ async fn selection_survives_a_subsequent_discovery_recompute() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -181,6 +188,7 @@ async fn selection_survives_a_subsequent_discovery_recompute() {
 
     select_group_file(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(SelectGroupFileRequest {
             session_id: "s1".to_string(),
             group_file_name: "facility_a_groups.csv".to_string(),
@@ -190,6 +198,7 @@ async fn selection_survives_a_subsequent_discovery_recompute() {
 
     let recomputed = discover(
         State(state),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),

@@ -130,6 +130,7 @@ async fn reuploading_a_different_file_resets_confirmation() {
 
     crate::api::group_file_confirm::confirm_group_file(
         axum::extract::State(state.clone()),
+        crate::api::test_support::test_user(),
         axum::Json(crate::api::group_file_confirm::ConfirmGroupFileRequest {
             session_id: "s1".to_string(),
         }),
@@ -166,6 +167,7 @@ async fn manual_selection_survives_a_subsequent_discovery_recompute() {
 
     let recomputed = crate::api::discover::discover(
         axum::extract::State(state),
+        crate::api::test_support::test_user(),
         axum::Json(crate::api::discover::DiscoverRequest {
             session_id: "s1".to_string(),
         }),

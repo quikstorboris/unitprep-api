@@ -11,6 +11,7 @@ use crate::api::{
     session_not_found, stage_conflict, validate::run_validation, ApiErrorBody, AppState,
 };
 use crate::application::unit_group_session::StageError;
+use crate::auth::AuthenticatedUser;
 use unitprep_unit_group::DimensionExemptionKey;
 
 #[derive(Debug, Deserialize)]
@@ -36,6 +37,7 @@ enum ExemptNotReady {
 /// corrected value. Immediately re-runs validation, mirroring `/correct`.
 pub async fn exempt_dimensions(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<ExemptDimensionsRequest>,
 ) -> Response {
     let key = DimensionExemptionKey {
@@ -101,6 +103,7 @@ mod tests {
     async fn exempt_dimensions_returns_404_for_missing_session() {
         let response = exempt_dimensions(
             State(empty_state()),
+            crate::api::test_support::test_user(),
             Json(ExemptDimensionsRequest {
                 session_id: "missing".to_string(),
                 file_name: "units.csv".to_string(),
@@ -128,6 +131,7 @@ mod tests {
 
         let response = exempt_dimensions(
             State(state),
+            crate::api::test_support::test_user(),
             Json(ExemptDimensionsRequest {
                 session_id: "s1".to_string(),
                 file_name: "units.csv".to_string(),
@@ -154,6 +158,7 @@ mod tests {
 
         let response = exempt_dimensions(
             State(state),
+            crate::api::test_support::test_user(),
             Json(ExemptDimensionsRequest {
                 session_id: "s1".to_string(),
                 file_name: "units.csv".to_string(),
@@ -185,6 +190,7 @@ mod tests {
 
         let response = exempt_dimensions(
             State(state),
+            crate::api::test_support::test_user(),
             Json(ExemptDimensionsRequest {
                 session_id: "s1".to_string(),
                 file_name: "units.csv".to_string(),

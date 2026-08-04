@@ -16,6 +16,7 @@ async fn body_json(response: Response) -> serde_json::Value {
 async fn validate_returns_404_for_missing_session() {
     let response = validate(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(ValidateRequest {
             session_id: "missing".to_string(),
         }),
@@ -41,6 +42,7 @@ async fn validate_returns_409_when_called_before_discovery() {
 
     let response = validate(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ValidateRequest {
             session_id: "s1".to_string(),
         }),
@@ -74,6 +76,7 @@ async fn validate_reports_invalid_dimensions_as_exemptable() {
 
     let response = validate(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ValidateRequest {
             session_id: "s1".to_string(),
         }),
@@ -116,6 +119,7 @@ async fn validate_reports_files_that_error_and_blocks_readiness() {
 
     let response = validate(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ValidateRequest {
             session_id: "s1".to_string(),
         }),

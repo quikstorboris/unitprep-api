@@ -8,6 +8,7 @@ use crate::api::{
     discover::compute_discovery, session_not_found, stage_conflict, ApiErrorBody, AppState,
 };
 use crate::application::unit_group_session::{StageError, WorkflowStage};
+use crate::auth::AuthenticatedUser;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct SelectGroupFileRequest {
@@ -30,6 +31,7 @@ enum SelectNotReady {
 /// fresh "yes, this is the right one" from `/group-file/confirm`.
 pub async fn select_group_file(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<SelectGroupFileRequest>,
 ) -> Response {
     let result = state

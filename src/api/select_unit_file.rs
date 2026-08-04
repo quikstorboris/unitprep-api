@@ -10,6 +10,7 @@ use unitprep_core::session_store::SessionStoreExt;
 use crate::{
     api::{discover::compute_discovery, session_not_found, stage_conflict, ApiErrorBody, AppState},
     application::unit_group_session::{StageError, WorkflowStage},
+    auth::AuthenticatedUser,
 };
 
 #[derive(Debug, Deserialize)]
@@ -33,6 +34,7 @@ enum SelectNotReady {
 
 pub async fn select_unit_file(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<SelectUnitFileRequest>,
 ) -> Response {
     let result = state

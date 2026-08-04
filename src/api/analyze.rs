@@ -13,6 +13,7 @@ use unitprep_core::session_store::SessionStoreExt;
 use crate::{
     api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
     application::unit_group_session::{StageError, WorkflowStage},
+    auth::AuthenticatedUser,
 };
 use unitprep_unit_group::{
     analyze_batch, build_batch_from_documents, load_reference_groups_from_document,
@@ -47,6 +48,7 @@ pub struct AnalyzeResponse {
 
 pub async fn analyze(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<AnalyzeRequest>,
 ) -> Response {
     let started = Instant::now();

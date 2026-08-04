@@ -7,6 +7,7 @@ use crate::api::test_support::{discovered_state, empty_state, unit_document, upl
 async fn correct_returns_404_for_missing_session() {
     let response = correct(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(CorrectRequest {
             session_id: "missing".to_string(),
             file_name: "units.csv".to_string(),
@@ -35,6 +36,7 @@ async fn correct_returns_409_when_called_before_discovery() {
 
     let response = correct(
         State(state),
+        crate::api::test_support::test_user(),
         Json(CorrectRequest {
             session_id: "s1".to_string(),
             file_name: "units.csv".to_string(),
@@ -64,6 +66,7 @@ async fn correct_rejects_a_unit_number_that_does_not_exist_in_the_file() {
 
     let response = correct(
         State(state),
+        crate::api::test_support::test_user(),
         Json(CorrectRequest {
             session_id: "s1".to_string(),
             file_name: "units.csv".to_string(),
@@ -104,6 +107,7 @@ async fn correct_rejects_an_ambiguous_duplicate_unit_number() {
 
     let response = correct(
         State(state),
+        crate::api::test_support::test_user(),
         Json(CorrectRequest {
             session_id: "s1".to_string(),
             file_name: "units.csv".to_string(),
@@ -143,6 +147,7 @@ async fn correct_still_applies_for_a_unique_unit_number_alongside_a_duplicate() 
 
     let response = correct(
         State(state),
+        crate::api::test_support::test_user(),
         Json(CorrectRequest {
             session_id: "s1".to_string(),
             file_name: "units.csv".to_string(),
@@ -177,6 +182,7 @@ async fn correct_clears_invalid_dimensions_warning() {
     // still be present until both are corrected.
     let response = correct(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(CorrectRequest {
             session_id: "s1".to_string(),
             file_name: "units.csv".to_string(),
@@ -202,6 +208,7 @@ async fn correct_clears_invalid_dimensions_warning() {
     // Now fix length too — the warning should clear entirely.
     let response = correct(
         State(state),
+        crate::api::test_support::test_user(),
         Json(CorrectRequest {
             session_id: "s1".to_string(),
             file_name: "units.csv".to_string(),

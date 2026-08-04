@@ -30,6 +30,7 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
 async fn select_unit_file_returns_404_for_missing_session() {
     let response = select_unit_file(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "missing".to_string(),
             unit_file_names: vec!["units.csv".to_string()],
@@ -52,6 +53,7 @@ async fn select_unit_file_returns_409_before_discovery_completes() {
 
     let response = select_unit_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
             unit_file_names: vec!["units.csv".to_string()],
@@ -68,6 +70,7 @@ async fn select_unit_file_rejects_an_empty_selection() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -76,6 +79,7 @@ async fn select_unit_file_rejects_an_empty_selection() {
 
     let response = select_unit_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
             unit_file_names: Vec::new(),
@@ -96,6 +100,7 @@ async fn select_unit_file_rejects_a_file_discovery_never_found() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -104,6 +109,7 @@ async fn select_unit_file_rejects_a_file_discovery_never_found() {
 
     let response = select_unit_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
             unit_file_names: vec!["not_discovered.csv".to_string()],
@@ -135,6 +141,7 @@ async fn selecting_a_subset_of_candidates_becomes_the_confirmed_set() {
 
     let discover_response = discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -148,6 +155,7 @@ async fn selecting_a_subset_of_candidates_becomes_the_confirmed_set() {
 
     let response = select_unit_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
             unit_file_names: vec!["facility_a.csv".to_string(), "facility_c.csv".to_string()],
@@ -192,6 +200,7 @@ async fn selecting_every_candidate_confirms_them_all() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -200,6 +209,7 @@ async fn selecting_every_candidate_confirms_them_all() {
 
     let response = select_unit_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
             unit_file_names: vec!["facility_a.csv".to_string(), "facility_b.csv".to_string()],

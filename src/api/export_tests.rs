@@ -12,6 +12,7 @@ use crate::application::unit_group_session::WorkflowStage;
 async fn export_returns_404_for_missing_session() {
     let response = export(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(ExportRequest {
             session_id: "missing".to_string(),
         }),
@@ -38,6 +39,7 @@ async fn export_returns_409_when_called_before_analysis() {
 
     let response = export(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ExportRequest {
             session_id: "s1".to_string(),
         }),
@@ -63,6 +65,7 @@ async fn export_blocked_when_errors_present() {
 
     let response = export(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ExportRequest {
             session_id: "s1".to_string(),
         }),
@@ -90,6 +93,7 @@ async fn export_succeeds_with_clean_validation() {
 
     let response = export(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ExportRequest {
             session_id: "s1".to_string(),
         }),

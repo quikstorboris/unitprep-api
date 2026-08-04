@@ -16,6 +16,7 @@ use crate::{
         session_not_found, stage_conflict, ApiErrorBody, AppState,
     },
     application::unit_group_session::{StageError, WorkflowStage},
+    auth::AuthenticatedUser,
 };
 use unitprep_unit_group::{
     detect_vendor, mapping_from_vendor, FieldMapping, CANONICAL_TARGET_FIELDS,
@@ -64,6 +65,7 @@ enum ResolveNotReady {
 
 pub async fn resolve_unit_format(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<ResolveUnitFormatRequest>,
 ) -> Response {
     let result = state

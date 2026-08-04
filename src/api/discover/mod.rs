@@ -29,9 +29,11 @@ use axum::{
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{session_not_found, AppState};
+use crate::auth::AuthenticatedUser;
 
 pub async fn discover(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<DiscoverRequest>,
 ) -> Response {
     let started = Instant::now();

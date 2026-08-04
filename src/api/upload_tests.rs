@@ -72,7 +72,12 @@ async fn rejects_upload_with_no_successfully_uploaded_files() {
     let state = empty_state();
     let multipart = multipart_from(closing_boundary(), &state).await;
 
-    let response = upload(State(state), multipart).await;
+    let response = upload(
+        State(state),
+        crate::api::test_support::test_user(),
+        multipart,
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
@@ -91,7 +96,12 @@ async fn a_single_real_file_uploads_successfully() {
     body.push_str(&closing_boundary());
 
     let multipart = multipart_from(body, &state).await;
-    let response = upload(State(state), multipart).await;
+    let response = upload(
+        State(state),
+        crate::api::test_support::test_user(),
+        multipart,
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
 
@@ -116,7 +126,12 @@ async fn a_field_missing_a_filename_is_counted_as_failed_without_blocking_the_re
     body.push_str(&closing_boundary());
 
     let multipart = multipart_from(body, &state).await;
-    let response = upload(State(state), multipart).await;
+    let response = upload(
+        State(state),
+        crate::api::test_support::test_user(),
+        multipart,
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
 
@@ -139,7 +154,12 @@ async fn multiple_real_files_are_all_counted() {
     body.push_str(&closing_boundary());
 
     let multipart = multipart_from(body, &state).await;
-    let response = upload(State(state), multipart).await;
+    let response = upload(
+        State(state),
+        crate::api::test_support::test_user(),
+        multipart,
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
 

@@ -42,6 +42,7 @@ fn door_swap_document(file_name: &str) -> CsvDocument {
 async fn resolve_unit_format_returns_404_for_missing_session() {
     let response = resolve_unit_format(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "missing".to_string(),
             action: ResolveAction::Confirm,
@@ -64,6 +65,7 @@ async fn resolve_unit_format_returns_409_before_discovery_completes() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -80,6 +82,7 @@ async fn resolve_unit_format_rejects_when_no_file_is_selected_yet() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -88,6 +91,7 @@ async fn resolve_unit_format_rejects_when_no_file_is_selected_yet() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -111,6 +115,7 @@ async fn confirm_applies_door_swaps_preset_mapping() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -119,6 +124,7 @@ async fn confirm_applies_door_swaps_preset_mapping() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -146,6 +152,7 @@ async fn manual_map_rejects_when_a_required_field_is_left_unmapped() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -154,6 +161,7 @@ async fn manual_map_rejects_when_a_required_field_is_left_unmapped() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Map {
@@ -182,6 +190,7 @@ async fn manual_map_rejects_a_source_header_not_in_the_file() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -190,6 +199,7 @@ async fn manual_map_rejects_a_source_header_not_in_the_file() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Map {
@@ -224,6 +234,7 @@ async fn manual_map_succeeds_with_only_the_required_fields_mapped() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -232,6 +243,7 @@ async fn manual_map_succeeds_with_only_the_required_fields_mapped() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Map {
@@ -281,6 +293,7 @@ async fn select_then_confirm_a_single_candidate() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -289,6 +302,7 @@ async fn select_then_confirm_a_single_candidate() {
 
     select_unit_file(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
             unit_file_names: vec!["b.csv".to_string()],
@@ -298,6 +312,7 @@ async fn select_then_confirm_a_single_candidate() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -330,6 +345,7 @@ async fn confirm_bulk_resolves_every_matching_selected_file() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -338,6 +354,7 @@ async fn confirm_bulk_resolves_every_matching_selected_file() {
 
     select_unit_file(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
             unit_file_names: vec![
@@ -351,6 +368,7 @@ async fn confirm_bulk_resolves_every_matching_selected_file() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -385,6 +403,7 @@ async fn confirm_rejects_a_confirmed_set_with_mismatched_headers() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -393,6 +412,7 @@ async fn confirm_rejects_a_confirmed_set_with_mismatched_headers() {
 
     select_unit_file(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
             unit_file_names: vec![
@@ -406,6 +426,7 @@ async fn confirm_rejects_a_confirmed_set_with_mismatched_headers() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -434,6 +455,7 @@ async fn reset_reopens_format_resolution_after_everything_was_confirmed() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -442,6 +464,7 @@ async fn reset_reopens_format_resolution_after_everything_was_confirmed() {
 
     select_unit_file(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
             unit_file_names: vec!["a.csv".to_string(), "b.csv".to_string()],
@@ -451,6 +474,7 @@ async fn reset_reopens_format_resolution_after_everything_was_confirmed() {
 
     resolve_unit_format(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -460,6 +484,7 @@ async fn reset_reopens_format_resolution_after_everything_was_confirmed() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Reset,
@@ -488,6 +513,7 @@ async fn reset_succeeds_even_though_nothing_is_currently_pending() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -496,6 +522,7 @@ async fn reset_succeeds_even_though_nothing_is_currently_pending() {
 
     resolve_unit_format(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -505,6 +532,7 @@ async fn reset_succeeds_even_though_nothing_is_currently_pending() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Reset,
@@ -530,6 +558,7 @@ async fn manual_map_resolves_only_the_current_file() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -538,6 +567,7 @@ async fn manual_map_resolves_only_the_current_file() {
 
     select_unit_file(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(SelectUnitFileRequest {
             session_id: "s1".to_string(),
             unit_file_names: vec!["first.csv".to_string(), "second.csv".to_string()],
@@ -547,6 +577,7 @@ async fn manual_map_resolves_only_the_current_file() {
 
     let response = resolve_unit_format(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Map {

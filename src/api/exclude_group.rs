@@ -7,6 +7,7 @@ use serde::Deserialize;
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{respond, validate::run_validation, AppState};
+use crate::auth::AuthenticatedUser;
 
 #[derive(Debug, Deserialize)]
 pub struct ExcludeGroupRequest {
@@ -26,6 +27,7 @@ pub struct ExcludeGroupRequest {
 /// exclusion is actually applied.
 pub async fn exclude_group(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<ExcludeGroupRequest>,
 ) -> Response {
     let response = state

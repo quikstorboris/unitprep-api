@@ -121,13 +121,19 @@ async fn cross_origin_request_from_an_unlisted_origin_gets_no_allow_origin_heade
 /// in this API (`{error, message}` JSON). Confirmed live against the real
 /// router, not a direct handler call, since `Json<T>`'s own rejection
 /// only happens at actual request-extraction time.
+///
+/// Targets `/auth/login/begin` rather than a product route: the
+/// extraction-rejection middleware is a router-wide layer, applied
+/// before any route-specific extractor (including `AuthenticatedUser`)
+/// ever runs, so an unauthenticated endpoint exercises it identically --
+/// and unlike every product route, this one needs no session to reach.
 #[tokio::test]
 async fn malformed_json_body_gets_the_standard_error_shape() {
     let addr = spawn_test_server().await;
     let client = reqwest::Client::new();
 
     let response = client
-        .post(format!("http://{addr}/correct"))
+        .post(format!("http://{addr}/auth/login/begin"))
         .header("Content-Type", "application/json")
         .body("{not valid json")
         .send()
@@ -156,13 +162,17 @@ async fn malformed_json_body_gets_the_standard_error_shape() {
 /// The other confirmed symptom of the same gap: posting JSON without the
 /// `Content-Type: application/json` header used to reject with a
 /// plain-text 415 body instead of the standard JSON error shape.
+///
+/// Targets `/auth/login/begin` for the same reason as the malformed-JSON
+/// test above -- this is a router-wide extraction concern, and an
+/// unauthenticated endpoint reaches it without needing a session.
 #[tokio::test]
 async fn wrong_content_type_gets_the_standard_error_shape() {
     let addr = spawn_test_server().await;
     let client = reqwest::Client::new();
 
     let response = client
-        .post(format!("http://{addr}/correct"))
+        .post(format!("http://{addr}/auth/login/begin"))
         .header("Content-Type", "text/plain")
         .body("{}")
         .send()
@@ -184,42 +194,59 @@ async fn wrong_content_type_gets_the_standard_error_shape() {
 
 /// A handler's own legitimately-JSON error response (not an extraction
 /// rejection) must pass through this layer completely untouched.
+///
+/// Targets `/auth/login/finish` with no ceremony cookie (`ceremony_not_found`,
+/// a legitimate handler-authored JSON error) rather than a product route's
+/// `session_not_found`: that specific shape is already covered by the many
+/// direct-call `*_returns_404_for_missing_session` tests throughout this
+/// crate, and every product route now requires a real authenticated
+/// session to reach at all, which this HTTP-level harness has no way to
+/// obtain (`empty_state`'s pool is deliberately unreachable). The property
+/// under test here -- the router-wide middleware leaves a handler's own
+/// JSON error alone -- doesn't depend on which handler or which error.
 #[tokio::test]
 async fn a_handlers_own_json_error_response_is_not_rewritten() {
     let addr = spawn_test_server().await;
     let client = reqwest::Client::new();
 
     let response = client
-        .post(format!("http://{addr}/correct"))
-        .json(&serde_json::json!({
-            "session_id": "missing",
-            "file_name": "units.csv",
-            "unit_number": "A01",
-            "field": "width",
-            "value": "10"
-        }))
+        .post(format!("http://{addr}/auth/login/finish"))
+        .json(&serde_json::json!({ "credential": {} }))
         .send()
         .await
         .expect("request should reach the real server");
 
-    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
 
     let body: serde_json::Value = response
         .json()
         .await
         .expect("error body should itself be valid JSON");
 
-    assert_eq!(body["error"], "session_not_found");
+    assert_eq!(body["error"], "ceremony_not_found");
 }
 
-/// The one handler whose input (`multipart/form-data`) is awkward to
-/// construct by calling the function directly -- `upload_tests.rs`
-/// already covers this via axum's own `Multipart::from_request`, but
-/// driving it through a real HTTP client too proves the route is wired
-/// correctly end to end, not just that the handler function works in
-/// isolation.
+/// Narrowed scope, recorded honestly rather than silently: this used to
+/// prove `/upload` accepts a real multipart request end to end, including
+/// a successful parse. Since `/upload` now requires `AuthenticatedUser`
+/// (extracted *before* `Multipart`, per the parameter order in
+/// `upload::upload`), and this harness's `empty_state` has no reachable
+/// database for `resolve_session` to query, there is no way to present a
+/// genuinely valid session cookie here -- so this can no longer drive the
+/// request past the auth gate to prove multipart parsing succeeds live.
+///
+/// What it still proves, and it's not nothing: the route is registered
+/// under POST, matches this exact path, and runs the auth extractor
+/// before ever touching the request body -- a 401 here (not a 404 route
+/// miss, and not a 500 from a handler panicking mid-multipart-parse)
+/// confirms the routing and extractor ordering are both wired correctly.
+/// Full coverage of successful multipart parsing remains in
+/// `upload_tests.rs`'s direct-call tests, which build a real `Multipart`
+/// value from real bytes -- just not over a live TCP connection. If this
+/// gap ever needs closing for real, it needs a reachable test database to
+/// mint a genuine session, not a workaround here.
 #[tokio::test]
-async fn upload_endpoint_accepts_a_real_multipart_request_over_http() {
+async fn upload_endpoint_requires_authentication_before_touching_the_multipart_body() {
     let addr = spawn_test_server().await;
     let client = reqwest::Client::new();
 
@@ -237,14 +264,7 @@ async fn upload_endpoint_accepts_a_real_multipart_request_over_http() {
         .await
         .expect("request should reach the real server");
 
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .expect("upload response should be valid JSON");
-
-    assert!(body.get("session_id").is_some());
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
 }
 
 /// Regression coverage for the size limit configured on the router
@@ -259,7 +279,7 @@ async fn upload_endpoint_accepts_a_real_multipart_request_over_http() {
 /// `upload_endpoint_accepts_a_real_multipart_request_over_http` above
 /// does.
 ///
-/// Deliberately targets `/correct` (a `Json<T>` handler), not `/upload`:
+/// Deliberately targets a `Json<T>` handler, not `/upload`'s `Multipart`:
 /// `Multipart`'s own extractor rejects a non-multipart `Content-Type`
 /// immediately, without ever reading the body far enough to trip
 /// `DefaultBodyLimit` at all -- confirmed empirically (that variant of
@@ -268,7 +288,11 @@ async fn upload_endpoint_accepts_a_real_multipart_request_over_http() {
 /// `DefaultBodyLimit`'s wrapped body stream errors out once the
 /// cumulative read exceeds the limit, before JSON parsing ever starts --
 /// so the oversized body never needs to be valid JSON (or even valid
-/// UTF-8) to trip this.
+/// UTF-8) to trip this. Uses `/auth/login/begin` rather than a product
+/// route: `DefaultBodyLimit` is a router-wide layer applied before any
+/// route-specific extractor, so an unauthenticated endpoint exercises it
+/// identically, without needing a session this harness has no way to
+/// mint.
 #[tokio::test]
 async fn oversized_request_body_is_rejected_with_the_standard_error_shape() {
     let addr = spawn_test_server().await;
@@ -279,7 +303,7 @@ async fn oversized_request_body_is_rejected_with_the_standard_error_shape() {
     let oversized_body = vec![0u8; 100 * 1024 * 1024 + 1];
 
     let response = client
-        .post(format!("http://{addr}/correct"))
+        .post(format!("http://{addr}/auth/login/begin"))
         .header("Content-Type", "application/json")
         .body(oversized_body)
         .send()
@@ -305,19 +329,26 @@ async fn oversized_request_body_is_rejected_with_the_standard_error_shape() {
 }
 
 /// Consolidated sweep across several DIFFERENT error-producing endpoints
-/// and failure modes, rather than one more test of a single handler --
-/// the point is confirming this API's `{error, message}` `ApiErrorBody`
-/// shape is the real, observable contract across the whole surface, not
-/// just wherever a prior audit happened to look. Combines the
-/// already-individually-tested failure modes above (malformed JSON,
-/// wrong Content-Type -- exercised here against `/discover` instead of
-/// `/correct`, proving the rewrite middleware applies router-wide, not
-/// to one hardcoded route) with a genuinely unknown `session_id` on
-/// three further endpoints, since `session_not_found` is a handler's own
-/// legitimately-JSON error (see
-/// `a_handlers_own_json_error_response_is_not_rewritten` above) --
-/// proving that's true everywhere a session lookup can fail, not just
-/// for `/correct`.
+/// and failure modes, rather than one more test of a single handler.
+/// Two things changed here once every product route started requiring
+/// `AuthenticatedUser`:
+///
+/// - The "genuinely unknown session id" check used to prove
+///   `session_not_found`'s shape across three product endpoints. Those
+///   endpoints now 401 before ever reaching a session lookup -- so this
+///   sweep instead confirms that EVERY product route in the list is
+///   uniformly gated (a 401, not a 404 route-miss or a 500), which is the
+///   property that actually matters post-gating. `session_not_found`'s
+///   own shape remains covered by the many direct-call
+///   `*_returns_404_for_missing_session` tests throughout this crate,
+///   which don't need a real session because they call the handler
+///   function directly.
+/// - Malformed-JSON and wrong-Content-Type now hit two different
+///   unauthenticated auth endpoints instead of one product route,
+///   preserving the original point (the rewrite middleware applies
+///   router-wide, not to one hardcoded route) without needing a session
+///   this harness has no way to mint (`empty_state`'s pool is
+///   deliberately unreachable).
 #[tokio::test]
 async fn a_sweep_of_different_error_endpoints_all_share_the_standard_error_shape() {
     let addr = spawn_test_server().await;
@@ -347,7 +378,8 @@ async fn a_sweep_of_different_error_endpoints_all_share_the_standard_error_shape
         assert!(body["message"].as_str().is_some_and(|m| !m.is_empty()));
     }
 
-    // A genuinely unknown session id, on three different endpoints.
+    // Every product route in this sample must refuse an unauthenticated
+    // caller uniformly, regardless of which one it is.
     for path in ["/analyze", "/export", "/validate"] {
         let response = client
             .post(format!("http://{addr}{path}"))
@@ -356,17 +388,16 @@ async fn a_sweep_of_different_error_endpoints_all_share_the_standard_error_shape
             .await
             .expect("request should reach the real server");
 
-        assert_standard_error_shape(
-            response,
-            reqwest::StatusCode::NOT_FOUND,
-            "session_not_found",
-        )
-        .await;
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::UNAUTHORIZED,
+            "{path} must require authentication"
+        );
     }
 
-    // Malformed JSON.
+    // Malformed JSON, against one unauthenticated auth endpoint.
     let malformed_json_response = client
-        .post(format!("http://{addr}/discover"))
+        .post(format!("http://{addr}/auth/login/begin"))
         .header("Content-Type", "application/json")
         .body("{not valid json")
         .send()
@@ -380,9 +411,11 @@ async fn a_sweep_of_different_error_endpoints_all_share_the_standard_error_shape
     )
     .await;
 
-    // Wrong Content-Type.
+    // Wrong Content-Type, against a DIFFERENT unauthenticated auth
+    // endpoint -- still proving this isn't one hardcoded route's own
+    // behavior.
     let wrong_content_type_response = client
-        .post(format!("http://{addr}/discover"))
+        .post(format!("http://{addr}/auth/login/finish"))
         .header("Content-Type", "text/plain")
         .body("{}")
         .send()

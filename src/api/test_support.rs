@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::application::dedup_session_service::DedupSession;
 use crate::application::unit_group_session::Session;
-use crate::auth::{AuthenticationCeremony, RegistrationCeremony};
+use crate::auth::{AuthenticatedUser, AuthenticationCeremony, RegistrationCeremony, Role};
 use unitprep_core::csv_document::CsvDocument;
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
 use unitprep_core::session_store::SessionStore;
@@ -65,6 +65,20 @@ pub(crate) fn test_auth_backend() -> std::sync::Arc<dyn crate::auth::AuthBackend
         crate::auth::WebauthnRsBackend::new("localhost", "http://localhost:3000")
             .expect("hardcoded localhost webauthn config should always be valid"),
     )
+}
+
+/// A stand-in authenticated caller for tool-route tests, now that every
+/// tool endpoint requires a valid session. Role doesn't matter here --
+/// tool routes only require *authentication*, not any particular role,
+/// unlike the admin-gated auth endpoints (see `auth_invites.rs`'s own
+/// `admin()` test helper, which exists for that different reason).
+pub fn test_user() -> AuthenticatedUser {
+    AuthenticatedUser {
+        user_id: uuid::Uuid::new_v4(),
+        role: Role::Admin,
+        token_hash: vec![0u8; 32],
+        elevated_until: None,
+    }
 }
 
 pub fn empty_state() -> AppState {

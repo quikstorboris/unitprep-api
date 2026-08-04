@@ -8,6 +8,7 @@ use crate::api::{
     discover::compute_discovery, session_not_found, stage_conflict, ApiErrorBody, AppState,
 };
 use crate::application::unit_group_session::{StageError, WorkflowStage};
+use crate::auth::AuthenticatedUser;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ConfirmGroupFileRequest {
@@ -27,6 +28,7 @@ enum ConfirmNotReady {
 /// select-then-confirm shape.
 pub async fn confirm_group_file(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<ConfirmGroupFileRequest>,
 ) -> Response {
     let result = state.unit_group_sessions.with_session_mut(&request.session_id, |session| {

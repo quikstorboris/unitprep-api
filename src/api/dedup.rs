@@ -21,6 +21,7 @@ use unitprep_dedup::{DedupReport, TenantRecord};
 use crate::api::dedup_view::{build_report_view, DedupReportView};
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::application::dedup_session_service::DedupSessionService;
+use crate::auth::AuthenticatedUser;
 use crate::infrastructure::csv_export::{build_zip, ExportFile};
 use crate::infrastructure::{dedup_csv_export, dedup_xlsx_export};
 
@@ -95,7 +96,11 @@ async fn first_uploaded_file(
 /// dedup session. Combining upload+analyze (rather than UnitGroup's
 /// separate stages) is deliberate: there's no ambiguity to resolve
 /// in between, the check just runs.
-pub async fn check(State(state): State<AppState>, mut multipart: Multipart) -> Response {
+pub async fn check(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    mut multipart: Multipart,
+) -> Response {
     let started = Instant::now();
 
     let file = match first_uploaded_file(&mut multipart).await {
@@ -126,9 +131,7 @@ pub async fn check(State(state): State<AppState>, mut multipart: Multipart) -> R
     let file_name = file.file_name.clone();
 
     let session_id = match DedupSessionService::new(Arc::clone(&state.dedup_sessions))
-        // No authenticated caller exists yet -- see
-        // SessionMetadata::owner_id's doc comment.
-        .create_session(file, None)
+        .create_session(file, Some(user.user_id))
     {
         Ok(id) => id,
         Err(err) => {
@@ -157,6 +160,7 @@ pub async fn check(State(state): State<AppState>, mut multipart: Multipart) -> R
 
     tracing::info!(
         session_id = %session_id,
+        owner_id = %user.user_id,
         file = %file_name,
         flagged_groups = report.flagged_groups.len(),
         typo_variant_candidates = report.typo_variant_candidates.len(),
@@ -173,6 +177,7 @@ pub async fn check(State(state): State<AppState>, mut multipart: Multipart) -> R
 /// without re-uploading the file.
 pub async fn report(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<DedupSessionRequest>,
 ) -> Response {
     match state
@@ -191,6 +196,7 @@ pub async fn report(
 /// share.
 pub async fn export(
     State(state): State<AppState>,
+    user: AuthenticatedUser,
     Json(request): Json<DedupExportRequest>,
 ) -> Response {
     let started = Instant::now();
@@ -214,6 +220,7 @@ pub async fn export(
 
     tracing::info!(
         session_id = %request.session_id,
+        owner_id = %user.user_id,
         format = ?request.format,
         flagged_groups = report.flagged_groups.len(),
         typo_variant_candidates = report.typo_variant_candidates.len(),

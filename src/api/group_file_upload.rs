@@ -11,6 +11,7 @@ use crate::api::manual_file_upload::{
 };
 use crate::api::{discover::compute_discovery, session_not_found, stage_conflict, AppState};
 use crate::application::unit_group_session::WorkflowStage;
+use crate::auth::AuthenticatedUser;
 
 /// Lets the user manually designate a specific uploaded file as this
 /// session's master/reference group file — for the case where none was
@@ -21,7 +22,11 @@ use crate::application::unit_group_session::WorkflowStage;
 /// `selected_group_file_name` over the auto-classified list whenever
 /// it's set, so forcing it here is enough — no other change needed for
 /// this file to actually get used during analysis.
-pub async fn upload_group_file(State(state): State<AppState>, multipart: Multipart) -> Response {
+pub async fn upload_group_file(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    multipart: Multipart,
+) -> Response {
     let fields = match extract_manual_upload_fields(multipart).await {
         Ok(fields) => fields,
         Err(err) => return manual_upload_error_response(err),

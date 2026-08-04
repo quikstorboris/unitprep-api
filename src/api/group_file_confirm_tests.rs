@@ -34,6 +34,7 @@ async fn body_json(response: axum::response::Response) -> serde_json::Value {
 async fn returns_404_for_missing_session() {
     let response = confirm_group_file(
         State(empty_state()),
+        crate::api::test_support::test_user(),
         Json(ConfirmGroupFileRequest {
             session_id: "missing".to_string(),
         }),
@@ -56,6 +57,7 @@ async fn returns_409_before_discovery_completes() {
 
     let response = confirm_group_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ConfirmGroupFileRequest {
             session_id: "s1".to_string(),
         }),
@@ -71,6 +73,7 @@ async fn rejects_confirming_when_nothing_is_selected() {
 
     let response = confirm_group_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ConfirmGroupFileRequest {
             session_id: "s1".to_string(),
         }),
@@ -96,6 +99,7 @@ async fn rejects_confirming_an_invalid_format_file() {
 
     let response = confirm_group_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ConfirmGroupFileRequest {
             session_id: "s1".to_string(),
         }),
@@ -121,6 +125,7 @@ async fn confirms_a_valid_selected_file() {
 
     let response = confirm_group_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ConfirmGroupFileRequest {
             session_id: "s1".to_string(),
         }),
@@ -143,6 +148,7 @@ async fn confirming_the_group_file_is_what_makes_discovery_ready() {
 
     discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -151,6 +157,7 @@ async fn confirming_the_group_file_is_what_makes_discovery_ready() {
 
     resolve_unit_format(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(ResolveUnitFormatRequest {
             session_id: "s1".to_string(),
             action: ResolveAction::Confirm,
@@ -166,6 +173,7 @@ async fn confirming_the_group_file_is_what_makes_discovery_ready() {
 
     let before_confirm = discover(
         State(state.clone()),
+        crate::api::test_support::test_user(),
         Json(DiscoverRequest {
             session_id: "s1".to_string(),
         }),
@@ -177,6 +185,7 @@ async fn confirming_the_group_file_is_what_makes_discovery_ready() {
 
     let response = confirm_group_file(
         State(state),
+        crate::api::test_support::test_user(),
         Json(ConfirmGroupFileRequest {
             session_id: "s1".to_string(),
         }),

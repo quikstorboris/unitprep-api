@@ -11,6 +11,7 @@ use crate::api::{
     session_not_found, stage_conflict, validate::run_validation, ApiErrorBody, AppState,
 };
 use crate::application::unit_group_session::StageError;
+use crate::auth::AuthenticatedUser;
 use unitprep_unit_group::CorrectionKey;
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +51,7 @@ enum CorrectNotReady {
 /// the original parsed data.
 pub async fn correct(
     State(state): State<AppState>,
+    _user: AuthenticatedUser,
     Json(request): Json<CorrectRequest>,
 ) -> Response {
     let key = CorrectionKey {
