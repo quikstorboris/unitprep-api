@@ -80,7 +80,9 @@ pub mod event {
     /// failed login would inflate that number with ordinary setup fumbles.
     pub const TOTP_ENROLMENT_FAILED: &str = "totp_enrolment_failed";
 
-    /// TOTP is confirmed and usable as a fallback factor.
+    /// TOTP is confirmed and usable as a step-up factor for sensitive
+    /// in-session actions (see TOTP_STEP_UP_SUCCEEDED) -- not a way to log
+    /// in; see auth_totp.rs's module docs.
     pub const TOTP_ENROLLED: &str = "totp_enrolled";
 
     /// An administrator attempted to issue an invitation to an account
@@ -105,6 +107,20 @@ pub mod event {
     /// flag so a review of "who got their credentials revoked and why"
     /// never has to filter a mixed-purpose event to find out.
     pub const ACCOUNT_RECOVERY_INITIATED: &str = "account_recovery_initiated";
+
+    /// An already-signed-in caller proved a fresh TOTP code, elevating
+    /// their own session for a short window (auth.record_step_up) so a
+    /// sensitive action (adding/replacing a passkey) can proceed. Distinct
+    /// from `LOGIN_SUCCEEDED`: nobody signed in here, a session already
+    /// existed -- this is a re-proof of identity mid-session, the same
+    /// distinction `TOTP_ENROLMENT_FAILED` draws against `LOGIN_FAILED`.
+    pub const TOTP_STEP_UP_SUCCEEDED: &str = "totp_step_up_succeeded";
+
+    /// A step-up code was rejected. Counted toward the same lockout as an
+    /// enrolment/legacy-login rejection would have been (`failed_attempts`
+    /// on the credential row) -- repeated guessing is repeated guessing
+    /// regardless of which action prompted it.
+    pub const TOTP_STEP_UP_FAILED: &str = "totp_step_up_failed";
 }
 
 /// Who did it, and who it was done to.

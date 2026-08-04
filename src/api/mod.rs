@@ -290,7 +290,6 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/auth/login/begin", post(auth_login::login_begin))
         .route("/auth/login/finish", post(auth_login::login_finish))
-        .route("/auth/login/totp", post(auth_totp::login))
         .layer(GovernorLayer::new(auth_rate_limit).error_handler(rate_limit_exceeded));
 
     let invite_routes = Router::new()
@@ -314,13 +313,13 @@ pub fn router(state: AppState) -> Router {
         // out must succeed with a stale or missing cookie, or the one case
         // where a user most needs to clear it is the case that 401s. See
         // auth_logout's module docs.
-        // TOTP: enrolment and removal are authenticated (the extractor is
-        // in the handler); the sign-in path is not, and is deliberately as
-        // opaque as the passkey login path -- and merged in below (see
-        // auth_routes) with the other unauthenticated auth endpoints,
-        // sharing their rate limit.
+        // TOTP is authenticated-only end to end (the extractor is in every
+        // handler below) -- there is no unauthenticated TOTP path any
+        // more. See auth_totp.rs's module docs for why: it's a step-up
+        // check for an already-signed-in session, not a way to log in.
         .route("/auth/totp/enroll/begin", post(auth_totp::enroll_begin))
         .route("/auth/totp/enroll/confirm", post(auth_totp::enroll_confirm))
+        .route("/auth/totp/step-up", post(auth_totp::step_up))
         .route("/auth/totp/disable", post(auth_totp::disable))
         .route("/auth/logout", post(auth_logout::logout))
         .route(
@@ -556,17 +555,55 @@ async fn health_db(State(state): State<AppState>) -> Response {
 struct WhoamiResponse {
     user_id: String,
     role: &'static str,
+    /// Whether a *confirmed* TOTP credential exists for this account --
+    /// lets the frontend show "enrolled" vs. a call-to-action instead of
+    /// always presenting "enroll", which would walk an already-enrolled
+    /// user into silently replacing their working fallback (re-enrolling
+    /// overwrites the secret immediately, see auth_totp.rs).
+    totp_enrolled: bool,
 }
 
 /// Manual/diagnostic verification that the whole cookie -> resolve_session
 /// -> identity chain actually works end to end -- exercises
 /// AuthenticatedUser the same way any future protected endpoint will,
 /// without yet having a real protected endpoint to exercise it through.
-async fn whoami(user: crate::auth::AuthenticatedUser) -> Json<WhoamiResponse> {
-    Json(WhoamiResponse {
+///
+/// Also the frontend's one source of truth for current-user state, so it
+/// carries the `totp_enrolled` flag alongside identity rather than needing
+/// a second round trip just to render the account/security page correctly.
+async fn whoami(
+    State(state): State<AppState>,
+    user: crate::auth::AuthenticatedUser,
+) -> Result<Json<WhoamiResponse>, Response> {
+    let mut tx = crate::auth::begin_owner_rls_transaction(&state.db, user.user_id)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, user_id = %user.user_id, "whoami: failed to open transaction");
+            internal_error("Could not look up your account")
+        })?;
+
+    let totp_enrolled: bool = sqlx::query_scalar(
+        "SELECT confirmed_at IS NOT NULL FROM auth.totp_credentials WHERE user_id = $1",
+    )
+    .bind(user.user_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|err| {
+        tracing::error!(error = %err, user_id = %user.user_id, "whoami: totp lookup failed");
+        internal_error("Could not look up your account")
+    })?
+    .unwrap_or(false);
+
+    tx.commit().await.map_err(|err| {
+        tracing::error!(error = %err, user_id = %user.user_id, "whoami: commit failed");
+        internal_error("Could not look up your account")
+    })?;
+
+    Ok(Json(WhoamiResponse {
         user_id: user.user_id.to_string(),
         role: user.role.as_db_text(),
-    })
+        totp_enrolled,
+    }))
 }
 
 #[cfg(test)]

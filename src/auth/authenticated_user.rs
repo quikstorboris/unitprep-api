@@ -4,6 +4,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use axum_extra::extract::cookie::CookieJar;
+use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -45,6 +46,24 @@ impl Role {
 pub struct AuthenticatedUser {
     pub user_id: Uuid,
     pub role: Role,
+    /// This exact session's own token hash -- needed by anything that acts
+    /// on "the session this request came in on" specifically, e.g.
+    /// recording a step-up verification (auth.record_step_up), which must
+    /// elevate only the one device that just proved a fresh TOTP code, not
+    /// every session this user has open. Never logged or returned to a
+    /// client -- same handling as everywhere else this hash appears.
+    pub token_hash: Vec<u8>,
+    /// None if this session has never been step-up verified, or if a past
+    /// verification has expired -- both mean "not currently elevated" to
+    /// every caller, so nothing downstream needs to tell them apart. See
+    /// `is_elevated`.
+    pub elevated_until: Option<DateTime<Utc>>,
+}
+
+impl AuthenticatedUser {
+    pub fn is_elevated(&self) -> bool {
+        self.elevated_until.is_some_and(|until| until > Utc::now())
+    }
 }
 
 impl FromRequestParts<AppState> for AuthenticatedUser {
@@ -62,15 +81,22 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             return Err(unauthorized());
         };
 
-        let row = query_session(&raw_token, &state.db)
+        let token_hash = hash_token(&raw_token);
+
+        let row = query_session(&token_hash, &state.db)
             .await
             .map_err(|_| internal_error())?;
 
-        let (user_id, role_text) = row.ok_or_else(unauthorized)?;
+        let (user_id, role_text, elevated_until) = row.ok_or_else(unauthorized)?;
 
         let role = Role::from_db_text(&role_text).ok_or_else(internal_error)?;
 
-        Ok(AuthenticatedUser { user_id, role })
+        Ok(AuthenticatedUser {
+            user_id,
+            role,
+            token_hash,
+            elevated_until,
+        })
     }
 }
 
@@ -78,12 +104,10 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 /// extractor above and by `try_authenticated_user` below so there is
 /// exactly one place that knows resolve_session's shape.
 async fn query_session(
-    raw_token: &str,
+    token_hash: &[u8],
     db: &PgPool,
-) -> Result<Option<(Uuid, String)>, sqlx::Error> {
-    let token_hash = hash_token(raw_token);
-
-    sqlx::query_as("SELECT user_id, role::text FROM auth.resolve_session($1)")
+) -> Result<Option<(Uuid, String, Option<DateTime<Utc>>)>, sqlx::Error> {
+    sqlx::query_as("SELECT user_id, role::text, elevated_until FROM auth.resolve_session($1)")
         .bind(token_hash)
         .fetch_optional(db)
         .await
@@ -104,10 +128,17 @@ pub async fn try_authenticated_user(
     state: &AppState,
 ) -> Option<AuthenticatedUser> {
     let raw_token = read_session_cookie(jar)?;
-    let (user_id, role_text) = query_session(&raw_token, &state.db).await.ok()??;
+    let token_hash = hash_token(&raw_token);
+    let (user_id, role_text, elevated_until) =
+        query_session(&token_hash, &state.db).await.ok()??;
     let role = Role::from_db_text(&role_text)?;
 
-    Some(AuthenticatedUser { user_id, role })
+    Some(AuthenticatedUser {
+        user_id,
+        role,
+        token_hash,
+        elevated_until,
+    })
 }
 
 fn unauthorized() -> Response {
@@ -116,6 +147,20 @@ fn unauthorized() -> Response {
         Json(ApiErrorBody {
             error: "unauthorized",
             message: "Sign in required".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+/// Shared with any handler gating part of itself behind
+/// `AuthenticatedUser::is_elevated` -- e.g. `register_begin`'s
+/// authenticated add-a-passkey branch (see auth_register.rs).
+pub fn step_up_required() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(ApiErrorBody {
+            error: "step_up_required",
+            message: "Enter your authenticator app code to confirm this action.".to_string(),
         }),
     )
         .into_response()
@@ -204,5 +249,31 @@ mod tests {
     #[test]
     fn unknown_db_text_does_not_match_any_role() {
         assert_eq!(Role::from_db_text("not_a_real_role"), None);
+    }
+
+    fn user_with_elevation(elevated_until: Option<DateTime<Utc>>) -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: Uuid::new_v4(),
+            role: Role::Admin,
+            token_hash: vec![0u8; 32],
+            elevated_until,
+        }
+    }
+
+    #[test]
+    fn never_stepped_up_is_not_elevated() {
+        assert!(!user_with_elevation(None).is_elevated());
+    }
+
+    #[test]
+    fn a_future_elevation_deadline_is_elevated() {
+        let deadline = Utc::now() + chrono::Duration::minutes(5);
+        assert!(user_with_elevation(Some(deadline)).is_elevated());
+    }
+
+    #[test]
+    fn a_past_elevation_deadline_is_not_elevated() {
+        let deadline = Utc::now() - chrono::Duration::seconds(1);
+        assert!(!user_with_elevation(Some(deadline)).is_elevated());
     }
 }

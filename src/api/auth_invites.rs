@@ -680,6 +680,8 @@ mod tests {
         AuthenticatedUser {
             user_id: Uuid::new_v4(),
             role: Role::Admin,
+            token_hash: vec![0u8; 32],
+            elevated_until: None,
         }
     }
 

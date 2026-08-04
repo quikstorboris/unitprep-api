@@ -1,20 +1,35 @@
-//! TOTP enrolment, removal, and fallback sign-in (Phase 2 task 9).
+//! TOTP enrolment, removal, and step-up verification for sensitive
+//! in-session actions.
 //!
 //! The cryptography and the encryption-at-rest decision live in
 //! `auth::totp`; this is orchestration.
+//!
+//! ## Not a way to log in
+//!
+//! TOTP shipped as a login-fallback factor (Phase 2 task 9, 2026-07-30),
+//! for a device with no passkey enrolled. That gap is now covered by
+//! admin-driven account recovery instead (deactivate -> reissue invite ->
+//! re-enrol), so a static shared secret standing in as an equally-capable
+//! full login path -- next to a hardware-bound passkey -- was undercutting
+//! the account's real security floor rather than helping it. There is no
+//! `/auth/login/totp` any more; `/auth/totp/step-up` is authenticated-only,
+//! and all it does is extend `auth.sessions.elevated_until` on the
+//! caller's own session (see `AuthenticatedUser::is_elevated` in
+//! `auth::authenticated_user`) -- it never issues a session or signs
+//! anyone in.
 //!
 //! ## Enrolment is two steps, and the second one is the point
 //!
 //! `/enroll/begin` writes the secret with `confirmed_at` NULL and hands back
 //! the `otpauth://` URI. `/enroll/confirm` takes a code and, only if it
-//! verifies, sets `confirmed_at`. Sign-in requires a *confirmed* credential.
+//! verifies, sets `confirmed_at`. Step-up requires a *confirmed* credential.
 //!
-//! Without the second step a user could believe they had a working fallback
-//! while having mistyped the secret, or scanned it into an app on a phone
-//! whose clock is wrong -- and they would find out at exactly the moment they
-//! needed the fallback and had no other way in. Requiring one successful code
-//! before the credential counts turns that from a latent problem into an
-//! immediate, obvious one.
+//! Without the second step a user could believe they had a working step-up
+//! factor while having mistyped the secret, or scanned it into an app on a
+//! phone whose clock is wrong -- and they would find out at exactly the
+//! moment a sensitive action needed it. Requiring one successful code before
+//! the credential counts turns that from a latent problem into an immediate,
+//! obvious one.
 //!
 //! ## Re-enrolling replaces the previous secret immediately
 //!
@@ -23,41 +38,23 @@
 //! rather than when the new one is confirmed. That is a deliberate
 //! simplification -- `totp_credentials.user_id` is UNIQUE, so holding both
 //! would need a second row and a rule for which wins -- and it is affordable
-//! precisely because TOTP is a **fallback**: abandoning a half-finished
-//! re-enrolment costs the fallback, not access to the account.
-//!
-//! ## The sign-in path is unauthenticated, so it says nothing
-//!
-//! Unknown address, no TOTP enrolled, unconfirmed enrolment, wrong code, and
-//! locked-out all return the same 401. Distinguishing them would leak which
-//! addresses exist and, worse, tell an attacker their guessing is having an
-//! effect by reporting the lockout they caused.
+//! precisely because losing a half-finished re-enrolment costs the step-up
+//! factor, not access to the account (unlike the login-fallback framing this
+//! reasoning originally shipped under).
 
 use axum::{
     extract::{Json, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{
     audit_log, base32_secret, begin_owner_rls_transaction, encrypt_secret, generate_secret,
-    generate_token, issue_session_cookie, provisioning_uri, totp_configured, verify_code,
-    AuthenticatedUser,
+    provisioning_uri, totp_configured, verify_code, AuthenticatedUser,
 };
-
-/// Matches the passkey paths, so a session's lifetime does not depend on
-/// which factor minted it.
-fn session_lifetime_hours() -> i64 {
-    std::env::var("SESSION_LIFETIME_HOURS")
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .filter(|hours| *hours > 0)
-        .unwrap_or(12)
-}
 
 #[derive(Debug, Serialize)]
 pub struct EnrollBeginResponse {
@@ -80,16 +77,16 @@ pub struct TotpConfirmResponse {
     pub confirmed: bool,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct TotpLoginRequest {
-    pub email: String,
-    pub code: String,
+#[derive(Debug, Serialize)]
+pub struct StepUpResponse {
+    pub confirmed: bool,
 }
 
-#[derive(Debug, Serialize)]
-pub struct TotpLoginResponse {
-    pub success: bool,
-}
+/// How long a step-up verification elevates the caller's session for.
+/// Long enough to complete a multi-field sensitive action (entering API
+/// credentials, say) without re-verifying mid-task; short enough that a
+/// walked-away session can't be abused on the strength of one earlier code.
+const STEP_UP_MINUTES: i32 = 5;
 
 /// TOTP is unavailable in this deployment because no encryption key is set.
 ///
@@ -122,14 +119,32 @@ fn wrong_code() -> Response {
         .into_response()
 }
 
-/// One response for every reason a TOTP sign-in cannot proceed. See the
-/// module docs.
-fn login_unavailable() -> Response {
+/// The caller is signed in, but has no confirmed TOTP credential to step up
+/// with. Named plainly rather than folded into `wrong_code` -- unlike the
+/// old anonymous login path, there is no enumeration concern here: the
+/// caller is already authenticated as themselves, so telling them their own
+/// account's TOTP state leaks nothing they don't already know.
+fn not_enrolled() -> Response {
     (
-        StatusCode::UNAUTHORIZED,
+        StatusCode::BAD_REQUEST,
         Json(ApiErrorBody {
-            error: "login_unavailable",
-            message: "Could not sign in with that address and code.".to_string(),
+            error: "totp_not_enrolled",
+            message: "Set up an authenticator app before confirming this action.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+/// Same reasoning as `not_enrolled`: the caller is already authenticated as
+/// themselves, so naming the lockout plainly leaks nothing new -- unlike
+/// the old anonymous login path, where this had to fold into an opaque
+/// rejection.
+fn locked_out() -> Response {
+    (
+        StatusCode::TOO_MANY_REQUESTS,
+        Json(ApiErrorBody {
+            error: "totp_locked_out",
+            message: "Too many incorrect codes. Try again in a few minutes.".to_string(),
         }),
     )
         .into_response()
@@ -315,130 +330,75 @@ pub async fn disable(
     Json(TotpConfirmResponse { confirmed: false }).into_response()
 }
 
-pub async fn login(
+/// Elevates the caller's own session for `STEP_UP_MINUTES`, given a code
+/// from a confirmed authenticator app. Never issues a session and never
+/// touches the cookie jar -- the caller is already signed in, or this
+/// handler would not have been reached at all (see `AuthenticatedUser`).
+pub async fn step_up(
     State(state): State<AppState>,
-    jar: CookieJar,
+    user: AuthenticatedUser,
     headers: HeaderMap,
-    Json(request): Json<TotpLoginRequest>,
+    Json(request): Json<TotpCodeRequest>,
 ) -> Response {
     let user_agent = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
 
-    let email = request.email.trim().to_ascii_lowercase();
-
-    if email.is_empty() {
-        // Same reasoning as the passkey login path's equivalent case: an
-        // empty address is exactly as much a login attempt as one that
-        // fails to resolve to an account, so it gets the same audit row.
-        audit_log::record(
-            &state.db,
-            audit_log::event::LOGIN_FAILED,
-            audit_log::Subjects::anonymous(),
-            user_agent,
-            serde_json::json!({ "reason": "empty_email", "factor": "totp" }),
-        )
-        .await;
-        return login_unavailable();
-    }
-
-    // The HTTP response is folded into the same opaque rejection as
-    // everything else -- an unconfigured deployment must not be
-    // detectable from an unauthenticated endpoint. The audit row is not
-    // under that constraint: it is never visible to the caller, and an
-    // operator watching it genuinely benefits from telling "TOTP is off
-    // here" apart from "someone tried a bad address".
     if !totp_configured() {
-        audit_log::record(
-            &state.db,
-            audit_log::event::LOGIN_FAILED,
-            audit_log::Subjects::anonymous(),
-            user_agent,
-            serde_json::json!({ "reason": "totp_not_configured", "factor": "totp" }),
-        )
-        .await;
-        return login_unavailable();
+        return not_configured();
     }
 
-    let candidate: Result<Option<(Uuid, Vec<u8>, bool)>, sqlx::Error> = sqlx::query_as(
-        "SELECT user_id, secret_encrypted, is_locked
-           FROM auth.resolve_totp_candidate($1::citext)",
-    )
-    .bind(&email)
-    .fetch_optional(&state.db)
-    .await;
-
-    let (user_id, secret_encrypted, is_locked) = match candidate {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            // No account, or no confirmed TOTP. Recorded with no actor for
-            // the same reason a failed passkey login is: there may be no
-            // user behind this address at all.
-            audit_log::record(
-                &state.db,
-                audit_log::event::LOGIN_FAILED,
-                audit_log::Subjects::anonymous(),
-                user_agent,
-                serde_json::json!({ "reason": "no_confirmed_totp", "email": email, "factor": "totp" }),
-            )
-            .await;
-            return login_unavailable();
-        }
+    let loaded = match load_own_confirmed_secret(&state, user.user_id).await {
+        Ok(Some(loaded)) => loaded,
+        Ok(None) => return not_enrolled(),
         Err(err) => {
-            tracing::error!(error = %err, "TOTP candidate lookup failed");
-            return internal_error("Could not sign in");
+            tracing::error!(error = %err, user_id = %user.user_id, "TOTP step-up lookup failed");
+            return internal_error("Could not confirm this action");
         }
     };
 
-    if is_locked {
-        // Deliberately not counted as another failure: letting attempts keep
-        // accruing while locked would extend the lock indefinitely under a
-        // sustained attack, turning a 15-minute inconvenience into a
-        // permanent denial of the fallback.
-        tracing::warn!(user_id = %user_id, "TOTP sign-in refused: locked out");
-        audit_log::record(
-            &state.db,
-            audit_log::event::LOGIN_FAILED,
-            audit_log::Subjects::by(user_id),
-            user_agent,
-            serde_json::json!({ "reason": "totp_locked_out", "factor": "totp" }),
-        )
-        .await;
-        return login_unavailable();
+    if loaded.is_locked {
+        // Deliberately not counted as another failure: letting attempts
+        // keep accruing while locked would extend the lock indefinitely
+        // under a sustained attack, turning a 15-minute inconvenience into
+        // a much longer one.
+        tracing::warn!(user_id = %user.user_id, "TOTP step-up refused: locked out");
+        return locked_out();
     }
 
-    let verified = match verify_code(user_id, &secret_encrypted, &email, &request.code) {
+    let verified = match verify_code(
+        user.user_id,
+        &loaded.secret_encrypted,
+        &loaded.email,
+        &request.code,
+    ) {
         Ok(verified) => verified,
         Err(err) => {
-            tracing::error!(error = %err, user_id = %user_id, "could not verify a TOTP code");
-            return internal_error("Could not sign in");
+            tracing::error!(error = %err, user_id = %user.user_id, "could not verify a TOTP code");
+            return internal_error("Could not confirm this action");
         }
     };
 
     if !verified {
         let attempts: Result<i32, sqlx::Error> =
             sqlx::query_scalar("SELECT auth.record_totp_failure($1)")
-                .bind(user_id)
+                .bind(user.user_id)
                 .fetch_one(&state.db)
                 .await;
 
         match attempts {
             Ok(count) => {
                 tracing::warn!(
-                    user_id = %user_id,
+                    user_id = %user.user_id,
                     failed_attempts = count,
-                    "TOTP sign-in rejected"
+                    "TOTP step-up rejected"
                 );
                 audit_log::record(
                     &state.db,
-                    audit_log::event::LOGIN_FAILED,
-                    audit_log::Subjects::by(user_id),
+                    audit_log::event::TOTP_STEP_UP_FAILED,
+                    audit_log::Subjects::by(user.user_id),
                     user_agent,
-                    serde_json::json!({
-                        "reason": "totp_code_rejected",
-                        "factor": "totp",
-                        "failed_attempts": count,
-                    }),
+                    serde_json::json!({ "failed_attempts": count }),
                 )
                 .await;
             }
@@ -446,68 +406,70 @@ pub async fn login(
                 // The attempt is not counted, so log loudly: a brute-force
                 // guard that silently stops counting is worse than none,
                 // because nothing looks wrong.
-                tracing::error!(error = %err, user_id = %user_id, "failed to record a TOTP failure");
+                tracing::error!(error = %err, user_id = %user.user_id, "failed to record a TOTP failure");
             }
         }
 
-        return login_unavailable();
+        return wrong_code();
     }
 
     if let Err(err) = sqlx::query("SELECT auth.record_totp_success($1)")
-        .bind(user_id)
+        .bind(user.user_id)
         .execute(&state.db)
         .await
     {
-        // The code was correct. Failing the sign-in over the bookkeeping
+        // The code was correct. Failing the request over the bookkeeping
         // would be the wrong trade -- but it does mean the failure counter
         // stays where it was, so this is `error`, not `warn`.
-        tracing::error!(error = %err, user_id = %user_id, "failed to clear TOTP failure state");
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to clear TOTP failure state");
     }
 
-    let (raw_token, token_hash) = generate_token();
-    let lifetime_hours = session_lifetime_hours();
-    let expires_at = chrono::Utc::now() + chrono::Duration::hours(lifetime_hours);
-
-    let created: Result<Uuid, sqlx::Error> =
-        sqlx::query_scalar("SELECT auth.create_session($1, $2, $3, NULL, $4)")
-            .bind(user_id)
-            .bind(&token_hash)
-            .bind(expires_at)
-            .bind(user_agent)
+    let elevated: Result<bool, sqlx::Error> =
+        sqlx::query_scalar("SELECT auth.record_step_up($1, $2)")
+            .bind(&user.token_hash)
+            .bind(STEP_UP_MINUTES)
             .fetch_one(&state.db)
             .await;
 
-    match created {
-        Ok(session_id) => {
+    match elevated {
+        Ok(true) => {
             audit_log::record(
                 &state.db,
-                audit_log::event::LOGIN_SUCCEEDED,
-                audit_log::Subjects::by(user_id),
+                audit_log::event::TOTP_STEP_UP_SUCCEEDED,
+                audit_log::Subjects::by(user.user_id),
                 user_agent,
-                serde_json::json!({ "session_id": session_id, "factor": "totp" }),
+                serde_json::json!({}),
             )
             .await;
 
-            tracing::info!(
-                user_id = %user_id,
-                session_id = %session_id,
-                factor = "totp",
-                "TOTP sign-in succeeded"
-            );
+            tracing::info!(user_id = %user.user_id, "TOTP step-up succeeded");
 
-            let jar = issue_session_cookie(jar, raw_token, time::Duration::hours(lifetime_hours));
-
-            (jar, Json(TotpLoginResponse { success: true })).into_response()
+            Json(StepUpResponse { confirmed: true }).into_response()
+        }
+        // The code was correct, but the session itself vanished (expired
+        // or was revoked from another device) in the time it took to
+        // verify it -- rare, but a stale success would be worse than
+        // telling the truth: sign in again.
+        Ok(false) => {
+            tracing::warn!(user_id = %user.user_id, "TOTP step-up verified but the session was gone");
+            unauthorized_session_gone()
         }
         Err(err) => {
-            tracing::error!(error = %err, user_id = %user_id, "TOTP verified but session creation failed");
-            (
-                jar,
-                internal_error("Signed in, but the session could not be created"),
-            )
-                .into_response()
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to record a TOTP step-up");
+            internal_error("Could not confirm this action")
         }
     }
+}
+
+fn unauthorized_session_gone() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(ApiErrorBody {
+            error: "unauthorized",
+            message: "Your session ended. Sign in again.".to_string(),
+        }),
+    )
+        .into_response()
 }
 
 struct LoadedSecret {
@@ -553,6 +515,44 @@ async fn load_own_secret(
         secret_encrypted,
         email,
     }))
+}
+
+struct LoadedConfirmedSecret {
+    secret_encrypted: Vec<u8>,
+    email: String,
+    is_locked: bool,
+}
+
+/// Reads the caller's own TOTP secret for step-up verification --
+/// `confirmed_at IS NOT NULL` only, unlike `load_own_secret`: an
+/// unconfirmed enrolment (mid-setup, never proven to work) must not count
+/// as a usable step-up factor.
+async fn load_own_confirmed_secret(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<Option<LoadedConfirmedSecret>, sqlx::Error> {
+    let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
+
+    let row: Option<(Vec<u8>, String, bool)> = sqlx::query_as(
+        "SELECT t.secret_encrypted, u.email::text,
+                (t.locked_until IS NOT NULL AND t.locked_until > now())
+           FROM auth.totp_credentials t
+           JOIN auth.users u ON u.id = t.user_id
+          WHERE t.user_id = $1 AND t.confirmed_at IS NOT NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(row.map(
+        |(secret_encrypted, email, is_locked)| LoadedConfirmedSecret {
+            secret_encrypted,
+            email,
+            is_locked,
+        },
+    ))
 }
 
 /// Writes a fresh unconfirmed secret, replacing any existing row.
@@ -628,54 +628,40 @@ mod tests {
         );
     }
 
-    /// An empty address must not reach the database, and must land on the
-    /// same opaque rejection as everything else.
+    /// Step-up is authenticated-only, so there is no anonymous caller to
+    /// hide this from -- unlike the old login path, an honest 503 is
+    /// correct here, the same as enrolment already does.
     #[tokio::test]
     #[serial(totp_env)]
-    async fn totp_login_refuses_an_empty_email_without_touching_the_database() {
-        set_key();
-
-        let response = login(
-            State(empty_state()),
-            CookieJar::new(),
-            HeaderMap::new(),
-            Json(TotpLoginRequest {
-                email: "   ".to_string(),
-                code: "123456".to_string(),
-            }),
-        )
-        .await;
-
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    /// With no key configured, the unauthenticated path must look exactly
-    /// like any other refusal -- not a 503, which would advertise the
-    /// deployment's configuration to anyone who asked.
-    #[tokio::test]
-    #[serial(totp_env)]
-    async fn an_unconfigured_deployment_is_indistinguishable_on_the_login_path() {
+    async fn an_unconfigured_deployment_says_so_on_the_step_up_path() {
         std::env::remove_var("TOTP_ENCRYPTION_KEY");
 
-        let response = login(
+        let response = step_up(
             State(empty_state()),
-            CookieJar::new(),
+            AuthenticatedUser {
+                user_id: Uuid::new_v4(),
+                role: crate::auth::Role::Admin,
+                token_hash: vec![0u8; 32],
+                elevated_until: None,
+            },
             HeaderMap::new(),
-            Json(TotpLoginRequest {
-                email: "someone@example.com".to_string(),
+            Json(TotpCodeRequest {
                 code: "123456".to_string(),
             }),
         )
         .await;
 
-        assert_eq!(
-            response.status(),
-            StatusCode::UNAUTHORIZED,
-            "an anonymous caller must not learn that TOTP is unconfigured"
-        );
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 
         set_key();
     }
+
+    // step_up's "no confirmed TOTP" / "locked out" / "code verified,
+    // session gone" branches all require a real database to distinguish
+    // "no row" from "connection error" -- like enroll_confirm and disable,
+    // they're exercised against the real dev database rather than as a
+    // unit test against test_support::empty_state()'s intentionally-lazy,
+    // fails-fast-in-50ms pool (see that pool's own doc comment).
 
     /// The enrolment path, by contrast, tells an authenticated caller
     /// plainly -- they can act on it, and hiding it would look like a bug.
@@ -689,6 +675,8 @@ mod tests {
             AuthenticatedUser {
                 user_id: Uuid::new_v4(),
                 role: crate::auth::Role::Admin,
+                token_hash: vec![0u8; 32],
+                elevated_until: None,
             },
             HeaderMap::new(),
         )
