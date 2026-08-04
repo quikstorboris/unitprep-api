@@ -66,6 +66,31 @@ impl AuthenticatedUser {
     }
 }
 
+/// How long a session may go without an authenticated request before it is
+/// treated as expired, independent of `auth.sessions.expires_at`'s
+/// absolute ceiling.
+///
+/// This is the idle half of the Phase II session-hardening pair: the
+/// absolute expiry (`SESSION_LIFETIME_HOURS`, set once at login and never
+/// extended) already bounds how long a session can exist at all; this
+/// bounds how long it can exist *unused*. A session left open and
+/// unattended for the rest of a 12-hour window was, before this, fully
+/// valid the whole time -- `resolve_session` bumps `last_seen_at` on every
+/// authenticated request, but nothing read it back to enforce a limit.
+///
+/// Same override-and-default shape as `session_lifetime_hours` in
+/// auth_login.rs, and the same reasoning for a floor of 1 rather than
+/// letting a misconfigured 0/negative value be read as "no idle timeout" --
+/// an idle timeout that can be silently disabled by a typo is not a
+/// hardening control.
+fn session_idle_timeout_minutes() -> i32 {
+    std::env::var("SESSION_IDLE_TIMEOUT_MINUTES")
+        .ok()
+        .and_then(|value| value.parse::<i32>().ok())
+        .filter(|minutes| *minutes > 0)
+        .unwrap_or(30)
+}
+
 impl FromRequestParts<AppState> for AuthenticatedUser {
     type Rejection = Response;
 
@@ -107,10 +132,13 @@ async fn query_session(
     token_hash: &[u8],
     db: &PgPool,
 ) -> Result<Option<(Uuid, String, Option<DateTime<Utc>>)>, sqlx::Error> {
-    sqlx::query_as("SELECT user_id, role::text, elevated_until FROM auth.resolve_session($1)")
-        .bind(token_hash)
-        .fetch_optional(db)
-        .await
+    sqlx::query_as(
+        "SELECT user_id, role::text, elevated_until FROM auth.resolve_session($1, $2)",
+    )
+    .bind(token_hash)
+    .bind(session_idle_timeout_minutes())
+    .fetch_optional(db)
+    .await
 }
 
 /// A best-effort version of the extractor above, for a handler that

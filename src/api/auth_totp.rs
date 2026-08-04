@@ -241,13 +241,16 @@ pub async fn enroll_confirm(
         }
     };
 
-    let verified = match verify_code(
+    // No prior accepted step for a secret that has never been confirmed --
+    // there is nothing yet for this code to replay against.
+    let matched_step = match verify_code(
         user.user_id,
         &loaded.secret_encrypted,
         &loaded.email,
         &request.code,
+        None,
     ) {
-        Ok(verified) => verified,
+        Ok(matched_step) => matched_step,
         Err(err) => {
             // The secret could not be read -- a key change, or a corrupted
             // row. Not the caller's fault and must not be reported as a
@@ -257,7 +260,7 @@ pub async fn enroll_confirm(
         }
     };
 
-    if !verified {
+    let Some(matched_step) = matched_step else {
         tracing::warn!(user_id = %user.user_id, "TOTP enrolment confirmation rejected");
         audit_log::record(
             &state.db,
@@ -268,9 +271,9 @@ pub async fn enroll_confirm(
         )
         .await;
         return wrong_code();
-    }
+    };
 
-    if let Err(err) = confirm_own_secret(&state, user.user_id).await {
+    if let Err(err) = confirm_own_secret(&state, user.user_id, matched_step).await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to confirm a TOTP secret");
         return internal_error("Could not confirm TOTP enrolment");
     }
@@ -366,20 +369,21 @@ pub async fn step_up(
         return locked_out();
     }
 
-    let verified = match verify_code(
+    let matched_step = match verify_code(
         user.user_id,
         &loaded.secret_encrypted,
         &loaded.email,
         &request.code,
+        loaded.last_used_step,
     ) {
-        Ok(verified) => verified,
+        Ok(matched_step) => matched_step,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "could not verify a TOTP code");
             return internal_error("Could not confirm this action");
         }
     };
 
-    if !verified {
+    let Some(matched_step) = matched_step else {
         let attempts: Result<i32, sqlx::Error> =
             sqlx::query_scalar("SELECT auth.record_totp_failure($1)")
                 .bind(user.user_id)
@@ -411,10 +415,11 @@ pub async fn step_up(
         }
 
         return wrong_code();
-    }
+    };
 
-    if let Err(err) = sqlx::query("SELECT auth.record_totp_success($1)")
+    if let Err(err) = sqlx::query("SELECT auth.record_totp_success($1, $2)")
         .bind(user.user_id)
+        .bind(matched_step)
         .execute(&state.db)
         .await
     {
@@ -521,6 +526,9 @@ struct LoadedConfirmedSecret {
     secret_encrypted: Vec<u8>,
     email: String,
     is_locked: bool,
+    /// The TOTP step this credential last accepted a code at, if any. Fed
+    /// straight into `verify_code`'s replay guard -- see auth::totp.
+    last_used_step: Option<i64>,
 }
 
 /// Reads the caller's own TOTP secret for step-up verification --
@@ -533,9 +541,10 @@ async fn load_own_confirmed_secret(
 ) -> Result<Option<LoadedConfirmedSecret>, sqlx::Error> {
     let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
 
-    let row: Option<(Vec<u8>, String, bool)> = sqlx::query_as(
+    let row: Option<(Vec<u8>, String, bool, Option<i64>)> = sqlx::query_as(
         "SELECT t.secret_encrypted, u.email::text,
-                (t.locked_until IS NOT NULL AND t.locked_until > now())
+                (t.locked_until IS NOT NULL AND t.locked_until > now()),
+                t.last_used_step
            FROM auth.totp_credentials t
            JOIN auth.users u ON u.id = t.user_id
           WHERE t.user_id = $1 AND t.confirmed_at IS NOT NULL",
@@ -547,10 +556,11 @@ async fn load_own_confirmed_secret(
     tx.commit().await?;
 
     Ok(row.map(
-        |(secret_encrypted, email, is_locked)| LoadedConfirmedSecret {
+        |(secret_encrypted, email, is_locked, last_used_step)| LoadedConfirmedSecret {
             secret_encrypted,
             email,
             is_locked,
+            last_used_step,
         },
     ))
 }
@@ -587,15 +597,25 @@ async fn store_unconfirmed_secret(
     tx.commit().await
 }
 
-async fn confirm_own_secret(state: &AppState, user_id: Uuid) -> Result<(), sqlx::Error> {
+/// `matched_step` is the step the confirming code was accepted at --
+/// recorded as `last_used_step` immediately, so the same code cannot be
+/// replayed as a step-up the instant enrolment finishes (see auth::totp's
+/// replay-window docs).
+async fn confirm_own_secret(
+    state: &AppState,
+    user_id: Uuid,
+    matched_step: i64,
+) -> Result<(), sqlx::Error> {
     let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
 
     sqlx::query(
         "UPDATE auth.totp_credentials
-            SET confirmed_at = now(), failed_attempts = 0, locked_until = NULL
+            SET confirmed_at = now(), failed_attempts = 0, locked_until = NULL,
+                last_used_step = $2
           WHERE user_id = $1",
     )
     .bind(user_id)
+    .bind(matched_step)
     .execute(&mut *tx)
     .await?;
 

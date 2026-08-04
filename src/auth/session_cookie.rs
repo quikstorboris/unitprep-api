@@ -47,12 +47,32 @@ pub fn validate_cookie_security(rp_origin: &str) -> Result<(), String> {
 
 /// Builds the Set-Cookie response for a freshly issued session --
 /// httpOnly (unreadable to page JS, so an XSS bug cannot exfiltrate
-/// it), SameSite=Lax (sent on top-level navigation, not on cross-site
-/// subrequests), and Secure per cookie_is_secure above. Deliberately
-/// not signed or encrypted -- the token itself is opaque random data,
-/// not a claim we would trust without a database round-trip through
-/// resolve_session, so there is nothing here worth protecting beyond
-/// transport and JS-readability.
+/// it), SameSite=Strict (never sent on a cross-site request, including a
+/// top-level navigation arriving from another site), and Secure per
+/// cookie_is_secure above. Deliberately not signed or encrypted -- the
+/// token itself is opaque random data, not a claim we would trust without
+/// a database round-trip through resolve_session, so there is nothing
+/// here worth protecting beyond transport and JS-readability.
+///
+/// ## Why Strict rather than Lax (Phase II hardening)
+///
+/// Lax still sends the cookie on a top-level GET navigation initiated from
+/// another site -- the case that matters for CSRF, since it is what lets a
+/// link or auto-submitting form on a malicious page ride in with the
+/// victim's session. This is an internal, single-organization admin tool
+/// with no legitimate flow that depends on the session cookie surviving a
+/// cross-site navigation (invites and recovery are delivered and opened
+/// out-of-band, not as a same-tab redirect chain that needs the cookie to
+/// follow), so there is no real feature to trade away by tightening this.
+///
+/// The cost, and it is a real one: a signed-in user who opens a link to
+/// this app from another site (an email client, Teams, a bookmark synced
+/// via a different flow) will not carry the cookie on that first
+/// navigation and will appear signed out for it, even though the cookie is
+/// still valid. Same-site navigation (clicking around inside the app,
+/// reloading, following its own links) is completely unaffected --
+/// Strict's restriction is specifically about the *initiating* site of the
+/// request, not about first-party vs third-party in the cookie sense.
 pub fn issue_session_cookie(
     jar: CookieJar,
     raw_token: String,
@@ -61,7 +81,7 @@ pub fn issue_session_cookie(
     let cookie = Cookie::build((SESSION_COOKIE_NAME, raw_token))
         .http_only(true)
         .secure(cookie_is_secure())
-        .same_site(SameSite::Lax)
+        .same_site(SameSite::Strict)
         .path("/")
         .max_age(max_age)
         .build();
@@ -127,7 +147,7 @@ pub fn clear_session_cookie(jar: CookieJar) -> CookieJar {
     let expired = Cookie::build((SESSION_COOKIE_NAME, ""))
         .http_only(true)
         .secure(cookie_is_secure())
-        .same_site(SameSite::Lax)
+        .same_site(SameSite::Strict)
         .path("/")
         .max_age(time::Duration::ZERO)
         .build();
@@ -262,6 +282,39 @@ mod tests {
             .split(';')
             .map(str::trim)
             .find_map(|part| part.strip_prefix("Path="))
+    }
+
+    fn same_site_attribute(set_cookie: &str) -> Option<&str> {
+        set_cookie
+            .split(';')
+            .map(str::trim)
+            .find_map(|part| part.strip_prefix("SameSite="))
+    }
+
+    /// Phase II hardening: the session cookie must carry SameSite=Strict,
+    /// not the Lax it shipped with -- see issue_session_cookie's doc
+    /// comment for why Strict is safe for this app specifically.
+    #[test]
+    fn issued_cookie_carries_same_site_strict() {
+        let line = set_cookie_line(issue_session_cookie(
+            CookieJar::new(),
+            "raw-token-value".to_string(),
+            time::Duration::hours(1),
+        ));
+
+        assert_eq!(same_site_attribute(&line), Some("Strict"), "emitted: {line}");
+    }
+
+    /// The cleared cookie must match the issued one's SameSite, for the
+    /// same browser-matching reason issued_and_cleared_paths_agree checks
+    /// Path -- SameSite is not part of deletion matching, but leaving the
+    /// two inconsistent is exactly how the Lax default silently survives
+    /// on the clearing path after being fixed everywhere else.
+    #[test]
+    fn cleared_cookie_carries_same_site_strict() {
+        let line = set_cookie_line(clear_session_cookie(CookieJar::new()));
+
+        assert_eq!(same_site_attribute(&line), Some("Strict"), "emitted: {line}");
     }
 
     /// The removal must carry `Path=/`, matching what `issue_session_cookie`

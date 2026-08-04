@@ -31,6 +31,13 @@ fn cookie_is_secure() -> bool {
 /// shorter max_age than a real session, since a WebAuthn ceremony is one
 /// request/response round trip through the browser's own
 /// `navigator.credentials` call, not a standing login.
+///
+/// SameSite=Strict, matching the real session cookie's Phase II hardening
+/// (see session_cookie.rs's issue_session_cookie for the full reasoning).
+/// Safe here for the same reason: a ceremony is always begun by a same-site
+/// request the frontend makes itself after its own page has already
+/// loaded, never by a cross-site top-level navigation that would need the
+/// cookie to arrive with the first request.
 pub fn issue_ceremony_cookie(
     jar: CookieJar,
     name: &'static str,
@@ -40,7 +47,7 @@ pub fn issue_ceremony_cookie(
     let cookie = Cookie::build((name, ceremony_id))
         .http_only(true)
         .secure(cookie_is_secure())
-        .same_site(SameSite::Lax)
+        .same_site(SameSite::Strict)
         .path("/")
         .max_age(max_age)
         .build();
@@ -104,6 +111,36 @@ mod tests {
         assert_eq!(
             read_ceremony_cookie(&jar, REGISTRATION_CEREMONY_COOKIE),
             None
+        );
+    }
+
+    /// Phase II hardening: ceremony cookies carry SameSite=Strict, matching
+    /// the real session cookie -- see issue_ceremony_cookie's doc comment.
+    #[test]
+    fn issued_ceremony_cookie_carries_same_site_strict() {
+        use axum::response::IntoResponse;
+
+        let jar = issue_ceremony_cookie(
+            CookieJar::new(),
+            REGISTRATION_CEREMONY_COOKIE,
+            "ceremony-123".to_string(),
+            time::Duration::minutes(5),
+        );
+
+        let response = (jar, axum::http::StatusCode::OK).into_response();
+        let line = response
+            .headers()
+            .get_all(axum::http::header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with(REGISTRATION_CEREMONY_COOKIE))
+            .expect("a Set-Cookie for the ceremony cookie must be emitted");
+
+        assert!(
+            line.split(';')
+                .map(str::trim)
+                .any(|part| part == "SameSite=Strict"),
+            "emitted: {line}"
         );
     }
 

@@ -49,16 +49,31 @@ route gating in `unitprep-ui`. Nothing is enforced as a product yet; see
 
 ### Sessions
 
-- A single `httpOnly`, `Secure`, `SameSite=Lax` cookie holds an **opaque
-  random session token** — not a JWT. The cookie is never read or
-  parsed by frontend JS; the token is meaningless without a database
-  round trip.
+- A single `httpOnly`, `Secure`, `SameSite=Strict` cookie holds an
+  **opaque random session token** — not a JWT. The cookie is never read
+  or parsed by frontend JS; the token is meaningless without a database
+  round trip. `SameSite=Strict` (tightened from `Lax` as Phase II item
+  2) means the cookie is never sent on a cross-site request at all, not
+  even a top-level navigation arriving from another site — the
+  narrower CSRF surface costs nothing here, since no legitimate flow in
+  this app depends on the session cookie surviving a cross-site
+  navigation. Ceremony cookies (`unitprep_reg_ceremony`,
+  `unitprep_login_ceremony`) carry the same attribute for the same
+  reason.
 - The database stores only a **SHA-256 hash** of the token, never the
   raw value — a database read alone can't produce a usable session.
 - Session creation and lookup both go through `SECURITY DEFINER`
   Postgres functions (`auth.create_session`, `auth.resolve_session`),
   which also validate the user is still active and non-deleted on every
   request and bump `last_seen_at`.
+- Two independent expiry clocks (Phase II item 2): an **absolute**
+  ceiling (`SESSION_LIFETIME_HOURS`, default 12h) fixed at login and
+  never extended, and an **idle** timeout (`SESSION_IDLE_TIMEOUT_MINUTES`,
+  default 30) checked against `last_seen_at` on every request. Either one
+  expiring makes `resolve_session` return no row, indistinguishable from
+  a revoked or nonexistent session — a session that is merely idle-expired
+  is never resurrected by a later request, since `last_seen_at` is only
+  advanced for rows the same query's `WHERE` clause already matched.
 - Revocation is instant and complete: `auth.revoke_session` and
   `auth.revoke_all_sessions_for_token` are both keyed by a **token
   hash**, not a user id, which makes them self-authorizing — "sign this
@@ -479,19 +494,32 @@ origin and an insecure cookie) — see [Sessions](#sessions) above.
 
 ### Phase II — hardening
 
-1. An optional policy requiring hardware-bound (security-key-only)
-   passkeys, at least for admin accounts — a small, targeted addition
-   (a registration-option hint plus a check against data already
-   captured at enrollment), not a redesign.
-2. Session and TOTP hardening: a formal idle/absolute session expiry
-   policy, evaluating `SameSite=Strict`, and tightening the TOTP
-   accepted-code replay window.
-3. Real key management (KMS or a self-hosted equivalent) for
-   `TOTP_ENCRYPTION_KEY`, replacing the current environment-variable
-   stopgap.
+Scoped 2026-08-04: hardware-bound passkeys (item 1), real KMS (item 3),
+and the formal external pentest (item 5) are deferred indefinitely — 1
+pending a team decision on whether it's needed at all, 3 pending
+willingness to take on a cloud-provider dependency, 5 as very low
+priority with no confirmed need yet. Items 2, 4, 6, 7 are approved to
+build now, one at a time.
+
+1. ~~An optional policy requiring hardware-bound (security-key-only)
+   passkeys, at least for admin accounts~~ — **deferred**, scope
+   (everyone / admins-only / voluntary) undecided by the team.
+2. **Shipped 2026-08-04:** session and TOTP hardening — idle
+   (`SESSION_IDLE_TIMEOUT_MINUTES`, default 30) plus absolute
+   (`SESSION_LIFETIME_HOURS`) session expiry, `SameSite=Strict` on the
+   session and ceremony cookies, and a TOTP replay window
+   (`auth.totp_credentials.last_used_step`) that refuses a code already
+   accepted at that step or earlier. See [Sessions](#sessions) above and
+   `auth::totp`'s module docs.
+3. ~~Real key management (KMS or a self-hosted equivalent) for
+   `TOTP_ENCRYPTION_KEY`~~ — **deferred**, not taking on a cloud-provider
+   dependency (or standing up self-hosted Vault) at this point.
 4. Anomaly / risk-based signals — flagging logins from a new device or
    an unexpected location for step-up verification.
-5. A formal external penetration test.
+5. ~~A formal external penetration test~~ — **deferred**, very low
+   priority, not confirmed this project will ever need one. Still the
+   single highest-leverage move for external-audit credibility if a
+   demanding audit is ever required.
 6. The threat model / control matrix and audit retention/review
    documentation described above.
 7. A fix for ceremony state being in-memory and single-instance, if

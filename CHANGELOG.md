@@ -6,7 +6,26 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Nothing yet.
+Phase 2 (hardening) item 2: session and TOTP hardening.
+
+### Added
+- **Idle session expiry.** `auth.resolve_session` now takes a
+  `p_idle_minutes` argument and refuses a session whose `last_seen_at`
+  is older than that window (`SESSION_IDLE_TIMEOUT_MINUTES`, default
+  30), independent of the existing absolute expiry
+  (`SESSION_LIFETIME_HOURS`, default 12h, unchanged).
+- **TOTP replay window.** `auth.totp_credentials` gains
+  `last_used_step`, the TOTP time-step last accepted for that
+  credential. `auth::totp::verify_code` now matches a submitted code
+  against a specific candidate step (rather than trusting an opaque
+  yes/no) and refuses one matching that step or an earlier one, closing
+  the window where an observed code stayed replayable for the rest of
+  its ~90s skew window.
+
+### Changed
+- Session and ceremony cookies now carry `SameSite=Strict` (was `Lax`).
+
+
 
 ## [1.5.0] - 2026-08-04
 

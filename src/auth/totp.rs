@@ -247,32 +247,80 @@ pub fn base32_secret(secret: &[u8]) -> String {
         .to_string()
 }
 
-/// Verifies a submitted code against a stored, encrypted secret.
+/// Verifies a submitted code against a stored, encrypted secret, enforcing
+/// the replay window along the way.
 ///
-/// Returns `Ok(false)` for a wrong code -- an ordinary outcome, not an
-/// error. `Err` means the secret could not be read at all, which is a
-/// server-side problem and must not be reported to the caller as "wrong
-/// code".
+/// Rather than trusting `totp_rs`'s own `check_current` for a bare yes/no,
+/// this generates the code for each candidate step in the skew window
+/// itself (the same primitive the RFC-vector test above already uses) so
+/// the *step* a match came from is known, not just whether one exists.
+/// That is what makes a replay window possible at all: a wrong-code check
+/// alone cannot tell "this code is valid for right now" apart from "this
+/// code was valid and already used a few seconds ago".
+///
+/// `last_used_step` is the step this credential was last accepted at, if
+/// any (persisted as `auth.totp_credentials.last_used_step`). A candidate
+/// matching that step or an earlier one is refused even though it is
+/// otherwise a correct code for the current window -- without this, a code
+/// observed once (shoulder-surfed, caught in a screen share, read off a
+/// compromised terminal) stays fully replayable for the rest of its ~90s
+/// window. Pass `None` when there is no prior accepted step yet (a fresh
+/// enrolment confirmation).
+///
+/// Returns `Ok(None)` for a wrong code *or* a replayed one -- deliberately
+/// indistinguishable, same reasoning as everywhere else in this module: a
+/// caller must never be able to tell "that code was right but already
+/// used" from "that code was never right", or a captured code becomes a
+/// confirmation oracle instead of a dead end. `Ok(Some(step))` on success
+/// carries the step the caller should persist as the new `last_used_step`,
+/// closing the replay window immediately rather than waiting on
+/// `last_used_at`'s coarser wall-clock timestamp. `Err` means the secret
+/// could not be read at all, which is a server-side problem and must not
+/// be reported to the caller as "wrong code".
 pub fn verify_code(
     user_id: Uuid,
     encrypted_secret: &[u8],
     account_name: &str,
     submitted: &str,
-) -> Result<bool, TotpError> {
+    last_used_step: Option<i64>,
+) -> Result<Option<i64>, TotpError> {
     // Trim and strip the spaces authenticator apps display for readability
     // ("123 456"). Rejecting a code the user copied exactly as shown is a
     // support ticket, not a security control.
     let submitted: String = submitted.chars().filter(|c| !c.is_whitespace()).collect();
 
     if submitted.len() != DIGITS || !submitted.chars().all(|c| c.is_ascii_digit()) {
-        return Ok(false);
+        return Ok(None);
     }
 
     let secret = decrypt_secret(user_id, encrypted_secret)?;
     let totp = totp_for(secret, account_name)?;
 
-    totp.check_current(&submitted)
-        .map_err(|err| TotpError::Unusable(err.to_string()))
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock must be at or after the Unix epoch")
+        .as_secs();
+    let current_step = (now_secs / STEP_SECONDS) as i64;
+
+    for offset in -(SKEW_STEPS as i64)..=(SKEW_STEPS as i64) {
+        let candidate_step = current_step + offset;
+        if candidate_step < 0 {
+            continue;
+        }
+
+        let candidate_time = candidate_step as u64 * STEP_SECONDS;
+        if totp.generate(candidate_time) != submitted {
+            continue;
+        }
+
+        if last_used_step.is_some_and(|last| candidate_step <= last) {
+            return Ok(None);
+        }
+
+        return Ok(Some(candidate_step));
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -405,7 +453,9 @@ mod tests {
 
         for bad in ["", "12345", "1234567", "abcdef", "12 34", "12345a"] {
             assert!(
-                !verify_code(user, &blob, "user@example.com", bad).expect("must not error"),
+                verify_code(user, &blob, "user@example.com", bad, None)
+                    .expect("must not error")
+                    .is_none(),
                 "expected {bad:?} to be rejected"
             );
         }
@@ -424,7 +474,81 @@ mod tests {
         let current = totp.generate_current().expect("the clock must be readable");
         let spaced = format!("{} {}", &current[..3], &current[3..]);
 
-        assert!(verify_code(user, &blob, "user@example.com", &spaced).expect("must not error"));
+        assert!(
+            verify_code(user, &blob, "user@example.com", &spaced, None)
+                .expect("must not error")
+                .is_some()
+        );
+    }
+
+    /// The replay window's whole point: the same code, submitted a second
+    /// time once the first acceptance's step has been persisted as
+    /// `last_used_step`, must be refused even though it is still within the
+    /// ordinary skew window and would otherwise verify.
+    #[test]
+    #[serial(totp_env)]
+    fn a_code_cannot_be_replayed_once_its_step_is_recorded() {
+        with_key();
+        let user = Uuid::new_v4();
+        let secret = generate_secret();
+        let blob = encrypt_secret(user, &secret).expect("encryption must succeed");
+
+        let totp = totp_for(secret.to_vec(), "user@example.com").expect("usable");
+        let current = totp.generate_current().expect("the clock must be readable");
+
+        let first_step = verify_code(user, &blob, "user@example.com", &current, None)
+            .expect("must not error")
+            .expect("a fresh, correct code must be accepted");
+
+        let replayed = verify_code(
+            user,
+            &blob,
+            "user@example.com",
+            &current,
+            Some(first_step),
+        )
+        .expect("must not error");
+
+        assert!(
+            replayed.is_none(),
+            "the same code must not verify twice once its step is recorded as used"
+        );
+    }
+
+    /// The flip side of the replay guard: a `last_used_step` from a
+    /// genuinely earlier acceptance (not the one about to be checked) must
+    /// not block today's correct code -- otherwise every step-up would
+    /// fail forever after the very first successful one.
+    #[test]
+    #[serial(totp_env)]
+    fn an_old_recorded_step_does_not_block_a_current_correct_code() {
+        with_key();
+        let user = Uuid::new_v4();
+        let secret = generate_secret();
+        let blob = encrypt_secret(user, &secret).expect("encryption must succeed");
+
+        let totp = totp_for(secret.to_vec(), "user@example.com").expect("usable");
+        let current = totp.generate_current().expect("the clock must be readable");
+
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
+        let long_past_step = (now_secs / STEP_SECONDS) as i64 - 1000;
+
+        let accepted = verify_code(
+            user,
+            &blob,
+            "user@example.com",
+            &current,
+            Some(long_past_step),
+        )
+        .expect("must not error");
+
+        assert!(
+            accepted.is_some(),
+            "a `last_used_step` far in the past must not block a fresh correct code"
+        );
     }
 
     #[test]
