@@ -8,6 +8,30 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 Nothing yet.
 
+## [1.5.0] - 2026-08-04
+
+Phase 1 item 8: the admin Users listing that backs `unitprep-ui`'s new
+Users tab.
+
+### Added
+- **`GET /auth/users`**, admin-only, read-only. Returns every non-deleted
+  user's identity, role, status, and two facts the UI needs to decide
+  what action makes sense for that row: `credential_count` (passkeys
+  enrolled) and `totp_enrolled`.
+- **`auth.list_users_for_admin()`**, a new `SECURITY DEFINER` function
+  backing it. A plain admin-scoped query can't do this join itself:
+  `auth.webauthn_credentials`'s RLS policy has no admin-bypass clause
+  (unlike `auth.users`/`auth.totp_credentials`), so an ordinary admin
+  query would see only its own credential rows and silently read every
+  other user's `credential_count` as zero. This function checks the
+  caller's role explicitly, the same way `auth.set_user_status` does,
+  rather than widening the underlying RLS policy — which stays narrow on
+  purpose, so an ordinary self-service credential read never accidentally
+  becomes admin-browsable.
+- Not audited — a listing is a read, and the audit trail records actions
+  taken; every action this list's UI triggers (invite, reissue, recovery)
+  already writes its own row via the existing `/auth/invites` endpoints.
+
 ## [1.4.0] - 2026-08-04
 
 Phase 1 hardening is complete. Every product tool route now requires a
