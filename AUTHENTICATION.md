@@ -506,8 +506,10 @@ Scoped 2026-08-04: hardware-bound passkeys (item 1), real KMS (item 3),
 and the formal external pentest (item 5) are deferred indefinitely — 1
 pending a team decision on whether it's needed at all, 3 pending
 willingness to take on a cloud-provider dependency, 5 as very low
-priority with no confirmed need yet. Items 2, 4, 6, 7 are approved to
-build now, one at a time.
+priority with no confirmed need yet. Items 2, 4, 6, 7 were approved and
+have since shipped. Item 8 was scoped and deferred the same day — see
+its own entry below for why. **Phase II is closed out** for now: nothing
+left on this list is scheduled, only trigger-gated.
 
 1. ~~An optional policy requiring hardware-bound (security-key-only)
    passkeys, at least for admin accounts~~ — **deferred**, scope
@@ -544,10 +546,31 @@ build now, one at a time.
    priority, not confirmed this project will ever need one. Still the
    single highest-leverage move for external-audit credibility if a
    demanding audit is ever required.
-6. The threat model / control matrix and audit retention/review
-   documentation described above.
-7. A fix for ceremony state being in-memory and single-instance, if
-   and when the backend ever needs to run as more than one instance.
+6. **Shipped 2026-08-04:** the formal threat model / control matrix —
+   see [THREAT_MODEL.md](THREAT_MODEL.md). Inventories every threat this
+   auth system defends against, the control that closes it, and — named
+   explicitly rather than left implicit — every deferred item and known
+   gap from this list.
+7. **Shipped 2026-08-04:** audit retention & review process
+   documentation — see [AUDIT_RETENTION.md](AUDIT_RETENTION.md).
+   Retention is indefinite by default (and structurally so: the
+   append-only triggers on `auth.auth_audit_logs` block deletion
+   outright, not just by convention); review is trigger-driven off
+   specific event types (`login_anomaly_detected`,
+   `account_recovery_initiated`, TOTP lockouts) plus a quarterly
+   baseline pass, with runnable queries for both.
+8. ~~A fix for ceremony state being in-memory and single-instance~~ —
+   **deferred 2026-08-04**, scoped and explicitly not built: no
+   multi-instance deployment is planned, and a real fix isn't a small,
+   ceremony-specific change — `AppState` holds four separate
+   `InMemorySessionStore` instances (the two WebAuthn ceremony stores
+   this item names, plus the unit-group and dedup tool-session stores),
+   all with the identical single-process limitation, so doing this
+   properly means replacing the store backend (Redis, or Postgres-backed)
+   everywhere at once, not just for ceremonies. Also arguably a downgrade
+   for single-instance security in the meantime: WebAuthn challenge state
+   never leaves the process today, which a shared external store would
+   change. Revisit only if horizontal scaling actually becomes necessary.
 
 ### Not scheduled — revisit only if triggered
 

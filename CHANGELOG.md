@@ -6,8 +6,12 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Phase II (hardening) items 2 and 4: session/TOTP hardening, and
-anomaly/risk-based login signals.
+Phase II (hardening) items 2, 4, 6, and 7 shipped: session/TOTP
+hardening, anomaly/risk-based login signals, a formal threat model, and
+audit retention/review documentation. Item 8 (ceremony-state
+horizontal-scaling fix) scoped and deferred the same day — see
+THREAT_MODEL.md. Phase II is closed out; nothing left on it is
+scheduled, only trigger-gated.
 
 ### Added
 - **Idle session expiry.** `auth.resolve_session` now takes a
@@ -39,6 +43,16 @@ anomaly/risk-based login signals.
 - Session and ceremony cookies now carry `SameSite=Strict` (was `Lax`).
 - `auth.create_session` gained a `p_requires_step_up` argument (no
   default — every caller now passes it explicitly).
+
+### Documentation
+- **[THREAT_MODEL.md](THREAT_MODEL.md)** — a formal threat/control
+  matrix for the auth system: every threat considered, the control that
+  closes it and where, and every deferred item or known gap named
+  explicitly rather than left implicit.
+- **[AUDIT_RETENTION.md](AUDIT_RETENTION.md)** — retention policy
+  (indefinite by default, and structurally so — the audit table's
+  append-only triggers block deletion outright) and a trigger-driven
+  review process with runnable queries.
 
 
 
