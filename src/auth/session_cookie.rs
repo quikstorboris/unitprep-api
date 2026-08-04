@@ -158,13 +158,26 @@ pub fn clear_session_cookie(jar: CookieJar) -> CookieJar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     /// Env-var tests here follow the same set-then-remove pattern as
     /// `auth_register.rs`'s bootstrap-env tests -- `cookie_is_secure`
     /// reads `SESSION_COOKIE_SECURE` directly, so exercising
     /// `validate_cookie_security`'s branches means setting it for the
     /// duration of one assertion and removing it immediately after.
+    ///
+    /// `#[serial(session_cookie_env)]` on every test that touches this env
+    /// var is load-bearing, not tidiness -- cargo test runs tests in this
+    /// file in parallel by default, and one test's `set_var` can leak into
+    /// another's assertion window between its own `set_var` and
+    /// `remove_var`. Caught live while adding the SameSite=Strict tests
+    /// below: `a_real_origin_with_the_default_secure_cookie_is_allowed`
+    /// (which assumes the var is unset) failed intermittently under
+    /// `cargo test auth::`, and passed every time under
+    /// `--test-threads=1` -- the same class of race `auth::totp`'s tests
+    /// already guard against with `#[serial(totp_env)]`.
     #[test]
+    #[serial(session_cookie_env)]
     fn localhost_origin_is_allowed_even_with_an_insecure_cookie() {
         std::env::set_var("SESSION_COOKIE_SECURE", "false");
         let result = validate_cookie_security("http://localhost:3000");
@@ -177,6 +190,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(session_cookie_env)]
     fn a_real_origin_with_an_insecure_cookie_is_refused() {
         std::env::set_var("SESSION_COOKIE_SECURE", "false");
         let result = validate_cookie_security("https://app.example.com");
@@ -189,12 +203,14 @@ mod tests {
     }
 
     #[test]
+    #[serial(session_cookie_env)]
     fn a_real_origin_with_the_default_secure_cookie_is_allowed() {
         std::env::remove_var("SESSION_COOKIE_SECURE");
         assert!(validate_cookie_security("https://app.example.com").is_ok());
     }
 
     #[test]
+    #[serial(session_cookie_env)]
     fn loopback_ip_origin_counts_as_localhost() {
         std::env::set_var("SESSION_COOKIE_SECURE", "false");
         let result = validate_cookie_security("http://127.0.0.1:3000");
