@@ -159,6 +159,8 @@ pub async fn login_begin(
             audit_log::event::LOGIN_FAILED,
             audit_log::Subjects::anonymous(),
             user_agent,
+            None,
+            audit_log::Change::none(),
             serde_json::json!({ "reason": "empty_email" }),
         )
         .await;
@@ -179,6 +181,8 @@ pub async fn login_begin(
                 audit_log::event::LOGIN_FAILED,
                 audit_log::Subjects::anonymous(),
                 user_agent,
+                None,
+                audit_log::Change::none(),
                 serde_json::json!({ "reason": "no_usable_credential", "email": email }),
             )
             .await;
@@ -328,6 +332,8 @@ pub async fn login_finish(
                 audit_log::event::LOGIN_FAILED,
                 audit_log::Subjects::by(user_id),
                 user_agent,
+                None,
+                audit_log::Change::none(),
                 serde_json::json!({
                     "reason": "credentials_removed_mid_ceremony",
                     "correlation_id": correlation_id,
@@ -370,6 +376,8 @@ pub async fn login_finish(
                     audit_log::event::LOGIN_FAILED,
                     audit_log::Subjects::by(user_id),
                     user_agent,
+                    None,
+                    audit_log::Change::none(),
                     serde_json::json!({
                         "reason": "assertion_rejected",
                         "correlation_id": correlation_id,
@@ -424,6 +432,8 @@ pub async fn login_finish(
             audit_log::event::LOGIN_ANOMALY_DETECTED,
             audit_log::Subjects::by(user_id),
             user_agent,
+            Some(client_ip),
+            audit_log::Change::none(),
             serde_json::json!({
                 "correlation_id": correlation_id,
                 "step_up_required": risk.totp_confirmed,
@@ -452,6 +462,8 @@ pub async fn login_finish(
                 audit_log::event::LOGIN_SUCCEEDED,
                 audit_log::Subjects::by(user_id),
                 user_agent,
+                Some(client_ip),
+                audit_log::Change::none(),
                 serde_json::json!({
                     "session_id": session_id,
                     "correlation_id": correlation_id,

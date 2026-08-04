@@ -32,6 +32,7 @@
 //! with no known actor still lands.
 
 use serde_json::Value;
+use sqlx::types::ipnetwork::IpNetwork;
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -127,6 +128,52 @@ pub mod event {
     /// operator reviewing the trail should be able to see every anomalous
     /// login, not just the ones that happened to be gateable.
     pub const LOGIN_ANOMALY_DETECTED: &str = "login_anomaly_detected";
+
+    /// A request presented a session cookie that resolved to a real,
+    /// non-revoked session row, but one that had already crossed its idle
+    /// or absolute expiry. Distinct from an ordinary 401 (missing cookie,
+    /// or a token matching nothing at all) -- this specifically means a
+    /// session that genuinely existed kept being used past the point it
+    /// should have stopped working, which is worth a permanent row even
+    /// though the response is the same opaque 401 either way.
+    pub const SESSION_EXPIRED_ACCESS_ATTEMPT: &str = "session_expired_access_attempt";
+
+    /// `tower_governor` refused a request for exceeding its bucket. Fired
+    /// only for the caller-driven `TooManyRequests` case, never for the
+    /// limiter's own internal-error variants -- those are a server fault,
+    /// not something about the caller worth a permanent row.
+    pub const RATE_LIMIT_REJECTED: &str = "rate_limit_rejected";
+}
+
+/// What changed, for the events that are a value transition rather than a
+/// bare occurrence -- see the schema's `before_state`/`after_state`
+/// columns. Named and shaped like `Subjects` for the identical reason:
+/// two same-typed `Option<Value>` parameters can be swapped at a call site
+/// with no compiler error, and "before" and "after" transposed is exactly
+/// the kind of audit-trail bug that reads as correct in review.
+pub struct Change {
+    pub before: Option<Value>,
+    pub after: Option<Value>,
+}
+
+impl Change {
+    /// Most events are occurrences, not transitions -- a login, an
+    /// enrolment attempt. Nothing to diff.
+    pub fn none() -> Self {
+        Self {
+            before: None,
+            after: None,
+        }
+    }
+
+    /// A genuine before/after pair -- e.g. a user's `status` column
+    /// flipping from `active` to `deactivated`.
+    pub fn from_to(before: Value, after: Value) -> Self {
+        Self {
+            before: Some(before),
+            after: Some(after),
+        }
+    }
 }
 
 /// Who did it, and who it was done to.
@@ -188,24 +235,34 @@ impl Subjects {
 /// not more important than the operation it describes.
 ///
 /// `subjects` carries who acted and who was acted upon -- see `Subjects`
-/// for why they are named rather than positional.
+/// for why they are named rather than positional. `ip_address` and
+/// `change` were, until this signature, columns the schema had carried
+/// since the very first migration with nothing ever writing them --
+/// `Change::none()` and `None` are what every call site that has neither
+/// available passes.
 pub async fn record(
     db: &PgPool,
     event_type: &str,
     subjects: Subjects,
     user_agent: Option<&str>,
+    ip_address: Option<IpNetwork>,
+    change: Change,
     metadata: Value,
 ) {
     // No RETURNING -- see the module doc above.
     let result = sqlx::query(
         "INSERT INTO auth.auth_audit_logs
-             (event_type, actor_user_id, target_user_id, user_agent, metadata)
-         VALUES ($1, $2, $3, $4, $5)",
+             (event_type, actor_user_id, target_user_id, user_agent, ip_address,
+              before_state, after_state, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(event_type)
     .bind(subjects.actor)
     .bind(subjects.target)
     .bind(user_agent)
+    .bind(ip_address)
+    .bind(&change.before)
+    .bind(&change.after)
     .bind(&metadata)
     .execute(db)
     .await;

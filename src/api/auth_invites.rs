@@ -34,8 +34,10 @@
 //! staging point, not an oversight: notify-on-enrolment was chosen over a
 //! blocking approval step, and both wait on an ESP existing.
 
+use std::net::SocketAddr;
+
 use axum::{
-    extract::{Json, State},
+    extract::{ConnectInfo, Json, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -112,6 +114,7 @@ fn conflict(message: String) -> Response {
 pub async fn create_invite(
     State(state): State<AppState>,
     admin: AuthenticatedUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(request): Json<CreateInviteRequest>,
 ) -> Response {
@@ -198,6 +201,8 @@ pub async fn create_invite(
                 audit_log::event::INVITE_REFUSED,
                 audit_log::Subjects::by(admin.user_id).about(user_id),
                 user_agent,
+                Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+                audit_log::Change::none(),
                 serde_json::json!({ "reason": reason }),
             )
             .await;
@@ -229,6 +234,8 @@ pub async fn create_invite(
         // was acted upon.
         audit_log::Subjects::by(admin.user_id).about(user_id),
         user_agent,
+        Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+        audit_log::Change::none(),
         // No token and no hash. The invite is a bearer credential and the
         // audit trail is not a place to keep one. `expires_at` is what an
         // operator actually needs to reason about later.
@@ -445,6 +452,7 @@ fn account_not_found(email: &str) -> Response {
 pub async fn recover_account(
     State(state): State<AppState>,
     admin: AuthenticatedUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(request): Json<RecoverAccountRequest>,
 ) -> Response {
@@ -469,8 +477,11 @@ pub async fn recover_account(
 
     let outcome = recover_account_tx(&state, &admin, &email, &token_hash, expires_at).await;
 
-    let user_id = match outcome {
-        Ok(RecoveryOutcome::Recovered { user_id }) => user_id,
+    let (user_id, prior_status) = match outcome {
+        Ok(RecoveryOutcome::Recovered {
+            user_id,
+            prior_status,
+        }) => (user_id, prior_status),
 
         Ok(RecoveryOutcome::Refused {
             user_id,
@@ -487,6 +498,8 @@ pub async fn recover_account(
                     audit_log::event::INVITE_REFUSED,
                     audit_log::Subjects::by(admin.user_id).about(target_user_id),
                     user_agent,
+                    Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+                    audit_log::Change::none(),
                     serde_json::json!({ "reason": reason, "action": "recovery" }),
                 )
                 .await;
@@ -520,6 +533,17 @@ pub async fn recover_account(
         audit_log::event::ACCOUNT_RECOVERY_INITIATED,
         audit_log::Subjects::by(admin.user_id).about(user_id),
         user_agent,
+        Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+        // The account's status cycles active -> deactivated -> invited
+        // inside recover_account_tx; the net transition an operator cares
+        // about is "was active, is now invited" -- the intermediate
+        // deactivated step is real (it is what triggers the
+        // revoke-every-access-path behaviour) but not a separate fact
+        // worth its own before/after pair.
+        audit_log::Change::from_to(
+            serde_json::json!({ "status": prior_status }),
+            serde_json::json!({ "status": "invited" }),
+        ),
         serde_json::json!({ "expires_at": expires_at }),
     )
     .await;
@@ -545,6 +569,13 @@ pub async fn recover_account(
 enum RecoveryOutcome {
     Recovered {
         user_id: Uuid,
+        /// The account's status immediately before this recovery cycled
+        /// it through `deactivated` to `invited` -- always `active`, since
+        /// that is the only status that reaches this branch (see the
+        /// `status != "active"` refusal above), but carried as data rather
+        /// than assumed at the call site so the audit `before_state`
+        /// reflects what was actually read, not what the caller expects.
+        prior_status: String,
     },
     /// `user_id` is `None` only when no account with this email exists at
     /// all -- every other refusal reason resolves to a real account
@@ -668,7 +699,10 @@ async fn recover_account_tx(
 
     tx.commit().await?;
 
-    Ok(RecoveryOutcome::Recovered { user_id })
+    Ok(RecoveryOutcome::Recovered {
+        user_id,
+        prior_status: status,
+    })
 }
 
 #[cfg(test)]
@@ -684,6 +718,14 @@ mod tests {
             elevated_until: None,
             requires_step_up: false,
         }
+    }
+
+    /// A stand-in peer address -- both handlers now take
+    /// `ConnectInfo<SocketAddr>` (only populated for real by
+    /// `into_make_service_with_connect_info` outside of tests), matching
+    /// the same fixture already used in auth_login.rs/auth_register.rs.
+    fn test_addr() -> ConnectInfo<SocketAddr> {
+        ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0)))
     }
 
     fn request(email: &str, company: &str) -> CreateInviteRequest {
@@ -716,8 +758,14 @@ mod tests {
         ];
 
         for (body, label) in cases {
-            let response =
-                create_invite(State(empty_state()), admin(), HeaderMap::new(), Json(body)).await;
+            let response = create_invite(
+                State(empty_state()),
+                admin(),
+                test_addr(),
+                HeaderMap::new(),
+                Json(body),
+            )
+            .await;
 
             assert_eq!(
                 response.status(),
@@ -735,8 +783,14 @@ mod tests {
         let mut body = request("ada@example.com", "quikstor");
         body.first_name = "   ".to_string();
 
-        let response =
-            create_invite(State(empty_state()), admin(), HeaderMap::new(), Json(body)).await;
+        let response = create_invite(
+            State(empty_state()),
+            admin(),
+            test_addr(),
+            HeaderMap::new(),
+            Json(body),
+        )
+        .await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
@@ -752,6 +806,7 @@ mod tests {
         let response = create_invite(
             State(empty_state()),
             admin(),
+            test_addr(),
             HeaderMap::new(),
             Json(request("Ada@Example.COM", "QuikStor")),
         )
@@ -782,8 +837,14 @@ mod tests {
         ];
 
         for (body, label) in cases {
-            let response =
-                recover_account(State(empty_state()), admin(), HeaderMap::new(), Json(body)).await;
+            let response = recover_account(
+                State(empty_state()),
+                admin(),
+                test_addr(),
+                HeaderMap::new(),
+                Json(body),
+            )
+            .await;
 
             assert_eq!(
                 response.status(),
@@ -801,6 +862,7 @@ mod tests {
         let response = recover_account(
             State(empty_state()),
             admin(),
+            test_addr(),
             HeaderMap::new(),
             Json(recover_request("someone@example.com")),
         )

@@ -213,6 +213,8 @@ pub async fn enroll_begin(
         audit_log::event::TOTP_ENROLMENT_STARTED,
         audit_log::Subjects::by(user.user_id),
         user_agent,
+        None,
+        audit_log::Change::none(),
         // No secret, no URI. Both contain the shared secret, and an audit
         // trail is not a place to keep one.
         serde_json::json!({}),
@@ -277,6 +279,8 @@ pub async fn enroll_confirm(
             audit_log::event::TOTP_ENROLMENT_FAILED,
             audit_log::Subjects::by(user.user_id),
             user_agent,
+            None,
+            audit_log::Change::none(),
             serde_json::json!({ "reason": "code_rejected" }),
         )
         .await;
@@ -293,6 +297,8 @@ pub async fn enroll_confirm(
         audit_log::event::TOTP_ENROLLED,
         audit_log::Subjects::by(user.user_id),
         user_agent,
+        None,
+        audit_log::Change::none(),
         serde_json::json!({}),
     )
     .await;
@@ -371,6 +377,8 @@ pub async fn step_up(
                     audit_log::event::TOTP_STEP_UP_FAILED,
                     audit_log::Subjects::by(user.user_id),
                     user_agent,
+                    None,
+                    audit_log::Change::none(),
                     serde_json::json!({
                         "failed_attempts": count,
                         // Correlates this attempt with a Phase II anomalous
@@ -420,6 +428,8 @@ pub async fn step_up(
                 audit_log::event::TOTP_STEP_UP_SUCCEEDED,
                 audit_log::Subjects::by(user.user_id),
                 user_agent,
+                None,
+                audit_log::Change::none(),
                 // Same correlation as the failure branch above -- true here
                 // means this success is what cleared a pending login-time
                 // anomaly gate (auth.record_step_up clears

@@ -224,6 +224,11 @@ async fn reject_registration(
             target: None,
         },
         user_agent,
+        // No ConnectInfo here -- every call site of this helper is on the
+        // /begin leg, which does not take it (see login_begin for the same
+        // shape of decision on the login side).
+        None,
+        audit_log::Change::none(),
         serde_json::json!({ "reason": reason }),
     )
     .await;
@@ -569,6 +574,8 @@ pub async fn register_finish(
                 audit_log::event::REGISTRATION_FAILED,
                 audit_log::Subjects::by(user_id),
                 user_agent,
+                Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+                audit_log::Change::none(),
                 serde_json::json!({
                     "reason": "credential_rejected",
                     "correlation_id": correlation_id,
@@ -610,6 +617,8 @@ pub async fn register_finish(
                 audit_log::event::REGISTRATION_FAILED,
                 audit_log::Subjects::by(user_id),
                 user_agent,
+                Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+                audit_log::Change::none(),
                 serde_json::json!({
                     "reason": "invite_consumed_elsewhere",
                     "correlation_id": correlation_id,
@@ -636,6 +645,8 @@ pub async fn register_finish(
         audit_log::event::PASSKEY_REGISTERED,
         audit_log::Subjects::by(user_id),
         user_agent,
+        Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+        audit_log::Change::none(),
         // `device_bound` is captured here rather than left to be read off
         // the credential row later. The flag exists purely for admin
         // visibility, and what an admin wants to know is what the

@@ -291,7 +291,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/auth/login/begin", post(auth_login::login_begin))
         .route("/auth/login/finish", post(auth_login::login_finish))
-        .layer(GovernorLayer::new(auth_rate_limit).error_handler(rate_limit_exceeded));
+        .layer(
+            GovernorLayer::new(auth_rate_limit)
+                .error_handler(rate_limit_exceeded_with_audit("auth", state.db.clone())),
+        );
 
     let invite_routes = Router::new()
         // Admin-only. Authorization is the `AuthenticatedUser` extractor in
@@ -304,7 +307,10 @@ pub fn router(state: AppState) -> Router {
         // (authenticated admin), same "bound accidental/scripted
         // hammering by a trusted caller" rationale.
         .route("/auth/invites/recover", post(auth_invites::recover_account))
-        .layer(GovernorLayer::new(invite_rate_limit).error_handler(rate_limit_exceeded));
+        .layer(
+            GovernorLayer::new(invite_rate_limit)
+                .error_handler(rate_limit_exceeded_with_audit("invite", state.db.clone())),
+        );
 
     Router::new()
         .route("/health", get(health))
@@ -430,6 +436,42 @@ fn rate_limit_exceeded(error: GovernorError) -> Response {
             tracing::error!(?error, "rate limiter returned an unexpected error");
             internal_error("Could not process this request")
         }
+    }
+}
+
+/// Wraps `rate_limit_exceeded` with an audit row for the one case that is
+/// actually about the caller -- `TooManyRequests`. `tower_governor`'s
+/// `error_handler` only receives the `GovernorError`, not the original
+/// request, so there is no `ConnectInfo` to bind here; `bucket` (`"auth"`
+/// or `"invite"`) is what distinguishes which limiter tripped.
+///
+/// The handler itself stays synchronous (that is what `error_handler`
+/// requires), so the write is fire-and-forget on a spawned task rather
+/// than awaited in place -- the same "must not affect the response"
+/// property `audit_log::record` already has, just reached a different way
+/// here since this function cannot itself be `async`.
+fn rate_limit_exceeded_with_audit(
+    bucket: &'static str,
+    db: sqlx::PgPool,
+) -> impl Fn(GovernorError) -> Response + Clone + Send + Sync + 'static {
+    move |error: GovernorError| {
+        if matches!(error, GovernorError::TooManyRequests { .. }) {
+            let db = db.clone();
+            tokio::spawn(async move {
+                crate::auth::audit_log::record(
+                    &db,
+                    crate::auth::audit_log::event::RATE_LIMIT_REJECTED,
+                    crate::auth::audit_log::Subjects::anonymous(),
+                    None,
+                    None,
+                    crate::auth::audit_log::Change::none(),
+                    serde_json::json!({ "bucket": bucket }),
+                )
+                .await;
+            });
+        }
+
+        rate_limit_exceeded(error)
     }
 }
 

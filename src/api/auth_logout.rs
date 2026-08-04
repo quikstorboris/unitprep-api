@@ -135,6 +135,8 @@ async fn sign_out(state: AppState, jar: CookieJar, headers: HeaderMap, scope: Sc
                 audit_log::event::SESSION_REVOKED,
                 audit_log::Subjects::by(user_id),
                 user_agent,
+                None,
+                audit_log::Change::none(),
                 serde_json::json!({ "scope": scope.label(), "revoked_count": count }),
             )
             .await;

@@ -136,8 +136,10 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             internal_error()
         })?;
 
-        let (user_id, role_text, elevated_until, requires_step_up) =
-            row.ok_or_else(unauthorized)?;
+        let Some((user_id, role_text, elevated_until, requires_step_up)) = row else {
+            record_expired_access_attempt(state, &token_hash, parts).await;
+            return Err(unauthorized());
+        };
 
         let role = Role::from_db_text(&role_text).ok_or_else(internal_error)?;
 
@@ -172,6 +174,49 @@ async fn query_session(
     .bind(session_idle_timeout_minutes())
     .fetch_optional(db)
     .await
+}
+
+/// Runs only on the "no valid session" path, to tell an ordinary stale or
+/// forged cookie apart from one that named a session which genuinely
+/// existed and had crossed its idle or absolute expiry -- only the latter
+/// is worth a permanent row. See `auth.check_session_expired`'s own doc
+/// comment for why a revoked session doesn't count here: that already has
+/// its own `SESSION_REVOKED` event at the time it happened.
+///
+/// Fire-and-forget like every other audit write -- a failure here must
+/// not turn into a different rejection response than an ordinary expired
+/// cookie would get.
+async fn record_expired_access_attempt(state: &AppState, token_hash: &[u8], parts: &Parts) {
+    let expired_user_id: Result<Option<Uuid>, sqlx::Error> =
+        sqlx::query_scalar("SELECT user_id FROM auth.check_session_expired($1, $2)")
+            .bind(token_hash)
+            .bind(session_idle_timeout_minutes())
+            .fetch_optional(&state.db)
+            .await;
+
+    match expired_user_id {
+        Ok(Some(user_id)) => {
+            let user_agent = parts
+                .headers
+                .get(axum::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok());
+
+            crate::auth::audit_log::record(
+                &state.db,
+                crate::auth::audit_log::event::SESSION_EXPIRED_ACCESS_ATTEMPT,
+                crate::auth::audit_log::Subjects::by(user_id),
+                user_agent,
+                None,
+                crate::auth::audit_log::Change::none(),
+                serde_json::json!({ "path": parts.uri.path() }),
+            )
+            .await;
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::error!(error = %err, "expired-session check query failed");
+        }
+    }
 }
 
 /// A best-effort version of the extractor above, for a handler that
