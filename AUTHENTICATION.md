@@ -85,6 +85,14 @@ route gating in `unitprep-ui`. Nothing is enforced as a product yet; see
   `UPDATE` grant on `auth.sessions` at all** — not even a column-scoped
   one — so a revoked session cannot be un-revoked by any application
   code path, buggy or otherwise.
+- Anomaly signal (Phase II item 4): a login from an IP or `user_agent`
+  never seen before for an account with prior sessions sets
+  `auth.sessions.requires_step_up`, unconditionally audited
+  (`login_anomaly_detected`) and gated behind an immediate TOTP step-up
+  when the account has one confirmed. `AuthenticatedUser` refuses every
+  route except `/auth/totp/step-up` and `/health/whoami` while the flag
+  is set; `auth.record_step_up` clears it the moment a fresh code
+  verifies. See the Phase II list below for the full reasoning.
 - Startup refuses to boot if `SESSION_COOKIE_SECURE=false` is paired
   with a non-localhost `WEBAUTHN_RP_ORIGIN` — a misconfigured
   deployment that would ship session cookies over plain HTTP fails fast
@@ -514,8 +522,24 @@ build now, one at a time.
 3. ~~Real key management (KMS or a self-hosted equivalent) for
    `TOTP_ENCRYPTION_KEY`~~ — **deferred**, not taking on a cloud-provider
    dependency (or standing up self-hosted Vault) at this point.
-4. Anomaly / risk-based signals — flagging logins from a new device or
-   an unexpected location for step-up verification.
+4. **Shipped 2026-08-04:** anomaly / risk-based signals. A login is
+   flagged when the account has prior session history but this login's
+   IP or `user_agent` matches none of it — audited unconditionally
+   (`login_anomaly_detected`) and, when the account has TOTP confirmed,
+   gated behind an immediate step-up: `auth.sessions.requires_step_up`
+   is set at login and `AuthenticatedUser` refuses every route except
+   `/auth/totp/step-up` and `/health/whoami` until it clears. An account
+   with no TOTP confirmed is audited but never gated — there is no
+   factor to step up with, and forcing a lockout over a self-service
+   factor nobody set up would be a denial-of-service on that account,
+   not a hardening measure. "Unexpected location" is scoped down to "new
+   IP" rather than true geolocation, which would need a GeoIP database
+   as a new dependency — deliberately deferred, easy to layer on top of
+   `ip_address` later without another schema change. Direct exposure
+   (no reverse proxy) is this deployment's actual topology today, so the
+   raw TCP peer address (`ConnectInfo`) is the trusted IP source; revisit
+   alongside a trusted-forwarded-header policy if a proxy/CDN (e.g.
+   Cloudflare) is ever put in front of this service.
 5. ~~A formal external penetration test~~ — **deferred**, very low
    priority, not confirmed this project will ever need one. Still the
    single highest-leverage move for external-audit credibility if a

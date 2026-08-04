@@ -567,6 +567,14 @@ struct WhoamiResponse {
     /// user into silently replacing their working fallback (re-enrolling
     /// overwrites the secret immediately, see auth_totp.rs).
     totp_enrolled: bool,
+    /// True when this session is pending a login-time step-up (Phase II
+    /// anomaly signal -- see `AuthenticatedUser`'s `STEP_UP_ALLOWED_PATHS`
+    /// and auth_login.rs's `assess_login_risk`). `whoami` is one of the
+    /// few routes reachable while this is true, specifically so the
+    /// frontend can tell "signed in but pending step-up" apart from "not
+    /// signed in at all" instead of inferring it from every other route
+    /// 403ing.
+    step_up_required: bool,
 }
 
 /// Manual/diagnostic verification that the whole cookie -> resolve_session
@@ -609,6 +617,7 @@ async fn whoami(
         user_id: user.user_id.to_string(),
         role: user.role.as_db_text(),
         totp_enrolled,
+        step_up_required: user.requires_step_up,
     }))
 }
 

@@ -402,7 +402,15 @@ pub async fn step_up(
                     audit_log::event::TOTP_STEP_UP_FAILED,
                     audit_log::Subjects::by(user.user_id),
                     user_agent,
-                    serde_json::json!({ "failed_attempts": count }),
+                    serde_json::json!({
+                        "failed_attempts": count,
+                        // Correlates this attempt with a Phase II anomalous
+                        // login (see auth_login.rs's assess_login_risk) --
+                        // an operator reviewing the trail can tell "ordinary
+                        // sensitive-action step-up rejected" apart from
+                        // "someone couldn't clear a login-time anomaly gate".
+                        "anomalous_login_pending_step_up": user.requires_step_up,
+                    }),
                 )
                 .await;
             }
@@ -443,7 +451,11 @@ pub async fn step_up(
                 audit_log::event::TOTP_STEP_UP_SUCCEEDED,
                 audit_log::Subjects::by(user.user_id),
                 user_agent,
-                serde_json::json!({}),
+                // Same correlation as the failure branch above -- true here
+                // means this success is what cleared a pending login-time
+                // anomaly gate (auth.record_step_up clears
+                // sessions.requires_step_up unconditionally on success).
+                serde_json::json!({ "anomalous_login_pending_step_up": user.requires_step_up }),
             )
             .await;
 
@@ -663,6 +675,7 @@ mod tests {
                 role: crate::auth::Role::Admin,
                 token_hash: vec![0u8; 32],
                 elevated_until: None,
+                requires_step_up: false,
             },
             HeaderMap::new(),
             Json(TotpCodeRequest {
@@ -697,6 +710,7 @@ mod tests {
                 role: crate::auth::Role::Admin,
                 token_hash: vec![0u8; 32],
                 elevated_until: None,
+                requires_step_up: false,
             },
             HeaderMap::new(),
         )

@@ -78,6 +78,7 @@ pub fn test_user() -> AuthenticatedUser {
         role: Role::Admin,
         token_hash: vec![0u8; 32],
         elevated_until: None,
+        requires_step_up: false,
     }
 }
 

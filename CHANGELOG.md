@@ -6,7 +6,8 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Phase 2 (hardening) item 2: session and TOTP hardening.
+Phase II (hardening) items 2 and 4: session/TOTP hardening, and
+anomaly/risk-based login signals.
 
 ### Added
 - **Idle session expiry.** `auth.resolve_session` now takes a
@@ -21,9 +22,23 @@ Phase 2 (hardening) item 2: session and TOTP hardening.
   yes/no) and refuses one matching that step or an earlier one, closing
   the window where an observed code stayed replayable for the rest of
   its ~90s skew window.
+- **Anomaly/risk-based login signal.** A login from an IP address or
+  `user_agent` never seen before for an account with prior session
+  history is now flagged: recorded as a new `login_anomaly_detected`
+  audit event unconditionally, and gated behind an immediate TOTP
+  step-up (`auth.sessions.requires_step_up`) when the account has TOTP
+  confirmed. `AuthenticatedUser` refuses every route except
+  `/auth/totp/step-up` and `/health/whoami` while the flag is set;
+  `auth.record_step_up` clears it on a successful step-up.
+  `auth.sessions.ip_address` is now actually populated (via
+  `ConnectInfo`, direct-exposure topology) instead of always `NULL`.
+  `/auth/login/finish` and `/health/whoami` responses both gained a
+  `step_up_required` field.
 
 ### Changed
 - Session and ceremony cookies now carry `SameSite=Strict` (was `Lax`).
+- `auth.create_session` gained a `p_requires_step_up` argument (no
+  default — every caller now passes it explicitly).
 
 
 

@@ -121,6 +121,15 @@ pub mod event {
     /// on the credential row) -- repeated guessing is repeated guessing
     /// regardless of which action prompted it.
     pub const TOTP_STEP_UP_FAILED: &str = "totp_step_up_failed";
+
+    /// A successful login came from an IP address or user_agent never seen
+    /// before for an account that has prior session history (Phase II
+    /// anomaly signal, see auth_login.rs's `assess_login_risk`). Recorded
+    /// unconditionally, even when `metadata.step_up_required` is false
+    /// because the account has no TOTP confirmed to gate with -- an
+    /// operator reviewing the trail should be able to see every anomalous
+    /// login, not just the ones that happened to be gateable.
+    pub const LOGIN_ANOMALY_DETECTED: &str = "login_anomaly_detected";
 }
 
 /// Who did it, and who it was done to.

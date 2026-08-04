@@ -58,6 +58,12 @@ pub struct AuthenticatedUser {
     /// every caller, so nothing downstream needs to tell them apart. See
     /// `is_elevated`.
     pub elevated_until: Option<DateTime<Utc>>,
+    /// Set at login (Phase II anomaly signal, see auth_login.rs) when this
+    /// account has TOTP confirmed and the login looked anomalous -- a new
+    /// IP or user_agent for an account with prior sessions to compare
+    /// against. While true, the extractor below refuses every route except
+    /// the handful needed to clear it; see `STEP_UP_ALLOWED_PATHS`.
+    pub requires_step_up: bool,
 }
 
 impl AuthenticatedUser {
@@ -65,6 +71,23 @@ impl AuthenticatedUser {
         self.elevated_until.is_some_and(|until| until > Utc::now())
     }
 }
+
+/// Routes reachable on a session that still has `requires_step_up = true`.
+/// Everything else 403s until the caller clears it. Deliberately a short,
+/// explicit allowlist rather than an opt-out per handler -- the gate has to
+/// be impossible to forget on a new route, and the alternative (every
+/// handler remembering to check `requires_step_up` itself) is exactly the
+/// kind of thing that gets missed once and stays missed.
+///
+/// - `/auth/totp/step-up` -- the only way to actually clear the flag.
+/// - `/health/whoami` -- so the frontend can tell "signed in but pending
+///   step-up" apart from "not signed in at all" and render the right
+///   screen, rather than watching every other route 403 and guessing why.
+///
+/// `/auth/logout` and `/auth/logout/everywhere` need no entry here: they
+/// deliberately don't use `AuthenticatedUser` at all (see auth_logout.rs),
+/// so this gate never applies to them regardless.
+const STEP_UP_ALLOWED_PATHS: [&str; 2] = ["/auth/totp/step-up", "/health/whoami"];
 
 /// How long a session may go without an authenticated request before it is
 /// treated as expired, independent of `auth.sessions.expires_at`'s
@@ -112,15 +135,24 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             .await
             .map_err(|_| internal_error())?;
 
-        let (user_id, role_text, elevated_until) = row.ok_or_else(unauthorized)?;
+        let (user_id, role_text, elevated_until, requires_step_up) =
+            row.ok_or_else(unauthorized)?;
 
         let role = Role::from_db_text(&role_text).ok_or_else(internal_error)?;
+
+        // Checked here, in the one place every gated route already passes
+        // through, rather than left to each handler -- see
+        // STEP_UP_ALLOWED_PATHS's doc comment for why.
+        if requires_step_up && !STEP_UP_ALLOWED_PATHS.contains(&parts.uri.path()) {
+            return Err(step_up_required());
+        }
 
         Ok(AuthenticatedUser {
             user_id,
             role,
             token_hash,
             elevated_until,
+            requires_step_up,
         })
     }
 }
@@ -131,9 +163,9 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 async fn query_session(
     token_hash: &[u8],
     db: &PgPool,
-) -> Result<Option<(Uuid, String, Option<DateTime<Utc>>)>, sqlx::Error> {
+) -> Result<Option<(Uuid, String, Option<DateTime<Utc>>, bool)>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT user_id, role::text, elevated_until FROM auth.resolve_session($1, $2)",
+        "SELECT user_id, role::text, elevated_until, requires_step_up FROM auth.resolve_session($1, $2)",
     )
     .bind(token_hash)
     .bind(session_idle_timeout_minutes())
@@ -151,14 +183,28 @@ async fn query_session(
 /// nothing downstream needs to tell those cases apart, since the caller
 /// falls through to its own, entirely separate bootstrap checks either
 /// way.
+///
+/// A session pending step-up also collapses to `None` here, deliberately:
+/// this function has no request path to consult (unlike the extractor
+/// above, which allowlists a couple of specific routes), and the caller
+/// this feeds -- "does an authenticated-add-a-passkey path apply?" --
+/// should not treat a not-yet-proven-trustworthy session as good enough to
+/// silently attach a brand new credential to. Falling through to the
+/// bootstrap path is the same outcome an absent session gets, which is
+/// correct here.
 pub async fn try_authenticated_user(
     jar: &CookieJar,
     state: &AppState,
 ) -> Option<AuthenticatedUser> {
     let raw_token = read_session_cookie(jar)?;
     let token_hash = hash_token(&raw_token);
-    let (user_id, role_text, elevated_until) =
+    let (user_id, role_text, elevated_until, requires_step_up) =
         query_session(&token_hash, &state.db).await.ok()??;
+
+    if requires_step_up {
+        return None;
+    }
+
     let role = Role::from_db_text(&role_text)?;
 
     Some(AuthenticatedUser {
@@ -166,6 +212,7 @@ pub async fn try_authenticated_user(
         role,
         token_hash,
         elevated_until,
+        requires_step_up,
     })
 }
 
@@ -285,6 +332,7 @@ mod tests {
             role: Role::Admin,
             token_hash: vec![0u8; 32],
             elevated_until,
+            requires_step_up: false,
         }
     }
 

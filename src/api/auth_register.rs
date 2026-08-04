@@ -77,8 +77,10 @@
 //! attack was visible against one endpoint and invisible against the
 //! other, which was an oversight rather than a policy.
 
+use std::net::SocketAddr;
+
 use axum::{
-    extract::{Json, State},
+    extract::{ConnectInfo, Json, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -471,6 +473,7 @@ async fn invite_target(
 
 pub async fn register_finish(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     jar: CookieJar,
     headers: HeaderMap,
     Json(request): Json<RegisterFinishRequest>,
@@ -651,18 +654,22 @@ pub async fn register_finish(
     let lifetime_hours = session_lifetime_hours();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(lifetime_hours);
 
-    // `ip_address` is left NULL deliberately. Capturing a real client IP
-    // needs `into_make_service_with_connect_info` wiring in `main.rs`
-    // and -- once this runs behind a proxy -- a trusted-forwarded-header
-    // policy that does not exist yet. Recording a wrong or trivially
-    // spoofable value in an audit-relevant column is worse than
-    // recording none, so it stays null until that decision is actually
-    // made.
+    // requires_step_up is always false here -- this is a brand-new
+    // enrolment, not a login with session history to compare against, so
+    // the Phase II anomaly signal (see auth_login.rs's assess_login_risk)
+    // has nothing to evaluate. ip_address is captured for real now: the
+    // into_make_service_with_connect_info wiring this comment used to wait
+    // on already exists in main.rs (added for the auth rate limiter), and
+    // direct exposure (no reverse proxy) is this deployment's actual
+    // topology today, so the raw peer address is trustworthy without a
+    // forwarded-header policy. Revisit if a reverse proxy/CDN is ever put
+    // in front of this service.
     let created: Result<Uuid, sqlx::Error> =
-        sqlx::query_scalar("SELECT auth.create_session($1, $2, $3, NULL, $4)")
+        sqlx::query_scalar("SELECT auth.create_session($1, $2, $3, $4, $5, false)")
             .bind(user_id)
             .bind(&token_hash)
             .bind(expires_at)
+            .bind(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()))
             .bind(user_agent)
             .fetch_one(&state.db)
             .await;
@@ -815,6 +822,15 @@ mod tests {
     use super::*;
     use crate::api::test_support::empty_state;
 
+    /// A stand-in peer address for tests -- `register_finish` now takes
+    /// `ConnectInfo<SocketAddr>` (only populated for real by
+    /// `into_make_service_with_connect_info` outside of tests). The actual
+    /// value never matters here: every test below fails before reaching
+    /// create_session, against the unreachable test pool.
+    fn test_addr() -> ConnectInfo<SocketAddr> {
+        ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0)))
+    }
+
     /// An unauthenticated caller with no invite token has nothing that
     /// could authorize a registration, and must be refused without the
     /// database being consulted at all.
@@ -956,6 +972,7 @@ mod tests {
     async fn finish_without_a_ceremony_cookie_is_a_bad_request() {
         let response = register_finish(
             State(empty_state()),
+            test_addr(),
             CookieJar::new(),
             HeaderMap::new(),
             Json(RegisterFinishRequest {
@@ -982,6 +999,7 @@ mod tests {
 
         let response = register_finish(
             State(empty_state()),
+            test_addr(),
             jar,
             HeaderMap::new(),
             Json(RegisterFinishRequest {
@@ -1023,6 +1041,7 @@ mod tests {
 
         let response = register_finish(
             State(state.clone()),
+            test_addr(),
             jar,
             HeaderMap::new(),
             Json(RegisterFinishRequest {

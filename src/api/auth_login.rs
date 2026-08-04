@@ -27,8 +27,10 @@
 //! the updated blob has to be persisted or the protection silently stops
 //! working. `last_used_at` is stamped in the same statement.
 
+use std::net::SocketAddr;
+
 use axum::{
-    extract::{Json, State},
+    extract::{ConnectInfo, Json, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -82,6 +84,12 @@ pub struct LoginFinishRequest {
 #[derive(Debug, Serialize)]
 pub struct LoginFinishResponse {
     pub success: bool,
+    /// True when this login was flagged as anomalous (new IP or user_agent
+    /// for an account with prior sessions) and the account has TOTP
+    /// confirmed -- every route except step-up itself and whoami will 403
+    /// until the frontend prompts for and submits a code. See
+    /// `AuthenticatedUser`'s `STEP_UP_ALLOWED_PATHS`.
+    pub step_up_required: bool,
 }
 
 /// One response for every reason a login cannot start: unknown email,
@@ -265,6 +273,7 @@ async fn load_login_candidate(
 
 pub async fn login_finish(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     jar: CookieJar,
     headers: HeaderMap,
     Json(request): Json<LoginFinishRequest>,
@@ -388,17 +397,51 @@ pub async fn login_finish(
     let (raw_token, token_hash) = generate_token();
     let lifetime_hours = session_lifetime_hours();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(lifetime_hours);
+    let client_ip = sqlx::types::ipnetwork::IpNetwork::from(addr.ip());
 
-    // ip_address left NULL for the same reason as the registration path:
-    // capturing a real client IP needs connect-info wiring plus a
-    // trusted-forwarded-header policy that does not exist yet, and a
-    // spoofable value in an audit-relevant column is worse than none.
+    // Phase II anomaly signal: flag a login from an IP or user_agent never
+    // seen before for an account that has *some* session history (a brand
+    // new account's very first login has nothing to compare against, so it
+    // is never anomalous). See assess_login_risk's own docs for the query
+    // and the reasoning behind auditing unconditionally but gating only
+    // when TOTP is confirmed.
+    let risk = match assess_login_risk(&state, user_id, client_ip, user_agent).await {
+        Ok(risk) => risk,
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                user_id = %user_id,
+                correlation_id = %correlation_id,
+                "failed to assess login risk"
+            );
+            return (jar, internal_error("Could not complete sign-in")).into_response();
+        }
+    };
+
+    if risk.is_anomalous {
+        audit_log::record(
+            &state.db,
+            audit_log::event::LOGIN_ANOMALY_DETECTED,
+            audit_log::Subjects::by(user_id),
+            user_agent,
+            serde_json::json!({
+                "correlation_id": correlation_id,
+                "step_up_required": risk.totp_confirmed,
+            }),
+        )
+        .await;
+    }
+
+    let requires_step_up = risk.is_anomalous && risk.totp_confirmed;
+
     let created: Result<Uuid, sqlx::Error> =
-        sqlx::query_scalar("SELECT auth.create_session($1, $2, $3, NULL, $4)")
+        sqlx::query_scalar("SELECT auth.create_session($1, $2, $3, $4, $5, $6)")
             .bind(user_id)
             .bind(&token_hash)
             .bind(expires_at)
+            .bind(client_ip)
             .bind(user_agent)
+            .bind(requires_step_up)
             .fetch_one(&state.db)
             .await;
 
@@ -420,12 +463,20 @@ pub async fn login_finish(
                 user_id = %user_id,
                 session_id = %session_id,
                 correlation_id = %correlation_id,
+                requires_step_up,
                 "passkey login succeeded"
             );
 
             let jar = issue_session_cookie(jar, raw_token, time::Duration::hours(lifetime_hours));
 
-            (jar, Json(LoginFinishResponse { success: true })).into_response()
+            (
+                jar,
+                Json(LoginFinishResponse {
+                    success: true,
+                    step_up_required: requires_step_up,
+                }),
+            )
+                .into_response()
         }
         Err(err) => {
             // The assertion verified, so this is not a failed login -- the
@@ -446,6 +497,78 @@ pub async fn login_finish(
                 .into_response()
         }
     }
+}
+
+/// What `assess_login_risk` found. `is_anomalous` and `totp_confirmed` are
+/// deliberately separate rather than pre-combined into one "should we gate
+/// this" bool -- the caller audits on the first and only gates on the
+/// pairing of both, and it needs `totp_confirmed` on its own to decide
+/// whether the audit metadata should say the account was left ungated for
+/// lack of a step-up factor.
+struct LoginRiskAssessment {
+    /// This account has at least one prior session, and this login's IP
+    /// and user_agent both differ from every one of them. A brand new
+    /// account's very first login is never anomalous under this
+    /// definition -- there is nothing yet to compare against.
+    is_anomalous: bool,
+    /// Whether this account has a confirmed TOTP credential to step up
+    /// with at all. An anomalous login on an account without one is
+    /// audited but never gated -- forcing a step-up with no factor to
+    /// satisfy it would be a lockout, not a hardening measure.
+    totp_confirmed: bool,
+}
+
+/// Assesses the Phase II anomaly signal for a login that has already
+/// cryptographically verified. Read-only, under the user's own identity
+/// (safe the same way `load_credentials_for_user` is: `user_id` comes from
+/// server-side ceremony state, never from the request) -- no SECURITY
+/// DEFINER bypass needed, since `sessions_select_own_or_admin` already lets
+/// an owner read their own session history.
+///
+/// "Unexpected location" is scoped down to "new IP address" rather than
+/// true geolocation -- see the migration's own docs for why. A NULL
+/// `ip_address` on a historical row (every row created before this
+/// feature, and any future row from a client whose peer address somehow
+/// isn't available) can never equal a real IP in SQL, so old rows simply
+/// don't count as "seen" for IP purposes, which is the correct
+/// fail-safe direction: it can make a login look newer than it is, never
+/// hide a genuinely new one.
+async fn assess_login_risk(
+    state: &AppState,
+    user_id: Uuid,
+    ip_address: sqlx::types::ipnetwork::IpNetwork,
+    user_agent: Option<&str>,
+) -> Result<LoginRiskAssessment, sqlx::Error> {
+    let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
+
+    let (has_history, seen_ip, seen_user_agent): (bool, bool, bool) = sqlx::query_as(
+        "SELECT
+            EXISTS(SELECT 1 FROM auth.sessions WHERE user_id = $1),
+            EXISTS(SELECT 1 FROM auth.sessions WHERE user_id = $1 AND ip_address = $2),
+            EXISTS(SELECT 1 FROM auth.sessions WHERE user_id = $1 AND user_agent = $3)",
+    )
+    .bind(user_id)
+    .bind(ip_address)
+    .bind(user_agent)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let totp_confirmed: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM auth.totp_credentials
+             WHERE user_id = $1 AND confirmed_at IS NOT NULL
+         )",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(LoginRiskAssessment {
+        is_anomalous: has_history && !(seen_ip || seen_user_agent),
+        totp_confirmed,
+    })
 }
 
 /// Reads a user's credentials under their own identity. Safe to scope this
@@ -505,6 +628,17 @@ mod tests {
     use super::*;
     use crate::api::test_support::empty_state;
 
+    /// A stand-in peer address for tests -- `login_finish` now takes
+    /// `ConnectInfo<SocketAddr>` (only populated for real by
+    /// `into_make_service_with_connect_info` outside of tests), so every
+    /// direct call needs one. The actual value never matters here: none of
+    /// these tests reach `assess_login_risk` (they all fail earlier, at
+    /// ceremony lookup or credential reload against the unreachable test
+    /// pool).
+    fn test_addr() -> ConnectInfo<SocketAddr> {
+        ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0)))
+    }
+
     /// An empty address must not reach the database, and must land on the
     /// same indistinguishable rejection as any other ineligible input.
     #[tokio::test]
@@ -531,6 +665,7 @@ mod tests {
     async fn finish_without_a_ceremony_cookie_is_a_bad_request() {
         let response = login_finish(
             State(empty_state()),
+            test_addr(),
             CookieJar::new(),
             HeaderMap::new(),
             Json(LoginFinishRequest {
@@ -555,6 +690,7 @@ mod tests {
 
         let response = login_finish(
             State(empty_state()),
+            test_addr(),
             jar,
             HeaderMap::new(),
             Json(LoginFinishRequest {
@@ -593,6 +729,7 @@ mod tests {
 
         let response = login_finish(
             State(state.clone()),
+            test_addr(),
             jar,
             HeaderMap::new(),
             Json(LoginFinishRequest {
@@ -637,6 +774,7 @@ mod tests {
 
         let response = login_finish(
             State(state),
+            test_addr(),
             jar,
             HeaderMap::new(),
             Json(LoginFinishRequest {
