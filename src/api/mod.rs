@@ -5,6 +5,7 @@ mod auth_login;
 mod auth_logout;
 mod auth_register;
 mod auth_totp;
+mod auth_users;
 mod cancel_session;
 mod correct;
 mod correct_group;
@@ -321,6 +322,11 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/totp/enroll/confirm", post(auth_totp::enroll_confirm))
         .route("/auth/totp/step-up", post(auth_totp::step_up))
         .route("/auth/totp/disable", post(auth_totp::disable))
+        // Admin-only, read-only -- no dedicated rate limit bucket the way
+        // /auth/invites has, since a GET hit by an ordinary page load
+        // isn't the "trusted caller hammering a write" case that
+        // reasoning exists for.
+        .route("/auth/users", get(auth_users::list_users))
         .route("/auth/logout", post(auth_logout::logout))
         .route(
             "/auth/logout/everywhere",
