@@ -158,6 +158,13 @@ pub mod event {
     /// `deactivated` but as one step of reissuing an invite, not as the
     /// action's own point.
     pub const USER_DEACTIVATED: &str = "user_deactivated";
+
+    /// An administrator changed an already-enrolled user's role through
+    /// the standalone role-change action. Distinct from role being set at
+    /// invite-creation time (`INVITE_CREATED`'s own metadata carries the
+    /// assigned role there) -- this is a transition on an existing
+    /// account, which is what `Change` is for.
+    pub const ROLE_CHANGED: &str = "role_changed";
 }
 
 /// What changed, for the events that are a value transition rather than a

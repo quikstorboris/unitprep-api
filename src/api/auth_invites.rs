@@ -61,13 +61,13 @@ pub struct CreateInviteRequest {
 
     #[serde(default)]
     pub job_title: Option<String>,
-    // There is deliberately no `role` field. Only `admin` exists today, so
-    // accepting one would add a client-controlled path to choosing a
-    // privilege level for a brand-new account -- the exact shape of a
-    // privilege-escalation bug, in exchange for no capability at all. When
-    // further roles arrive this becomes an explicit allowlist decision
-    // (which roles may an admin grant?), which is a design question worth
-    // answering deliberately rather than inheriting from a request body.
+
+    /// The allowlist decision this field's absence used to defer is made:
+    /// any admin may assign either role that exists today. Validated
+    /// against `Role::from_db_text` -- the same parser the session
+    /// extractor uses -- rather than a second parallel list, so this and
+    /// the `Role` enum cannot disagree about what a role is.
+    pub role: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -176,6 +176,13 @@ pub async fn create_invite(
         );
     }
 
+    let Some(role) = Role::from_db_text(&request.role.trim().to_ascii_lowercase()) else {
+        return bad_request(
+            "invalid_role",
+            "role must be one of: admin, onboarding_manager".to_string(),
+        );
+    };
+
     let (raw_token, token_hash) = generate_token();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(invite_hours());
 
@@ -188,6 +195,7 @@ pub async fn create_invite(
             last_name,
             company: &company,
             job_title,
+            role,
             token_hash: &token_hash,
             expires_at,
         },
@@ -255,6 +263,7 @@ pub async fn create_invite(
         // operator actually needs to reason about later.
         serde_json::json!({
             "reissued": reissued,
+            "role": role.as_db_text(),
             "expires_at": expires_at,
         }),
     )
@@ -288,6 +297,7 @@ struct IssueInvite<'a> {
     last_name: &'a str,
     company: &'a str,
     job_title: Option<&'a str>,
+    role: Role,
     token_hash: &'a [u8],
     expires_at: chrono::DateTime<chrono::Utc>,
 }
@@ -343,7 +353,7 @@ async fn issue_invite(
                 "INSERT INTO auth.users
                      (email, first_name, last_name, job_title, company, role, status)
                  VALUES ($1::citext, $2, $3, $4, $5::auth.user_company,
-                         'admin'::auth.auth_role, 'invited'::auth.user_status)
+                         $6::auth.auth_role, 'invited'::auth.user_status)
                  RETURNING id",
             )
             .bind(input.email)
@@ -351,6 +361,7 @@ async fn issue_invite(
             .bind(input.last_name)
             .bind(input.job_title)
             .bind(input.company)
+            .bind(input.role.as_db_text())
             .fetch_one(&mut *tx)
             .await?;
 
@@ -412,6 +423,25 @@ async fn issue_invite(
                     "retired outstanding invite(s) before reissuing"
                 );
             }
+
+            // Re-applies whatever role was submitted, even on a reissue --
+            // an account still `invited` (the only status that reaches
+            // this branch) has never signed in, so there is no session or
+            // established behaviour a role change here could disrupt.
+            // Without this, changing the role dropdown before clicking
+            // Reissue would silently do nothing, which is worse than
+            // either always honouring it or not accepting it at all.
+            //
+            // Goes through set_user_role rather than a direct UPDATE:
+            // `role` has no application-facing column grant at all (see
+            // restrict_users_update_columns), by design -- this SECURITY
+            // DEFINER function is the only path past that, the same as
+            // every other role/status change in this codebase.
+            sqlx::query("SELECT auth.set_user_role($1, $2::auth.auth_role)")
+                .bind(id)
+                .bind(input.role.as_db_text())
+                .execute(&mut *tx)
+                .await?;
 
             (id, true)
         }
@@ -772,6 +802,7 @@ mod tests {
             last_name: "Lovelace".to_string(),
             company: company.to_string(),
             job_title: None,
+            role: "admin".to_string(),
         }
     }
 
@@ -871,6 +902,48 @@ mod tests {
             StatusCode::INTERNAL_SERVER_ERROR,
             "validation should have passed and the call should have reached the database"
         );
+    }
+
+    /// An unrecognised role string must be caught before the database is
+    /// touched -- same property as every other field's validation, and
+    /// specifically what stands between a client-supplied string and a
+    /// raw Postgres enum-cast error.
+    #[tokio::test]
+    async fn an_invalid_role_is_refused_without_touching_the_database() {
+        let mut body = request("ada@example.com", "quikstor");
+        body.role = "superuser".to_string();
+
+        let response = create_invite(
+            State(empty_state()),
+            admin(),
+            test_addr(),
+            HeaderMap::new(),
+            Json(body),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// The onboarding_manager role must be assignable via the same
+    /// endpoint, not just admin -- reaching the database (a 500 against
+    /// the unreachable test pool) is the success signal, same convention
+    /// as the casing-normalisation test above.
+    #[tokio::test]
+    async fn onboarding_manager_is_an_accepted_role() {
+        let mut body = request("ada@example.com", "quikstor");
+        body.role = "onboarding_manager".to_string();
+
+        let response = create_invite(
+            State(empty_state()),
+            admin(),
+            test_addr(),
+            HeaderMap::new(),
+            Json(body),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     fn recover_request(email: &str) -> RecoverAccountRequest {

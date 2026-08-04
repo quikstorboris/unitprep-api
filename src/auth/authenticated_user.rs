@@ -28,7 +28,13 @@ pub enum Role {
 }
 
 impl Role {
-    fn from_db_text(value: &str) -> Option<Self> {
+    /// Public rather than crate-private: this is now the shared parser
+    /// for a role string coming from a client request (invite creation,
+    /// the role-change endpoint), not just from the database -- one
+    /// place that knows what a valid role string looks like, so a
+    /// request-body validator and the session extractor cannot disagree
+    /// about it.
+    pub fn from_db_text(value: &str) -> Option<Self> {
         match value {
             "admin" => Some(Role::Admin),
             "onboarding_manager" => Some(Role::OnboardingManager),

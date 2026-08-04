@@ -6,6 +6,7 @@ mod auth_login;
 mod auth_logout;
 mod auth_register;
 mod auth_totp;
+mod auth_user_role;
 mod auth_user_status;
 mod auth_users;
 mod cancel_session;
@@ -337,6 +338,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/auth/users/{id}/deactivate",
             post(auth_user_status::deactivate_user),
+        )
+        .route(
+            "/auth/users/{id}/role",
+            post(auth_user_role::change_user_role),
         )
         // Admin-only, read-only -- same no-dedicated-bucket reasoning as
         // /auth/users above.
