@@ -9,12 +9,15 @@ the only fallback, for a device that has no passkey enrolled yet.
 
 This document describes what exists today, why it's built the way it is,
 what it looks like to actually use, how it holds up under an audit, and
-what's still left to build. Status: **backend implementation is
-functionally complete** (WebAuthn registration/login, TOTP fallback,
-sessions, invites, sign-out, audit logging). **The frontend does not yet
-exist** — there is no login page, no invite-redemption page, and no
-route gating in `unitprep-ui`. Nothing is enforced as a product yet; see
-[Planned Development](#planned-development-to-finalize-auth).
+what's still left to build. Status as of 2026-08-04: **both backend and
+frontend are built and enforced in production.** WebAuthn registration/
+login, TOTP fallback, sessions, invites, admin-mediated recovery,
+standalone user deactivation, role assignment, and audit logging all
+exist end to end — `unitprep-ui` has a real login page, invite-redemption
+page, route gating, an admin Users table, and an audit-log viewer. Phase I
+(ship it, enforce it) and Phase II (hardening) are both closed out; see
+[Planned Development](#planned-development-to-finalize-auth) for what
+shipped since and what's genuinely still open.
 
 ## Technical / architectural description
 
@@ -103,13 +106,14 @@ route gating in `unitprep-ui`. Nothing is enforced as a product yet; see
   `auth.revoke_all_sessions_for_token` are both keyed by a **token
   hash**, not a user id, which makes them self-authorizing — "sign this
   account out everywhere" isn't a request the API can even express for
-  an account other than the one whose live token was presented. The
-  admin-facing "sign a specific user out" form belongs with the admin
-  panel (planned), which checks the caller's role explicitly.
+  an account other than the one whose live token was presented.
   `app_service`, the role the application connects as, holds **no
   `UPDATE` grant on `auth.sessions` at all** — not even a column-scoped
   one — so a revoked session cannot be un-revoked by any application
-  code path, buggy or otherwise.
+  code path, buggy or otherwise. An admin revoking *another* user's
+  sessions remotely (as opposed to the standalone deactivation action,
+  which revokes as a side effect via the existing trigger) is not built
+  yet — see [Planned development](#planned-development-to-finalize-auth).
 - Anomaly signal (Phase II item 4): a login from an IP or `user_agent`
   never seen before for an account with prior sessions sets
   `auth.sessions.requires_step_up`, unconditionally audited
@@ -141,6 +145,56 @@ route gating in `unitprep-ui`. Nothing is enforced as a product yet; see
   no `search_path` is set on the connection, which matters specifically
   because Neon's pooled connection mode doesn't reliably support
   connection-level `search_path` settings.
+
+### Roles and authorization
+
+- Two roles exist in the `auth.auth_role` Postgres enum and the Rust
+  `Role` enum: `admin` and `onboarding_manager` (added 2026-08-04, the
+  second role named in the original architecture doc's extensible-
+  role-column design). `Role` is a real enum, not a bare string — adding
+  a role means adding a variant, and the Rust compiler forces every
+  exhaustive `match admin.role` to handle it, rather than a new role
+  silently falling through an `if role == "admin"` check somewhere.
+- **`onboarding_manager` is schema-only today — it carries no
+  permissions of its own.** Every admin-gated handler's role match has
+  an explicit arm for it that returns a shared 403
+  (`insufficient_role()`) and writes a permanent `authorization_failure`
+  audit row naming the action attempted. That row is what makes it safe
+  to have the role exist in the schema ahead of a real decision about
+  what it should be allowed to do — the decision is still open, not the
+  role's existence.
+- **Any admin may assign either role to anyone** — at invite-creation
+  time (`CreateInviteRequest.role`) or, for an already-enrolled account,
+  through `POST /auth/users/{id}/role`. Both validate the submitted
+  string against `Role::from_db_text` before touching the database, so
+  an unrecognised value is a clean 400, not a raw Postgres enum-cast
+  error. There is no finer-grained "who may grant admin" policy than
+  "any admin" — with only one role carrying real capability, a narrower
+  allowlist wouldn't currently mean anything.
+- **Changing an existing user's role goes through `auth.set_user_role`**,
+  a `SECURITY DEFINER` function mirroring `auth.set_user_status` exactly.
+  `role` has no application-facing `UPDATE` grant at all (see
+  [Data model](#data-model-and-database-layer-defense) above) — this
+  function, re-checking the caller is an admin independently of RLS, is
+  the only path a role change on an existing row can take, including the
+  invite-reissue path (reissuing re-applies whatever role is submitted,
+  since the account is still `invited` and has never signed in).
+- **An admin cannot change their own role or deactivate their own
+  account.** Both `POST /auth/users/{id}/role` and `POST
+  /auth/users/{id}/deactivate` refuse when the target is the caller,
+  before any write — a structural guard against a self-inflicted
+  lockout, not something left to a frontend confirm dialog. This does
+  **not** yet prevent two admins from deactivating or demoting each
+  other down to zero real admins, in either order — see
+  [THREAT_MODEL.md](THREAT_MODEL.md)'s Known gaps.
+- **Deactivating a user** (`POST /auth/users/{id}/deactivate`) wraps
+  `auth.set_user_status` in its own endpoint, distinct from account
+  recovery: recovery also passes a user through `deactivated`, but only
+  as one step of revoking every credential and reissuing an invite.
+  Deactivation is the action itself — an admin deciding someone should
+  lose access, with nothing reissued afterward. Refuses on an
+  already-deactivated target and on a concurrent status change; writes
+  `user_deactivated` with a real before/after status diff.
 
 ### Onboarding, invites, and enrollment
 
@@ -188,8 +242,40 @@ route gating in `unitprep-ui`. Nothing is enforced as a product yet; see
   "invisible to the attacker" and "invisible to the operator" don't
   have to be the same fact, and conflating them was an actual gap that
   got closed.
-- Login, TOTP enrollment/verification/lockout, and session revocation
-  are logged the same way.
+- Login, TOTP enrollment/verification/lockout, session revocation,
+  invite creation/refusal, account recovery, standalone deactivation,
+  and role changes are all logged the same way, through the same shared
+  helper.
+- **`ip_address` and a real before/after diff, as of 2026-08-04.**
+  `audit_log::record()` takes `ip_address: Option<IpNetwork>` and a
+  `Change` (before/after) pair — both existed as columns in
+  `auth_audit_logs` since the very first migration with nothing ever
+  writing them. `ip_address` is populated wherever `ConnectInfo` is
+  already in scope or was cheap to add (login/registration success,
+  invite creation/recovery, deactivation, role changes); the
+  unauthenticated `/begin` legs and TOTP handlers still pass `None`,
+  since neither has a natural IP source without disproportionate churn.
+  `before_state`/`after_state` are populated for the schema's
+  diff-worthy events — `user_deactivated`, `role_changed`,
+  `account_recovery_initiated` — as structured `{"status": "..."}` or
+  `{"role": "..."}` JSON, not buried in free-form `metadata`.
+- **Three additional event types, also 2026-08-04**: `rate_limit_rejected`
+  (a `429` from the auth/invite rate limiter — previously enforced but
+  invisible to an operator reviewing the trail; carries no `ip_address`,
+  since the limiter's error handler is synchronous with no `ConnectInfo`
+  available at that layer), `session_expired_access_attempt` (a session
+  that genuinely existed and crossed its idle or absolute expiry,
+  distinguished from an ordinary missing/forged cookie by a new
+  `auth.check_session_expired` function — ordinary cookie absence still
+  gets a plain 401 with no row), and `authorization_failure` (an
+  authenticated caller reaching an admin-gated action without the role
+  for it — see [Roles and authorization](#roles-and-authorization)
+  above).
+- **`GET /auth/audit-logs`**, admin-only, lets an admin read the trail
+  directly — filterable by `event_type` and `user_id` (matches actor or
+  target), keyset-paginated by `id`. Backs `unitprep-ui`'s Audit Logs
+  page, including a red/green before/after diff view for the events that
+  carry one.
 - **Never use `INSERT ... RETURNING` against `auth_audit_logs`** — the
   table's `SELECT` policy is admin-only, and `RETURNING` is evaluated
   against it, so it fails precisely on the anonymous/no-identity events
@@ -315,10 +401,6 @@ for the second.
 
 ## User-friendly description of auth workflows
 
-*(The workflows below describe the backend behavior that exists today.
-The pages and buttons that would make them clickable in a browser don't
-exist yet — see [Planned Development](#planned-development-to-finalize-auth).)*
-
 **Signing in.** No username, no password, ever. You click sign in, your
 browser or password manager prompts you the way it always does —
 Windows Hello, Touch ID, a fingerprint, a security key tap, or your
@@ -336,7 +418,7 @@ done, you're signed in immediately. No separate "activate your account"
 step.
 
 **Setting up the backup code method (TOTP).** From your account
-settings (once built), you'll see a QR code to scan with an
+settings page, you'll see a QR code to scan with an
 authenticator app (Google Authenticator, 1Password, Authy, etc.). You
 confirm it worked by entering the six-digit code it shows you once —
 this "confirm" step exists specifically so a mis-scanned code gets
@@ -362,7 +444,15 @@ link" as an entire class of attack.
 
 **Signing out.** Signs out the device you're on. A "sign out
 everywhere" option (revokes every session on every device at once) is
-built on the backend and will be exposed once the frontend exists.
+also available from your account page.
+
+**Losing admin access to your own account.** If an admin needs to lose
+access — leaving the organization, a compromised device — another admin
+deactivates the account from the Users table. This is a different
+action from account recovery: recovery is for someone who still needs
+access but lost their passkey; deactivation is for someone who
+shouldn't have access at all any more. Neither admin can trigger either
+action on their own account.
 
 ## Audit preparedness notes
 
@@ -371,12 +461,24 @@ built on the backend and will be exposed once the frontend exists.
 - **Append-only audit trail.** `auth_audit_logs` has no `UPDATE`/
   `DELETE` grant for any role. Once written, an entry cannot be
   altered or removed by the application.
-- **Full event coverage for the paths built so far**, including the
-  anonymous/pre-authentication ones that are easy to overlook: login
-  success and failure, passkey registration success/failure/refusal,
-  TOTP enrollment/confirmation/removal/lockout, and session revocation.
-  Each row carries actor, target (where one exists), user agent, and a
-  structured reason — queryable fields, not prose.
+- **Full event coverage**, including the anonymous/pre-authentication
+  paths that are easy to overlook: login success and failure, passkey
+  registration success/failure/refusal, TOTP enrollment/confirmation/
+  lockout, session revocation, invite creation/refusal, account
+  recovery, standalone deactivation, role changes, rate-limit
+  rejections, expired-session re-use, and admin-gated actions attempted
+  without the role for them. Verified by a dedicated closing pass
+  (Phase I item 1), not just assumed from the common paths working.
+  Each row carries actor, target (where one exists), user agent,
+  `ip_address` (where available), and a structured reason or a real
+  before/after diff — queryable fields, not prose.
+- **`ip_address` and before/after diffing**, as of 2026-08-04 — both
+  existed as unpopulated columns since the original schema; see
+  [Audit logging](#audit-logging) above.
+- **An admin can read the trail directly** via `GET /auth/audit-logs`
+  and `unitprep-ui`'s Audit Logs page, without needing raw database
+  access — filterable, paginated, with a diff view for transition
+  events.
 - **No credential material ever touches the audit trail or logs.**
   Raw invite tokens, session tokens, TOTP secrets, and WebAuthn
   challenges are never recorded anywhere, including in rejection rows
@@ -385,6 +487,11 @@ built on the backend and will be exposed once the frontend exists.
   plaintext.** Session tokens and invite tokens: SHA-256 hash only.
   TOTP secrets: ChaCha20-Poly1305, bound to the owning user, versioned
   for rotation.
+- **Rate limiting on every unauthenticated auth endpoint** (passkey
+  registration/login, invite redemption), peer-IP-keyed, plus a
+  separate authenticated bucket for invite creation — and, as of
+  2026-08-04, every rejection is itself an audited event
+  (`rate_limit_rejected`), not just an enforced-but-invisible 429.
 - **Database-layer access control independent of the application.**
   RLS plus `SECURITY DEFINER` functions mean the database itself
   enforces who can read or write what, as a second layer behind
@@ -396,6 +503,10 @@ built on the backend and will be exposed once the frontend exists.
   narrow, named, `SECURITY DEFINER` functions, each with a single
   documented purpose, rather than broad table grants trusted to be used
   correctly.
+- **Structural self-lockout guards.** An admin cannot change their own
+  role or deactivate their own account — enforced before any database
+  write, not left to a UI confirm dialog. (Does not yet cover two admins
+  locking each other out — see Known gaps in THREAT_MODEL.md.)
 - **No hard delete, anywhere, for a user with audit history.**
   Deactivation is soft — status changes, credentials are removed by
   trigger, history is retained. This is intentional and matches what
@@ -404,30 +515,35 @@ built on the backend and will be exposed once the frontend exists.
 - **Anti-enumeration by design**, without sacrificing operator
   visibility — see [Architectural Choices](#architectural-choices-and-reasoning)
   above.
+- **A formal threat model / control matrix** — [THREAT_MODEL.md](THREAT_MODEL.md),
+  mapping every threat considered to the control that closes it, with
+  every deferred item or known gap named explicitly.
+- **Documented retention and review process** —
+  [AUDIT_RETENTION.md](AUDIT_RETENTION.md): retention is indefinite by
+  default and structurally so (the append-only triggers block deletion
+  outright, not just by convention); review is trigger-driven off
+  specific event types plus a quarterly baseline pass, with runnable
+  queries for both.
 
 ### Planned — needed before this is genuinely audit-ready
 
-- **Formal audit-coverage verification** (in progress) — a closing
-  pass confirming every auth event type that *should* produce a row
-  actually does, rather than relying on it having been true so far.
-- **Rate limiting on unauthenticated auth endpoints.** TOTP already has
-  lockout; passkey registration/login and invite redemption currently
-  do not, which is a real gap an external reviewer would flag.
-- **A formal threat model / control matrix.** What exists today is a
-  careful, defensible design — it has not yet been written down as a
-  structured document mapping specific controls to specific threats,
-  which is typically what an external audit actually asks for.
-- **Documented retention and review process for the audit log.**
-  Good mechanics (append-only, hashed, complete) is only half of
-  audit-readiness; the other half — how long entries are kept, who
-  reviews them and how often, separation of duties — is process, not
-  code, and doesn't exist as a document yet.
 - **Key management beyond an environment variable.** `TOTP_ENCRYPTION_KEY`
   is an explicit, documented stopgap: a leaked process environment is
   as good as plaintext for every TOTP secret it protects, and there is
   currently no rotation path (the ciphertext format already carries a
   version byte specifically so rotation can be added later without
-  guessing which ciphertexts are under which key).
+  guessing which ciphertexts are under which key). Deferred, not
+  scheduled — not taking on a cloud-provider (or self-hosted Vault)
+  dependency at this point.
+- **A "last remaining admin" guard.** Nothing stops two admins from
+  demoting or deactivating each other down to zero real admins, in
+  either order — only a realistic scenario once a second admin exists,
+  which is close to happening now that role assignment exists at all.
+- **A real decision about what `onboarding_manager` can do.** The role
+  exists and can be assigned; every admin-gated action currently
+  refuses it. That is a safe default, not a finished feature — the
+  actual allowlist ("what should this role be able to do") is
+  unscheduled, not deferred-with-a-plan.
 - **A right-to-erasure / anonymize path.** Today, personal data
   (email, name) on a deactivated account is retained indefinitely
   alongside its audit history — appropriate for the current scale, but
@@ -439,7 +555,8 @@ built on the backend and will be exposed once the frontend exists.
   system, not someone actually trying to break it. A scoped
   penetration test is the highest-leverage single action left for
   external audit credibility, precisely because it's the one thing on
-  this list that isn't just more careful reasoning.
+  this list that isn't just more careful reasoning. Deferred, very low
+  priority, not confirmed this project will ever need one.
 
 ## Planned development to finalize auth
 
@@ -457,73 +574,47 @@ origin and an insecure cookie) — see [Sessions](#sessions) above.
 
 ### Phase I — ship it, enforce it, close the obvious gaps
 
-1. Finish audit-event coverage verification (the closing check above) —
-   specifically confirm every rejection path, not just the common ones,
-   actually routes through the shared audit helper rather than assuming
-   it does because the common ones do.
-2. Add rate limiting to the remaining unauthenticated auth endpoints
-   (registration, login, invite redemption) — and to invite *creation*
-   too, even though it's authenticated, since it's still a path that
-   can be hammered.
-3. Extend invite issuance to support the account-recovery case — right
-   now, re-issuing an invite is refused for any account that already
-   holds a credential, which means there's currently no path back in
-   for someone who's already enrolled and loses their device. This is
-   the piece that makes the admin-mediated recovery workflow described
-   above actually possible, not just described.
-4. **Decide the tool-session ownership rule before gating routes, not
-   after.** `owner_id` already exists on the `unit_group`/`dedup`
-   session model and is currently always `None` — tool sessions and
-   auth sessions are deliberately parallel systems today, with no
-   relationship between them. Once every request carries an
-   `AuthenticatedUser`, that stops being a neutral default: either a
-   tool session gets stamped with its creator's `owner_id` and becomes
-   access-checked (only its owner, or an admin, can reach it), or it
-   stays intentionally shared/anonymous and that choice gets written
-   down as deliberate. Left implicit, this is exactly the kind of thing
-   that becomes a messy retrofit once real users and real data exist in
-   those sessions.
-5. Gate the product's actual routes behind requiring a valid session —
-   today, auth exists but nothing outside the auth endpoints themselves
-   requires it. This is the step that makes item 4 unavoidable, which
-   is why 4 is sequenced immediately before it rather than after.
-6. **Decide the role model before building the admin panel, not
-   during it.** `Role` is already structured to be more than a single
-   value, but nothing beyond `Admin` is meaningfully used anywhere yet.
-   The Users panel (item 8) will force this question one way or
-   another — who can view the user list, who can create invites, who
-   can revoke someone else's session — so it's worth deciding
-   deliberately up front (even if the answer is "just Admin, for now,
-   and here's why") rather than letting the first admin-panel PR decide
-   it by accident.
-7. Build the frontend, essentially from scratch: a WebAuthn client
-   integration, a login page, an invite-redemption page (which doubles
-   as the recovery re-enrollment page), TOTP enrollment and login UI
-   (including rendering the otpauth:// URI the backend already returns
-   as an actual QR code), a signed-in-user context, route-gating
-   middleware, and a sign-out control. While building this, keep the
-   request/response shapes for the auth endpoints (WebAuthn ceremony
-   payloads, TOTP enroll/verify bodies, the session/user shape) defined
-   in exactly one place both sides can check against — even something
-   as lightweight as a hand-maintained shared types file — rather than
-   letting the frontend infer shapes from the backend's JSON and drift
-   over time. This is the cheapest point to start that discipline,
-   since both sides are being written new right now rather than one
-   already existing and the other reverse-engineering it.
-8. Build the admin Users panel: create invites, list users, manage a
-   user's active sessions (including remote sign-out), deactivate an
-   account, and correct a mistyped invite email. Can proceed in
-   parallel with item 7 once items 1–6 are solid — they don't block
-   each other.
+**Closed out.** Items 1–8 shipped; item 9 is half-done (see its own
+entry) and is the one item from this phase still genuinely open.
+
+1. ~~Finish audit-event coverage verification~~ — **shipped.** A closing
+   pass confirmed every rejection path, not just the common ones,
+   actually routes through the shared audit helper.
+2. ~~Add rate limiting to the remaining unauthenticated auth
+   endpoints~~ — **shipped.** Registration, login, invite redemption,
+   and authenticated invite creation are all rate-limited; rejections
+   are now audited too (`rate_limit_rejected`, 2026-08-04).
+3. ~~Extend invite issuance to support the account-recovery case~~ —
+   **shipped.** `auth_invites::recover_account` revokes every existing
+   credential and reissues, for an account that already holds one.
+4. ~~Decide the tool-session ownership rule before gating routes~~ —
+   **decided and shipped**: tool sessions are stamped with their
+   creator's `owner_id` at creation.
+5. ~~Gate the product's actual routes behind requiring a valid
+   session~~ — **shipped.** Every product route requires
+   `AuthenticatedUser`.
+6. ~~Decide the role model before building the admin panel~~ —
+   **decided**: `Role` shipped as a real enum (not a bare value) from
+   the start, and now carries two variants — see
+   [Roles and authorization](#roles-and-authorization) above.
+7. ~~Build the frontend~~ — **shipped.** `unitprep-ui` has a WebAuthn
+   client integration, login page, invite-redemption page, TOTP
+   enrollment/login UI, a signed-in-user context, route-gating
+   middleware, and sign-out (including sign-out-everywhere).
+8. ~~Build the admin Users panel~~ — **shipped**, and grew past its
+   original scope: create invites, list users, reissue, admin-mediated
+   recovery, standalone deactivation, and role assignment. Per-user
+   *session* management (list a specific user's active sessions, remote
+   sign-out by an admin) is **not** part of what shipped — see Not yet
+   built below.
 9. Confirm the first-administrator bootstrap path is usable as a
-   break-glass mechanism if the sole current admin ever loses their own
-   device — and go one step further than just the CLI working: write
-   down, briefly, where the pieces someone would actually need to use
-   it live (`TOTP_ENCRYPTION_KEY`, database credentials, hosting/Neon
-   account access) and who besides the current admin could reach them.
-   Low priority, but "the CLI still works" and "break-glass access
-   doesn't quietly depend on one specific person being reachable" are
-   two different claims, and only the first is currently confirmed.
+   break-glass mechanism, and document where the pieces someone would
+   actually need to use it live (`TOTP_ENCRYPTION_KEY`, database
+   credentials, hosting/Neon account access) and who besides the
+   current admin could reach them. **Half done**: the CLI itself is
+   confirmed working; the "who else can reach what break-glass needs"
+   documentation was never written. Low priority, but still open —
+   see THREAT_MODEL.md's Known gaps.
 
 ### Phase II — hardening
 
@@ -596,6 +687,44 @@ left on this list is scheduled, only trigger-gated.
    for single-instance security in the meantime: WebAuthn challenge state
    never leaves the process today, which a shared external store would
    change. Revisit only if horizontal scaling actually becomes necessary.
+
+### Phase III — the post-Phase-II backlog
+
+Approved and shipped 2026-08-04, immediately after Phase II's close-out —
+found via a real user bug report ("disable user feature is not available
+in the FE") and the audit-log-viewer questions it raised, rather than
+being in either phase's original scope.
+
+1. **Standalone disable-user admin action.** `auth.set_user_status` (the
+   underlying primitive) existed and was exercised by account recovery,
+   but nothing exposed it as its own endpoint. `POST
+   /auth/users/{id}/deactivate` now does, with a frontend button.
+2. **The two gaps blocking a frontend audit-log viewer, closed.**
+   `audit_log::record()` now actually writes `ip_address`,
+   `before_state`, and `after_state`; `GET /auth/audit-logs` gives an
+   admin a way to read the trail at all. `unitprep-ui`'s Audit Logs page
+   is built on top of both.
+3. **Three new audit event types**: `rate_limit_rejected`,
+   `session_expired_access_attempt`, `authorization_failure` — see
+   [Audit logging](#audit-logging) above.
+4. **The `onboarding_manager` role**, added to the schema/enum —
+   deliberately schema-only; see
+   [Roles and authorization](#roles-and-authorization) above.
+5. **A way to actually assign it**: a `role` field at invite-creation
+   time, and `POST /auth/users/{id}/role` for an already-enrolled
+   account. Resolves the "which roles may an admin grant?" question
+   `CreateInviteRequest.role`'s absence had deliberately deferred.
+
+### Not yet built (not phase-scoped, surfaced by the work above)
+
+- **Per-user session management for admins** — list a specific user's
+  active sessions and remotely sign one out. Named in the original
+  Phase I item 8 scope but never built; standalone deactivation covers
+  "remove all access" but not "see and selectively revoke."
+- **A "last remaining admin" guard** and **a real permissions decision
+  for `onboarding_manager`** — see Planned, above.
+- **Break-glass access documentation** — Phase I item 9's unfinished
+  half.
 
 ### Not scheduled — revisit only if triggered
 

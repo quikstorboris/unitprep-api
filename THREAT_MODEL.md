@@ -31,8 +31,9 @@ compromised:
 4. **The audit trail** (`auth.auth_audit_logs`) — the record an operator
    or a future pentest/auditor relies on; its own integrity is an asset.
 5. **Admin capability** — the ability to create invites, revoke sessions,
-   deactivate accounts, and (via account recovery) revoke and reissue
-   every credential on an account.
+   deactivate accounts (directly, or via account recovery, which also
+   revokes and reissues every credential on an account), assign or
+   change a user's role, and read the full audit trail.
 6. **Product data behind the tool routes** (dedup, unit-group) — gated by
    authentication but not covered further here; see their own domain
    docs.
@@ -43,8 +44,8 @@ compromised:
 |---|---|---|
 | Anonymous internet caller | `/auth/register/begin\|finish` (invite path), `/auth/login/begin\|finish`, `/auth/invites/recover` isn't reachable unauth — admin only | Nothing. Every response on these paths is deliberately opaque (see "User enumeration" below). |
 | Invited-not-yet-registered user | The invite-redemption registration path, with an unguessable token | Possession of the token, nothing else. |
-| Authenticated non-admin | Every tool route, TOTP self-service (enroll/disable/step-up), sign-out | Their own identity only — every RLS policy in the schema that isn't `_admin_only` is `owner_only` or `own_or_admin`. |
-| Authenticated admin | Everything a non-admin can, plus `/auth/invites`, `/auth/invites/recover`, `/auth/users` | Their own identity, plus the `current_setting('app.current_user_role') = 'admin'` bypass wired into each RLS policy that grants it. |
+| Authenticated non-admin (`onboarding_manager`) | Every tool route, TOTP self-service (enroll/disable/step-up), sign-out — every admin-gated route refuses it | Their own identity only, same as any authenticated caller. `onboarding_manager` exists in the schema (added 2026-08-04) but has no permissions of its own — every `match admin.role` arm for it 403s via `insufficient_role` and writes an `authorization_failure` row. Nothing yet distinguishes it from a hypothetical third non-admin role; it is simply "authenticated, not admin" today. |
+| Authenticated admin | Everything a non-admin can, plus `/auth/invites`, `/auth/invites/recover`, `/auth/users`, `/auth/users/{id}/deactivate`, `/auth/users/{id}/role`, `/auth/audit-logs` | Their own identity, plus the `current_setting('app.current_user_role') = 'admin'` bypass wired into each RLS policy that grants it. May assign either role (`admin` or `onboarding_manager`) to anyone, at invite time or after — see the role-assignment row below. Cannot change their own role or deactivate themselves (structural self-lockout guards). |
 | `app_service` (the DB role the API connects as) | Whatever RLS + column grants allow | Nothing by default — RLS is deny-by-default on every table in the schema, and even where a table's RLS would allow a write, column-level grants narrow it further (see the users-table row below). |
 | The Postgres owner role / migration role | Everything, RLS included | Full trust — this is the standard Postgres "whoever runs migrations owns the schema" assumption, not something this system tries to defend against. Used deliberately, once, by `bootstrap-admin` (see below). |
 
@@ -86,10 +87,14 @@ These are load-bearing and should be re-checked if the deployment changes:
 | Session fixation / cookie tampering | Token is 256 bits of CSPRNG output, generated server-side only, never accepted from a client-supplied value. | `src/auth/session_token.rs` | Closed by construction — there is no code path that accepts a client-chosen token. |
 | Stolen-but-live session used indefinitely | Absolute expiry (`SESSION_LIFETIME_HOURS`, 12h default) plus idle expiry (`SESSION_IDLE_TIMEOUT_MINUTES`, 30min default) — either expiring makes `resolve_session` return nothing. | `auth.resolve_session`, migration `20260804130000` | Closed 2026-08-04 (Phase II item 2). |
 | Session un-revocation (an attacker or bug reviving a signed-out session) | `app_service` holds **no** `UPDATE` grant on `auth.sessions` at all, not even column-scoped — revocation can only move forward through `auth.revoke_session`/`auth.revoke_all_sessions_for_token`, both `SET revoked_at = now()` with no caller-supplied value reaching the column. | Migration `20260730140000` | Closed. |
-| Login/registration/invite endpoint abuse (credential stuffing, scripted brute force) | Peer-IP-keyed rate limiting, one shared bucket across all anonymous auth endpoints so spreading attempts across endpoints doesn't multiply budget; a separate, more generous bucket for authenticated admin invite creation. | `src/api/mod.rs`'s `GovernorLayer` wiring | Coarse behind a reverse proxy that doesn't preserve the real peer address — not applicable today (direct exposure), revisit if that changes (see Trust Assumptions). |
+| Login/registration/invite endpoint abuse (credential stuffing, scripted brute force) | Peer-IP-keyed rate limiting, one shared bucket across all anonymous auth endpoints so spreading attempts across endpoints doesn't multiply budget; a separate, more generous bucket for authenticated admin invite creation. Every `429` now writes a `rate_limit_rejected` audit row (2026-08-04) — previously a rejection was enforced but invisible to an operator reviewing the trail. | `src/api/mod.rs`'s `GovernorLayer` wiring, `rate_limit_exceeded_with_audit` | Coarse behind a reverse proxy that doesn't preserve the real peer address — not applicable today (direct exposure), revisit if that changes (see Trust Assumptions). The audit row carries no `ip_address` — the governor error handler is synchronous with no `ConnectInfo` available at that layer. |
+| A session presented after it has already expired going unnoticed operationally | `auth.check_session_expired` distinguishes a session that genuinely existed and crossed its idle/absolute expiry from an ordinary missing or forged cookie; the mandatory extractor fires `session_expired_access_attempt` for the former. Revoked sessions are excluded — those already have their own `session_revoked` event from when they were revoked. | `src/auth/authenticated_user.rs`'s `record_expired_access_attempt`, migration `20260804170000` | Closed 2026-08-04. The HTTP response is unchanged either way (still a plain 401) — this is purely an operator-visibility improvement, not a new control. |
+| An authenticated caller (any non-admin role) reaching an admin-gated action | Every admin-gated `match admin.role` has an explicit arm for every non-admin role that returns a shared `insufficient_role()` 403 and writes an `authorization_failure` audit row naming the action attempted. | `src/auth/authenticated_user.rs`'s `insufficient_role`, every `auth_*.rs` handler's role match | Closed 2026-08-04, coincident with `onboarding_manager` existing to make the arm reachable at all — while `Role` had one variant this code path was unreachable and untestable. |
+| Privilege escalation via role assignment | Any admin may assign either role (`admin` or `onboarding_manager`) to anyone, at invite-creation time or via `POST /auth/users/{id}/role` — both validate the role string against `Role::from_db_text`, so an unrecognised value is a 400, never a raw Postgres enum-cast error. `role` has no application-facing `UPDATE` grant at all (see the users-table row below); both paths go through `SECURITY DEFINER` functions (`auth.set_user_role`, mirroring `auth.set_user_status`) that re-check the caller is an admin independently of the RLS/column-grant layer. | `auth_invites.rs`, `auth_user_role.rs`, migration `20260804180000` | Accepted by design — there is no finer-grained "who may grant admin" policy than "any admin," since `onboarding_manager` has no capability of its own to make a narrower allowlist meaningful yet. Revisit if a role with real privileges is ever added. |
+| An admin locking themselves out via a self-inflicted role change or deactivation | `POST /auth/users/{id}/role` and `POST /auth/users/{id}/deactivate` both refuse when the target is the caller's own `user_id`, before any database write. | `auth_user_role.rs`, `auth_user_status.rs` | Closed for the single-admin-acting-alone case. **Not** closed for two-admin mutual lockout (admin A demotes/deactivates admin B and vice versa, or in either order) — see Known gaps. |
 | User enumeration via login/registration/TOTP responses | Every rejection reason on an anonymous path collapses to one indistinguishable response (`login_unavailable`, `registration_unavailable`) — unknown email, wrong password-equivalent, inactive account, and "no passkey enrolled" are not separable by the caller. | `src/api/auth_login.rs`, `auth_register.rs` | Closed — verified by dedicated tests asserting identical response shapes across every rejection reason. |
-| Privilege escalation via self-service profile update | Column-level `UPDATE` grant on `auth.users` restricted to `(first_name, last_name, job_title)` — `role`/`status`/`email` are not grantable columns at all, so a bug that accepts a `role` field from a client request still can't write it. | Migration `20260729210000` | Closed. Anything touching `role`/`status` must go through an admin-checked `SECURITY DEFINER` function. |
-| An admin abusing legitimate admin capability (insider risk) | Every administrative act (invite creation, account recovery, user status change) is audited with actor and target recorded separately, never conflated. | `auth_audit_log.rs`'s `Subjects` type, `INVITE_CREATED`/`ACCOUNT_RECOVERY_INITIATED` events | Detective, not preventive — this system has one privileged role (`admin`) with no further separation of duties. Accepted for the current scale (small, trusted admin population); revisit if the admin population grows past "everyone knows everyone." |
+| Privilege escalation via self-service profile update | Column-level `UPDATE` grant on `auth.users` restricted to `(first_name, last_name, job_title)` — `role`/`status`/`email` are not grantable columns at all, so a bug that accepts a `role` field from a client request still can't write it. | Migration `20260729210000` | Closed. Anything touching `role`/`status` must go through an admin-checked `SECURITY DEFINER` function — `auth.set_user_status` and, as of 2026-08-04, `auth.set_user_role` (migration `20260804180000`). |
+| An admin abusing legitimate admin capability (insider risk) | Every administrative act (invite creation, account recovery, standalone deactivation, role change) is audited with actor and target recorded separately, never conflated, and — as of 2026-08-04 — with `ip_address` and a real before/after diff for the events that are a transition (`user_deactivated`, `role_changed`, `account_recovery_initiated`). An admin can read the full trail via `GET /auth/audit-logs`. | `auth_audit_log.rs`'s `Subjects`/`Change` types, `USER_DEACTIVATED`/`ROLE_CHANGED`/`ACCOUNT_RECOVERY_INITIATED`/`INVITE_CREATED` events | Detective, not preventive — this system has two roles today, but only one (`admin`) carries any real capability, so there is still no separation of duties between "can act" and "can review." Accepted for the current scale (small, trusted admin population); revisit if the admin population grows past "everyone knows everyone," or once `onboarding_manager` (or a future role) gains capability that would make a second reviewer meaningful. |
 | Anomalous / attacker-controlled login on a stolen-but-valid credential set | A login from an IP or `user_agent` never seen before for an account with prior history is audited unconditionally and gated behind an immediate TOTP step-up when the account has TOTP confirmed. | `src/api/auth_login.rs`'s `assess_login_risk`, migration `20260804140000` | Closed 2026-08-04 (Phase II item 4) for accounts with TOTP enrolled. An account with **no** TOTP confirmed is audited but not gated — see the matching row below. |
 | Anomalous login on an account with no step-up factor enrolled | Audited (`login_anomaly_detected` with `step_up_required: false` in the metadata) so an operator can see it. | Same as above | **Accepted, named residual risk** — there is no factor to gate with, and forcing a lockout over a self-service factor nobody set up would be a denial-of-service on that account, not a hardening measure. Mitigation is encouraging/requiring TOTP enrolment broadly, not a technical control on this path. |
 | Location-based anomaly detection | Scoped down to "new IP address," not true geolocation. | Same as above | **Deliberately deferred** — true geo needs a GeoIP database as a new dependency. Revisit alongside Cloudflare adoption, which would provide country-level geolocation via `CF-IPCountry` for free — see the vault's trigger-gated backlog. |
@@ -127,26 +132,32 @@ stays honest rather than only cataloguing what's already closed:
 - `unitprep-ui` has no step-up UI yet — an anomalous login on a
   TOTP-enrolled account currently 403s on every route except `whoami`
   with no frontend explanation of why.
-- No standalone "deactivate a user" admin action — `auth.set_user_status`
-  (the underlying primitive, admin-gated) exists and is exercised by the
-  account-recovery flow, but nothing exposes it as its own endpoint, so
-  there's no way to deactivate an account outside of full recovery.
-  Frontend has no button for it either, for the same reason. Scheduled
-  as a small follow-up after this Phase II close-out.
-- Audit rows don't yet carry `ip_address`, `before_state`, or
-  `after_state` — all three columns exist in `auth.auth_audit_logs`
-  (since the original schema) but `audit_log::record()` has never
-  written any of them. Relevant if/when a frontend audit-log viewer with
-  before/after diffing is built — see the vault for that discussion.
 - `auth.auth_configuration.step_up_actions` and `allowed_factors` have no
   admin UI yet — the only way to edit either today is direct SQL. Fine
   for now (one admin, low change frequency); revisit once an
   Admin > Security policy tab is built, since a UI should presumably
   confirm before someone turns off a step-up gate.
-- Rate-limit rejections (`429` from the auth/invite `GovernorLayer`) and
-  a session presented after it's expired aren't audited or even
-  `tracing`-logged yet — both flagged as gaps worth closing, not yet
-  built.
+- **`onboarding_manager` has no permissions of its own** — the role can
+  be assigned (invite-time or via the role-change endpoint) and is
+  correctly refused by every admin-gated action, but nothing has decided
+  what it *should* be able to do. Assigning the role is solved; the
+  actual allowlist decision is not, and is genuinely unscheduled rather
+  than deferred-with-a-plan.
+- **No "last remaining admin" guard.** The self-role-change and
+  self-deactivation refusals stop an admin locking themselves out
+  directly, but nothing stops two admins from demoting or deactivating
+  each other down to zero real admins left, in either order. Only a
+  realistic scenario once a second admin actually exists — today there
+  is effectively one — but worth closing before that happens rather
+  than after.
+- No formal, automated check that every new admin-gated handler actually
+  gets a non-admin role arm (and the `authorization_failure` audit that
+  goes with it) — today this is enforced by the exhaustive-match compiler
+  error whenever a `Role` variant is added, which is a real guarantee for
+  *existing* roles, but does nothing for a handler that simply never
+  matches on `admin.role` in the first place (see `auth_totp.rs`, which
+  has no role gate at all because every authenticated caller is allowed
+  to manage their own TOTP).
 
 ## Review cadence
 

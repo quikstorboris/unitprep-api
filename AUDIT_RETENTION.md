@@ -76,22 +76,43 @@ is **trigger-driven, with a floor**:
   - `totp_step_up_failed` / `totp_locked_out` clusters — a handful of
     fumbled codes is normal; a lockout on an account that isn't
     currently trying to do anything sensitive is not.
+  - `user_deactivated` (2026-08-04) — confirm you actually meant to
+    deactivate that specific account. `before_state`/`after_state` carry
+    the status transition, so this is diffable rather than a bare
+    occurrence.
+  - `role_changed` (2026-08-04) — same reasoning as deactivation: a role
+    change is consequential enough, and rare enough, that every one is
+    worth a look. Check `before_state`/`after_state` against what was
+    actually intended.
+  - `authorization_failure` (2026-08-04) — an authenticated, non-admin
+    caller reached an admin-gated action. One or two are noise (a
+    mis-clicked link, a bookmarked admin URL); a cluster against the same
+    account, or one right after that account's role changed, is not.
 - **A periodic baseline pass — quarterly is a reasonable floor** — scan
   for patterns a single alarming event wouldn't surface on its own:
   repeated `login_failed`/`registration_failed` against the same email
   (probing), any `invite_refused` the admin doesn't remember causing,
-  and a general skim for event-type frequencies that look different
-  from the previous quarter. Adjust the cadence up if the user base
-  grows past "one admin can eyeball it," or down if quarterly turns out
-  to reliably find nothing — this number is a starting point, not a
-  commitment.
+  a `rate_limit_rejected` cluster (2026-08-04 — scripted probing, not
+  necessarily malicious, but worth knowing about), any
+  `session_expired_access_attempt` (2026-08-04 — a session that outlived
+  its expiry and was still being presented; rare, and worth understanding
+  why a client kept retrying), and a general skim for event-type
+  frequencies that look different from the previous quarter. Adjust the
+  cadence up if the user base grows past "one admin can eyeball it," or
+  down if quarterly turns out to reliably find nothing — this number is a
+  starting point, not a commitment.
 
 ## Practical queries for a review pass
 
-Run these as the admin role (RLS restricts `SELECT` on
-`auth.auth_audit_logs` to `current_setting('app.current_user_role') =
-'admin'`, so they need an admin-context connection, not `app_service`'s
-default identity-less one).
+**As of 2026-08-04, `GET /auth/audit-logs` (admin-only, filterable by
+`event_type` and `user_id`, keyset-paginated) is the normal way to do
+this** — it's what `unitprep-ui`'s Audit Logs page uses, and it needs no
+direct database access. The raw SQL below is the fallback for anything
+the endpoint doesn't filter on yet (date-range aggregation, `GROUP BY`),
+and for anyone reviewing without the frontend in front of them. Run these
+as the admin role (RLS restricts `SELECT` on `auth.auth_audit_logs` to
+`current_setting('app.current_user_role') = 'admin'`, so they need an
+admin-context connection, not `app_service`'s default identity-less one).
 
 Event-type frequency, most recent quarter:
 
@@ -129,13 +150,27 @@ SELECT metadata->>'email' AS email, count(*)
 ```
 
 Every administrative act, actor and target both, for a specific
-timeframe (useful after any real incident, not just routine review):
+timeframe (useful after any real incident, not just routine review) —
+`before_state`/`after_state` are included since three of these event
+types are now real transitions, not bare occurrences:
 
 ```sql
-SELECT created_at, event_type, actor_user_id, target_user_id, metadata
+SELECT created_at, event_type, actor_user_id, target_user_id,
+       ip_address, before_state, after_state, metadata
   FROM auth.auth_audit_logs
  WHERE event_type IN ('invite_created', 'invite_refused',
-                       'account_recovery_initiated', 'session_revoked')
+                       'account_recovery_initiated', 'session_revoked',
+                       'user_deactivated', 'role_changed')
+ ORDER BY created_at DESC;
+```
+
+Every `authorization_failure`, to spot a role or account being probed
+against admin-gated actions:
+
+```sql
+SELECT created_at, actor_user_id, ip_address, metadata->>'action' AS action
+  FROM auth.auth_audit_logs
+ WHERE event_type = 'authorization_failure'
  ORDER BY created_at DESC;
 ```
 

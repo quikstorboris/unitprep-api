@@ -80,6 +80,79 @@ scheduled, only trigger-gated.
   append-only triggers block deletion outright) and a trigger-driven
   review process with runnable queries.
 
+The backlog approved right after Phase II's close-out also shipped, found
+via a real user bug report ("disable user feature is not available in the
+FE") and the audit-log-viewer questions it raised: a standalone
+disable-user action, the two audit-log gaps that were blocking a frontend
+viewer, three new audit event types, the `onboarding_manager` role, and a
+way to actually assign it.
+
+### Added
+- **`POST /auth/users/{id}/deactivate`** — admin-gated, wraps the
+  already-built `auth.set_user_status` primitive in its own endpoint
+  rather than only being reachable indirectly through account recovery.
+  Refuses on self, on an already-deactivated target, and on a concurrent
+  status change; writes a `user_deactivated` audit row with a real
+  before/after status diff. `unitprep-ui`'s admin Users table gained a
+  matching Disable button with a confirm step.
+- **`GET /auth/audit-logs`** — admin-only listing over
+  `auth.auth_audit_logs`, filterable by `event_type` and `user_id`
+  (matches actor or target), keyset-paginated by `id`. No new `SECURITY
+  DEFINER` function needed — `auth_audit_logs_select_admin_only` already
+  grants exactly this access, unlike `list_users_for_admin`, which exists
+  to bypass a *different* table's owner-only RLS for a cross-user join.
+  Backs `unitprep-ui`'s new Audit Logs page: filters, keyset "load more",
+  and a red/green before/after diff view for the events that carry one.
+- **`audit_log::record()` now takes `ip_address` and a `Change`
+  (before/after) pair.** Both columns existed in `auth.auth_audit_logs`
+  since the very first migration with nothing ever writing them. Every
+  existing call site was updated — `ip_address` is populated wherever
+  `ConnectInfo` was already in scope or was cheap to add (login/
+  registration success paths, invite creation/recovery, the new
+  deactivate-user and role-change actions); the `/begin` legs and TOTP
+  handlers still pass `None`, since neither has a natural IP source
+  without disproportionate churn. `before_state`/`after_state` are
+  populated for the schema's named diff-worthy events
+  (`user_deactivated`, `account_recovery_initiated`, `role_changed`).
+- **Three new audit event types.** `rate_limit_rejected` (fired from the
+  auth/invite `GovernorLayer`'s error handler for the caller-driven
+  rejection case only — the handler is synchronous with no `ConnectInfo`
+  available, so this one carries no `ip_address`); `session_expired_access_attempt`
+  (a session that genuinely existed and crossed its idle or absolute
+  expiry, backed by a new `auth.check_session_expired` function —
+  distinct from an ordinary missing/forged cookie, which still gets a
+  plain 401 with no row); `authorization_failure` (an authenticated
+  caller reaching an admin-gated action without the role for it).
+- **`onboarding_manager`**, a second `auth.auth_role` enum value and
+  `Role` variant — the second role named in the original architecture
+  doc's extensible-role-column design. Every admin-gated `match
+  admin.role` — unreachable while `Role` had one variant — gained an
+  explicit arm that refuses it via a new shared `insufficient_role()` 403
+  and writes an `authorization_failure` row.
+- **Role selection.** `CreateInviteRequest` gained a `role` field
+  (validated against `Role::from_db_text`, now public so a request-body
+  validator and the session extractor share one parser) — any admin may
+  assign either role at invite-creation time, and reissuing re-applies
+  whatever role is submitted. `POST /auth/users/{id}/role` changes an
+  already-enrolled user's role via a new `auth.set_user_role` `SECURITY
+  DEFINER` function (mirroring `set_user_status` — `role` has no direct
+  `UPDATE` grant), refuses a caller changing their own role, and writes a
+  `role_changed` audit row with a before/after diff. `unitprep-ui` gained
+  a role dropdown on the invite form and a per-row role dropdown on the
+  admin Users table.
+
+### Documentation
+- **THREAT_MODEL.md** — new matrix rows for rate-limit abuse,
+  session-expiry re-use, and role-based authorization failure; three
+  `Known gaps` entries closed (disable-user, audit `ip_address`/before-
+  after, rate-limit/session-expiry auditing); a new gap named
+  (`onboarding_manager` has no permissions of its own yet — assigning it
+  is solved, what it can do is still open).
+- **AUDIT_RETENTION.md** — the trigger-driven immediate-review list
+  gained `user_deactivated`, `role_changed`, and `authorization_failure`;
+  practical queries extended to use `/auth/audit-logs` as the normal
+  operational path, with raw SQL kept as the fallback.
+
 
 
 ## [1.5.0] - 2026-08-04
