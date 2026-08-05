@@ -335,6 +335,7 @@ pub fn router(state: AppState) -> Router {
         // isn't the "trusted caller hammering a write" case that
         // reasoning exists for.
         .route("/auth/users", get(auth_users::list_users))
+        .route("/auth/users/export", get(auth_users::export_users))
         .route(
             "/auth/users/{id}/deactivate",
             post(auth_user_status::deactivate_user),

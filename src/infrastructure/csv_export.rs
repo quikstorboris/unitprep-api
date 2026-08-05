@@ -87,7 +87,15 @@ pub fn build_zip(files: Vec<ExportFile>) -> Result<Vec<u8>> {
 /// Writes `header` followed by `rows` to an in-memory CSV byte buffer —
 /// the `Writer::from_writer` + write loop + `flush()` boilerplate every
 /// `generate_*_csv` function below used to repeat independently.
-fn write_csv(header: &[&str], rows: impl IntoIterator<Item = Vec<String>>) -> Result<Vec<u8>> {
+///
+/// `pub(crate)`, not private: reused directly by `api::auth_users`'s CSV
+/// export, which has nothing to do with unit groups but needs the exact
+/// same "header + sanitized rows -> CSV bytes" behavior. Writing a second
+/// copy would risk the two drifting (e.g. one sanitizing cells, one not).
+pub(crate) fn write_csv(
+    header: &[&str],
+    rows: impl IntoIterator<Item = Vec<String>>,
+) -> Result<Vec<u8>> {
     let mut buffer = Vec::new();
 
     {
