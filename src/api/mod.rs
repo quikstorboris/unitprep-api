@@ -350,6 +350,10 @@ pub fn router(state: AppState) -> Router {
         // Admin-only, read-only -- same no-dedicated-bucket reasoning as
         // /auth/users above.
         .route("/auth/audit-logs", get(auth_audit_logs::list_audit_logs))
+        .route(
+            "/auth/audit-logs/event-types",
+            get(auth_audit_logs::list_event_types),
+        )
         .route("/auth/logout", post(auth_logout::logout))
         .route(
             "/auth/logout/everywhere",

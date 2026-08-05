@@ -48,6 +48,19 @@ pub struct AuditLogQuery {
     pub user_id: Option<Uuid>,
 }
 
+/// Splits `event_type`'s comma-separated form into individual values.
+/// A comma-joined string rather than a repeated `event_type=a&event_type=b`
+/// query key: `serde_urlencoded` (what axum's `Query` extractor uses) has no
+/// reliable support for collecting repeated keys into a `Vec`, so a single
+/// string field parsed here avoids that pitfall entirely.
+fn parse_event_types(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 #[derive(Debug, Serialize)]
 pub struct AuditLogEntry {
     pub id: i64,
@@ -110,10 +123,26 @@ pub async fn list_audit_logs(
     if let Some(before_id) = query.before_id {
         builder.push(" AND id < ").push_bind(before_id);
     }
-    if let Some(event_type) = &query.event_type {
-        builder
-            .push(" AND event_type = ")
-            .push_bind(event_type.clone());
+    if let Some(raw) = &query.event_type {
+        let values = parse_event_types(raw);
+        match values.len() {
+            0 => {}
+            1 => {
+                builder
+                    .push(" AND event_type = ")
+                    .push_bind(values.into_iter().next().expect("checked len == 1"));
+            }
+            _ => {
+                builder.push(" AND event_type IN (");
+                {
+                    let mut separated = builder.separated(", ");
+                    for value in values {
+                        separated.push_bind(value);
+                    }
+                }
+                builder.push(")");
+            }
+        }
     }
     if let Some(user_id) = query.user_id {
         builder
@@ -193,6 +222,43 @@ pub async fn list_audit_logs(
     Json(ListAuditLogsResponse { entries }).into_response()
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EventTypesResponse {
+    pub event_types: Vec<String>,
+}
+
+/// The canonical event-type list, for the admin filter dropdown's "which
+/// events" control -- straight from `audit_log::event::ALL`, so the
+/// frontend's list can never drift from what this backend actually writes.
+/// Admin-gated for consistency with every other audit-log-adjacent
+/// endpoint, even though the list itself carries nothing sensitive.
+pub async fn list_event_types(State(state): State<AppState>, admin: AuthenticatedUser) -> Response {
+    match admin.role {
+        Role::Admin => {}
+        Role::OnboardingManager => {
+            audit_log::record(
+                &state.db,
+                audit_log::event::AUTHORIZATION_FAILURE,
+                audit_log::Subjects::by(admin.user_id),
+                None,
+                None,
+                audit_log::Change::none(),
+                serde_json::json!({ "action": "list_event_types" }),
+            )
+            .await;
+            return insufficient_role();
+        }
+    }
+
+    Json(EventTypesResponse {
+        event_types: audit_log::event::ALL
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+    })
+    .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +269,16 @@ mod tests {
         AuthenticatedUser {
             user_id: Uuid::new_v4(),
             role: Role::OnboardingManager,
+            token_hash: vec![0u8; 32],
+            elevated_until: None,
+            requires_step_up: false,
+        }
+    }
+
+    fn admin() -> AuthenticatedUser {
+        AuthenticatedUser {
+            user_id: Uuid::new_v4(),
+            role: Role::Admin,
             token_hash: vec![0u8; 32],
             elevated_until: None,
             requires_step_up: false,
@@ -224,5 +300,42 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn event_types_refuses_a_non_admin_role() {
+        let response = list_event_types(State(empty_state()), onboarding_manager()).await;
+
+        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+    }
+
+    /// Unlike every other handler in this file, this one never touches the
+    /// database for an admin caller -- it's a static list -- so the success
+    /// path is directly assertable here rather than only reachable via a
+    /// "reaches the database" 500 proxy.
+    #[tokio::test]
+    async fn event_types_returns_the_full_canonical_list_for_an_admin() {
+        let response = list_event_types(State(empty_state()), admin()).await;
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body must be readable");
+        let parsed: EventTypesResponse =
+            serde_json::from_slice(&body).expect("response body must be valid JSON");
+
+        let expected: Vec<String> = audit_log::event::ALL
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(parsed.event_types, expected);
+    }
+
+    #[test]
+    fn parse_event_types_trims_and_drops_empties() {
+        assert_eq!(
+            parse_event_types(" login_failed , login_succeeded ,, "),
+            vec!["login_failed".to_string(), "login_succeeded".to_string()]
+        );
     }
 }

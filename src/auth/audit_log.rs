@@ -175,6 +175,51 @@ pub mod event {
     /// re-enters that state, since the revoke already happened at the
     /// original deactivation.
     pub const USER_REACTIVATED: &str = "user_reactivated";
+
+    /// Every event type that exists, for the admin audit-log viewer's
+    /// "which events" filter -- served over `GET /auth/audit-logs/event-types`
+    /// rather than hand-duplicated into the frontend, so the two cannot
+    /// drift the way a second, independently-maintained list would.
+    ///
+    /// Not derived automatically (no macro/reflection) -- adding a new
+    /// event type above means adding it here too. `event_types_has_no_duplicates`
+    /// below only catches a copy-paste duplicate, not an omission; there is
+    /// no compiler enforcement for that half, same as this module's other
+    /// deliberate choice to keep `event_type` as `text` rather than an enum.
+    pub const ALL: &[&str] = &[
+        LOGIN_SUCCEEDED,
+        LOGIN_FAILED,
+        PASSKEY_REGISTERED,
+        REGISTRATION_FAILED,
+        INVITE_CREATED,
+        SESSION_REVOKED,
+        TOTP_ENROLMENT_STARTED,
+        TOTP_ENROLMENT_FAILED,
+        TOTP_ENROLLED,
+        INVITE_REFUSED,
+        ACCOUNT_RECOVERY_INITIATED,
+        TOTP_STEP_UP_SUCCEEDED,
+        TOTP_STEP_UP_FAILED,
+        LOGIN_ANOMALY_DETECTED,
+        SESSION_EXPIRED_ACCESS_ATTEMPT,
+        RATE_LIMIT_REJECTED,
+        AUTHORIZATION_FAILURE,
+        USER_DEACTIVATED,
+        ROLE_CHANGED,
+        USER_REACTIVATED,
+    ];
+
+    #[cfg(test)]
+    mod tests {
+        use super::ALL;
+        use std::collections::HashSet;
+
+        #[test]
+        fn event_types_has_no_duplicates() {
+            let unique: HashSet<&str> = ALL.iter().copied().collect();
+            assert_eq!(unique.len(), ALL.len(), "ALL contains a duplicate entry");
+        }
+    }
 }
 
 /// What changed, for the events that are a value transition rather than a
