@@ -165,6 +165,16 @@ pub mod event {
     /// assigned role there) -- this is a transition on an existing
     /// account, which is what `Change` is for.
     pub const ROLE_CHANGED: &str = "role_changed";
+
+    /// An administrator reactivated a deactivated user's account, issuing a
+    /// fresh invite in its place. Distinct from `ACCOUNT_RECOVERY_INITIATED`:
+    /// that action starts from `active` (a lost credential on an account
+    /// that could still sign in) and cycles through `deactivated` only as a
+    /// mechanism to trigger the revoke-all-access-paths behaviour; this one
+    /// starts from `deactivated` (access was deliberately removed) and never
+    /// re-enters that state, since the revoke already happened at the
+    /// original deactivation.
+    pub const USER_REACTIVATED: &str = "user_reactivated";
 }
 
 /// What changed, for the events that are a value transition rather than a

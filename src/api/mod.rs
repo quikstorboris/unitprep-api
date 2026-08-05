@@ -340,6 +340,10 @@ pub fn router(state: AppState) -> Router {
             post(auth_user_status::deactivate_user),
         )
         .route(
+            "/auth/users/{id}/reactivate",
+            post(auth_user_status::reactivate_user),
+        )
+        .route(
             "/auth/users/{id}/role",
             post(auth_user_role::change_user_role),
         )
