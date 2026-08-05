@@ -32,6 +32,13 @@ pub struct UserSummary {
     pub created_at: DateTime<Utc>,
     pub credential_count: i64,
     pub totp_enrolled: bool,
+    /// The most recent `last_seen_at` across every session this user has
+    /// ever had, or `None` if they have never had one (still `invited`,
+    /// or every session has since expired past retention -- expired
+    /// sessions aren't deleted today, so in practice this is only `None`
+    /// for a not-yet-enrolled account). Backs the admin Users table's
+    /// dormant-account indicator.
+    pub last_seen_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,6 +90,7 @@ pub async fn list_users(State(state): State<AppState>, admin: AuthenticatedUser)
             DateTime<Utc>,
             i64,
             bool,
+            Option<DateTime<Utc>>,
         )>,
         sqlx::Error,
     > = sqlx::query_as("SELECT * FROM auth.list_users_for_admin()")
@@ -117,6 +125,7 @@ pub async fn list_users(State(state): State<AppState>, admin: AuthenticatedUser)
                 created_at,
                 credential_count,
                 totp_enrolled,
+                last_seen_at,
             )| UserSummary {
                 id,
                 email,
@@ -129,6 +138,7 @@ pub async fn list_users(State(state): State<AppState>, admin: AuthenticatedUser)
                 created_at,
                 credential_count,
                 totp_enrolled,
+                last_seen_at,
             },
         )
         .collect();
