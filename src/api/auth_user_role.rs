@@ -143,6 +143,48 @@ pub async fn change_user_role(
         return conflict(format!("This user already has the {prior_role} role."));
     }
 
+    // Refuses only when this specific change would zero out active admins
+    // -- promoting someone, or demoting one admin while another remains
+    // active, is unaffected. Doesn't stop two admins taking turns
+    // demoting each other down to one and then that one demoting
+    // themselves (already refused above, self-target) -- only the
+    // single-request case where this admin's own action would be the
+    // one that empties the role. Mirrors the reasoning in
+    // deactivate_user's equivalent check.
+    if prior_role == Role::Admin.as_db_text() && new_role != Role::Admin {
+        let remaining_admins: Result<i64, sqlx::Error> = sqlx::query_scalar(
+            "SELECT count(*) FROM auth.users
+              WHERE role = 'admin'::auth.auth_role
+                AND status = 'active'::auth.user_status
+                AND deleted_at IS NULL
+                AND id != $1",
+        )
+        .bind(target_user_id)
+        .fetch_one(&mut *tx)
+        .await;
+
+        match remaining_admins {
+            Ok(0) => {
+                if let Err(err) = tx.rollback().await {
+                    tracing::error!(error = %err, "failed to roll back a last-admin role change");
+                }
+                return conflict(
+                    "This is the last active admin. Promote another user to admin before \
+                     changing this one's role."
+                        .to_string(),
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to count remaining admins during role change");
+                if let Err(err) = tx.rollback().await {
+                    tracing::error!(error = %err, "failed to roll back after a remaining-admins count failure");
+                }
+                return internal_error("Could not change this user's role");
+            }
+        }
+    }
+
     let updated: Result<bool, sqlx::Error> =
         sqlx::query_scalar("SELECT auth.set_user_role($1, $2::auth.auth_role)")
             .bind(target_user_id)

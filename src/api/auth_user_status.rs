@@ -110,15 +110,15 @@ pub async fn deactivate_user(
         }
     };
 
-    let existing: Result<Option<(String,)>, sqlx::Error> = sqlx::query_as(
-        "SELECT status::text FROM auth.users WHERE id = $1 AND deleted_at IS NULL",
+    let existing: Result<Option<(String, String)>, sqlx::Error> = sqlx::query_as(
+        "SELECT status::text, role::text FROM auth.users WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(target_user_id)
     .fetch_optional(&mut *tx)
     .await;
 
-    let prior_status = match existing {
-        Ok(Some((status,))) => status,
+    let (prior_status, prior_role) = match existing {
+        Ok(Some(row)) => row,
         Ok(None) => {
             if let Err(err) = tx.rollback().await {
                 tracing::error!(error = %err, "failed to roll back after a missing user lookup");
@@ -136,6 +136,43 @@ pub async fn deactivate_user(
             tracing::error!(error = %err, "failed to roll back a no-op deactivation");
         }
         return conflict("This user is already deactivated.".to_string());
+    }
+
+    // Same reasoning as change_user_role's equivalent check: deactivating
+    // the last active admin would leave the account with no one able to
+    // undo it (short of the bootstrap-admin CLI's break-glass path).
+    if prior_role == Role::Admin.as_db_text() && prior_status == "active" {
+        let remaining_admins: Result<i64, sqlx::Error> = sqlx::query_scalar(
+            "SELECT count(*) FROM auth.users
+              WHERE role = 'admin'::auth.auth_role
+                AND status = 'active'::auth.user_status
+                AND deleted_at IS NULL
+                AND id != $1",
+        )
+        .bind(target_user_id)
+        .fetch_one(&mut *tx)
+        .await;
+
+        match remaining_admins {
+            Ok(0) => {
+                if let Err(err) = tx.rollback().await {
+                    tracing::error!(error = %err, "failed to roll back a last-admin deactivation");
+                }
+                return conflict(
+                    "This is the last active admin. Promote another user to admin before \
+                     deactivating this one."
+                        .to_string(),
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to count remaining admins during deactivation");
+                if let Err(err) = tx.rollback().await {
+                    tracing::error!(error = %err, "failed to roll back after a remaining-admins count failure");
+                }
+                return internal_error("Could not deactivate this user");
+            }
+        }
     }
 
     let updated: Result<bool, sqlx::Error> =
