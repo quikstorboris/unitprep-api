@@ -39,6 +39,17 @@ const BODY_FONT_SIZE: f32 = 8.0;
 const TITLE_FONT_SIZE: f32 = 16.0;
 const META_FONT_SIZE: f32 = 10.0;
 
+// Details wraps across multiple lines rather than truncating -- it's the
+// one column carrying genuinely prose-like content (before/after diff
+// summaries, metadata), unlike a name or IP address where truncation
+// loses nothing worth keeping. Capped at 3 lines so a pathological long
+// value (a large metadata dump) can't blow up a single row's height
+// unboundedly; anything past the cap is marked, not silently dropped.
+// Continuation lines use a tighter line height than ROW_HEIGHT_MM --
+// they're wrapped lines within one logical row, not new rows.
+const DETAILS_MAX_WRAP_LINES: usize = 3;
+const DETAIL_LINE_HEIGHT_MM: f32 = 4.0;
+
 // Letterhead logo -- page 1 only, top-left. Compiled into the binary
 // (not a runtime file path) so the export has no filesystem dependency
 // beyond what's already true of the built-in fonts.
@@ -87,11 +98,19 @@ struct Column {
 // Widths (the gap between one column's x_offset_mm and the next's) use a
 // conservative ~1.8mm/char plus a couple mm of unused margin baked into
 // each max_chars -- verified against a real render (see
-// write_sample_pdf_to_disk_for_manual_inspection). Event and Details get
-// the largest share of the landscape page's extra width: those were the
-// two columns a real report showed truncating hardest (event_type names
-// run up to 31 characters, and Details carries full before/after diff
-// summaries).
+// write_sample_pdf_to_disk_for_manual_inspection).
+//
+// Actor/Target/IP were sized down from an earlier pass that budgeted for
+// worst-case content (a bare 36-character UUID fallback, or a full IPv4
+// literal) on every row -- but a *resolved* actor/target is typically
+// "First Last" (well under half that), so the wider budget just left
+// visible dead space in front of IP and Details on a typical row. Actor/
+// Target still have enough room for most real names; the rare
+// unresolved-UUID fallback truncates harder now, which is an acceptable
+// trade since the full UUID remains visible on the on-screen audit log
+// page regardless. The reclaimed width goes to Details -- max_chars here
+// is a *per-line* budget now that Details wraps (see DETAILS_MAX_WRAP_LINES
+// above) rather than a single-line truncation limit.
 const COLUMNS: &[Column] = &[
     Column {
         label: "Time",
@@ -106,24 +125,24 @@ const COLUMNS: &[Column] = &[
     Column {
         label: "Actor",
         x_offset_mm: 82.0,
-        max_chars: 23,
+        max_chars: 16,
     },
     Column {
         label: "Target",
-        x_offset_mm: 127.0,
-        max_chars: 23,
+        x_offset_mm: 114.0,
+        max_chars: 16,
     },
     Column {
         label: "IP",
-        x_offset_mm: 172.0,
+        x_offset_mm: 146.0,
         // 15 chars fits the longest possible IPv4 literal
         // ("255.255.255.255") without truncation.
         max_chars: 15,
     },
     Column {
         label: "Details",
-        x_offset_mm: 202.0,
-        max_chars: 35,
+        x_offset_mm: 175.0,
+        max_chars: 50,
     },
 ];
 
@@ -137,14 +156,16 @@ pub struct AuditLogPdfRow {
 }
 
 impl AuditLogPdfRow {
-    fn cells(&self) -> [&str; 6] {
+    /// Every column except Details, which wraps onto multiple lines and
+    /// so isn't rendered through the single-line generic path the rest
+    /// of the row uses.
+    fn single_line_cells(&self) -> [&str; 5] {
         [
             &self.created_at,
             &self.event_type,
             &self.actor_label,
             &self.target_label,
             &self.ip_address,
-            &self.details,
         ]
     }
 }
@@ -191,6 +212,64 @@ fn truncate(value: &str, max_chars: usize) -> String {
     let mut shortened: String = value.chars().take(max_chars.saturating_sub(1)).collect();
     shortened.push('…');
     shortened
+}
+
+/// Greedily word-wraps `value` into at most `max_lines` lines of at most
+/// `max_chars` each. Only ever called for the Details column -- every
+/// other cell stays single-line-and-truncated (a name or an IP address
+/// truncated mid-way loses nothing worth keeping; a before/after diff
+/// summary cut off is a genuinely different, worse loss).
+///
+/// A single word longer than `max_chars` is truncated in place rather
+/// than left to overflow the column (rare -- Details content is short
+/// structured text in practice, not long unbroken tokens). If more words
+/// remain than `max_lines` could hold, the last line gets an ellipsis
+/// appended (or is truncated to make room for one) so a capped value
+/// reads as "there's more", not as a complete value that happened to be
+/// short.
+fn wrap_lines(value: &str, max_chars: usize, max_lines: usize) -> Vec<String> {
+    let words: Vec<&str> = value.split_whitespace().collect();
+    if words.is_empty() || max_lines == 0 {
+        return Vec::new();
+    }
+
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut index = 0;
+
+    while index < words.len() && lines.len() < max_lines {
+        let word = words[index];
+
+        if current.is_empty() {
+            current = truncate(word, max_chars);
+            index += 1;
+            continue;
+        }
+
+        let candidate = format!("{current} {word}");
+        if candidate.chars().count() <= max_chars {
+            current = candidate;
+            index += 1;
+        } else {
+            lines.push(std::mem::take(&mut current));
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    if index < words.len() {
+        if let Some(last) = lines.last_mut() {
+            *last = if last.chars().count() < max_chars {
+                format!("{last}…")
+            } else {
+                truncate(last, max_chars)
+            };
+        }
+    }
+
+    lines
 }
 
 /// Places one piece of text at an absolute page position.
@@ -240,25 +319,96 @@ fn header_row_ops(y_mm: f32) -> Vec<Op> {
     ops
 }
 
-fn data_row_ops(row: &AuditLogPdfRow, y_mm: f32) -> Vec<Op> {
+/// The Details column's own `Column` -- pulled out once since both
+/// `data_row_ops` and `row_height_mm` need it and `COLUMNS` is always
+/// non-empty (Details is always the last one).
+fn details_column() -> &'static Column {
+    COLUMNS.last().expect("COLUMNS is never empty")
+}
+
+fn data_row_ops(row: &AuditLogPdfRow, top_y_mm: f32) -> Vec<Op> {
     let mut ops = Vec::new();
-    for (column, value) in COLUMNS.iter().zip(row.cells()) {
+
+    for (column, value) in COLUMNS[..COLUMNS.len() - 1]
+        .iter()
+        .zip(row.single_line_cells())
+    {
         ops.extend(show_text_at(
             LEFT_MARGIN_MM + column.x_offset_mm,
-            y_mm,
+            top_y_mm,
             truncate(value, column.max_chars),
         ));
     }
+
+    let details_column = details_column();
+    let wrapped = wrap_lines(
+        &row.details,
+        details_column.max_chars,
+        DETAILS_MAX_WRAP_LINES,
+    );
+    for (index, line) in wrapped.into_iter().enumerate() {
+        ops.extend(show_text_at(
+            LEFT_MARGIN_MM + details_column.x_offset_mm,
+            top_y_mm - (index as f32) * DETAIL_LINE_HEIGHT_MM,
+            line,
+        ));
+    }
+
     ops
 }
 
-/// How many data rows fit on a page below `first_row_y_mm`, given
-/// `ROW_HEIGHT_MM` spacing down to `BOTTOM_MARGIN_MM`. Kept as a function
-/// (not a stored constant) since page 1's first row starts lower than
-/// every later page's (page 1 carries the title/metadata block above the
-/// table).
-fn rows_per_page(first_row_y_mm: f32) -> usize {
-    (((first_row_y_mm - BOTTOM_MARGIN_MM) / ROW_HEIGHT_MM).floor() as isize).max(0) as usize
+/// A row's total height -- `ROW_HEIGHT_MM` for an empty or single-line
+/// Details value, plus one `DETAIL_LINE_HEIGHT_MM` per extra wrapped
+/// line. Rows are no longer uniform height once Details can wrap, so
+/// pagination (`paginate_rows` below) has to ask each row for its own.
+fn row_height_mm(row: &AuditLogPdfRow) -> f32 {
+    let details_column = details_column();
+    let line_count = wrap_lines(
+        &row.details,
+        details_column.max_chars,
+        DETAILS_MAX_WRAP_LINES,
+    )
+    .len()
+    .max(1);
+    ROW_HEIGHT_MM + (line_count - 1) as f32 * DETAIL_LINE_HEIGHT_MM
+}
+
+/// Greedy-packs `rows` into pages by each row's own height (see
+/// `row_height_mm`) rather than a fixed row count per page -- a fixed
+/// count can't work once rows have variable height. `first_page_budget_mm`
+/// is the vertical space available for rows on page 1 (smaller, since it
+/// also carries the title/metadata block); every later page gets
+/// `later_page_budget_mm`. Always places at least one row per page even
+/// if that row alone exceeds the budget, so a single oversized wrapped
+/// row can't produce an infinite loop or a silently empty page.
+fn paginate_rows(
+    rows: &[AuditLogPdfRow],
+    first_page_budget_mm: f32,
+    later_page_budget_mm: f32,
+) -> Vec<&[AuditLogPdfRow]> {
+    let mut pages = Vec::new();
+    let mut start = 0;
+    let mut budget = first_page_budget_mm;
+
+    while start < rows.len() {
+        let mut used_mm = 0.0;
+        let mut end = start;
+
+        while end < rows.len() {
+            let height = row_height_mm(&rows[end]);
+            if end > start && used_mm + height > budget {
+                break;
+            }
+            used_mm += height;
+            end += 1;
+        }
+
+        pages.push(&rows[start..end]);
+        start = end;
+        budget = later_page_budget_mm;
+    }
+
+    pages
 }
 
 /// Renders the full report to PDF bytes, paginating the row list across
@@ -315,15 +465,18 @@ pub fn render_audit_log_pdf(report: &AuditLogPdfReport) -> Vec<u8> {
 
     let first_table_y = meta_y - 6.0;
     first_page_ops.extend(header_row_ops(first_table_y));
-    let first_page_row_capacity = rows_per_page(first_table_y - ROW_HEIGHT_MM);
 
-    let mut chunks = report.rows.chunks(first_page_row_capacity.max(1));
-    let first_chunk = chunks.next().unwrap_or(&[]);
+    let first_page_budget_mm = first_table_y - ROW_HEIGHT_MM - BOTTOM_MARGIN_MM;
+    let later_page_budget_mm = TOP_START_MM - ROW_HEIGHT_MM - BOTTOM_MARGIN_MM;
+    let mut row_pages =
+        paginate_rows(&report.rows, first_page_budget_mm, later_page_budget_mm).into_iter();
+
+    let first_chunk = row_pages.next().unwrap_or(&[]);
     let mut y = first_table_y - ROW_HEIGHT_MM;
     first_page_ops.extend(set_font(BuiltinFont::Helvetica, BODY_FONT_SIZE, black()));
     for row in first_chunk {
         first_page_ops.extend(data_row_ops(row, y));
-        y -= ROW_HEIGHT_MM;
+        y -= row_height_mm(row);
     }
     first_page_ops.push(Op::EndTextSection);
     first_page_ops.push(Op::RestoreGraphicsState);
@@ -335,15 +488,14 @@ pub fn render_audit_log_pdf(report: &AuditLogPdfReport) -> Vec<u8> {
 
     // Every later page starts the table right below the top margin --
     // no title block to make room for.
-    let later_page_row_capacity = rows_per_page(TOP_START_MM - ROW_HEIGHT_MM).max(1);
-    for chunk in report.rows[first_chunk.len()..].chunks(later_page_row_capacity) {
+    for chunk in row_pages {
         let mut ops = vec![Op::SaveGraphicsState, Op::StartTextSection];
         ops.extend(header_row_ops(TOP_START_MM));
         ops.extend(set_font(BuiltinFont::Helvetica, BODY_FONT_SIZE, black()));
         let mut y = TOP_START_MM - ROW_HEIGHT_MM;
         for row in chunk {
             ops.extend(data_row_ops(row, y));
-            y -= ROW_HEIGHT_MM;
+            y -= row_height_mm(row);
         }
         ops.push(Op::EndTextSection);
         ops.push(Op::RestoreGraphicsState);
@@ -457,6 +609,82 @@ mod tests {
     }
 
     #[test]
+    fn wrap_lines_returns_nothing_for_empty_input() {
+        assert_eq!(wrap_lines("", 10, 3), Vec::<String>::new());
+        assert_eq!(wrap_lines("   ", 10, 3), Vec::<String>::new());
+    }
+
+    #[test]
+    fn wrap_lines_keeps_a_short_value_on_one_line() {
+        assert_eq!(wrap_lines("status: active", 30, 3), vec!["status: active"]);
+    }
+
+    #[test]
+    fn wrap_lines_wraps_across_multiple_lines() {
+        let result = wrap_lines("status: active -> deactivated", 12, 3);
+        assert_eq!(result, vec!["status:", "active ->", "deactivated"]);
+    }
+
+    #[test]
+    fn wrap_lines_caps_at_max_lines_and_marks_truncation() {
+        let result = wrap_lines("one two three four five six", 4, 2);
+        assert_eq!(result.len(), 2);
+        assert!(result[1].ends_with('…'));
+    }
+
+    #[test]
+    fn wrap_lines_truncates_a_single_word_longer_than_max_chars() {
+        let result = wrap_lines("supercalifragilisticexpialidocious", 10, 3);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].chars().count(), 10);
+        assert!(result[0].ends_with('…'));
+    }
+
+    #[test]
+    fn row_height_matches_row_height_mm_for_empty_details() {
+        let row = sample_row(1); // odd n -> empty details, per sample_row
+        assert_eq!(row_height_mm(&row), ROW_HEIGHT_MM);
+    }
+
+    #[test]
+    fn row_height_grows_for_wrapped_details() {
+        let mut row = sample_row(2); // even n -> non-empty details
+        row.details =
+            "one two three four five six seven eight nine ten eleven twelve thirteen".to_string();
+        let details_column = details_column();
+        let line_count = wrap_lines(
+            &row.details,
+            details_column.max_chars,
+            DETAILS_MAX_WRAP_LINES,
+        )
+        .len();
+        assert!(line_count > 1);
+        assert_eq!(
+            row_height_mm(&row),
+            ROW_HEIGHT_MM + (line_count - 1) as f32 * DETAIL_LINE_HEIGHT_MM
+        );
+    }
+
+    #[test]
+    fn paginate_rows_always_makes_progress_even_over_budget() {
+        let rows: Vec<AuditLogPdfRow> = (1..=5).map(sample_row).collect();
+        // A budget smaller than even one row's height must still place
+        // exactly one row per page, not loop forever or drop rows.
+        let pages = paginate_rows(&rows, 0.0, 0.0);
+        let total: usize = pages.iter().map(|page| page.len()).sum();
+        assert_eq!(total, rows.len());
+        assert!(pages.iter().all(|page| page.len() == 1));
+    }
+
+    #[test]
+    fn paginate_rows_packs_multiple_rows_per_page_when_budget_allows() {
+        let rows: Vec<AuditLogPdfRow> = (1..=5).map(sample_row).collect();
+        let pages = paginate_rows(&rows, 100.0, 100.0);
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].len(), 5);
+    }
+
+    #[test]
     fn renders_a_small_report_to_nonempty_pdf_bytes() {
         let report = AuditLogPdfReport {
             generated_by: "Admin Admin (admin@example.com)".to_string(),
@@ -522,7 +750,25 @@ mod tests {
                 "Users: All users".to_string(),
                 "IP address: Any".to_string(),
             ],
-            rows: (1..=60).map(sample_row).collect(),
+            rows: (1..=60)
+                .map(sample_row)
+                .enumerate()
+                .map(|(index, mut row)| {
+                    // Row 4 (n=5, an otherwise-empty-Details login event)
+                    // gets an artificially long Details value so this
+                    // manual-inspection render actually exercises wrapping
+                    // instead of only ever showing the short, single-line
+                    // "status: active -> deactivated" the fixture
+                    // otherwise alternates in.
+                    if index == 4 {
+                        row.details = "Session token rotated after step-up re-authentication; \
+                             previous session revoked from IP 203.0.113.1 due to a role change \
+                             from OnboardingManager to Admin"
+                            .to_string();
+                    }
+                    row
+                })
+                .collect(),
             truncated_at: None,
         };
 
