@@ -1,3 +1,4 @@
+pub mod audit_log_pdf;
 pub mod csv_export;
 pub mod csv_safety;
 pub mod dedup_csv_export;

@@ -355,6 +355,14 @@ pub fn router(state: AppState) -> Router {
             "/auth/audit-logs/event-types",
             get(auth_audit_logs::list_event_types),
         )
+        .route(
+            "/auth/audit-logs/export",
+            post(auth_audit_logs::export_audit_logs),
+        )
+        .route(
+            "/auth/audit-logs/export/preview",
+            post(auth_audit_logs::preview_audit_logs),
+        )
         .route("/auth/logout", post(auth_logout::logout))
         .route(
             "/auth/logout/everywhere",

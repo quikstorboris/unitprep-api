@@ -200,6 +200,34 @@ hex = "0.4.3"
 # itself, "tracing" matches every other subsystem's instrumentation.
 tower_governor = { version = "0.8", default-features = false, features = ["axum", "tracing"] }
 
+# IANA timezone database (with DST rules) -- needed for the audit-log
+# PDF's "Generated at" line to show a correct Pacific-time equivalent
+# alongside UTC. Plain chrono has no DST logic at all (FixedOffset is a
+# constant offset, and chrono::Local depends on the server's own system
+# timezone, not "wherever the reader is") -- a hardcoded "-8" would be
+# wrong for half the year (PDT is -7). This is exactly what pulls in the
+# real IANA rules for correctly deciding PST vs PDT on any given date.
+chrono-tz = "0.10"
+
+# PDF generation for the admin audit-log export report. Chosen over genpdf
+# (the higher-level layout crate built on top of this one) specifically
+# for genpdf's own biggest cost: it has no built-in-font path at all, only
+# loading external TTF files at runtime, which would mean bundling/shipping
+# font assets with the binary. printpdf supports the 14 standard PDF fonts
+# (Helvetica here) built into every PDF viewer -- zero extra assets, same
+# self-hosted-library preference as the rest of this project, and plenty
+# for a plain tabular report.
+#
+# default-features = false is deliberate and load-bearing: printpdf's
+# default feature ("html") pulls in a full HTML/CSS layout engine (the
+# `azul` crates -- azul-core/azul-css/azul-layout, plus rust-fontconfig,
+# a flexbox engine, etc.), none of which this module uses. The manual,
+# fixed-column table layout in audit_log_pdf.rs needs only printpdf's
+# core PDF-writing path. "png" adds just the `image` crate's PNG decoder
+# for the report's letterhead logo -- still nowhere near the html/svg
+# feature chain, which would pull the whole azul tree straight back in.
+printpdf = { version = "0.12", default-features = false, features = ["png"] }
+
 [dev-dependencies]
 
 # Reads the xlsx exporter's own output back in its tests, so those

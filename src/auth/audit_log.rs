@@ -176,6 +176,14 @@ pub mod event {
     /// original deactivation.
     pub const USER_REACTIVATED: &str = "user_reactivated";
 
+    /// An administrator exported the audit log as a PDF. Recorded so the
+    /// export action itself isn't the one blind spot in an otherwise
+    /// fully-logged system -- see the vault's own logging principle: an
+    /// audit log's own export/access is exactly the kind of thing an
+    /// audit trail exists to answer "who did this and when" about.
+    /// `metadata` carries the filters used and the row count returned.
+    pub const AUDIT_LOG_EXPORTED: &str = "audit_log_exported";
+
     /// Every event type that exists, for the admin audit-log viewer's
     /// "which events" filter -- served over `GET /auth/audit-logs/event-types`
     /// rather than hand-duplicated into the frontend, so the two cannot
@@ -207,6 +215,7 @@ pub mod event {
         USER_DEACTIVATED,
         ROLE_CHANGED,
         USER_REACTIVATED,
+        AUDIT_LOG_EXPORTED,
     ];
 
     #[cfg(test)]
