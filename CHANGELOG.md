@@ -6,6 +6,8 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-08-07
+
 Phase II (hardening) items 2, 4, 6, and 7 shipped: session/TOTP
 hardening, anomaly/risk-based login signals, a formal threat model, and
 audit retention/review documentation. Item 8 (ceremony-state
@@ -152,6 +154,67 @@ way to actually assign it.
   gained `user_deactivated`, `role_changed`, and `authorization_failure`;
   practical queries extended to use `/auth/audit-logs` as the normal
   operational path, with raw SQL kept as the fallback.
+
+Multi-role authorization: a user can now hold more than one role at
+once, and every admin-gated endpoint checks a real permission instead of
+matching on a hardcoded role name. `onboarding_manager`'s "no
+permissions of its own yet" gap (named above) is closed as part of this.
+
+### Added
+- **Roles and permissions are now data**, not a single `auth.users.role`
+  column: `auth.roles`, `auth.permissions`, `auth.role_permissions`, and
+  `auth.user_roles` (many-to-many). Four system roles seeded (`admin`,
+  `onboarding_manager`, `department_manager`, `sales`) with an initial
+  8-key permission catalog matching each role's agreed capabilities.
+  `auth.users.role` and the `auth_role` enum are dropped once nothing
+  references them. RLS: the catalog tables are readable by any
+  authenticated caller; `user_roles` is owner-or-admin read, admin-only
+  write, with a `WITH CHECK` that structurally refuses a caller granting
+  or revoking a role on their own account -- enforced by Postgres
+  itself, not just the handler.
+- **`AuthenticatedUser::require_permission`** replaces the `match
+  admin.role { Role::Admin => {}, Role::OnboardingManager => {
+  ...403... } }` block that had been duplicated across every admin-gated
+  handler. Checks a permission key, records an `authorization_failure`
+  audit row on refusal, and returns the existing shared 403. The closed
+  `Role` enum is gone -- roles are open-ended now, so hardcoding them in
+  Rust would defeat the point.
+- **`POST /auth/users/{id}/roles`** (grant) and **`DELETE
+  /auth/users/{id}/roles/{role_key}`** (revoke) replace the single-value
+  `POST /auth/users/{id}/role` and the `auth.set_user_role` function it
+  used -- plain RLS-scoped INSERT/DELETE on `auth.user_roles`, no
+  `SECURITY DEFINER` function needed this time, since the table's own
+  policies are the real enforcement. Revoking `admin` re-implements the
+  last-remaining-admin guard against a role count instead of a role
+  column. Both write `role_granted`/`role_revoked` audit rows carrying
+  the target's full before/after role set, not just the one role that
+  changed.
+- **`GET /auth/roles`** -- the role/permission catalog, for the admin
+  Roles page and any future role picker. No permission gate: any
+  authenticated caller can already read this under RLS, and there's
+  nothing sensitive in a role's name or its permission list.
+- **`GET`/`PUT /auth/configuration`** -- org-wide auth policy, gated by
+  a new `security_policies.manage` permission. Scoped to
+  `step_up_actions` only: `allowed_factors` exists in the schema but no
+  code path reads it, so a control for it would edit a value with no
+  effect on real behaviour.
+- Every user-creation path (invite issuance, the `bootstrap-admin` CLI)
+  now grants a role as a second insert into `auth.user_roles` rather
+  than a column value on the `INSERT INTO auth.users`.
+
+### Fixed
+- **`auth.resolve_session` was missing `permission_keys` entirely** --
+  designed and coded against in `AuthenticatedUser`, never actually
+  migrated into the database function. Every test exercised only the
+  unauthenticated (no-cookie) path, so this shipped invisibly until a
+  real login hit it. `resolve_session` now returns `permission_keys
+  TEXT[]` alongside `role_keys`, resolved in the same query.
+
+### Changed
+- **`district_manager` renamed to `department_manager`** (role key and
+  label), same day it was created -- "district manager" is already
+  self-storage-industry terminology for a client-side facility manager,
+  a different concept from this internal staff role.
 
 
 
