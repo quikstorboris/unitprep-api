@@ -1,10 +1,12 @@
 mod acknowledge_group_warnings;
 mod analyze;
 mod auth_audit_logs;
+mod auth_configuration;
 mod auth_invites;
 mod auth_login;
 mod auth_logout;
 mod auth_register;
+mod auth_roles;
 mod auth_totp;
 mod auth_user_role;
 mod auth_user_status;
@@ -349,6 +351,13 @@ pub fn router(state: AppState) -> Router {
             "/auth/users/{id}/roles/{role_key}",
             delete(auth_user_role::revoke_role),
         )
+        // No dedicated rate-limit bucket -- read-only catalog data any
+        // authenticated caller can already reach under RLS.
+        .route("/auth/roles", get(auth_roles::list_roles))
+        .route(
+            "/auth/configuration",
+            get(auth_configuration::get_configuration).put(auth_configuration::update_configuration),
+        )
         // Admin-only, read-only -- same no-dedicated-bucket reasoning as
         // /auth/users above.
         .route("/auth/audit-logs", get(auth_audit_logs::list_audit_logs))
@@ -634,6 +643,7 @@ async fn health_db(State(state): State<AppState>) -> Response {
 struct WhoamiResponse {
     user_id: String,
     roles: Vec<String>,
+    permissions: Vec<String>,
     /// Whether a *confirmed* TOTP credential exists for this account --
     /// lets the frontend show "enrolled" vs. a call-to-action instead of
     /// always presenting "enroll", which would walk an already-enrolled
@@ -689,6 +699,7 @@ async fn whoami(
     Ok(Json(WhoamiResponse {
         user_id: user.user_id.to_string(),
         roles: user.role_keys.clone(),
+        permissions: user.permission_keys.iter().cloned().collect(),
         totp_enrolled,
         step_up_required: user.requires_step_up,
     }))
