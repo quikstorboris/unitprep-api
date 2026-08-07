@@ -97,6 +97,23 @@ BEGIN
 END
 $$;
 
+-- client_ops is the first non-auth domain schema. Same USAGE-doesn't-
+-- survive-a-schema-move reasoning as the auth block above, and guarded
+-- the same way for the same fresh-branch ordering reason.
+DO
+$$
+BEGIN
+    IF EXISTS (SELECT FROM pg_catalog.pg_namespace WHERE nspname = 'client_ops') THEN
+        EXECUTE 'GRANT USAGE ON SCHEMA client_ops TO app_service';
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA client_ops TO app_service';
+        EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA client_ops '
+                'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+    ELSE
+        RAISE NOTICE 'schema "client_ops" not present yet -- skipping its grants. Re-run this file after `sqlx migrate run`.';
+    END IF;
+END
+$$;
+
 -- The app never needs sqlx's own migration-tracking table -- only
 -- sqlx-cli does, connecting as the owner role. Guarded for the same
 -- reason as the auth block: it does not exist until the first migration
