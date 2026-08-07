@@ -189,3 +189,18 @@ BEGIN
     END IF;
 END
 $$;
+
+-- client_ops.audit_log is append-only too, same reasoning as
+-- auth_audit_logs immediately above (migration
+-- 20260808130000_widen_qms_tag_access_and_add_client_ops_audit_log).
+DO
+$$
+BEGIN
+    IF EXISTS (
+        SELECT FROM pg_catalog.pg_tables
+        WHERE schemaname = 'client_ops' AND tablename = 'audit_log'
+    ) THEN
+        EXECUTE 'REVOKE UPDATE, DELETE ON client_ops.audit_log FROM app_service';
+    END IF;
+END
+$$;

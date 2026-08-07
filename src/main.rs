@@ -3,6 +3,7 @@ mod api;
 mod application;
 mod auth;
 mod bootstrap;
+mod client_ops;
 mod db;
 mod infrastructure;
 

@@ -94,10 +94,21 @@ pub fn admin_user() -> AuthenticatedUser {
     AuthenticatedUser {
         user_id: uuid::Uuid::new_v4(),
         role_keys: vec!["admin".to_string()],
-        permission_keys: ["users.manage", "users.manage_roles", "audit_logs.read", "roles.manage"]
-            .into_iter()
-            .map(String::from)
-            .collect(),
+        permission_keys: [
+            "users.manage",
+            "users.manage_roles",
+            "audit_logs.read",
+            "roles.manage",
+            // Not client_ops.perform — admin never performs client
+            // operations — but this one narrow catalog-maintenance
+            // permission is deliberately shared across all three
+            // client-ops-adjacent roles. See
+            // add_qms_tag_manage_permission_and_widen_rls.
+            "client_ops.manage_tags",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
         token_hash: vec![0u8; 32],
         elevated_until: None,
         requires_step_up: false,
@@ -114,6 +125,30 @@ pub fn onboarding_manager_user() -> AuthenticatedUser {
             "client_ops.perform",
             "client_credentials.add",
             "client_credentials.revoke",
+            "client_ops.manage_tags",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
+        token_hash: vec![0u8; 32],
+        elevated_until: None,
+        requires_step_up: false,
+    }
+}
+
+/// `department_manager`'s counterpart to `admin_user`/
+/// `onboarding_manager_user` — everything `onboarding_manager` can do,
+/// plus approving pending client-credential changes.
+pub fn department_manager_user() -> AuthenticatedUser {
+    AuthenticatedUser {
+        user_id: uuid::Uuid::new_v4(),
+        role_keys: vec!["department_manager".to_string()],
+        permission_keys: [
+            "client_ops.perform",
+            "client_credentials.add",
+            "client_credentials.revoke",
+            "client_credentials.approve",
+            "client_ops.manage_tags",
         ]
         .into_iter()
         .map(String::from)

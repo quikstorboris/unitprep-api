@@ -12,6 +12,7 @@ mod auth_user_role;
 mod auth_user_status;
 mod auth_users;
 mod cancel_session;
+mod client_ops_qms_tags;
 mod correct;
 mod correct_group;
 mod dedup;
@@ -39,7 +40,7 @@ use axum::{
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 
@@ -357,6 +358,26 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/auth/configuration",
             get(auth_configuration::get_configuration).put(auth_configuration::update_configuration),
+        )
+        // Read: any authenticated caller, same reasoning as /auth/roles
+        // above. Writes: gated on client_ops.manage_tags inside each
+        // handler (admin, onboarding_manager, department_manager all
+        // hold it) — see client_ops_qms_tags's module doc.
+        .route(
+            "/client-ops/qms-tags",
+            get(client_ops_qms_tags::list_qms_tags).post(client_ops_qms_tags::create_qms_tag),
+        )
+        .route(
+            "/client-ops/qms-tags/{tag_key}",
+            put(client_ops_qms_tags::update_qms_tag),
+        )
+        .route(
+            "/client-ops/qms-tags/{tag_key}/deactivate",
+            patch(client_ops_qms_tags::deactivate_qms_tag),
+        )
+        .route(
+            "/client-ops/qms-tags/{tag_key}/reactivate",
+            patch(client_ops_qms_tags::reactivate_qms_tag),
         )
         // Admin-only, read-only -- same no-dedicated-bucket reasoning as
         // /auth/users above.
