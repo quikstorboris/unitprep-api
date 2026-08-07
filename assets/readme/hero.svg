@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1200" height="360" viewBox="0 0 1200 360"
+     role="img" aria-labelledby="title desc">
+  <title id="title">unitprep-api</title>
+  <desc id="desc">Rust/Axum backend for UnitPrep: validates and cross-checks self-storage migration data across two tools, Group Prep and duplicate tenant check, sharing one session engine.</desc>
+
+  <defs>
+    <style>
+      .eyebrow { font: 15px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 2px; fill: #8A8F92; }
+      .name { font: 600 58px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #F4F1EA; }
+      .desc { font: 20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #C9C6BE; }
+      .chip-label { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 1px; fill: #8A8F92; }
+      .chip-label-accent { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 1px; fill: #E2A63B; }
+      .legend { font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #8A8F92; }
+      .row-label { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 1px; fill: #8A8F92; }
+      .stage { font: 600 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #F4F1EA; }
+    </style>
+  </defs>
+
+  <rect x="0.75" y="0.75" width="1198.5" height="358.5" rx="24" fill="#0B0D0E" stroke="#2B2F31" stroke-width="1.5"/>
+
+  <!-- Left: identity -->
+  <g id="title-block">
+    <polygon points="64,60 71,67 64,74 57,67" fill="#E2A63B"/>
+    <text x="80" y="72" class="eyebrow">RUST · AXUM · INTERNAL PLATFORM API</text>
+
+    <text x="64" y="140" class="name">unitprep-api</text>
+
+    <text x="64" y="182" class="desc">Validates and cross-checks self-storage migration data</text>
+    <text x="64" y="208" class="desc">before it ships — one backend, a growing set of tools.</text>
+
+    <rect x="64" y="232" width="176" height="32" rx="16" fill="none" stroke="#2B2F31" stroke-width="1.5"/>
+    <text x="152" y="252" text-anchor="middle" class="chip-label">4-CRATE WORKSPACE</text>
+
+    <rect x="256" y="232" width="176" height="32" rx="16" fill="none" stroke="#E2A63B" stroke-width="1.5"/>
+    <text x="344" y="252" text-anchor="middle" class="chip-label-accent">AUTH: IN PROGRESS</text>
+
+    <polygon points="64,300 70,306 64,312 58,306" fill="none" stroke="#E2A63B" stroke-width="1.5"/>
+    <text x="80" y="311" class="legend">flagged for human review — never auto-applied</text>
+  </g>
+
+  <!-- Right: the two real pipelines -->
+  <g id="project-proof">
+    <line x1="628" y1="40" x2="628" y2="300" stroke="#2B2F31" stroke-width="1.5"/>
+
+    <text x="652" y="58" class="row-label">GROUP PREP · 5 STAGES</text>
+    <line x1="652" y1="90" x2="1144" y2="90" stroke="#2B2F31" stroke-width="1.5"/>
+
+    <g transform="translate(652,70)">
+      <rect width="90" height="40" rx="8" fill="#15181A" stroke="#2B2F31" stroke-width="1.5"/>
+      <text x="45" y="25" text-anchor="middle" class="stage">Upload</text>
+    </g>
+    <g transform="translate(760,70)">
+      <rect width="98" height="40" rx="8" fill="#15181A" stroke="#2B2F31" stroke-width="1.5"/>
+      <text x="49" y="25" text-anchor="middle" class="stage">Discover</text>
+    </g>
+    <g transform="translate(876,70)">
+      <rect width="98" height="40" rx="8" fill="#15181A" stroke="#E2A63B" stroke-width="1.5"/>
+      <text x="49" y="25" text-anchor="middle" class="stage">Validate</text>
+      <polygon points="88,4 94,10 88,16 82,10" fill="#E2A63B"/>
+    </g>
+    <g transform="translate(992,70)">
+      <rect width="90" height="40" rx="8" fill="#15181A" stroke="#2B2F31" stroke-width="1.5"/>
+      <text x="45" y="25" text-anchor="middle" class="stage">Analyze</text>
+    </g>
+    <g transform="translate(1096,70)">
+      <rect width="48" height="40" rx="8" fill="#15181A" stroke="#2B2F31" stroke-width="1.5"/>
+      <text x="24" y="25" text-anchor="middle" class="stage">Export</text>
+    </g>
+
+    <text x="652" y="178" class="row-label">DEDUP · 3 STAGES</text>
+    <line x1="652" y1="210" x2="1144" y2="210" stroke="#2B2F31" stroke-width="1.5"/>
+
+    <g transform="translate(652,190)">
+      <rect width="140" height="40" rx="8" fill="#15181A" stroke="#2B2F31" stroke-width="1.5"/>
+      <text x="70" y="25" text-anchor="middle" class="stage">Upload</text>
+    </g>
+    <g transform="translate(808,190)">
+      <rect width="140" height="40" rx="8" fill="#15181A" stroke="#E2A63B" stroke-width="1.5"/>
+      <text x="70" y="25" text-anchor="middle" class="stage">Check</text>
+      <polygon points="130,4 136,10 130,16 124,10" fill="#E2A63B"/>
+    </g>
+    <g transform="translate(964,190)">
+      <rect width="180" height="40" rx="8" fill="#15181A" stroke="#2B2F31" stroke-width="1.5"/>
+      <text x="90" y="25" text-anchor="middle" class="stage">Export</text>
+    </g>
+
+    <rect x="652" y="262" width="300" height="30" rx="15" fill="none" stroke="#2B2F31" stroke-width="1.5"/>
+    <text x="802" y="282" text-anchor="middle" class="row-label">SHARED · unitprep-core session engine</text>
+  </g>
+</svg>
