@@ -474,11 +474,9 @@ mod tests {
         let current = totp.generate_current().expect("the clock must be readable");
         let spaced = format!("{} {}", &current[..3], &current[3..]);
 
-        assert!(
-            verify_code(user, &blob, "user@example.com", &spaced, None)
-                .expect("must not error")
-                .is_some()
-        );
+        assert!(verify_code(user, &blob, "user@example.com", &spaced, None)
+            .expect("must not error")
+            .is_some());
     }
 
     /// The replay window's whole point: the same code, submitted a second
@@ -500,14 +498,8 @@ mod tests {
             .expect("must not error")
             .expect("a fresh, correct code must be accepted");
 
-        let replayed = verify_code(
-            user,
-            &blob,
-            "user@example.com",
-            &current,
-            Some(first_step),
-        )
-        .expect("must not error");
+        let replayed = verify_code(user, &blob, "user@example.com", &current, Some(first_step))
+            .expect("must not error");
 
         assert!(
             replayed.is_none(),

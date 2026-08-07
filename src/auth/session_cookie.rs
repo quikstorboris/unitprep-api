@@ -318,7 +318,11 @@ mod tests {
             time::Duration::hours(1),
         ));
 
-        assert_eq!(same_site_attribute(&line), Some("Strict"), "emitted: {line}");
+        assert_eq!(
+            same_site_attribute(&line),
+            Some("Strict"),
+            "emitted: {line}"
+        );
     }
 
     /// The cleared cookie must match the issued one's SameSite, for the
@@ -330,7 +334,11 @@ mod tests {
     fn cleared_cookie_carries_same_site_strict() {
         let line = set_cookie_line(clear_session_cookie(CookieJar::new()));
 
-        assert_eq!(same_site_attribute(&line), Some("Strict"), "emitted: {line}");
+        assert_eq!(
+            same_site_attribute(&line),
+            Some("Strict"),
+            "emitted: {line}"
+        );
     }
 
     /// The removal must carry `Path=/`, matching what `issue_session_cookie`

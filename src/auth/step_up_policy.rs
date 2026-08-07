@@ -39,12 +39,11 @@ pub async fn action_requires_step_up(
 ) -> Result<bool, sqlx::Error> {
     let mut tx = begin_owner_rls_transaction(db, user_id).await?;
 
-    let required: bool = sqlx::query_scalar(
-        "SELECT step_up_actions ? $1 FROM auth.auth_configuration WHERE id = 1",
-    )
-    .bind(action)
-    .fetch_one(&mut *tx)
-    .await?;
+    let required: bool =
+        sqlx::query_scalar("SELECT step_up_actions ? $1 FROM auth.auth_configuration WHERE id = 1")
+            .bind(action)
+            .fetch_one(&mut *tx)
+            .await?;
 
     tx.commit().await?;
     Ok(required)
