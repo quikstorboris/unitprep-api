@@ -652,7 +652,8 @@ mod tests {
             State(empty_state()),
             AuthenticatedUser {
                 user_id: Uuid::new_v4(),
-                role: crate::auth::Role::Admin,
+                role_keys: vec!["admin".to_string()],
+                permission_keys: std::collections::HashSet::new(),
                 token_hash: vec![0u8; 32],
                 elevated_until: None,
                 requires_step_up: false,
@@ -687,7 +688,8 @@ mod tests {
             State(empty_state()),
             AuthenticatedUser {
                 user_id: Uuid::new_v4(),
-                role: crate::auth::Role::Admin,
+                role_keys: vec!["admin".to_string()],
+                permission_keys: std::collections::HashSet::new(),
                 token_hash: vec![0u8; 32],
                 elevated_until: None,
                 requires_step_up: false,

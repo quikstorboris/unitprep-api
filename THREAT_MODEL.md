@@ -137,12 +137,16 @@ stays honest rather than only cataloguing what's already closed:
   for now (one admin, low change frequency); revisit once an
   Admin > Security policy tab is built, since a UI should presumably
   confirm before someone turns off a step-up gate.
-- **`onboarding_manager` has no permissions of its own** — the role can
-  be assigned (invite-time or via the role-change endpoint) and is
-  correctly refused by every admin-gated action, but nothing has decided
-  what it *should* be able to do. Assigning the role is solved; the
-  actual allowlist decision is not, and is genuinely unscheduled rather
-  than deferred-with-a-plan.
+- ~~**`onboarding_manager` has no permissions of its own**~~ — **closed
+  2026-08-06.** Roles and permissions are now real, data-driven tables
+  (`auth.roles`/`auth.permissions`/`auth.role_permissions`/
+  `auth.user_roles`, migration `add_roles_permissions_tables`), a user can
+  hold more than one role at once, and `onboarding_manager` is seeded
+  with a real permission set (`client_ops.perform`,
+  `client_credentials.add`, `client_credentials.revoke`). Two more system
+  roles exist now too: `department_manager` (adds
+  `client_credentials.approve`) and `sales` (no permissions yet,
+  deliberately — capabilities still being defined).
 - **No "last remaining admin" guard.** The self-role-change and
   self-deactivation refusals stop an admin locking themselves out
   directly, but nothing stops two admins from demoting or deactivating
@@ -150,14 +154,18 @@ stays honest rather than only cataloguing what's already closed:
   realistic scenario once a second admin actually exists — today there
   is effectively one — but worth closing before that happens rather
   than after.
-- No formal, automated check that every new admin-gated handler actually
-  gets a non-admin role arm (and the `authorization_failure` audit that
-  goes with it) — today this is enforced by the exhaustive-match compiler
-  error whenever a `Role` variant is added, which is a real guarantee for
-  *existing* roles, but does nothing for a handler that simply never
-  matches on `admin.role` in the first place (see `auth_totp.rs`, which
-  has no role gate at all because every authenticated caller is allowed
-  to manage their own TOTP).
+- No formal, automated check that every new privilege-gated handler
+  actually calls `AuthenticatedUser::require_permission`. Before
+  2026-08-06 this had a partial compiler-enforced backstop: adding a
+  `Role` variant forced every `match admin.role` site to grow a new arm
+  or fail to compile. That backstop is gone now that roles/permissions
+  are data, not a closed Rust enum — nothing catches a new handler that
+  simply never calls `require_permission` in the first place, which was
+  already true for a handler that never matched on `admin.role` at all
+  (see `auth_totp.rs`, which has no permission gate because every
+  authenticated caller is allowed to manage their own TOTP). Worth a
+  proper answer eventually (an integration test enumerating routes
+  against an expected permission map, say) but not built.
 
 ## Review cadence
 

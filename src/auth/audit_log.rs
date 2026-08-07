@@ -8,13 +8,13 @@
 //!
 //! `RETURNING` requires the newly inserted row to be *readable*, so it is
 //! evaluated against `auth_audit_logs_select_admin_only`. The insert
-//! therefore succeeds or fails depending on whether `app.current_user_role`
-//! happens to be `'admin'` at the time:
+//! therefore succeeds or fails depending on whether `app.current_user_roles`
+//! holds `admin` at the time:
 //!
 //! | statement | identity context | result |
 //! |---|---|---|
 //! | `INSERT ... RETURNING id` | none | **ERROR** |
-//! | `INSERT ... RETURNING id` | `role = 'admin'` | ok |
+//! | `INSERT ... RETURNING id` | roles include `admin` | ok |
 //! | `INSERT ...` (no RETURNING) | none | ok |
 //!
 //! The error is `new row violates row-level security policy`, which points
@@ -159,12 +159,18 @@ pub mod event {
     /// action's own point.
     pub const USER_DEACTIVATED: &str = "user_deactivated";
 
-    /// An administrator changed an already-enrolled user's role through
-    /// the standalone role-change action. Distinct from role being set at
-    /// invite-creation time (`INVITE_CREATED`'s own metadata carries the
-    /// assigned role there) -- this is a transition on an existing
-    /// account, which is what `Change` is for.
-    pub const ROLE_CHANGED: &str = "role_changed";
+    /// An administrator granted an already-enrolled user an additional
+    /// role. Distinct from a role being set at invite-creation time
+    /// (`INVITE_CREATED`'s own metadata carries the assigned role there)
+    /// -- this is a change to an existing account. `Change` carries the
+    /// full role set before and after, not just the one role that was
+    /// added, since the whole set is what matters once a user can hold
+    /// more than one.
+    pub const ROLE_GRANTED: &str = "role_granted";
+
+    /// `ROLE_GRANTED`'s counterpart -- an administrator revoked a role
+    /// from an already-enrolled user. Same before/after-full-set shape.
+    pub const ROLE_REVOKED: &str = "role_revoked";
 
     /// An administrator reactivated a deactivated user's account, issuing a
     /// fresh invite in its place. Distinct from `ACCOUNT_RECOVERY_INITIATED`:
@@ -213,7 +219,8 @@ pub mod event {
         RATE_LIMIT_REJECTED,
         AUTHORIZATION_FAILURE,
         USER_DEACTIVATED,
-        ROLE_CHANGED,
+        ROLE_GRANTED,
+        ROLE_REVOKED,
         USER_REACTIVATED,
         AUDIT_LOG_EXPORTED,
     ];

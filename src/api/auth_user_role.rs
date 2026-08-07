@@ -1,8 +1,16 @@
-//! Standalone admin action: change an already-enrolled user's role.
+//! Admin actions that grant or revoke a role on an already-enrolled user.
 //! Distinct from role-at-invite-time (`auth_invites::CreateInviteRequest`)
-//! -- that assigns a role to a brand-new account; this changes one that
-//! already exists, which is why it goes through `auth.set_user_role`
-//! (mirroring `auth.set_user_status`) rather than the INSERT path.
+//! -- that assigns a brand-new account's first role; these two endpoints
+//! add or remove one role on an account that already exists, any number
+//! of times, since a user can hold more than one role at once.
+//!
+//! Unlike the single-role `auth.set_user_role` primitive this replaces,
+//! there is no SECURITY DEFINER function backing these -- `auth.user_roles`
+//! is a normal table with normal grants, and its own RLS policies
+//! (admin-only, never targeting the caller's own account) are the actual
+//! enforcement. These handlers run a plain INSERT/DELETE inside
+//! `begin_rls_transaction` and let the database refuse what it should
+//! refuse.
 
 use std::net::SocketAddr;
 
@@ -16,18 +24,22 @@ use uuid::Uuid;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{
-    audit_log, begin_rls_transaction, insufficient_role, AuthenticatedUser, Role,
+    audit_log, begin_rls_transaction, resolve_role_id, role_keys_for_user, AuthenticatedUser,
 };
 
 #[derive(Debug, Deserialize)]
-pub struct ChangeRoleRequest {
+pub struct GrantRoleRequest {
     pub role: String,
 }
 
 #[derive(Debug, Serialize)]
-pub struct ChangeRoleResponse {
+pub struct RoleChangeResponse {
     pub user_id: Uuid,
-    pub role: &'static str,
+    /// The target's full, current role set after this change -- more
+    /// useful to a caller than echoing back just the one role that
+    /// changed, since the point of multi-role is that the whole set
+    /// matters.
+    pub roles: Vec<String>,
 }
 
 fn bad_request(error: &'static str, message: String) -> Response {
@@ -49,182 +61,155 @@ fn not_found() -> Response {
         .into_response()
 }
 
-fn conflict(message: String) -> Response {
+fn conflict(error: &'static str, message: String) -> Response {
     (
         StatusCode::CONFLICT,
-        Json(ApiErrorBody {
-            error: "role_not_changeable",
-            message,
-        }),
+        Json(ApiErrorBody { error, message }),
     )
         .into_response()
 }
 
-pub async fn change_user_role(
+/// Confirms the target account exists and isn't soft-deleted -- same
+/// existence check every other admin-on-another-user action in this
+/// codebase makes before touching anything.
+async fn target_exists(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    target_user_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM auth.users WHERE id = $1 AND deleted_at IS NULL)",
+    )
+    .bind(target_user_id)
+    .fetch_one(&mut **tx)
+    .await
+}
+
+pub async fn grant_role(
     State(state): State<AppState>,
     admin: AuthenticatedUser,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(target_user_id): Path<Uuid>,
-    Json(request): Json<ChangeRoleRequest>,
+    Json(request): Json<GrantRoleRequest>,
 ) -> Response {
     let user_agent = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
     let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
 
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                user_agent,
-                ip_address,
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "change_user_role" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    if let Err(response) = admin
+        .require_permission(
+            &state.db,
+            "users.manage_roles",
+            "grant_role",
+            user_agent,
+            ip_address,
+        )
+        .await
+    {
+        return response;
     }
 
-    let Some(new_role) = Role::from_db_text(&request.role.trim().to_ascii_lowercase()) else {
-        return bad_request(
-            "invalid_role",
-            "role must be one of: admin, onboarding_manager".to_string(),
-        );
-    };
-
-    // Never on your own row -- an admin locking themselves out of the
-    // only role that can undo it is exactly the kind of mistake worth
-    // ruling out structurally rather than trusting the UI's confirm
-    // dialog to catch. Same stance as `deactivate_user`'s self-refusal.
+    // Redundant with the RLS INSERT policy on auth.user_roles by design --
+    // same reasoning as every other admin-on-self refusal in this
+    // codebase: a clean 400 here, the database is what actually holds if
+    // this is ever forgotten.
     if target_user_id == admin.user_id {
         return bad_request(
-            "cannot_change_own_role",
-            "You cannot change your own role.".to_string(),
+            "cannot_change_own_roles",
+            "You cannot change your own roles.".to_string(),
         );
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, admin.role).await {
+    let role_key = request.role.trim().to_ascii_lowercase();
+
+    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for role change");
-            return internal_error("Could not change this user's role");
+            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for role grant");
+            return internal_error("Could not grant this role");
         }
     };
 
-    let existing: Result<Option<(String,)>, sqlx::Error> =
-        sqlx::query_as("SELECT role::text FROM auth.users WHERE id = $1 AND deleted_at IS NULL")
-            .bind(target_user_id)
-            .fetch_optional(&mut *tx)
-            .await;
-
-    let prior_role = match existing {
-        Ok(Some((role,))) => role,
-        Ok(None) => {
+    match target_exists(&mut tx, target_user_id).await {
+        Ok(true) => {}
+        Ok(false) => {
             if let Err(err) = tx.rollback().await {
                 tracing::error!(error = %err, "failed to roll back after a missing user lookup");
             }
             return not_found();
         }
         Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "user lookup failed during role change");
-            return internal_error("Could not change this user's role");
-        }
-    };
-
-    if prior_role == new_role.as_db_text() {
-        if let Err(err) = tx.rollback().await {
-            tracing::error!(error = %err, "failed to roll back a no-op role change");
-        }
-        return conflict(format!("This user already has the {prior_role} role."));
-    }
-
-    // Refuses only when this specific change would zero out active admins
-    // -- promoting someone, or demoting one admin while another remains
-    // active, is unaffected. Doesn't stop two admins taking turns
-    // demoting each other down to one and then that one demoting
-    // themselves (already refused above, self-target) -- only the
-    // single-request case where this admin's own action would be the
-    // one that empties the role. Mirrors the reasoning in
-    // deactivate_user's equivalent check.
-    if prior_role == Role::Admin.as_db_text() && new_role != Role::Admin {
-        let remaining_admins: Result<i64, sqlx::Error> = sqlx::query_scalar(
-            "SELECT count(*) FROM auth.users
-              WHERE role = 'admin'::auth.auth_role
-                AND status = 'active'::auth.user_status
-                AND deleted_at IS NULL
-                AND id != $1",
-        )
-        .bind(target_user_id)
-        .fetch_one(&mut *tx)
-        .await;
-
-        match remaining_admins {
-            Ok(0) => {
-                if let Err(err) = tx.rollback().await {
-                    tracing::error!(error = %err, "failed to roll back a last-admin role change");
-                }
-                return conflict(
-                    "This is the last active admin. Promote another user to admin before \
-                     changing this one's role."
-                        .to_string(),
-                );
-            }
-            Ok(_) => {}
-            Err(err) => {
-                tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to count remaining admins during role change");
-                if let Err(err) = tx.rollback().await {
-                    tracing::error!(error = %err, "failed to roll back after a remaining-admins count failure");
-                }
-                return internal_error("Could not change this user's role");
-            }
+            tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "user lookup failed during role grant");
+            return internal_error("Could not grant this role");
         }
     }
 
-    let updated: Result<bool, sqlx::Error> =
-        sqlx::query_scalar("SELECT auth.set_user_role($1, $2::auth.auth_role)")
-            .bind(target_user_id)
-            .bind(new_role.as_db_text())
-            .fetch_one(&mut *tx)
-            .await;
-
-    let updated = match updated {
-        Ok(updated) => updated,
+    let role_id: Uuid = match resolve_role_id(&mut tx, &role_key).await {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            if let Err(err) = tx.rollback().await {
+                tracing::error!(error = %err, "failed to roll back after an unknown role key");
+            }
+            return bad_request("invalid_role", format!("No such role: {role_key}"));
+        }
         Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "set_user_role failed during role change");
-            return internal_error("Could not change this user's role");
+            tracing::error!(error = %err, admin_user_id = %admin.user_id, "role lookup failed during grant");
+            return internal_error("Could not grant this role");
         }
     };
 
-    if !updated {
+    let before_roles = match role_keys_for_user(&mut tx, target_user_id).await {
+        Ok(roles) => roles,
+        Err(err) => {
+            tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "failed to read prior roles during grant");
+            return internal_error("Could not grant this role");
+        }
+    };
+
+    if before_roles.iter().any(|held| held == &role_key) {
         if let Err(err) = tx.rollback().await {
-            tracing::error!(error = %err, "failed to roll back a concurrently-changed role");
+            tracing::error!(error = %err, "failed to roll back a no-op role grant");
         }
         return conflict(
-            "This user's role changed while this request was in progress. Check its current \
-             state and try again."
-                .to_string(),
+            "role_already_held",
+            format!("This user already has the {role_key} role."),
         );
     }
 
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "failed to commit role change");
-        return internal_error("Could not change this user's role");
+    if let Err(err) =
+        sqlx::query("INSERT INTO auth.user_roles (user_id, role_id, granted_by) VALUES ($1, $2, $3)")
+            .bind(target_user_id)
+            .bind(role_id)
+            .bind(admin.user_id)
+            .execute(&mut *tx)
+            .await
+    {
+        tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "role grant insert failed");
+        if let Err(err) = tx.rollback().await {
+            tracing::error!(error = %err, "failed to roll back a failed role grant");
+        }
+        return internal_error("Could not grant this role");
     }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "failed to commit role grant");
+        return internal_error("Could not grant this role");
+    }
+
+    let mut after_roles = before_roles.clone();
+    after_roles.push(role_key.clone());
+    after_roles.sort();
 
     audit_log::record(
         &state.db,
-        audit_log::event::ROLE_CHANGED,
+        audit_log::event::ROLE_GRANTED,
         audit_log::Subjects::by(admin.user_id).about(target_user_id),
         user_agent,
         ip_address,
         audit_log::Change::from_to(
-            serde_json::json!({ "role": prior_role }),
-            serde_json::json!({ "role": new_role.as_db_text() }),
+            serde_json::json!({ "roles": before_roles }),
+            serde_json::json!({ "roles": after_roles }),
         ),
         serde_json::json!({}),
     )
@@ -233,13 +218,196 @@ pub async fn change_user_role(
     tracing::info!(
         admin_user_id = %admin.user_id,
         target_user_id = %target_user_id,
-        new_role = new_role.as_db_text(),
-        "user role changed"
+        role = %role_key,
+        "role granted"
     );
 
-    Json(ChangeRoleResponse {
+    Json(RoleChangeResponse {
         user_id: target_user_id,
-        role: new_role.as_db_text(),
+        roles: after_roles,
+    })
+    .into_response()
+}
+
+pub async fn revoke_role(
+    State(state): State<AppState>,
+    admin: AuthenticatedUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path((target_user_id, role_key)): Path<(Uuid, String)>,
+) -> Response {
+    let user_agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok());
+    let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
+
+    if let Err(response) = admin
+        .require_permission(
+            &state.db,
+            "users.manage_roles",
+            "revoke_role",
+            user_agent,
+            ip_address,
+        )
+        .await
+    {
+        return response;
+    }
+
+    if target_user_id == admin.user_id {
+        return bad_request(
+            "cannot_change_own_roles",
+            "You cannot change your own roles.".to_string(),
+        );
+    }
+
+    let role_key = role_key.trim().to_ascii_lowercase();
+
+    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for role revoke");
+            return internal_error("Could not revoke this role");
+        }
+    };
+
+    match target_exists(&mut tx, target_user_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            if let Err(err) = tx.rollback().await {
+                tracing::error!(error = %err, "failed to roll back after a missing user lookup");
+            }
+            return not_found();
+        }
+        Err(err) => {
+            tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "user lookup failed during role revoke");
+            return internal_error("Could not revoke this role");
+        }
+    }
+
+    let role_id: Uuid = match resolve_role_id(&mut tx, &role_key).await {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            if let Err(err) = tx.rollback().await {
+                tracing::error!(error = %err, "failed to roll back after an unknown role key");
+            }
+            return bad_request("invalid_role", format!("No such role: {role_key}"));
+        }
+        Err(err) => {
+            tracing::error!(error = %err, admin_user_id = %admin.user_id, "role lookup failed during revoke");
+            return internal_error("Could not revoke this role");
+        }
+    };
+
+    let before_roles = match role_keys_for_user(&mut tx, target_user_id).await {
+        Ok(roles) => roles,
+        Err(err) => {
+            tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "failed to read prior roles during revoke");
+            return internal_error("Could not revoke this role");
+        }
+    };
+
+    if !before_roles.iter().any(|held| held == &role_key) {
+        if let Err(err) = tx.rollback().await {
+            tracing::error!(error = %err, "failed to roll back a no-op role revoke");
+        }
+        return conflict(
+            "role_not_held",
+            format!("This user does not have the {role_key} role."),
+        );
+    }
+
+    // Refuses only when revoking THIS role from THIS user would zero out
+    // active admins -- mirrors the last-admin reasoning this codebase
+    // already applies to deactivation, re-scoped from a single role
+    // column to a role_id count. Promoting someone, or revoking a role
+    // from a user who isn't the last active admin, is unaffected.
+    if role_key == "admin" {
+        let remaining_admins: Result<i64, sqlx::Error> = sqlx::query_scalar(
+            "SELECT count(*) FROM auth.users u
+               JOIN auth.user_roles ur ON ur.user_id = u.id
+               JOIN auth.roles r ON r.id = ur.role_id
+              WHERE r.key = 'admin'
+                AND u.status = 'active'::auth.user_status
+                AND u.deleted_at IS NULL
+                AND u.id != $1",
+        )
+        .bind(target_user_id)
+        .fetch_one(&mut *tx)
+        .await;
+
+        match remaining_admins {
+            Ok(0) => {
+                if let Err(err) = tx.rollback().await {
+                    tracing::error!(error = %err, "failed to roll back a last-admin role revoke");
+                }
+                return conflict(
+                    "last_active_admin",
+                    "This is the last active admin. Promote another user to admin before \
+                     revoking this one's admin role."
+                        .to_string(),
+                );
+            }
+            Ok(_) => {}
+            Err(err) => {
+                tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to count remaining admins during role revoke");
+                if let Err(err) = tx.rollback().await {
+                    tracing::error!(error = %err, "failed to roll back after a remaining-admins count failure");
+                }
+                return internal_error("Could not revoke this role");
+            }
+        }
+    }
+
+    if let Err(err) =
+        sqlx::query("DELETE FROM auth.user_roles WHERE user_id = $1 AND role_id = $2")
+            .bind(target_user_id)
+            .bind(role_id)
+            .execute(&mut *tx)
+            .await
+    {
+        tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "role revoke delete failed");
+        if let Err(err) = tx.rollback().await {
+            tracing::error!(error = %err, "failed to roll back a failed role revoke");
+        }
+        return internal_error("Could not revoke this role");
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "failed to commit role revoke");
+        return internal_error("Could not revoke this role");
+    }
+
+    let after_roles: Vec<String> = before_roles
+        .iter()
+        .filter(|held| *held != &role_key)
+        .cloned()
+        .collect();
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::ROLE_REVOKED,
+        audit_log::Subjects::by(admin.user_id).about(target_user_id),
+        user_agent,
+        ip_address,
+        audit_log::Change::from_to(
+            serde_json::json!({ "roles": before_roles }),
+            serde_json::json!({ "roles": after_roles }),
+        ),
+        serde_json::json!({}),
+    )
+    .await;
+
+    tracing::info!(
+        admin_user_id = %admin.user_id,
+        target_user_id = %target_user_id,
+        role = %role_key,
+        "role revoked"
+    );
+
+    Json(RoleChangeResponse {
+        user_id: target_user_id,
+        roles: after_roles,
     })
     .into_response()
 }
@@ -247,42 +415,22 @@ pub async fn change_user_role(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::test_support::empty_state;
-
-    fn admin() -> AuthenticatedUser {
-        AuthenticatedUser {
-            user_id: Uuid::new_v4(),
-            role: Role::Admin,
-            token_hash: vec![0u8; 32],
-            elevated_until: None,
-            requires_step_up: false,
-        }
-    }
-
-    fn onboarding_manager() -> AuthenticatedUser {
-        AuthenticatedUser {
-            user_id: Uuid::new_v4(),
-            role: Role::OnboardingManager,
-            token_hash: vec![0u8; 32],
-            elevated_until: None,
-            requires_step_up: false,
-        }
-    }
+    use crate::api::test_support::{admin_user, empty_state, onboarding_manager_user};
 
     fn test_addr() -> ConnectInfo<SocketAddr> {
         ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0)))
     }
 
     #[tokio::test]
-    async fn refuses_a_non_admin_role_without_touching_the_database() {
-        let response = change_user_role(
+    async fn grant_refuses_insufficient_permission_without_touching_the_database() {
+        let response = grant_role(
             State(empty_state()),
-            onboarding_manager(),
+            onboarding_manager_user(),
             test_addr(),
             HeaderMap::new(),
             Path(Uuid::new_v4()),
-            Json(ChangeRoleRequest {
-                role: "admin".to_string(),
+            Json(GrantRoleRequest {
+                role: "onboarding_manager".to_string(),
             }),
         )
         .await;
@@ -291,15 +439,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refuses_an_invalid_role_without_touching_the_database() {
-        let response = change_user_role(
+    async fn revoke_refuses_insufficient_permission_without_touching_the_database() {
+        let response = revoke_role(
             State(empty_state()),
-            admin(),
+            onboarding_manager_user(),
             test_addr(),
             HeaderMap::new(),
-            Path(Uuid::new_v4()),
-            Json(ChangeRoleRequest {
-                role: "superuser".to_string(),
+            Path((Uuid::new_v4(), "onboarding_manager".to_string())),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn grant_refuses_to_change_own_roles_without_touching_the_database() {
+        let admin = admin_user();
+        let self_id = admin.user_id;
+
+        let response = grant_role(
+            State(empty_state()),
+            admin,
+            test_addr(),
+            HeaderMap::new(),
+            Path(self_id),
+            Json(GrantRoleRequest {
+                role: "onboarding_manager".to_string(),
             }),
         )
         .await;
@@ -308,22 +473,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refuses_to_change_own_role_without_touching_the_database() {
-        let admin = admin();
+    async fn revoke_refuses_to_change_own_roles_without_touching_the_database() {
+        let admin = admin_user();
         let self_id = admin.user_id;
 
-        let response = change_user_role(
+        let response = revoke_role(
             State(empty_state()),
             admin,
             test_addr(),
             HeaderMap::new(),
-            Path(self_id),
-            Json(ChangeRoleRequest {
+            Path((self_id, "admin".to_string())),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn grant_with_sufficient_permission_reaches_the_database() {
+        let response = grant_role(
+            State(empty_state()),
+            admin_user(),
+            test_addr(),
+            HeaderMap::new(),
+            Path(Uuid::new_v4()),
+            Json(GrantRoleRequest {
                 role: "onboarding_manager".to_string(),
             }),
         )
         .await;
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn revoke_with_sufficient_permission_reaches_the_database() {
+        let response = revoke_role(
+            State(empty_state()),
+            admin_user(),
+            test_addr(),
+            HeaderMap::new(),
+            Path((Uuid::new_v4(), "onboarding_manager".to_string())),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

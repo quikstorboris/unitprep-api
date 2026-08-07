@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -9,46 +11,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::api::{ApiErrorBody, AppState};
+use crate::auth::audit_log;
 
 use super::{hash_token, read_session_cookie};
-
-/// The roles that exist today -- an enum, not a bare String, so adding
-/// the remaining roles from the architecture doc's extensible-role-column
-/// design means adding a variant, not restructuring every call site that
-/// matches on a role. `OnboardingManager` is schema-only for now: nothing
-/// grants it any permission an admin-gated match doesn't already reject,
-/// and no invite-creation path can assign it yet (see
-/// `auth_invites::CreateInviteRequest`'s module doc) -- adding it here is
-/// deliberately just the enum/schema half of that backlog item, not a
-/// decision about what it can do.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    Admin,
-    OnboardingManager,
-}
-
-impl Role {
-    /// Public rather than crate-private: this is now the shared parser
-    /// for a role string coming from a client request (invite creation,
-    /// the role-change endpoint), not just from the database -- one
-    /// place that knows what a valid role string looks like, so a
-    /// request-body validator and the session extractor cannot disagree
-    /// about it.
-    pub fn from_db_text(value: &str) -> Option<Self> {
-        match value {
-            "admin" => Some(Role::Admin),
-            "onboarding_manager" => Some(Role::OnboardingManager),
-            _ => None,
-        }
-    }
-
-    pub fn as_db_text(&self) -> &'static str {
-        match self {
-            Role::Admin => "admin",
-            Role::OnboardingManager => "onboarding_manager",
-        }
-    }
-}
 
 /// Extracted once per request from the session cookie. Resolves the
 /// session via resolve_session() -- a SECURITY DEFINER function that
@@ -59,7 +24,17 @@ impl Role {
 /// connections are not identity-scoped between requests.
 pub struct AuthenticatedUser {
     pub user_id: Uuid,
-    pub role: Role,
+    /// Every role key this account currently holds -- not a closed Rust
+    /// enum. Roles are real data now (four today, more later, eventually
+    /// admin-defined custom ones), and hardcoding them in Rust would be
+    /// exactly the kind of hardcoding the permission model exists to
+    /// avoid. Prefer `has_role`/`has_permission`/`require_permission` to
+    /// matching on this directly.
+    pub role_keys: Vec<String>,
+    /// Every permission key the roles above currently grant, resolved in
+    /// the same `resolve_session` call as `role_keys` -- so an
+    /// authorization check is a `HashSet` lookup, not a second query.
+    pub permission_keys: HashSet<String>,
     /// This exact session's own token hash -- needed by anything that acts
     /// on "the session this request came in on" specifically, e.g.
     /// recording a step-up verification (auth.record_step_up), which must
@@ -83,6 +58,44 @@ pub struct AuthenticatedUser {
 impl AuthenticatedUser {
     pub fn is_elevated(&self) -> bool {
         self.elevated_until.is_some_and(|until| until > Utc::now())
+    }
+
+    pub fn has_permission(&self, permission_key: &str) -> bool {
+        self.permission_keys.contains(permission_key)
+    }
+
+    /// Checks `permission_key` and, if the caller lacks it, records an
+    /// `AUTHORIZATION_FAILURE` audit row and returns the shared 403 --
+    /// replaces what used to be a `match admin.role { Role::Admin => {},
+    /// Role::OnboardingManager => { ...403... } }` block duplicated at
+    /// every admin-gated call site. Redundant with the RLS layer by
+    /// design, same as every check it replaces: this produces a clean 403
+    /// with an audit row, and the database's own policies are what hold
+    /// if a future handler forgets to call this.
+    pub async fn require_permission(
+        &self,
+        db: &PgPool,
+        permission_key: &str,
+        action: &'static str,
+        user_agent: Option<&str>,
+        ip_address: Option<sqlx::types::ipnetwork::IpNetwork>,
+    ) -> Result<(), Response> {
+        if self.has_permission(permission_key) {
+            return Ok(());
+        }
+
+        audit_log::record(
+            db,
+            audit_log::event::AUTHORIZATION_FAILURE,
+            audit_log::Subjects::by(self.user_id),
+            user_agent,
+            ip_address,
+            audit_log::Change::none(),
+            serde_json::json!({ "action": action, "required_permission": permission_key }),
+        )
+        .await;
+
+        Err(insufficient_role())
     }
 }
 
@@ -150,12 +163,11 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             internal_error()
         })?;
 
-        let Some((user_id, role_text, elevated_until, requires_step_up)) = row else {
+        let Some((user_id, role_keys, permission_keys, elevated_until, requires_step_up)) = row
+        else {
             record_expired_access_attempt(state, &token_hash, parts).await;
             return Err(unauthorized());
         };
-
-        let role = Role::from_db_text(&role_text).ok_or_else(internal_error)?;
 
         // Checked here, in the one place every gated route already passes
         // through, rather than left to each handler -- see
@@ -166,7 +178,8 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 
         Ok(AuthenticatedUser {
             user_id,
-            role,
+            role_keys: role_keys.unwrap_or_default(),
+            permission_keys: permission_keys.unwrap_or_default().into_iter().collect(),
             token_hash,
             elevated_until,
             requires_step_up,
@@ -176,13 +189,28 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 
 /// The one query behind session resolution -- shared by the mandatory
 /// extractor above and by `try_authenticated_user` below so there is
-/// exactly one place that knows resolve_session's shape.
+/// exactly one place that knows resolve_session's shape. `role_keys` and
+/// `permission_keys` come back `NULL` (mapped to `None`) rather than an
+/// empty array when a user holds no roles at all -- `array_agg` over zero
+/// matching rows, not something expected in practice but not a crash
+/// either.
+#[allow(clippy::type_complexity)]
 async fn query_session(
     token_hash: &[u8],
     db: &PgPool,
-) -> Result<Option<(Uuid, String, Option<DateTime<Utc>>, bool)>, sqlx::Error> {
+) -> Result<
+    Option<(
+        Uuid,
+        Option<Vec<String>>,
+        Option<Vec<String>>,
+        Option<DateTime<Utc>>,
+        bool,
+    )>,
+    sqlx::Error,
+> {
     sqlx::query_as(
-        "SELECT user_id, role::text, elevated_until, requires_step_up FROM auth.resolve_session($1, $2)",
+        "SELECT user_id, role_keys, permission_keys, elevated_until, requires_step_up \
+         FROM auth.resolve_session($1, $2)",
     )
     .bind(token_hash)
     .bind(session_idle_timeout_minutes())
@@ -238,11 +266,10 @@ async fn record_expired_access_attempt(state: &AppState, token_hash: &[u8], part
 /// the request when there isn't one -- see register_begin, which treats
 /// an existing session as "add another passkey for yourself" and an
 /// absent or unresolvable one as the bootstrap path instead of a 401.
-/// Any failure (missing cookie, DB error, unresolved session, unknown
-/// role) collapses to `None` here -- unlike the mandatory extractor,
-/// nothing downstream needs to tell those cases apart, since the caller
-/// falls through to its own, entirely separate bootstrap checks either
-/// way.
+/// Any failure (missing cookie, DB error, unresolved session) collapses
+/// to `None` here -- unlike the mandatory extractor, nothing downstream
+/// needs to tell those cases apart, since the caller falls through to its
+/// own, entirely separate bootstrap checks either way.
 ///
 /// A session pending step-up also collapses to `None` here, deliberately:
 /// this function has no request path to consult (unlike the extractor
@@ -258,18 +285,17 @@ pub async fn try_authenticated_user(
 ) -> Option<AuthenticatedUser> {
     let raw_token = read_session_cookie(jar)?;
     let token_hash = hash_token(&raw_token);
-    let (user_id, role_text, elevated_until, requires_step_up) =
+    let (user_id, role_keys, permission_keys, elevated_until, requires_step_up) =
         query_session(&token_hash, &state.db).await.ok()??;
 
     if requires_step_up {
         return None;
     }
 
-    let role = Role::from_db_text(&role_text)?;
-
     Some(AuthenticatedUser {
         user_id,
-        role,
+        role_keys: role_keys.unwrap_or_default(),
+        permission_keys: permission_keys.unwrap_or_default().into_iter().collect(),
         token_hash,
         elevated_until,
         requires_step_up,
@@ -301,12 +327,11 @@ pub fn step_up_required() -> Response {
         .into_response()
 }
 
-/// Shared 403 for an authenticated caller whose role does not permit the
-/// action -- every admin-gated handler's `match admin.role` gains an arm
-/// for each new role, and this is what that arm returns once the caller
-/// also records an `AUTHORIZATION_FAILURE` audit row. A single shared
-/// response, not a per-handler one, so the body stays consistent across
-/// every place this can now happen.
+/// Shared 403 for an authenticated caller whose permissions do not permit
+/// the action -- see `AuthenticatedUser::require_permission`, which
+/// records an `AUTHORIZATION_FAILURE` audit row and returns this. A
+/// single shared response, not a per-handler one, so the body stays
+/// consistent across every place this can happen.
 pub fn insufficient_role() -> Response {
     (
         StatusCode::FORBIDDEN,
@@ -336,11 +361,17 @@ fn internal_error() -> Response {
 /// identity into a later, unrelated request that happens to reuse it.
 /// Callers run their RLS-scoped queries against the returned
 /// transaction and commit it themselves.
-pub async fn begin_rls_transaction(
-    pool: &PgPool,
+///
+/// `app.current_user_roles` is comma-joined role keys (e.g.
+/// `"admin,onboarding_manager"`) -- see `auth.current_user_has_role` for
+/// the matching read side. A held role takes effect on this caller's
+/// very next request, since nothing here caches across requests; there is
+/// no separate cache to invalidate when an admin changes someone's roles.
+pub async fn begin_rls_transaction<'a>(
+    pool: &'a PgPool,
     user_id: Uuid,
-    role: Role,
-) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, sqlx::Error> {
+    role_keys: &[String],
+) -> Result<sqlx::Transaction<'a, sqlx::Postgres>, sqlx::Error> {
     let mut tx = pool.begin().await?;
 
     sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
@@ -348,8 +379,8 @@ pub async fn begin_rls_transaction(
         .execute(&mut *tx)
         .await?;
 
-    sqlx::query("SELECT set_config('app.current_user_role', $1, true)")
-        .bind(role.as_db_text())
+    sqlx::query("SELECT set_config('app.current_user_roles', $1, true)")
+        .bind(role_keys.join(","))
         .execute(&mut *tx)
         .await?;
 
@@ -357,7 +388,7 @@ pub async fn begin_rls_transaction(
 }
 
 /// Like `begin_rls_transaction`, but sets ONLY `app.current_user_id` and
-/// deliberately leaves `app.current_user_role` unset.
+/// deliberately leaves `app.current_user_roles` unset.
 ///
 /// For pre-authentication flows that must write a row owned by a
 /// specific user before that user has any established role to assert --
@@ -366,12 +397,11 @@ pub async fn begin_rls_transaction(
 ///
 /// Strictly LESS privilege than `begin_rls_transaction`, not a
 /// convenience variant: every admin-bypass branch in this schema's
-/// policies is written as `current_setting('app.current_user_role', true)
-/// = 'admin'`, which safely evaluates false when the setting is unset
-/// (a text comparison, so it needs no `NULLIF` guard -- unlike the uuid
-/// casts, see the RLS notes on why those do). So a transaction opened
-/// here can reach owner-scoped rows and nothing else, and cannot
-/// accidentally inherit admin visibility.
+/// policies is written as `auth.current_user_has_role('admin')`, which
+/// checks membership in `app.current_user_roles` and safely evaluates
+/// false when the setting is unset. So a transaction opened here can
+/// reach owner-scoped rows and nothing else, and cannot accidentally
+/// inherit admin visibility.
 pub async fn begin_owner_rls_transaction(
     pool: &PgPool,
     user_id: Uuid,
@@ -390,31 +420,11 @@ pub async fn begin_owner_rls_transaction(
 mod tests {
     use super::*;
 
-    #[test]
-    fn role_round_trips_through_its_db_text_form() {
-        assert_eq!(
-            Role::from_db_text(Role::Admin.as_db_text()),
-            Some(Role::Admin)
-        );
-    }
-
-    #[test]
-    fn unknown_db_text_does_not_match_any_role() {
-        assert_eq!(Role::from_db_text("not_a_real_role"), None);
-    }
-
-    #[test]
-    fn onboarding_manager_round_trips_through_its_db_text_form() {
-        assert_eq!(
-            Role::from_db_text(Role::OnboardingManager.as_db_text()),
-            Some(Role::OnboardingManager)
-        );
-    }
-
     fn user_with_elevation(elevated_until: Option<DateTime<Utc>>) -> AuthenticatedUser {
         AuthenticatedUser {
             user_id: Uuid::new_v4(),
-            role: Role::Admin,
+            role_keys: vec!["admin".to_string()],
+            permission_keys: HashSet::new(),
             token_hash: vec![0u8; 32],
             elevated_until,
             requires_step_up: false,
@@ -436,5 +446,13 @@ mod tests {
     fn a_past_elevation_deadline_is_not_elevated() {
         let deadline = Utc::now() - chrono::Duration::seconds(1);
         assert!(!user_with_elevation(Some(deadline)).is_elevated());
+    }
+
+    #[test]
+    fn has_permission_matches_a_granted_permission_key_only() {
+        let mut user = user_with_elevation(None);
+        user.permission_keys.insert("users.manage".to_string());
+        assert!(user.has_permission("users.manage"));
+        assert!(!user.has_permission("client_ops.perform"));
     }
 }

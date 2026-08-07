@@ -292,11 +292,11 @@ pub async fn run(args: BootstrapArgs) -> Result<String, String> {
                 ));
             }
 
-            sqlx::query_scalar(
+            let new_user_id: Uuid = sqlx::query_scalar(
                 "INSERT INTO auth.users
-                     (email, first_name, last_name, job_title, company, role, status)
+                     (email, first_name, last_name, job_title, company, status)
                  VALUES ($1::citext, $2, $3, $4, $5::auth.user_company,
-                         'admin'::auth.auth_role, 'invited'::auth.user_status)
+                         'invited'::auth.user_status)
                  RETURNING id",
             )
             .bind(&args.email)
@@ -306,7 +306,21 @@ pub async fn run(args: BootstrapArgs) -> Result<String, String> {
             .bind(company)
             .fetch_one(&mut *tx)
             .await
-            .map_err(|err| format!("could not create the administrator: {err}"))?
+            .map_err(|err| format!("could not create the administrator: {err}"))?;
+
+            // granted_by is left NULL -- there is no administrator yet for
+            // this grant to be attributed to, the same reason
+            // user_invites.created_by is nullable for this exact case.
+            sqlx::query(
+                "INSERT INTO auth.user_roles (user_id, role_id)
+                 SELECT $1, id FROM auth.roles WHERE key = 'admin'",
+            )
+            .bind(new_user_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|err| format!("could not grant the administrator role: {err}"))?;
+
+            new_user_id
         }
 
         Mode::ReissueInvite => {

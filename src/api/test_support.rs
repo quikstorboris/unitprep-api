@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::application::dedup_session_service::DedupSession;
 use crate::application::unit_group_session::Session;
-use crate::auth::{AuthenticatedUser, AuthenticationCeremony, RegistrationCeremony, Role};
+use crate::auth::{AuthenticatedUser, AuthenticationCeremony, RegistrationCeremony};
 use unitprep_core::csv_document::CsvDocument;
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
 use unitprep_core::session_store::SessionStore;
@@ -68,14 +69,55 @@ pub(crate) fn test_auth_backend() -> std::sync::Arc<dyn crate::auth::AuthBackend
 }
 
 /// A stand-in authenticated caller for tool-route tests, now that every
-/// tool endpoint requires a valid session. Role doesn't matter here --
-/// tool routes only require *authentication*, not any particular role,
-/// unlike the admin-gated auth endpoints (see `auth_invites.rs`'s own
-/// `admin()` test helper, which exists for that different reason).
+/// tool endpoint requires a valid session. Role/permissions don't matter
+/// here -- tool routes only require *authentication*, not any particular
+/// permission, unlike the admin-gated auth endpoints (see `admin_user`/
+/// `onboarding_manager_user` below, which exist for that different
+/// reason).
 pub fn test_user() -> AuthenticatedUser {
     AuthenticatedUser {
         user_id: uuid::Uuid::new_v4(),
-        role: Role::Admin,
+        role_keys: Vec::new(),
+        permission_keys: HashSet::new(),
+        token_hash: vec![0u8; 32],
+        elevated_until: None,
+        requires_step_up: false,
+    }
+}
+
+/// A stand-in admin caller for the admin-gated auth endpoints, carrying
+/// the same permission keys the `admin` role is seeded with (see
+/// migration `add_roles_permissions_tables`). Shared here rather than
+/// redefined per test file, which is how this used to exist as an
+/// identical `admin()` helper in half a dozen files.
+pub fn admin_user() -> AuthenticatedUser {
+    AuthenticatedUser {
+        user_id: uuid::Uuid::new_v4(),
+        role_keys: vec!["admin".to_string()],
+        permission_keys: ["users.manage", "users.manage_roles", "audit_logs.read", "roles.manage"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        token_hash: vec![0u8; 32],
+        elevated_until: None,
+        requires_step_up: false,
+    }
+}
+
+/// `onboarding_manager`'s counterpart to `admin_user`, carrying the
+/// permission keys that role is seeded with.
+pub fn onboarding_manager_user() -> AuthenticatedUser {
+    AuthenticatedUser {
+        user_id: uuid::Uuid::new_v4(),
+        role_keys: vec!["onboarding_manager".to_string()],
+        permission_keys: [
+            "client_ops.perform",
+            "client_credentials.add",
+            "client_credentials.revoke",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
         token_hash: vec![0u8; 32],
         elevated_until: None,
         requires_step_up: false,

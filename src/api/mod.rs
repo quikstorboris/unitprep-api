@@ -37,7 +37,7 @@ use axum::{
     http::{header, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 
@@ -344,9 +344,10 @@ pub fn router(state: AppState) -> Router {
             "/auth/users/{id}/reactivate",
             post(auth_user_status::reactivate_user),
         )
+        .route("/auth/users/{id}/roles", post(auth_user_role::grant_role))
         .route(
-            "/auth/users/{id}/role",
-            post(auth_user_role::change_user_role),
+            "/auth/users/{id}/roles/{role_key}",
+            delete(auth_user_role::revoke_role),
         )
         // Admin-only, read-only -- same no-dedicated-bucket reasoning as
         // /auth/users above.
@@ -632,7 +633,7 @@ async fn health_db(State(state): State<AppState>) -> Response {
 #[derive(Serialize)]
 struct WhoamiResponse {
     user_id: String,
-    role: &'static str,
+    roles: Vec<String>,
     /// Whether a *confirmed* TOTP credential exists for this account --
     /// lets the frontend show "enrolled" vs. a call-to-action instead of
     /// always presenting "enroll", which would walk an already-enrolled
@@ -687,7 +688,7 @@ async fn whoami(
 
     Ok(Json(WhoamiResponse {
         user_id: user.user_id.to_string(),
-        role: user.role.as_db_text(),
+        roles: user.role_keys.clone(),
         totp_enrolled,
         step_up_required: user.requires_step_up,
     }))

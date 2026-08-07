@@ -25,7 +25,7 @@ use sqlx::QueryBuilder;
 use uuid::Uuid;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
-use crate::auth::{audit_log, begin_rls_transaction, insufficient_role, AuthenticatedUser, Role};
+use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser};
 use crate::infrastructure::audit_log_pdf::{
     render_audit_log_pdf, AuditLogPdfReport, AuditLogPdfRow,
 };
@@ -110,21 +110,11 @@ pub async fn list_audit_logs(
 ) -> Response {
     // Redundant with the RLS policy by design -- see auth_invites.rs's
     // module doc for why both layers exist.
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                None,
-                None,
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "list_audit_logs" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    if let Err(response) = admin
+        .require_permission(&state.db, "audit_logs.read", "list_audit_logs", None, None)
+        .await
+    {
+        return response;
     }
 
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
@@ -143,7 +133,7 @@ pub async fn list_audit_logs(
         None => Vec::new(),
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, admin.role).await {
+    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for audit log listing");
@@ -291,21 +281,11 @@ pub struct EventTypesResponse {
 /// Admin-gated for consistency with every other audit-log-adjacent
 /// endpoint, even though the list itself carries nothing sensitive.
 pub async fn list_event_types(State(state): State<AppState>, admin: AuthenticatedUser) -> Response {
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                None,
-                None,
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "list_event_types" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    if let Err(response) = admin
+        .require_permission(&state.db, "audit_logs.read", "list_event_types", None, None)
+        .await
+    {
+        return response;
     }
 
     Json(EventTypesResponse {
@@ -633,21 +613,17 @@ pub async fn export_audit_logs(
     let ip_address = Some(IpNetwork::from(addr.ip()));
 
     // Redundant with the RLS policy by design -- see list_audit_logs above.
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                user_agent,
-                ip_address,
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "export_audit_logs" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    if let Err(response) = admin
+        .require_permission(
+            &state.db,
+            "audit_logs.read",
+            "export_audit_logs",
+            user_agent,
+            ip_address,
+        )
+        .await
+    {
+        return response;
     }
 
     let ip_filter = match validate_filters(&request) {
@@ -655,7 +631,7 @@ pub async fn export_audit_logs(
         Err(response) => return *response,
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, admin.role).await {
+    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for audit log export");
@@ -809,21 +785,17 @@ pub async fn preview_audit_logs(
 ) -> Response {
     let ip_address = Some(IpNetwork::from(addr.ip()));
 
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                None,
-                ip_address,
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "preview_audit_logs" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    if let Err(response) = admin
+        .require_permission(
+            &state.db,
+            "audit_logs.read",
+            "preview_audit_logs",
+            None,
+            ip_address,
+        )
+        .await
+    {
+        return response;
     }
 
     let ip_filter = match validate_filters(&request) {
@@ -831,7 +803,7 @@ pub async fn preview_audit_logs(
         Err(response) => return *response,
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, admin.role).await {
+    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for audit log preview");
@@ -880,35 +852,15 @@ pub async fn preview_audit_logs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::test_support::empty_state;
+    use crate::api::test_support::{admin_user, empty_state, onboarding_manager_user};
     use axum::extract::Query as AxumQuery;
     use chrono::{TimeZone, Timelike};
-
-    fn onboarding_manager() -> AuthenticatedUser {
-        AuthenticatedUser {
-            user_id: Uuid::new_v4(),
-            role: Role::OnboardingManager,
-            token_hash: vec![0u8; 32],
-            elevated_until: None,
-            requires_step_up: false,
-        }
-    }
-
-    fn admin() -> AuthenticatedUser {
-        AuthenticatedUser {
-            user_id: Uuid::new_v4(),
-            role: Role::Admin,
-            token_hash: vec![0u8; 32],
-            elevated_until: None,
-            requires_step_up: false,
-        }
-    }
 
     #[tokio::test]
     async fn refuses_a_non_admin_role_without_touching_the_database() {
         let response = list_audit_logs(
             State(empty_state()),
-            onboarding_manager(),
+            onboarding_manager_user(),
             AxumQuery(AuditLogQuery {
                 limit: None,
                 before_id: None,
@@ -923,7 +875,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_types_refuses_a_non_admin_role() {
-        let response = list_event_types(State(empty_state()), onboarding_manager()).await;
+        let response = list_event_types(State(empty_state()), onboarding_manager_user()).await;
 
         assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
     }
@@ -934,7 +886,7 @@ mod tests {
     /// "reaches the database" 500 proxy.
     #[tokio::test]
     async fn event_types_returns_the_full_canonical_list_for_an_admin() {
-        let response = list_event_types(State(empty_state()), admin()).await;
+        let response = list_event_types(State(empty_state()), admin_user()).await;
         assert_eq!(response.status(), axum::http::StatusCode::OK);
 
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -982,7 +934,7 @@ mod tests {
     async fn list_audit_logs_refuses_an_invalid_user_id_without_touching_the_database() {
         let response = list_audit_logs(
             State(empty_state()),
-            admin(),
+            admin_user(),
             AxumQuery(AuditLogQuery {
                 limit: None,
                 before_id: None,
@@ -1002,7 +954,7 @@ mod tests {
     async fn list_audit_logs_with_multiple_user_ids_reaches_the_database() {
         let response = list_audit_logs(
             State(empty_state()),
-            admin(),
+            admin_user(),
             AxumQuery(AuditLogQuery {
                 limit: None,
                 before_id: None,
@@ -1033,7 +985,7 @@ mod tests {
     async fn export_refuses_a_non_admin_role_without_touching_the_database() {
         let response = export_audit_logs(
             State(empty_state()),
-            onboarding_manager(),
+            onboarding_manager_user(),
             test_addr(),
             HeaderMap::new(),
             Json(export_request(Utc::now(), Utc::now())),
@@ -1048,7 +1000,7 @@ mod tests {
         let now = Utc::now();
         let response = export_audit_logs(
             State(empty_state()),
-            admin(),
+            admin_user(),
             test_addr(),
             HeaderMap::new(),
             Json(export_request(now, now - chrono::Duration::days(1))),
@@ -1066,7 +1018,7 @@ mod tests {
 
         let response = export_audit_logs(
             State(empty_state()),
-            admin(),
+            admin_user(),
             test_addr(),
             HeaderMap::new(),
             Json(request),
@@ -1084,7 +1036,7 @@ mod tests {
         let now = Utc::now();
         let response = export_audit_logs(
             State(empty_state()),
-            admin(),
+            admin_user(),
             test_addr(),
             HeaderMap::new(),
             Json(export_request(now - chrono::Duration::days(1), now)),
@@ -1098,7 +1050,7 @@ mod tests {
     async fn preview_refuses_a_non_admin_role_without_touching_the_database() {
         let response = preview_audit_logs(
             State(empty_state()),
-            onboarding_manager(),
+            onboarding_manager_user(),
             test_addr(),
             Json(export_request(Utc::now(), Utc::now())),
         )
@@ -1112,7 +1064,7 @@ mod tests {
         let now = Utc::now();
         let response = preview_audit_logs(
             State(empty_state()),
-            admin(),
+            admin_user(),
             test_addr(),
             Json(export_request(now, now - chrono::Duration::days(1))),
         )
@@ -1126,7 +1078,7 @@ mod tests {
         let now = Utc::now();
         let response = preview_audit_logs(
             State(empty_state()),
-            admin(),
+            admin_user(),
             test_addr(),
             Json(export_request(now - chrono::Duration::days(1), now)),
         )

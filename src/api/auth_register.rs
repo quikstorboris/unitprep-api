@@ -98,7 +98,7 @@ use crate::auth::{
     action_requires_step_up, audit_log, begin_owner_rls_transaction, begin_rls_transaction,
     clear_ceremony_cookie, generate_token, hash_token, issue_ceremony_cookie, issue_session_cookie,
     read_ceremony_cookie, step_up_required, try_authenticated_user, RegisteredCredential,
-    RegistrationCeremony, Role, ADD_PASSKEY, REGISTRATION_CEREMONY_COOKIE,
+    RegistrationCeremony, ADD_PASSKEY, REGISTRATION_CEREMONY_COOKIE,
 };
 
 /// How long a started-but-unfinished ceremony stays valid. Deliberately
@@ -326,7 +326,7 @@ pub async fn register_begin(
                 return step_up_required();
             }
 
-            match authenticated_target(&state, user.user_id, user.role).await {
+            match authenticated_target(&state, user.user_id, &user.role_keys).await {
                 Ok(Some(target)) => target,
                 // A session that resolved but whose user row is missing or
                 // invisible is a real inconsistency, not a bad request --
@@ -432,9 +432,9 @@ pub async fn register_begin(
 async fn authenticated_target(
     state: &AppState,
     user_id: Uuid,
-    role: Role,
+    role_keys: &[String],
 ) -> Result<Option<RegistrationTarget>, sqlx::Error> {
-    let mut tx = begin_rls_transaction(&state.db, user_id, role).await?;
+    let mut tx = begin_rls_transaction(&state.db, user_id, role_keys).await?;
 
     let row: Option<(String, String, String)> =
         sqlx::query_as("SELECT email::text, first_name, last_name FROM auth.users WHERE id = $1")

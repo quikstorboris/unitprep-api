@@ -8,10 +8,10 @@
 //! Both writes are permitted to `app_service` directly, under RLS policies
 //! that check the identity GUCs:
 //!
-//! - `users_insert_admin_only` — `WITH CHECK (app.current_user_role = 'admin')`
+//! - `users_insert_admin_only` — `WITH CHECK (auth.current_user_has_role('admin'))`
 //! - `user_invites_admin_only` — `FOR ALL` under the same condition
 //!
-//! So running inside `begin_rls_transaction(.., Role::Admin)` means the
+//! So running inside `begin_rls_transaction(.., &admin.role_keys)` means the
 //! **database** enforces admin-ness independently of this handler's own
 //! check. Both exist on purpose: the handler's check produces a clean 403,
 //! and the policy is what holds if a future refactor forgets it.
@@ -26,6 +26,15 @@
 //! `app.current_user_id` — so inside this transaction it records the issuing
 //! admin by itself. That default was written for exactly this call site;
 //! binding it explicitly would be duplicating the schema's own answer.
+//!
+//! ## Role validity now costs a database round trip
+//!
+//! A role key can no longer be checked against a closed Rust enum before
+//! opening a transaction -- roles are real data (`auth.roles`), open-ended
+//! rather than a fixed pair, so the only source of truth for "is this a
+//! real role" is the table itself. `issue_invite` resolves it via
+//! `resolve_role_id` right after opening the RLS transaction, and rolls
+//! back cleanly on an unknown key rather than attempting the write.
 //!
 //! ## No email is sent
 //!
@@ -46,7 +55,7 @@ use uuid::Uuid;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{
-    audit_log, begin_rls_transaction, generate_token, insufficient_role, AuthenticatedUser, Role,
+    audit_log, begin_rls_transaction, generate_token, resolve_role_id, AuthenticatedUser,
 };
 use crate::bootstrap::{invite_hours, VALID_COMPANIES};
 
@@ -62,11 +71,10 @@ pub struct CreateInviteRequest {
     #[serde(default)]
     pub job_title: Option<String>,
 
-    /// The allowlist decision this field's absence used to defer is made:
-    /// any admin may assign either role that exists today. Validated
-    /// against `Role::from_db_text` -- the same parser the session
-    /// extractor uses -- rather than a second parallel list, so this and
-    /// the `Role` enum cannot disagree about what a role is.
+    /// Any key currently in `auth.roles` -- resolved and validated inside
+    /// `issue_invite`'s own transaction (see the module doc for why that
+    /// can no longer happen before one opens). Any admin may assign any
+    /// role that exists today.
     pub role: String,
 }
 
@@ -123,26 +131,15 @@ pub async fn create_invite(
     let user_agent = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
+    let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
 
     // Redundant with the RLS policy by design, not by accident -- see the
-    // module docs. This used to be unreachable while `Role` had one
-    // variant; now that `OnboardingManager` exists, it is a real path,
-    // and one worth its own permanent row -- see `AUTHORIZATION_FAILURE`.
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                user_agent,
-                Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "create_invite" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    // module docs.
+    if let Err(response) = admin
+        .require_permission(&state.db, "users.manage", "create_invite", user_agent, ip_address)
+        .await
+    {
+        return response;
     }
 
     let email = request.email.trim().to_ascii_lowercase();
@@ -154,12 +151,14 @@ pub async fn create_invite(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let role_key = request.role.trim().to_ascii_lowercase();
 
     // Validated before a transaction is opened, so a typo costs a round trip
     // rather than a rolled-back write -- and so `company` fails with the
     // valid options named instead of a Postgres enum cast error. Same
     // reasoning as the bootstrap CLI, whose list this reuses so the two
-    // cannot disagree about what a company is.
+    // cannot disagree about what a company is. `role` cannot join this
+    // group of checks any more -- see the module doc.
     if email.is_empty() || !email.contains('@') || email.split_whitespace().count() > 1 {
         return bad_request("invalid_email", "A valid email address is required.".into());
     }
@@ -175,13 +174,9 @@ pub async fn create_invite(
             format!("company must be one of: {}", VALID_COMPANIES.join(", ")),
         );
     }
-
-    let Some(role) = Role::from_db_text(&request.role.trim().to_ascii_lowercase()) else {
-        return bad_request(
-            "invalid_role",
-            "role must be one of: admin, onboarding_manager".to_string(),
-        );
-    };
+    if role_key.is_empty() {
+        return bad_request("invalid_role", "role is required.".to_string());
+    }
 
     let (raw_token, token_hash) = generate_token();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(invite_hours());
@@ -195,7 +190,7 @@ pub async fn create_invite(
             last_name,
             company: &company,
             job_title,
-            role,
+            role: &role_key,
             token_hash: &token_hash,
             expires_at,
         },
@@ -223,7 +218,7 @@ pub async fn create_invite(
                 audit_log::event::INVITE_REFUSED,
                 audit_log::Subjects::by(admin.user_id).about(user_id),
                 user_agent,
-                Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+                ip_address,
                 audit_log::Change::none(),
                 serde_json::json!({ "reason": reason }),
             )
@@ -238,7 +233,11 @@ pub async fn create_invite(
             return conflict(message);
         }
 
-        Err(err) => {
+        Err(IssueInviteError::InvalidRole(role_key)) => {
+            return bad_request("invalid_role", format!("No such role: {role_key}"));
+        }
+
+        Err(IssueInviteError::Database(err)) => {
             tracing::error!(
                 error = %err,
                 admin_user_id = %admin.user_id,
@@ -256,14 +255,14 @@ pub async fn create_invite(
         // was acted upon.
         audit_log::Subjects::by(admin.user_id).about(user_id),
         user_agent,
-        Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+        ip_address,
         audit_log::Change::none(),
         // No token and no hash. The invite is a bearer credential and the
         // audit trail is not a place to keep one. `expires_at` is what an
         // operator actually needs to reason about later.
         serde_json::json!({
             "reissued": reissued,
-            "role": role.as_db_text(),
+            "role": role_key,
             "expires_at": expires_at,
         }),
     )
@@ -297,7 +296,7 @@ struct IssueInvite<'a> {
     last_name: &'a str,
     company: &'a str,
     job_title: Option<&'a str>,
-    role: Role,
+    role: &'a str,
     token_hash: &'a [u8],
     expires_at: chrono::DateTime<chrono::Utc>,
 }
@@ -319,6 +318,22 @@ enum Outcome {
     },
 }
 
+/// `issue_invite`'s error type -- a plain `sqlx::Error` is no longer
+/// enough now that "the submitted role doesn't exist" is a real outcome
+/// discovered mid-transaction rather than a pre-transaction parse
+/// failure. `From<sqlx::Error>` keeps every existing `?` inside
+/// `issue_invite` working unchanged.
+enum IssueInviteError {
+    Database(sqlx::Error),
+    InvalidRole(String),
+}
+
+impl From<sqlx::Error> for IssueInviteError {
+    fn from(err: sqlx::Error) -> Self {
+        IssueInviteError::Database(err)
+    }
+}
+
 /// Creates the account if the address is new, or reissues for an account
 /// that is still awaiting its first enrolment.
 ///
@@ -330,8 +345,16 @@ async fn issue_invite(
     state: &AppState,
     admin: &AuthenticatedUser,
     input: IssueInvite<'_>,
-) -> Result<Outcome, sqlx::Error> {
-    let mut tx = begin_rls_transaction(&state.db, admin.user_id, admin.role).await?;
+) -> Result<Outcome, IssueInviteError> {
+    let mut tx = begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await?;
+
+    let role_id = match resolve_role_id(&mut tx, input.role).await? {
+        Some(id) => id,
+        None => {
+            tx.rollback().await?;
+            return Err(IssueInviteError::InvalidRole(input.role.to_string()));
+        }
+    };
 
     // Soft-deleted accounts are excluded, so the address of a removed user
     // can be re-invited rather than being permanently unusable. That matters
@@ -351,9 +374,9 @@ async fn issue_invite(
         None => {
             let user_id: Uuid = sqlx::query_scalar(
                 "INSERT INTO auth.users
-                     (email, first_name, last_name, job_title, company, role, status)
+                     (email, first_name, last_name, job_title, company, status)
                  VALUES ($1::citext, $2, $3, $4, $5::auth.user_company,
-                         $6::auth.auth_role, 'invited'::auth.user_status)
+                         'invited'::auth.user_status)
                  RETURNING id",
             )
             .bind(input.email)
@@ -361,8 +384,16 @@ async fn issue_invite(
             .bind(input.last_name)
             .bind(input.job_title)
             .bind(input.company)
-            .bind(input.role.as_db_text())
             .fetch_one(&mut *tx)
+            .await?;
+
+            sqlx::query(
+                "INSERT INTO auth.user_roles (user_id, role_id, granted_by) VALUES ($1, $2, $3)",
+            )
+            .bind(user_id)
+            .bind(role_id)
+            .bind(admin.user_id)
+            .execute(&mut *tx)
             .await?;
 
             (user_id, false)
@@ -430,18 +461,24 @@ async fn issue_invite(
             // established behaviour a role change here could disrupt.
             // Without this, changing the role dropdown before clicking
             // Reissue would silently do nothing, which is worse than
-            // either always honouring it or not accepting it at all.
-            //
-            // Goes through set_user_role rather than a direct UPDATE:
-            // `role` has no application-facing column grant at all (see
-            // restrict_users_update_columns), by design -- this SECURITY
-            // DEFINER function is the only path past that, the same as
-            // every other role/status change in this codebase.
-            sqlx::query("SELECT auth.set_user_role($1, $2::auth.auth_role)")
+            // either always honouring it or not accepting it at all. Now
+            // expressed as "replace the role set" (clear, then insert the
+            // one submitted) rather than "set the one role column", since
+            // role is no longer a single value -- same net effect for the
+            // common case of one role at invite time.
+            sqlx::query("DELETE FROM auth.user_roles WHERE user_id = $1")
                 .bind(id)
-                .bind(input.role.as_db_text())
                 .execute(&mut *tx)
                 .await?;
+
+            sqlx::query(
+                "INSERT INTO auth.user_roles (user_id, role_id, granted_by) VALUES ($1, $2, $3)",
+            )
+            .bind(id)
+            .bind(role_id)
+            .bind(admin.user_id)
+            .execute(&mut *tx)
+            .await?;
 
             (id, true)
         }
@@ -503,24 +540,14 @@ pub async fn recover_account(
     let user_agent = headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|value| value.to_str().ok());
+    let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
 
-    // Redundant with the RLS policy by design -- see create_invite above
-    // for why, including why this arm is reachable now.
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                user_agent,
-                Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "recover_account" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    // Redundant with the RLS policy by design -- see create_invite above.
+    if let Err(response) = admin
+        .require_permission(&state.db, "users.manage", "recover_account", user_agent, ip_address)
+        .await
+    {
+        return response;
     }
 
     let email = request.email.trim().to_ascii_lowercase();
@@ -555,7 +582,7 @@ pub async fn recover_account(
                     audit_log::event::INVITE_REFUSED,
                     audit_log::Subjects::by(admin.user_id).about(target_user_id),
                     user_agent,
-                    Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+                    ip_address,
                     audit_log::Change::none(),
                     serde_json::json!({ "reason": reason, "action": "recovery" }),
                 )
@@ -590,7 +617,7 @@ pub async fn recover_account(
         audit_log::event::ACCOUNT_RECOVERY_INITIATED,
         audit_log::Subjects::by(admin.user_id).about(user_id),
         user_agent,
-        Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+        ip_address,
         // The account's status cycles active -> deactivated -> invited
         // inside recover_account_tx; the net transition an operator cares
         // about is "was active, is now invited" -- the intermediate
@@ -655,7 +682,7 @@ async fn recover_account_tx(
     token_hash: &[u8],
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<RecoveryOutcome, sqlx::Error> {
-    let mut tx = begin_rls_transaction(&state.db, admin.user_id, admin.role).await?;
+    let mut tx = begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await?;
 
     let existing: Option<(Uuid, String)> = sqlx::query_as(
         "SELECT id, status::text FROM auth.users WHERE email = $1::citext AND deleted_at IS NULL",
@@ -765,27 +792,7 @@ async fn recover_account_tx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::test_support::empty_state;
-
-    fn admin() -> AuthenticatedUser {
-        AuthenticatedUser {
-            user_id: Uuid::new_v4(),
-            role: Role::Admin,
-            token_hash: vec![0u8; 32],
-            elevated_until: None,
-            requires_step_up: false,
-        }
-    }
-
-    fn onboarding_manager() -> AuthenticatedUser {
-        AuthenticatedUser {
-            user_id: Uuid::new_v4(),
-            role: Role::OnboardingManager,
-            token_hash: vec![0u8; 32],
-            elevated_until: None,
-            requires_step_up: false,
-        }
-    }
+    use crate::api::test_support::{admin_user, empty_state, onboarding_manager_user};
 
     /// A stand-in peer address -- both handlers now take
     /// `ConnectInfo<SocketAddr>` (only populated for real by
@@ -828,7 +835,7 @@ mod tests {
         for (body, label) in cases {
             let response = create_invite(
                 State(empty_state()),
-                admin(),
+                admin_user(),
                 test_addr(),
                 HeaderMap::new(),
                 Json(body),
@@ -853,7 +860,7 @@ mod tests {
 
         let response = create_invite(
             State(empty_state()),
-            admin(),
+            admin_user(),
             test_addr(),
             HeaderMap::new(),
             Json(body),
@@ -863,14 +870,14 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
-    /// A non-admin authenticated caller (the only other role that exists
-    /// today) must be refused before any validation of the request body
-    /// even runs -- role-gating happens first.
+    /// A non-admin authenticated caller must be refused before any
+    /// validation of the request body even runs -- permission-gating
+    /// happens first.
     #[tokio::test]
-    async fn create_invite_refuses_a_non_admin_role() {
+    async fn create_invite_refuses_insufficient_permission() {
         let response = create_invite(
             State(empty_state()),
-            onboarding_manager(),
+            onboarding_manager_user(),
             test_addr(),
             HeaderMap::new(),
             Json(request("ada@example.com", "quikstor")),
@@ -890,7 +897,7 @@ mod tests {
     async fn company_and_email_casing_are_normalised_not_rejected() {
         let response = create_invite(
             State(empty_state()),
-            admin(),
+            admin_user(),
             test_addr(),
             HeaderMap::new(),
             Json(request("Ada@Example.COM", "QuikStor")),
@@ -904,18 +911,43 @@ mod tests {
         );
     }
 
-    /// An unrecognised role string must be caught before the database is
-    /// touched -- same property as every other field's validation, and
-    /// specifically what stands between a client-supplied string and a
-    /// raw Postgres enum-cast error.
+    /// An unknown role can no longer be caught before the database is
+    /// touched -- roles are real data now (see the module doc), so the
+    /// only source of truth is the `auth.roles` table itself, which this
+    /// handler only reaches inside a transaction. Reaching the database
+    /// (a 500 against the unreachable test pool) is the success signal
+    /// here: it proves every pre-transaction check passed and the role
+    /// lookup was actually attempted. The "no such role" 400 itself is
+    /// exercised against the real dev database, not this fake pool, same
+    /// as several other DB-dependent branches in this codebase.
     #[tokio::test]
-    async fn an_invalid_role_is_refused_without_touching_the_database() {
+    async fn an_unrecognised_role_still_reaches_the_database() {
         let mut body = request("ada@example.com", "quikstor");
         body.role = "superuser".to_string();
 
         let response = create_invite(
             State(empty_state()),
-            admin(),
+            admin_user(),
+            test_addr(),
+            HeaderMap::new(),
+            Json(body),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    /// A blank role is still caught before the database, same as the other
+    /// required-field checks -- there is no ambiguity to resolve against
+    /// `auth.roles` for an empty string.
+    #[tokio::test]
+    async fn a_blank_role_is_refused_without_touching_the_database() {
+        let mut body = request("ada@example.com", "quikstor");
+        body.role = "   ".to_string();
+
+        let response = create_invite(
+            State(empty_state()),
+            admin_user(),
             test_addr(),
             HeaderMap::new(),
             Json(body),
@@ -925,18 +957,17 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
-    /// The onboarding_manager role must be assignable via the same
-    /// endpoint, not just admin -- reaching the database (a 500 against
-    /// the unreachable test pool) is the success signal, same convention
-    /// as the casing-normalisation test above.
+    /// Any role key reaches the same code path -- reaching the database (a
+    /// 500 against the unreachable test pool) is the success signal, same
+    /// convention as the casing-normalisation test above.
     #[tokio::test]
-    async fn onboarding_manager_is_an_accepted_role() {
+    async fn onboarding_manager_is_an_accepted_role_string() {
         let mut body = request("ada@example.com", "quikstor");
         body.role = "onboarding_manager".to_string();
 
         let response = create_invite(
             State(empty_state()),
-            admin(),
+            admin_user(),
             test_addr(),
             HeaderMap::new(),
             Json(body),
@@ -966,7 +997,7 @@ mod tests {
         for (body, label) in cases {
             let response = recover_account(
                 State(empty_state()),
-                admin(),
+                admin_user(),
                 test_addr(),
                 HeaderMap::new(),
                 Json(body),
@@ -981,13 +1012,13 @@ mod tests {
         }
     }
 
-    /// Same role-gating property as `create_invite_refuses_a_non_admin_role`,
+    /// Same permission-gating property as `create_invite_refuses_insufficient_permission`,
     /// on the recovery endpoint.
     #[tokio::test]
-    async fn recover_account_refuses_a_non_admin_role() {
+    async fn recover_account_refuses_insufficient_permission() {
         let response = recover_account(
             State(empty_state()),
-            onboarding_manager(),
+            onboarding_manager_user(),
             test_addr(),
             HeaderMap::new(),
             Json(recover_request("someone@example.com")),
@@ -1004,7 +1035,7 @@ mod tests {
     async fn recovery_with_a_valid_email_reaches_the_database() {
         let response = recover_account(
             State(empty_state()),
-            admin(),
+            admin_user(),
             test_addr(),
             HeaderMap::new(),
             Json(recover_request("someone@example.com")),

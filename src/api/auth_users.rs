@@ -18,7 +18,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::api::{internal_error, AppState};
-use crate::auth::{audit_log, begin_rls_transaction, insufficient_role, AuthenticatedUser, Role};
+use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::infrastructure::csv_export::write_csv;
 use crate::infrastructure::csv_safety::sanitize_cell;
 
@@ -30,7 +30,7 @@ pub struct UserSummary {
     pub last_name: String,
     pub company: String,
     pub job_title: Option<String>,
-    pub role: String,
+    pub roles: Vec<String>,
     pub status: String,
     pub created_at: DateTime<Utc>,
     pub credential_count: i64,
@@ -64,7 +64,7 @@ async fn fetch_users_for_admin(
         String,
         String,
         Option<String>,
-        String,
+        Option<Vec<String>>,
         String,
         DateTime<Utc>,
         i64,
@@ -84,7 +84,7 @@ async fn fetch_users_for_admin(
                 last_name,
                 company,
                 job_title,
-                role,
+                roles,
                 status,
                 created_at,
                 credential_count,
@@ -97,7 +97,7 @@ async fn fetch_users_for_admin(
                 last_name,
                 company,
                 job_title,
-                role,
+                roles: roles.unwrap_or_default(),
                 status,
                 created_at,
                 credential_count,
@@ -109,28 +109,18 @@ async fn fetch_users_for_admin(
 }
 
 pub async fn list_users(State(state): State<AppState>, admin: AuthenticatedUser) -> Response {
-    // Redundant with the RLS-independent role check inside
+    // Redundant with the RLS-independent permission check inside
     // auth.list_users_for_admin itself, by the same design as
     // auth_invites.rs's own handlers: this produces a clean 403, and the
     // function's own check is what holds if this one is ever forgotten.
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                None,
-                None,
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "list_users" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    if let Err(response) = admin
+        .require_permission(&state.db, "users.manage", "list_users", None, None)
+        .await
+    {
+        return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, admin.role).await {
+    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for user listing");
@@ -161,7 +151,7 @@ const USER_CSV_HEADER: &[&str] = &[
     "Last Name",
     "Company",
     "Job Title",
-    "Role",
+    "Roles",
     "Status",
     "Created At",
     "Credential Count",
@@ -182,7 +172,7 @@ fn user_csv_record(user: &UserSummary) -> Vec<String> {
         last_name,
         company,
         job_title,
-        role,
+        roles,
         status,
         created_at,
         credential_count,
@@ -197,7 +187,7 @@ fn user_csv_record(user: &UserSummary) -> Vec<String> {
         sanitize_cell(last_name),
         sanitize_cell(company),
         job_title.as_deref().map(sanitize_cell).unwrap_or_default(),
-        role.clone(),
+        sanitize_cell(&roles.join("; ")),
         status.clone(),
         created_at.to_rfc3339(),
         credential_count.to_string(),
@@ -212,24 +202,14 @@ fn user_csv_record(user: &UserSummary) -> Vec<String> {
 /// this is a view of existing state, not a change to it. A refused export
 /// (wrong role) is audited, matching every other admin-gated read here.
 pub async fn export_users(State(state): State<AppState>, admin: AuthenticatedUser) -> Response {
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                None,
-                None,
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "export_users" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    if let Err(response) = admin
+        .require_permission(&state.db, "users.manage", "export_users", None, None)
+        .await
+    {
+        return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, admin.role).await {
+    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for user export");
@@ -281,30 +261,20 @@ pub async fn export_users(State(state): State<AppState>, admin: AuthenticatedUse
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::test_support::empty_state;
+    use crate::api::test_support::{empty_state, onboarding_manager_user};
     use axum::http::StatusCode;
     use uuid::Uuid;
 
-    fn onboarding_manager() -> AuthenticatedUser {
-        AuthenticatedUser {
-            user_id: Uuid::new_v4(),
-            role: Role::OnboardingManager,
-            token_hash: vec![0u8; 32],
-            elevated_until: None,
-            requires_step_up: false,
-        }
-    }
-
     #[tokio::test]
-    async fn list_users_refuses_a_non_admin_role_without_touching_the_database() {
-        let response = list_users(State(empty_state()), onboarding_manager()).await;
+    async fn list_users_refuses_insufficient_permission_without_touching_the_database() {
+        let response = list_users(State(empty_state()), onboarding_manager_user()).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
-    async fn export_users_refuses_a_non_admin_role_without_touching_the_database() {
-        let response = export_users(State(empty_state()), onboarding_manager()).await;
+    async fn export_users_refuses_insufficient_permission_without_touching_the_database() {
+        let response = export_users(State(empty_state()), onboarding_manager_user()).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
@@ -323,7 +293,7 @@ mod tests {
             last_name: "Lovelace".to_string(),
             company: "quikstor".to_string(),
             job_title: Some("Engineer".to_string()),
-            role: "admin".to_string(),
+            roles: vec!["admin".to_string()],
             status: "active".to_string(),
             created_at: DateTime::<Utc>::MIN_UTC,
             credential_count: 2,
@@ -360,7 +330,7 @@ mod tests {
             last_name: "Lovelace".to_string(),
             company: "quikstor".to_string(),
             job_title: Some("=SUM(A1)".to_string()),
-            role: "admin".to_string(),
+            roles: vec!["admin".to_string()],
             status: "active".to_string(),
             created_at: DateTime::<Utc>::MIN_UTC,
             credential_count: 0,

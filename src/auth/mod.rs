@@ -1,4 +1,5 @@
 pub mod audit_log;
+pub mod roles;
 
 mod authenticated_user;
 mod authentication_ceremony;
@@ -11,9 +12,10 @@ mod totp;
 mod webauthn_backend;
 
 pub use authenticated_user::{
-    begin_owner_rls_transaction, begin_rls_transaction, insufficient_role, step_up_required,
-    try_authenticated_user, AuthenticatedUser, Role,
+    begin_owner_rls_transaction, begin_rls_transaction, step_up_required, try_authenticated_user,
+    AuthenticatedUser,
 };
+pub use roles::{resolve_role_id, role_keys_for_user};
 pub use authentication_ceremony::AuthenticationCeremony;
 pub use ceremony_cookie::{
     clear_ceremony_cookie, issue_ceremony_cookie, read_ceremony_cookie, LOGIN_CEREMONY_COOKIE,

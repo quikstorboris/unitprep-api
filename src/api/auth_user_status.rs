@@ -36,9 +36,7 @@ use uuid::Uuid;
 
 use crate::api::auth_invites::CreateInviteResponse;
 use crate::api::{internal_error, ApiErrorBody, AppState};
-use crate::auth::{
-    audit_log, begin_rls_transaction, generate_token, insufficient_role, AuthenticatedUser, Role,
-};
+use crate::auth::{audit_log, begin_rls_transaction, generate_token, AuthenticatedUser};
 use crate::bootstrap::invite_hours;
 
 #[derive(Debug, Serialize)]
@@ -95,21 +93,17 @@ pub async fn deactivate_user(
     // Redundant with the RLS policy / set_user_status's own SECURITY
     // DEFINER check by design -- see auth_invites.rs's module doc for why
     // both layers exist.
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                user_agent,
-                ip_address,
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "deactivate_user" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    if let Err(response) = admin
+        .require_permission(
+            &state.db,
+            "users.manage",
+            "deactivate_user",
+            user_agent,
+            ip_address,
+        )
+        .await
+    {
+        return response;
     }
 
     if target_user_id == admin.user_id {
@@ -119,7 +113,7 @@ pub async fn deactivate_user(
         );
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, admin.role).await {
+    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for user deactivation");
@@ -127,14 +121,17 @@ pub async fn deactivate_user(
         }
     };
 
-    let existing: Result<Option<(String, String)>, sqlx::Error> = sqlx::query_as(
-        "SELECT status::text, role::text FROM auth.users WHERE id = $1 AND deleted_at IS NULL",
+    let existing: Result<Option<(String, bool)>, sqlx::Error> = sqlx::query_as(
+        "SELECT u.status::text,
+                EXISTS(SELECT 1 FROM auth.user_roles ur JOIN auth.roles r ON r.id = ur.role_id
+                        WHERE ur.user_id = u.id AND r.key = 'admin')
+           FROM auth.users u WHERE u.id = $1 AND u.deleted_at IS NULL",
     )
     .bind(target_user_id)
     .fetch_optional(&mut *tx)
     .await;
 
-    let (prior_status, prior_role) = match existing {
+    let (prior_status, target_is_admin) = match existing {
         Ok(Some(row)) => row,
         Ok(None) => {
             if let Err(err) = tx.rollback().await {
@@ -155,16 +152,19 @@ pub async fn deactivate_user(
         return conflict("This user is already deactivated.".to_string());
     }
 
-    // Same reasoning as change_user_role's equivalent check: deactivating
-    // the last active admin would leave the account with no one able to
-    // undo it (short of the bootstrap-admin CLI's break-glass path).
-    if prior_role == Role::Admin.as_db_text() && prior_status == "active" {
+    // Same reasoning as auth_user_role.rs's revoke_role equivalent check:
+    // deactivating the last active admin would leave the account with no
+    // one able to undo it (short of the bootstrap-admin CLI's break-glass
+    // path).
+    if target_is_admin && prior_status == "active" {
         let remaining_admins: Result<i64, sqlx::Error> = sqlx::query_scalar(
-            "SELECT count(*) FROM auth.users
-              WHERE role = 'admin'::auth.auth_role
-                AND status = 'active'::auth.user_status
-                AND deleted_at IS NULL
-                AND id != $1",
+            "SELECT count(*) FROM auth.users u
+               JOIN auth.user_roles ur ON ur.user_id = u.id
+               JOIN auth.roles r ON r.id = ur.role_id
+              WHERE r.key = 'admin'
+                AND u.status = 'active'::auth.user_status
+                AND u.deleted_at IS NULL
+                AND u.id != $1",
         )
         .bind(target_user_id)
         .fetch_one(&mut *tx)
@@ -265,27 +265,23 @@ pub async fn reactivate_user(
     let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
 
     // Same two-layer reasoning as deactivate_user above.
-    match admin.role {
-        Role::Admin => {}
-        Role::OnboardingManager => {
-            audit_log::record(
-                &state.db,
-                audit_log::event::AUTHORIZATION_FAILURE,
-                audit_log::Subjects::by(admin.user_id),
-                user_agent,
-                ip_address,
-                audit_log::Change::none(),
-                serde_json::json!({ "action": "reactivate_user" }),
-            )
-            .await;
-            return insufficient_role();
-        }
+    if let Err(response) = admin
+        .require_permission(
+            &state.db,
+            "users.manage",
+            "reactivate_user",
+            user_agent,
+            ip_address,
+        )
+        .await
+    {
+        return response;
     }
 
     let (raw_token, token_hash) = generate_token();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(invite_hours());
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, admin.role).await {
+    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for user reactivation");
@@ -410,37 +406,17 @@ pub async fn reactivate_user(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::test_support::empty_state;
-
-    fn admin() -> AuthenticatedUser {
-        AuthenticatedUser {
-            user_id: Uuid::new_v4(),
-            role: Role::Admin,
-            token_hash: vec![0u8; 32],
-            elevated_until: None,
-            requires_step_up: false,
-        }
-    }
-
-    fn onboarding_manager() -> AuthenticatedUser {
-        AuthenticatedUser {
-            user_id: Uuid::new_v4(),
-            role: Role::OnboardingManager,
-            token_hash: vec![0u8; 32],
-            elevated_until: None,
-            requires_step_up: false,
-        }
-    }
+    use crate::api::test_support::{admin_user, empty_state, onboarding_manager_user};
 
     fn test_addr() -> ConnectInfo<SocketAddr> {
         ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0)))
     }
 
     #[tokio::test]
-    async fn refuses_a_non_admin_role_without_touching_the_database() {
+    async fn refuses_insufficient_permission_without_touching_the_database() {
         let response = deactivate_user(
             State(empty_state()),
-            onboarding_manager(),
+            onboarding_manager_user(),
             test_addr(),
             HeaderMap::new(),
             Path(Uuid::new_v4()),
@@ -452,7 +428,7 @@ mod tests {
 
     #[tokio::test]
     async fn refuses_to_deactivate_self_without_touching_the_database() {
-        let admin = admin();
+        let admin = admin_user();
         let self_id = admin.user_id;
 
         let response = deactivate_user(
@@ -467,13 +443,14 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
-    /// Same role-gating property as `refuses_a_non_admin_role_without_touching_the_database`
+    /// Same permission-gating property as
+    /// `refuses_insufficient_permission_without_touching_the_database`
     /// above, on the reactivate endpoint.
     #[tokio::test]
-    async fn reactivate_refuses_a_non_admin_role_without_touching_the_database() {
+    async fn reactivate_refuses_insufficient_permission_without_touching_the_database() {
         let response = reactivate_user(
             State(empty_state()),
-            onboarding_manager(),
+            onboarding_manager_user(),
             test_addr(),
             HeaderMap::new(),
             Path(Uuid::new_v4()),
@@ -487,10 +464,10 @@ mod tests {
     /// unreachable test pool) is the success signal, same convention used
     /// throughout auth_invites.rs's own tests.
     #[tokio::test]
-    async fn reactivate_with_a_valid_role_reaches_the_database() {
+    async fn reactivate_with_sufficient_permission_reaches_the_database() {
         let response = reactivate_user(
             State(empty_state()),
-            admin(),
+            admin_user(),
             test_addr(),
             HeaderMap::new(),
             Path(Uuid::new_v4()),
