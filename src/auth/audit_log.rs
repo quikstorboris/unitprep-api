@@ -190,6 +190,12 @@ pub mod event {
     /// `metadata` carries the filters used and the row count returned.
     pub const AUDIT_LOG_EXPORTED: &str = "audit_log_exported";
 
+    /// An administrator edited org-wide auth policy
+    /// (`auth.auth_configuration` -- currently just `step_up_actions`).
+    /// `Change` carries the full before/after row, same shape as every
+    /// other change-type event here.
+    pub const AUTH_CONFIGURATION_UPDATED: &str = "auth_configuration_updated";
+
     /// Every event type that exists, for the admin audit-log viewer's
     /// "which events" filter -- served over `GET /auth/audit-logs/event-types`
     /// rather than hand-duplicated into the frontend, so the two cannot
@@ -223,6 +229,7 @@ pub mod event {
         ROLE_REVOKED,
         USER_REACTIVATED,
         AUDIT_LOG_EXPORTED,
+        AUTH_CONFIGURATION_UPDATED,
     ];
 
     #[cfg(test)]
