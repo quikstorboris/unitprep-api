@@ -35,6 +35,8 @@ pub struct TenantRecord {
     pub company_name: String,
 
     pub phone_number: String,
+    /// Export passthrough only — not in `FieldName`/`FIELD_SPECS`, so
+    /// never compared. See `FieldName`'s doc comment for why.
     pub phone_number_prefix: String,
     pub email: String,
 
@@ -48,6 +50,7 @@ pub struct TenantRecord {
     pub alt_contact_last_name: String,
     pub alt_contact_email: String,
     pub alt_contact_phone_number: String,
+    /// Export passthrough only — see `phone_number_prefix` above.
     pub alt_contact_phone_number_prefix: String,
     pub alt_contact_address_street1: String,
     pub alt_contact_address_street2: String,
@@ -64,7 +67,6 @@ impl TenantRecord {
     pub fn field(&self, name: FieldName) -> &str {
         match name {
             FieldName::PhoneNumber => &self.phone_number,
-            FieldName::PhoneNumberPrefix => &self.phone_number_prefix,
             FieldName::Email => &self.email,
             FieldName::AddressStreet1 => &self.address_street1,
             FieldName::AddressStreet2 => &self.address_street2,
@@ -75,7 +77,6 @@ impl TenantRecord {
             FieldName::AltContactLastName => &self.alt_contact_last_name,
             FieldName::AltContactEmail => &self.alt_contact_email,
             FieldName::AltContactPhoneNumber => &self.alt_contact_phone_number,
-            FieldName::AltContactPhoneNumberPrefix => &self.alt_contact_phone_number_prefix,
             FieldName::AltContactAddressStreet1 => &self.alt_contact_address_street1,
             FieldName::AltContactAddressStreet2 => &self.alt_contact_address_street2,
             FieldName::AltContactAddressCity => &self.alt_contact_address_city,

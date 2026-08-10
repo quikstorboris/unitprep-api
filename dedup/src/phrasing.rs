@@ -64,7 +64,6 @@ pub(crate) fn capitalize_first(s: &str) -> String {
 pub fn human_label(field: FieldName) -> &'static str {
     match field {
         FieldName::PhoneNumber => "Phone number",
-        FieldName::PhoneNumberPrefix => "Phone country code",
         FieldName::Email => "Email address",
         FieldName::AddressStreet1 => "Street address",
         FieldName::AddressStreet2 => "Street address (line 2)",
@@ -75,7 +74,6 @@ pub fn human_label(field: FieldName) -> &'static str {
         FieldName::AltContactLastName => "Alternate contact last name",
         FieldName::AltContactEmail => "Alternate contact email address",
         FieldName::AltContactPhoneNumber => "Alternate contact phone number",
-        FieldName::AltContactPhoneNumberPrefix => "Alternate contact phone country code",
         FieldName::AltContactAddressStreet1 => "Alternate contact street address",
         FieldName::AltContactAddressStreet2 => "Alternate contact street address (line 2)",
         FieldName::AltContactAddressCity => "Alternate contact city",

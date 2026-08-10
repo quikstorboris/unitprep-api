@@ -46,10 +46,18 @@ pub enum FieldKind {
 /// Every QMS export column this crate reads. Deliberately a closed enum
 /// (not a raw string) so a typo'd field name is a compile error, not a
 /// silent no-op lookup.
+///
+/// `PhoneNumberPrefix`/`AlternateContactPhoneNumberPrefix` are
+/// deliberately absent, same as `Gender`/`DateOfBirth` — per the
+/// reference skill's own current rationale, legacy QSX never exposed
+/// the prefix field to users, so differences there are migration
+/// noise, not a correctable discrepancy, regardless of whether both
+/// values are populated. `TenantRecord` still stores the raw values
+/// (`phone_number_prefix`/`alt_contact_phone_number_prefix`) for
+/// export passthrough — this enum only governs what's compared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
 pub enum FieldName {
     PhoneNumber,
-    PhoneNumberPrefix,
     Email,
     AddressStreet1,
     AddressStreet2,
@@ -60,7 +68,6 @@ pub enum FieldName {
     AltContactLastName,
     AltContactEmail,
     AltContactPhoneNumber,
-    AltContactPhoneNumberPrefix,
     AltContactAddressStreet1,
     AltContactAddressStreet2,
     AltContactAddressCity,
@@ -86,11 +93,6 @@ pub struct FieldSpec {
 pub const FIELD_SPECS: &[FieldSpec] = &[
     FieldSpec {
         name: FieldName::PhoneNumber,
-        category: FieldCategory::Phone,
-        kind: FieldKind::Phone,
-    },
-    FieldSpec {
-        name: FieldName::PhoneNumberPrefix,
         category: FieldCategory::Phone,
         kind: FieldKind::Phone,
     },
@@ -141,11 +143,6 @@ pub const FIELD_SPECS: &[FieldSpec] = &[
     },
     FieldSpec {
         name: FieldName::AltContactPhoneNumber,
-        category: FieldCategory::AltContact,
-        kind: FieldKind::Phone,
-    },
-    FieldSpec {
-        name: FieldName::AltContactPhoneNumberPrefix,
         category: FieldCategory::AltContact,
         kind: FieldKind::Phone,
     },
@@ -214,7 +211,6 @@ mod tests {
         fn exhaustiveness_check(name: FieldName) {
             match name {
                 FieldName::PhoneNumber
-                | FieldName::PhoneNumberPrefix
                 | FieldName::Email
                 | FieldName::AddressStreet1
                 | FieldName::AddressStreet2
@@ -225,7 +221,6 @@ mod tests {
                 | FieldName::AltContactLastName
                 | FieldName::AltContactEmail
                 | FieldName::AltContactPhoneNumber
-                | FieldName::AltContactPhoneNumberPrefix
                 | FieldName::AltContactAddressStreet1
                 | FieldName::AltContactAddressStreet2
                 | FieldName::AltContactAddressCity
@@ -239,7 +234,6 @@ mod tests {
 
         let all = vec![
             FieldName::PhoneNumber,
-            FieldName::PhoneNumberPrefix,
             FieldName::Email,
             FieldName::AddressStreet1,
             FieldName::AddressStreet2,
@@ -250,7 +244,6 @@ mod tests {
             FieldName::AltContactLastName,
             FieldName::AltContactEmail,
             FieldName::AltContactPhoneNumber,
-            FieldName::AltContactPhoneNumberPrefix,
             FieldName::AltContactAddressStreet1,
             FieldName::AltContactAddressStreet2,
             FieldName::AltContactAddressCity,

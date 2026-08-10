@@ -35,7 +35,6 @@ fn csv_column_name_covers_every_field_and_stays_in_columns() {
 
     for field in [
         FieldName::PhoneNumber,
-        FieldName::PhoneNumberPrefix,
         FieldName::Email,
         FieldName::AddressStreet1,
         FieldName::AddressStreet2,
@@ -46,7 +45,6 @@ fn csv_column_name_covers_every_field_and_stays_in_columns() {
         FieldName::AltContactLastName,
         FieldName::AltContactEmail,
         FieldName::AltContactPhoneNumber,
-        FieldName::AltContactPhoneNumberPrefix,
         FieldName::AltContactAddressStreet1,
         FieldName::AltContactAddressStreet2,
         FieldName::AltContactAddressCity,

@@ -97,30 +97,6 @@ fn field_matches_across(
     name: FieldName,
     kind: crate::types::FieldKind,
 ) -> bool {
-    // A phone *prefix*/extension is routinely left blank on some rows and
-    // populated on others in real QMS exports even when the actual phone
-    // number is identical -- unlike every other field, a blank prefix here
-    // is exactly-nothing-to-compare, not "differs from a populated one".
-    // Only two DIFFERENT non-blank prefixes are a real mismatch; this is
-    // the one field pair exempted from the general blank-vs-filled-always-
-    // differs rule the rest of this function enforces.
-    if matches!(
-        name,
-        FieldName::PhoneNumberPrefix | FieldName::AltContactPhoneNumberPrefix
-    ) {
-        let mut non_blank_values = group
-            .iter()
-            .map(|r| normalize_value(kind, r.field(name)))
-            .filter(|v| !v.is_empty());
-
-        let first = match non_blank_values.next() {
-            Some(v) => v,
-            None => return true,
-        };
-
-        return non_blank_values.all(|v| v == first);
-    }
-
     let mut values = group.iter().map(|r| {
         let raw = r.field(name);
         (is_empty(raw), normalize_value(kind, raw))
@@ -231,35 +207,15 @@ mod tests {
         );
     }
 
-    /// Regression test: a phone-number *prefix* populated on one record
-    /// and blank on another must not flag a Phone mismatch when the
-    /// actual phone number is identical -- a blank prefix is normal QMS-
-    /// export noise, not a real discrepancy, unlike every other field.
+    /// `PhoneNumberPrefix`/`AlternateContactPhoneNumberPrefix` differences
+    /// — even fully populated, genuinely different values, not just
+    /// blank-vs-filled — must never surface a Phone mismatch. Per the
+    /// reference skill's own current rationale, legacy QSX never exposed
+    /// this field to users, so any difference here is migration noise,
+    /// not a correctable discrepancy; unlike every other field, this one
+    /// isn't in `FIELD_SPECS` at all (see `FieldName`'s doc comment).
     #[test]
-    fn blank_phone_prefix_on_one_record_does_not_flag_a_mismatch() {
-        let group = vec![
-            TenantRecord {
-                phone_number: "5551234567".to_string(),
-                phone_number_prefix: "1".to_string(),
-                ..Default::default()
-            },
-            TenantRecord {
-                phone_number: "5551234567".to_string(),
-                phone_number_prefix: "".to_string(),
-                ..Default::default()
-            },
-        ];
-        let differing = find_differing_categories(&group);
-        assert!(
-            differing.iter().all(|m| m.category != FieldCategory::Phone),
-            "a blank prefix alongside a matching phone number should not be a Phone mismatch: {differing:?}"
-        );
-    }
-
-    /// Two genuinely *different* non-blank prefixes are still a real
-    /// mismatch -- the exemption above is for blank-vs-populated only.
-    #[test]
-    fn two_different_non_blank_phone_prefixes_still_mismatch() {
+    fn differing_phone_prefixes_never_flag_a_mismatch() {
         let group = vec![
             TenantRecord {
                 phone_number: "5551234567".to_string(),
@@ -274,8 +230,8 @@ mod tests {
         ];
         let differing = find_differing_categories(&group);
         assert!(
-            differing.iter().any(|m| m.category == FieldCategory::Phone),
-            "two different non-blank prefixes should still be a Phone mismatch: {differing:?}"
+            differing.iter().all(|m| m.category != FieldCategory::Phone),
+            "a phone prefix difference alone should never be a Phone mismatch: {differing:?}"
         );
     }
 

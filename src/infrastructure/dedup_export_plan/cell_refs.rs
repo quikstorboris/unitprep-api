@@ -156,7 +156,6 @@ fn col_letter(index0: usize) -> String {
 fn csv_column_name(field: FieldName) -> &'static str {
     match field {
         FieldName::PhoneNumber => "PhoneNumber",
-        FieldName::PhoneNumberPrefix => "PhoneNumberPrefix",
         FieldName::Email => "Email",
         FieldName::AddressStreet1 => "AddressStreet1",
         FieldName::AddressStreet2 => "AddressStreet2",
@@ -167,7 +166,6 @@ fn csv_column_name(field: FieldName) -> &'static str {
         FieldName::AltContactLastName => "AlternateContactLastName",
         FieldName::AltContactEmail => "AlternateContactEmail",
         FieldName::AltContactPhoneNumber => "AlternateContactPhoneNumber",
-        FieldName::AltContactPhoneNumberPrefix => "AlternateContactPhoneNumberPrefix",
         FieldName::AltContactAddressStreet1 => "AlternateContactAddressStreet1",
         FieldName::AltContactAddressStreet2 => "AlternateContactAddressStreet2",
         FieldName::AltContactAddressCity => "AlternateContactAddressCity",
