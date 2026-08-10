@@ -129,25 +129,80 @@ fn describe_group_bullets_returns_one_sentence_per_field() {
 }
 
 #[test]
-fn distinct_emails_only_suggests_separate_tenants() {
+fn distinct_emails_and_distinct_addresses_suggests_separate_tenants() {
+    let mut a = record("101", "John", "Smith", "a@example.com");
+    a.address_street1 = "12 Elm St".to_string();
+    a.address_city = "Springfield".to_string();
+    let mut b = record("204", "John", "Smith", "b@example.com");
+    b.address_street1 = "88 Oak Ave".to_string();
+    b.address_city = "Shelbyville".to_string();
+
     let group = TenantGroup {
         key: "smith".to_string(),
-        records: vec![
-            record("101", "John", "Smith", "a@example.com"),
-            record("204", "John", "Smith", "b@example.com"),
-        ],
+        records: vec![a, b],
+    };
+    let differing = vec![
+        FieldMismatch {
+            category: FieldCategory::Email,
+            fields: vec![FieldValueMismatch {
+                field: crate::types::FieldName::Email,
+                values: vec!["a@example.com".into(), "b@example.com".into()],
+            }],
+        },
+        FieldMismatch {
+            category: FieldCategory::Address,
+            fields: vec![FieldValueMismatch {
+                field: crate::types::FieldName::AddressStreet1,
+                values: vec!["12 Elm St".into(), "88 Oak Ave".into()],
+            }],
+        },
+    ];
+
+    let note = TemplateNoteComposer.compose_group_note(&group, &differing);
+    assert!(note.starts_with("Units 101 and 204 share a name"));
+    assert!(note.contains("may be separate tenants"));
+}
+
+/// Regression test for a real bug found on production data: two units
+/// belonging to the same person (identical address, one-character email
+/// typo) were told they "may be separate tenants" — because the old
+/// condition only checked that Email was the sole differing category,
+/// which (since a matching category never appears in `differing`)
+/// actually *required* the address to already match. Distinct emails
+/// with a *matching* address must fall through to the plain
+/// "update the email to match" note instead.
+#[test]
+fn distinct_emails_with_matching_address_is_a_typo_not_separate_tenants() {
+    let mut a = record("B207", "Christopher", "Muise", "mammamoose7@gmail.com");
+    a.address_street1 = "26 Campmeeting Rd".to_string();
+    a.address_city = "Topsfield".to_string();
+    let mut b = record("B256", "Christopher", "Muise", "mommamoose7@gmail.com");
+    b.address_street1 = "26 Campmeeting Rd".to_string();
+    b.address_city = "Topsfield".to_string();
+
+    let group = TenantGroup {
+        key: "muise".to_string(),
+        records: vec![a, b],
     };
     let differing = vec![FieldMismatch {
         category: FieldCategory::Email,
         fields: vec![FieldValueMismatch {
             field: crate::types::FieldName::Email,
-            values: vec!["a@example.com".into(), "b@example.com".into()],
+            values: vec![
+                "mammamoose7@gmail.com".into(),
+                "mommamoose7@gmail.com".into(),
+            ],
         }],
     }];
 
     let note = TemplateNoteComposer.compose_group_note(&group, &differing);
-    assert!(note.starts_with("Units 101 and 204 share a name"));
-    assert!(note.contains("may be separate tenants"));
+    assert!(!note.contains("may be separate tenants"));
+    assert_eq!(
+        note,
+        "Please update the email address to match across units B207 and B256. \
+         Email address is mammamoose7@gmail.com for unit B207 and \
+         mommamoose7@gmail.com for unit B256."
+    );
 }
 
 #[test]

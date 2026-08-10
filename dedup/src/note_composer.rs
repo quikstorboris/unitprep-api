@@ -13,7 +13,8 @@ use crate::notes::{
     NOTE_VERIFY_DIFFERS, NOTE_VERIFY_MATCHES,
 };
 use crate::phrasing::{
-    all_emails_present_and_distinct, capitalize_first, describe_field, group_units, units_phrase,
+    all_addresses_present_and_distinct, all_emails_present_and_distinct, capitalize_first,
+    describe_field, group_units, units_phrase,
 };
 use crate::relatedness::RelatednessSignal;
 use crate::types::{FieldCategory, FieldMismatch, FieldName, TenantGroup, CATEGORY_PRIORITY};
@@ -63,9 +64,26 @@ impl NoteComposer for TemplateNoteComposer {
     fn compose_group_note(&self, group: &TenantGroup, differing: &[FieldMismatch]) -> String {
         let units = units_phrase(&group_units(group));
 
-        if differing.len() == 1
-            && differing[0].category == FieldCategory::Email
+        // "Separate tenants sharing a name" only makes sense when Email
+        // AND Address both differ (and each is non-blank/distinct across
+        // the group) — two people who happen to share a name plausibly
+        // don't also share a home address. The previous condition
+        // (Email as the *sole* differing category) could never actually
+        // reach that scenario: `find_differing_categories` only lists a
+        // category when something in it differs, so "Email is the only
+        // entry" structurally meant Address already matched — i.e. this
+        // branch fired exactly for the same-person-typo'd-their-email
+        // case, the opposite of what it claimed. Confirmed against real
+        // production data (two units, one tenant, a one-character email
+        // typo, identical address/phone) getting told they "may be
+        // separate tenants."
+        if differing.len() == 2
+            && differing.iter().any(|m| m.category == FieldCategory::Email)
+            && differing
+                .iter()
+                .any(|m| m.category == FieldCategory::Address)
             && all_emails_present_and_distinct(group)
+            && all_addresses_present_and_distinct(group)
         {
             return capitalize_first(&NOTE_SEPARATE_TENANTS.replace("{units}", &units));
         }

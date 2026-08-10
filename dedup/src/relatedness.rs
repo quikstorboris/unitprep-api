@@ -225,7 +225,11 @@ fn address_values(group: &TenantGroup) -> Vec<String> {
         .collect()
 }
 
-fn full_address(
+/// `pub(crate)` so `phrasing::all_addresses_present_and_distinct` can
+/// reuse the exact same "what counts as the same address" rule for the
+/// separate-tenants note check, rather than a second, possibly-drifting
+/// definition living in two places.
+pub(crate) fn full_address(
     street1: &str,
     street2: &str,
     city: &str,

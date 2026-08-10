@@ -169,8 +169,12 @@ fn units_by_value(group: &TenantGroup, field: FieldName) -> Vec<(String, Vec<&st
 }
 
 /// True if every record's email is present (non-blank) and distinct —
-/// the "these might just be separate tenants sharing a name" signal,
-/// as opposed to a genuine mismatch to fix.
+/// the email half of the "these might just be separate tenants sharing
+/// a name" signal, as opposed to a genuine mismatch to fix. Must be
+/// paired with `all_addresses_present_and_distinct`: distinct emails
+/// alone are equally consistent with "same person, typo'd their email"
+/// (the common case) as with two genuinely different people, so this
+/// check can never be used on its own to decide the note's framing.
 pub(crate) fn all_emails_present_and_distinct(group: &TenantGroup) -> bool {
     let emails: Vec<String> = group
         .records
@@ -182,6 +186,35 @@ pub(crate) fn all_emails_present_and_distinct(group: &TenantGroup) -> bool {
     }
     let unique: HashSet<&String> = emails.iter().collect();
     unique.len() == emails.len()
+}
+
+/// True if every record's primary home address is present (non-blank
+/// street) and distinct — the address half of the same signal. Reuses
+/// `relatedness::full_address` so "what counts as the same address"
+/// never diverges between this check and the related-tenant pass.
+/// Deliberately the primary address only, not the alternate contact's —
+/// the question is whether the *tenants* look like different people,
+/// not their emergency contacts.
+pub(crate) fn all_addresses_present_and_distinct(group: &TenantGroup) -> bool {
+    let addresses: Vec<Option<String>> = group
+        .records
+        .iter()
+        .map(|r| {
+            crate::relatedness::full_address(
+                &r.address_street1,
+                &r.address_street2,
+                &r.address_city,
+                &r.address_state,
+                &r.address_postal_code,
+            )
+        })
+        .collect();
+    if addresses.iter().any(|a| a.is_none()) {
+        return false;
+    }
+    let addresses: Vec<String> = addresses.into_iter().flatten().collect();
+    let unique: HashSet<&String> = addresses.iter().collect();
+    unique.len() == addresses.len()
 }
 
 #[cfg(test)]
