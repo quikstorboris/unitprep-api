@@ -6,6 +6,42 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-08-10
+
+Phase 1 of the QMS Template Tagging Assistant shipped: `client_ops`, the
+first Postgres schema outside `auth`, holding a hand-maintained reference
+catalog of QMS's document-template merge tags — a stand-in until QMS
+exposes its own tag list via its own API. Seeded with the 13 tags QMS's
+own Default Lease document calls out as its "popular variables," not the
+full ~300+ tag catalog — growing this, and adding real context-scoping
+(a tag can be valid in some document contexts and not others), is
+tracked follow-up work, not a rework of what shipped here.
+
+### Added
+- **`client_ops.qms_tag`**: `tag_key` (natural key, matched against
+  literal `{{tag_key}}` text in a document — never renamed), `label`,
+  `category`, `is_active`. Never hard-deleted: deactivate/reactivate
+  only, so a template already referencing a tag stays resolvable, or at
+  least visible as deactivated, rather than disappearing outright.
+- **`GET/POST /client-ops/qms-tags`, `PUT /client-ops/qms-tags/{tag_key}`,
+  `PATCH /client-ops/qms-tags/{tag_key}/deactivate`,
+  `PATCH /client-ops/qms-tags/{tag_key}/reactivate`.** Read is open to
+  any authenticated caller (catalog/reference data, nothing sensitive);
+  every mutation requires the new `client_ops.manage_tags` permission
+  and writes a `client_ops.audit_log` row.
+- **`client_ops.manage_tags` permission**, granted to `admin`,
+  `onboarding_manager`, and `department_manager` alike — deliberately
+  not the same shape as `client_ops.perform`, which `admin` does not
+  hold. Maintaining a reference catalog of tag names reads as system
+  configuration, not a client operation, so `admin` shares this one
+  without blurring that boundary.
+- **`client_ops.audit_log`**: a distinct, non-security operations trail
+  for client-ops mutations (today: `qms_tag` edits; later: client
+  credential adds/revokes and whatever else this domain grows). Kept
+  separate from `auth.auth_audit_logs` on purpose — the same
+  access-boundary split already locked between Admin's oversight audit
+  and client-ops's own business data.
+
 ## [1.6.0] - 2026-08-07
 
 Phase II (hardening) items 2, 4, 6, and 7 shipped: session/TOTP
