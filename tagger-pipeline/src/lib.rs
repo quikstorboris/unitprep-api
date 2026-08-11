@@ -1,0 +1,231 @@
+//! Wires `unitprep-template-tagger`'s two matchers and `docx-surgeon`'s
+//! region model together: given a whole document's flattened regions,
+//! finds every candidate across the body **and** every table cell, and
+//! builds the region-aware [`Edit`] each one would need to be applied.
+//!
+//! Domain logic only, same "no I/O" scope as its two dependencies --
+//! reading the actual `.docx` bytes, and any DB-backed pattern/tag
+//! lookups, are the caller's job. This crate exists specifically
+//! because neither dependency should know about the other:
+//! `unitprep-template-tagger` is a pure text-matching engine with no
+//! notion of "region," and `docx-surgeon` has no notion of what a
+//! candidate is. Combining "run every matcher against every region" is
+//! its own coherent piece of logic, not naturally either matcher's job
+//! or the document reader's job.
+//!
+//! **Hard rule inherited from both dependencies: propose, never
+//! modify.** [`find_candidates`] never applies anything; [`to_edit`]
+//! only *builds* an [`Edit`] from an already-confirmed candidate and a
+//! caller-supplied replacement -- applying it is still
+//! `docx_surgeon::apply_edits`'s job, called explicitly by the caller.
+
+use docx_surgeon::{Edit, FlatDocument, RegionRef};
+use unitprep_template_tagger::{
+    detect_candidates, recognize_blanks, Candidate, LabelProximityPattern, TagValue,
+};
+
+/// One [`Candidate`] plus which region of the document it was found in
+/// -- a candidate's `start`/`end` are meaningless without knowing which
+/// region's text they're relative to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionCandidate {
+    pub region: RegionRef,
+    pub candidate: Candidate,
+}
+
+/// Runs both matchers -- literal-value matching against `values`
+/// ([`detect_candidates`]), and label-proximity blank recognition
+/// against `patterns` ([`recognize_blanks`]) -- across every region of
+/// `doc`: the body, then every table cell in document order. Returns
+/// every candidate found, each tagged with which region it came from.
+///
+/// Deliberately does not deduplicate, rank, or resolve ambiguity across
+/// or within regions -- same "propose, never modify, never silently
+/// collapse a judgment call" philosophy both matchers already hold
+/// individually. Two candidates for the same span (e.g. a value match
+/// and a blank match landing on the same text, or two patterns
+/// resolving the same blank to different tags) are both reported; a
+/// human reviewer decides what to do with that.
+pub fn find_candidates(
+    doc: &FlatDocument,
+    values: &[TagValue],
+    patterns: &[LabelProximityPattern],
+) -> Vec<RegionCandidate> {
+    let mut all = Vec::new();
+    collect_region(RegionRef::Body, &doc.body.text, values, patterns, &mut all);
+    for (i, cell) in doc.table_cells.iter().enumerate() {
+        collect_region(
+            RegionRef::TableCell(i),
+            &cell.text,
+            values,
+            patterns,
+            &mut all,
+        );
+    }
+    all
+}
+
+fn collect_region(
+    region: RegionRef,
+    text: &str,
+    values: &[TagValue],
+    patterns: &[LabelProximityPattern],
+    out: &mut Vec<RegionCandidate>,
+) {
+    for candidate in detect_candidates(text, values) {
+        out.push(RegionCandidate { region, candidate });
+    }
+    for candidate in recognize_blanks(text, patterns) {
+        out.push(RegionCandidate { region, candidate });
+    }
+}
+
+/// Builds the [`Edit`] that would apply `candidate`'s substitution.
+/// `replacement` is the caller's choice (typically `{{tag_key}}`) --
+/// this crate has no opinion on merge-tag templating syntax, only on
+/// where the substitution goes.
+pub fn to_edit(candidate: &RegionCandidate, replacement: String) -> Edit {
+    Edit {
+        region: candidate.region,
+        flat_start: candidate.candidate.start,
+        flat_end: candidate.candidate.end,
+        replacement,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use docx_surgeon::{apply_edits, extract_flat_text};
+
+    fn value(tag_key: &str, value: &str) -> TagValue {
+        TagValue {
+            tag_key: tag_key.to_string(),
+            value: value.to_string(),
+        }
+    }
+
+    fn label_pattern(
+        tag_key: &str,
+        label: &str,
+        position: unitprep_template_tagger::LabelPosition,
+    ) -> LabelProximityPattern {
+        LabelProximityPattern {
+            tag_key: tag_key.to_string(),
+            label: label.to_string(),
+            position,
+            max_gap_chars: 5,
+        }
+    }
+
+    fn wrap(body: &str) -> String {
+        format!(
+            r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#
+        )
+    }
+
+    #[test]
+    fn finds_a_known_value_in_the_body() {
+        let xml = wrap(r#"<w:p><w:r><w:t>Tenant: John Smith</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+
+        let candidates = find_candidates(&doc, &[value("e.name", "John Smith")], &[]);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].region, RegionRef::Body);
+        assert_eq!(candidates[0].candidate.tag_key, "e.name");
+    }
+
+    #[test]
+    fn finds_a_known_value_inside_a_table_cell() {
+        let xml = wrap(
+            r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>204</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        );
+        let doc = extract_flat_text(&xml);
+
+        let candidates = find_candidates(&doc, &[value("u.num", "204")], &[]);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].region, RegionRef::TableCell(0));
+    }
+
+    #[test]
+    fn finds_a_label_proximity_blank_inside_a_table_cell() {
+        let xml = wrap(
+            r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>Move-In Date: ______</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        );
+        let doc = extract_flat_text(&xml);
+        let patterns = [label_pattern(
+            "m.indate",
+            "Move-In Date",
+            unitprep_template_tagger::LabelPosition::After,
+        )];
+
+        let candidates = find_candidates(&doc, &[], &patterns);
+
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].region, RegionRef::TableCell(0));
+        assert_eq!(candidates[0].candidate.tag_key, "m.indate");
+    }
+
+    #[test]
+    fn reports_candidates_from_both_matchers_without_deduplicating() {
+        // "204" is both a known value AND sits right after a
+        // label_proximity pattern's label -- both matchers legitimately
+        // find something here, and both are reported.
+        let xml = wrap(r#"<w:p><w:r><w:t>Unit No.: 204</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let patterns = [label_pattern(
+            "u.num",
+            "Unit No.",
+            unitprep_template_tagger::LabelPosition::After,
+        )];
+
+        let candidates = find_candidates(&doc, &[value("u.num", "204")], &patterns);
+
+        // detect_candidates finds "204"; recognize_blanks finds nothing
+        // here (no underscore run) -- so only the literal match shows,
+        // proving the two matchers really did both run independently
+        // rather than one silently suppressing the other.
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].candidate.matched_text, "204");
+    }
+
+    #[test]
+    fn to_edit_builds_a_region_aware_edit_from_a_candidate() {
+        let xml = wrap(r#"<w:p><w:r><w:t>Tenant: John Smith</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let candidates = find_candidates(&doc, &[value("e.name", "John Smith")], &[]);
+
+        let edit = to_edit(&candidates[0], "{{e.name}}".to_string());
+
+        assert_eq!(edit.region, RegionRef::Body);
+        assert_eq!(edit.flat_start, candidates[0].candidate.start);
+        assert_eq!(edit.replacement, "{{e.name}}");
+    }
+
+    #[test]
+    fn end_to_end_find_and_apply_across_body_and_a_table_cell() {
+        let xml = wrap(&format!(
+            "{}{}",
+            r#"<w:p><w:r><w:t>Tenant: John Smith</w:t></w:r></w:p>"#,
+            r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>204</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#
+        ));
+        let doc = extract_flat_text(&xml);
+        let values = [value("e.name", "John Smith"), value("u.num", "204")];
+
+        let candidates = find_candidates(&doc, &values, &[]);
+        assert_eq!(candidates.len(), 2);
+
+        let edits: Vec<Edit> = candidates
+            .iter()
+            .map(|c| to_edit(c, format!("{{{{{}}}}}", c.candidate.tag_key)))
+            .collect();
+
+        let edited_xml = apply_edits(&xml, &doc, &edits).unwrap();
+        let reflattened = extract_flat_text(&edited_xml);
+
+        assert_eq!(reflattened.body.text, "Tenant: {{e.name}}");
+        assert_eq!(reflattened.table_cells[0].text, "{{u.num}}");
+    }
+}

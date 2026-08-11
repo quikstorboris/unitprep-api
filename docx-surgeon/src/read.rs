@@ -73,6 +73,31 @@ pub struct FlatDocument {
     pub table_cells: Vec<FlatText>,
 }
 
+impl FlatDocument {
+    /// The region `r` identifies. Panics if `r` is a `TableCell` index
+    /// out of range for this document -- same "caller-guaranteed valid"
+    /// contract as `Vec`'s own indexing, since a [`RegionRef`] is only
+    /// ever meaningful paired with the specific `FlatDocument` it was
+    /// produced from.
+    pub fn region(&self, r: RegionRef) -> &FlatText {
+        match r {
+            RegionRef::Body => &self.body,
+            RegionRef::TableCell(i) => &self.table_cells[i],
+        }
+    }
+}
+
+/// Identifies which region of a [`FlatDocument`] a set of flat-text
+/// coordinates (a [`RunSpan`], an edit) is relative to. Two regions can
+/// both have a run at `flat_start: 0` -- it is never meaningful to
+/// compare flat coordinates across regions without knowing which region
+/// each side belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionRef {
+    Body,
+    TableCell(usize),
+}
+
 /// One region's in-progress accumulator while walking the document --
 /// either the shared `body` accumulator, or one pushed per `<w:tc>`.
 struct Accumulator {

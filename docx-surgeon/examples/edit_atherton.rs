@@ -1,4 +1,4 @@
-use docx_surgeon::{edit_docx, read_docx, Edit};
+use docx_surgeon::{edit_docx, read_docx, Edit, RegionRef};
 use std::fs;
 
 fn main() {
@@ -11,6 +11,7 @@ fn main() {
     let edited_bytes = edit_docx(
         &original_bytes,
         &[Edit {
+            region: RegionRef::Body,
             flat_start: start,
             flat_end: end,
             replacement: "{{f.name}}".to_string(),

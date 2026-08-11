@@ -1,0 +1,8 @@
+[package]
+name = "unitprep-tagger-pipeline"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+docx-surgeon = { path = "../docx-surgeon" }
+unitprep-template-tagger = { path = "../template-tagger" }

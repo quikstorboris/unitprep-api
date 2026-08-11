@@ -25,9 +25,9 @@
 //! (`table_cells`) are independently-addressable regions, so a pattern
 //! search run against one can never see across a cell boundary into
 //! another, or into the surrounding body text. [`read_docx`] surfaces
-//! this directly; [`edit_docx`]/[`apply_edits`] currently only edit the
-//! `body` region -- editing table-cell content is a natural follow-up,
-//! not yet needed by anything calling this crate.
+//! this directly; each [`Edit`] names which region ([`RegionRef`]) its
+//! coordinates are relative to, so [`edit_docx`]/[`apply_edits`] can
+//! apply a body edit and a table-cell edit in the very same call.
 //!
 //! Scope: this handles the OOXML most real-world `.docx` files actually
 //! use (paragraphs, runs, tables, tabs). It does not understand content
@@ -39,7 +39,7 @@ pub mod edit;
 pub mod read;
 
 pub use edit::{apply_edits, Edit, EditError};
-pub use read::{extract_flat_text, FlatDocument, FlatText, RunSpan};
+pub use read::{extract_flat_text, FlatDocument, FlatText, RegionRef, RunSpan};
 
 use std::io::{Cursor, Read, Write};
 
@@ -74,19 +74,16 @@ pub fn read_docx(docx_bytes: &[u8]) -> Result<FlatDocument, DocxError> {
     Ok(extract_flat_text(&document_xml))
 }
 
-/// Applies `edits` (in the same flat-text coordinates [`read_docx`]'s
-/// `body` region returned) to a `.docx` given as raw bytes, returning a
-/// new `.docx`'s bytes. Every zip entry other than `word/document.xml`
-/// is copied through byte-for-byte from the input; within
-/// `document.xml`, every byte outside an edited run's text content is
-/// likewise untouched.
-///
-/// Only edits the `body` region -- table-cell edits aren't wired up yet
-/// (see the module doc comment).
+/// Applies `edits` (in the same flat-text coordinates [`read_docx`]
+/// returned, each naming which region it targets via [`RegionRef`]) to
+/// a `.docx` given as raw bytes, returning a new `.docx`'s bytes. Every
+/// zip entry other than `word/document.xml` is copied through byte-for-
+/// byte from the input; within `document.xml`, every byte outside an
+/// edited run's text content is likewise untouched.
 pub fn edit_docx(docx_bytes: &[u8], edits: &[Edit]) -> Result<Vec<u8>, DocxError> {
     let document_xml = read_document_xml(docx_bytes)?;
     let flat = extract_flat_text(&document_xml);
-    let edited_xml = apply_edits(&document_xml, &flat.body, edits).map_err(DocxError::Edit)?;
+    let edited_xml = apply_edits(&document_xml, &flat, edits).map_err(DocxError::Edit)?;
 
     let mut input_zip = zip::ZipArchive::new(Cursor::new(docx_bytes))?;
     let mut output_buffer = Vec::new();

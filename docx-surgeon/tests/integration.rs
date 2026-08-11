@@ -2,7 +2,7 @@
 //! synthetic fixture -- Atherton Storage's actual blank lease template
 //! (no real tenant data, safe to commit; see `tests/fixtures/`).
 
-use docx_surgeon::{edit_docx, read_docx, Edit};
+use docx_surgeon::{edit_docx, read_docx, Edit, RegionRef};
 use std::fs;
 use std::io::{Cursor, Read};
 use zip::ZipArchive;
@@ -32,6 +32,7 @@ fn edits_a_real_document_and_leaves_every_other_zip_entry_byte_identical() {
     let edited_bytes = edit_docx(
         &original_bytes,
         &[Edit {
+            region: RegionRef::Body,
             flat_start: start,
             flat_end: end,
             replacement: "{{f.name}}".to_string(),
@@ -95,6 +96,7 @@ fn document_xml_changes_only_inside_the_one_edited_runs_text_content() {
     let edited_bytes = edit_docx(
         &original_bytes,
         &[Edit {
+            region: RegionRef::Body,
             flat_start: start,
             flat_end: end,
             replacement: "{{f.name}}".to_string(),

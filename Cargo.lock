@@ -3604,6 +3604,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "unitprep-tagger-pipeline"
+version = "0.1.0"
+dependencies = [
+ "docx-surgeon",
+ "unitprep-template-tagger",
+]
+
+[[package]]
 name = "unitprep-template-tagger"
 version = "0.1.0"
 
