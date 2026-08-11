@@ -1,7 +1,13 @@
 //! Core matching logic for the QMS Template Tagging Assistant, Phase 2
-//! (rule-based candidate detection). Given a client document's plain
-//! text and a set of known values, finds every literal occurrence of a
-//! value and proposes the matching QMS merge tag as a substitution.
+//! (rule-based candidate detection). Two independent matchers, both pure
+//! text-in/candidates-out:
+//!
+//! - [`detect_candidates`]: given a set of *known* values, finds every
+//!   literal occurrence of each in a document's plain text.
+//! - [`recognize_blanks`]: given the `client_ops.tag_pattern` label-
+//!   proximity library, finds blank underscore runs near a recognized
+//!   label -- no known value required, for template documents that
+//!   haven't been filled in at all.
 //!
 //! Domain logic only -- no session state, no HTTP layer, no `.docx`
 //! parsing. Depends on nothing but `std`, per the workspace's
@@ -26,5 +32,7 @@
 //! writes to a document.
 
 pub mod detect;
+pub mod recognize;
 
 pub use detect::{detect_candidates, Candidate, TagValue};
+pub use recognize::{recognize_blanks, LabelPosition, LabelProximityPattern};

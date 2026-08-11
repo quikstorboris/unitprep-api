@@ -90,7 +90,11 @@ fn is_word_char(c: char) -> bool {
 /// Every byte-range `(start, end)` in `haystack` where `needle` occurs,
 /// ASCII-case-insensitively and word-bounded on both sides. See
 /// [`detect_candidates`]'s doc comment for why folding is ASCII-only.
-fn find_word_bounded_matches(haystack: &str, needle: &str) -> Vec<(usize, usize)> {
+///
+/// `pub(crate)` rather than private: `recognize::recognize_blanks` reuses
+/// this exact matching behavior for label text, rather than duplicating
+/// it under a second name.
+pub(crate) fn find_word_bounded_matches(haystack: &str, needle: &str) -> Vec<(usize, usize)> {
     let haystack_folded = haystack.to_ascii_lowercase();
     let needle_folded = needle.to_ascii_lowercase();
 
