@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "unit-group", "dedup", "template-tagger"]
+members = ["core", "unit-group", "dedup", "template-tagger", "docx-surgeon"]
 # This root Cargo.toml is both the workspace manifest and the
 # `unitprep` binary's own package manifest — the binary crate stays at
 # the repo root (unchanged import paths, unchanged build command) while

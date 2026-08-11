@@ -1,0 +1,9 @@
+[package]
+name = "docx-surgeon"
+version = "0.1.0"
+edition = "2021"
+description = "Surgical, minimal-diff text edits inside a .docx -- replace exact text spans without touching anything else in the file."
+
+[dependencies]
+quick-xml = "0.36"
+zip = "2"
