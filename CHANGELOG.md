@@ -6,6 +6,41 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-11
+
+Continued growing the QMS tag catalog from real-world evidence, and
+shipped the write-side counterpart to the Phase 2 matching engine.
+
+### Added
+- **`e.dob`, `e.add1`, `e.add2`** — date of birth and the two-line
+  address variant, confirmed directly against the live QMS tag
+  picker. `e.address` (single-line) was already seeded.
+- **`m.indate`, `m.secdep`, `l.indate`, `l.secdep`, `d.now`,
+  `d.nowlong`** — identified from a real sample lease (Affordable
+  Storage) for the QMS Template Tagging Assistant effort; each key
+  independently confirmed in the vault's own transcribed tag-family
+  notes before being added.
+- **98 more tags**, harvested by scanning every `{{tag}}` occurrence
+  across 258 already-tagged real client documents (the full QMS
+  Onboarding document tree). Introduces six categories beyond the
+  original Tenant/Unit/Lease/Move-In/Date-Time set: Alternate Contact,
+  Military, Facility, Company, Vehicle, Lienholder, Signature. The
+  catalog is now 121 tags, up from 13.
+- **`docx-surgeon`**, a new standalone crate: surgical, minimal-diff
+  text editing inside a `.docx` file. Given a document and a set of
+  exact text-span edits, produces a new document where only those
+  spans change — every other run, table, style, and zip part is
+  copied through unchanged. Never deserializes the whole document
+  into an object model; edits are spliced directly into the original
+  XML bytes at each targeted run's own text range, with a decode/
+  re-encode round trip that makes it impossible to corrupt a run
+  whose text contains an XML entity. Proven against a real sample
+  document, not just synthetic fixtures: every zip entry other than
+  `word/document.xml` verified byte-identical after an edit, and
+  everything in `document.xml` outside the one targeted run's text
+  verified byte-identical too. Not yet wired into the template-
+  tagging pipeline or any HTTP endpoint.
+
 ## [1.7.0] - 2026-08-10
 
 Phase 1 of the QMS Template Tagging Assistant shipped: `client_ops`, the
