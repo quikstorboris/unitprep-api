@@ -204,7 +204,12 @@ fn allowed_origins() -> Vec<axum::http::HeaderValue> {
 pub fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed_origins()))
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::PATCH,
+        ])
         .allow_headers([axum::http::header::CONTENT_TYPE])
         // The frontend's shared hooks (useSessionPost/useSessionAction)
         // now send `credentials: "include"` on every request, ahead of
