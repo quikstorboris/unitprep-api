@@ -20,18 +20,26 @@
 //! else in the file that this crate is capable of altering, by
 //! construction, not by care.
 //!
+//! Flattening returns a [`FlatDocument`], not one flat string: the
+//! document's own paragraph flow (`body`) and each table cell
+//! (`table_cells`) are independently-addressable regions, so a pattern
+//! search run against one can never see across a cell boundary into
+//! another, or into the surrounding body text. [`read_docx`] surfaces
+//! this directly; [`edit_docx`]/[`apply_edits`] currently only edit the
+//! `body` region -- editing table-cell content is a natural follow-up,
+//! not yet needed by anything calling this crate.
+//!
 //! Scope: this handles the OOXML most real-world `.docx` files actually
-//! use (paragraphs, runs, tables-as-plain-text, tabs). It does not
-//! understand content controls, tracked changes, or comments -- a
-//! document using those will still flatten to readable text and edit
-//! correctly, just without any special handling for what those features
-//! mean.
+//! use (paragraphs, runs, tables, tabs). It does not understand content
+//! controls, tracked changes, comments, or nested tables -- a document
+//! using those will still flatten to readable text, just without any
+//! special handling for what those features mean.
 
 pub mod edit;
 pub mod read;
 
 pub use edit::{apply_edits, Edit, EditError};
-pub use read::{extract_flat_text, FlatText, RunSpan};
+pub use read::{extract_flat_text, FlatDocument, FlatText, RunSpan};
 
 use std::io::{Cursor, Read, Write};
 
@@ -58,23 +66,27 @@ impl From<std::io::Error> for DocxError {
     }
 }
 
-/// Extracts the flattened body text of a `.docx` given as raw bytes.
-/// The returned [`FlatText`] is what a caller runs pattern-matching
-/// against to decide what needs to change.
-pub fn read_docx(docx_bytes: &[u8]) -> Result<FlatText, DocxError> {
+/// Extracts the flattened text of a `.docx` given as raw bytes, as an
+/// independently-addressable region per [`FlatDocument`]'s doc comment.
+/// A caller runs pattern-matching against whichever region(s) it needs.
+pub fn read_docx(docx_bytes: &[u8]) -> Result<FlatDocument, DocxError> {
     let document_xml = read_document_xml(docx_bytes)?;
     Ok(extract_flat_text(&document_xml))
 }
 
-/// Applies `edits` (in the same flat-text coordinates [`read_docx`]
-/// returned) to a `.docx` given as raw bytes, returning a new `.docx`'s
-/// bytes. Every zip entry other than `word/document.xml` is copied
-/// through byte-for-byte from the input; within `document.xml`, every
-/// byte outside an edited run's text content is likewise untouched.
+/// Applies `edits` (in the same flat-text coordinates [`read_docx`]'s
+/// `body` region returned) to a `.docx` given as raw bytes, returning a
+/// new `.docx`'s bytes. Every zip entry other than `word/document.xml`
+/// is copied through byte-for-byte from the input; within
+/// `document.xml`, every byte outside an edited run's text content is
+/// likewise untouched.
+///
+/// Only edits the `body` region -- table-cell edits aren't wired up yet
+/// (see the module doc comment).
 pub fn edit_docx(docx_bytes: &[u8], edits: &[Edit]) -> Result<Vec<u8>, DocxError> {
     let document_xml = read_document_xml(docx_bytes)?;
     let flat = extract_flat_text(&document_xml);
-    let edited_xml = apply_edits(&document_xml, &flat, edits).map_err(DocxError::Edit)?;
+    let edited_xml = apply_edits(&document_xml, &flat.body, edits).map_err(DocxError::Edit)?;
 
     let mut input_zip = zip::ZipArchive::new(Cursor::new(docx_bytes))?;
     let mut output_buffer = Vec::new();

@@ -3,7 +3,7 @@ use std::fs;
 
 fn main() {
     let original_bytes = fs::read("tests/fixtures/atherton-storage-contract.docx").unwrap();
-    let flat = read_docx(&original_bytes).unwrap();
+    let flat = read_docx(&original_bytes).unwrap().body;
     let needle = "Atherton Storage";
     let start = flat.text.find(needle).unwrap();
     let end = start + needle.len();

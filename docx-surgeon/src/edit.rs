@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn replaces_a_whole_run() {
         let xml = wrap(r#"<w:p><w:r><w:t>John Smith</w:t></w:r></w:p>"#);
-        let flat = extract_flat_text(&xml);
+        let flat = extract_flat_text(&xml).body;
 
         let edited = apply_edits(
             &xml,
@@ -167,14 +167,14 @@ mod tests {
         )
         .unwrap();
 
-        let reflattened = extract_flat_text(&edited);
+        let reflattened = extract_flat_text(&edited).body;
         assert_eq!(reflattened.text, "{{e.name}}");
     }
 
     #[test]
     fn replaces_only_part_of_a_run_leaving_the_rest_intact() {
         let xml = wrap(r#"<w:p><w:r><w:t>Unit/Space number 204</w:t></w:r></w:p>"#);
-        let flat = extract_flat_text(&xml);
+        let flat = extract_flat_text(&xml).body;
 
         let edited = apply_edits(
             &xml,
@@ -187,7 +187,7 @@ mod tests {
         )
         .unwrap();
 
-        let reflattened = extract_flat_text(&edited);
+        let reflattened = extract_flat_text(&edited).body;
         assert_eq!(reflattened.text, "Unit/Space number {{u.num}}");
     }
 
@@ -196,7 +196,7 @@ mod tests {
         let xml = wrap(
             r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Bold label: </w:t></w:r><w:r><w:t>204</w:t></w:r></w:p>"#,
         );
-        let flat = extract_flat_text(&xml);
+        let flat = extract_flat_text(&xml).body;
         let unit_run = flat.runs[1];
 
         let edited = apply_edits(
@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn escapes_special_characters_in_the_replacement() {
         let xml = wrap(r#"<w:p><w:r><w:t>PLACEHOLDER</w:t></w:r></w:p>"#);
-        let flat = extract_flat_text(&xml);
+        let flat = extract_flat_text(&xml).body;
 
         let edited = apply_edits(
             &xml,
@@ -232,7 +232,7 @@ mod tests {
         .unwrap();
 
         assert!(edited.contains("Smith &amp; Sons &lt;Storage&gt;"));
-        let reflattened = extract_flat_text(&edited);
+        let reflattened = extract_flat_text(&edited).body;
         assert_eq!(reflattened.text, "Smith & Sons <Storage>");
     }
 
@@ -240,7 +240,7 @@ mod tests {
     fn refuses_an_edit_spanning_two_runs() {
         let xml =
             wrap(r#"<w:p><w:r><w:t>Tenant: John</w:t></w:r><w:r><w:t> Smith</w:t></w:r></w:p>"#);
-        let flat = extract_flat_text(&xml);
+        let flat = extract_flat_text(&xml).body;
 
         let result = apply_edits(
             &xml,
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn refuses_overlapping_edits() {
         let xml = wrap(r#"<w:p><w:r><w:t>John Smith</w:t></w:r></w:p>"#);
-        let flat = extract_flat_text(&xml);
+        let flat = extract_flat_text(&xml).body;
 
         let result = apply_edits(
             &xml,
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn applies_two_non_overlapping_edits_in_the_same_run() {
         let xml = wrap(r#"<w:p><w:r><w:t>AAA BBB CCC</w:t></w:r></w:p>"#);
-        let flat = extract_flat_text(&xml);
+        let flat = extract_flat_text(&xml).body;
 
         let edited = apply_edits(
             &xml,
@@ -315,7 +315,7 @@ mod tests {
         )
         .unwrap();
 
-        let reflattened = extract_flat_text(&edited);
+        let reflattened = extract_flat_text(&edited).body;
         assert_eq!(reflattened.text, "X BBB Z");
     }
 }

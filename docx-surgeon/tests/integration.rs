@@ -13,7 +13,9 @@ const FIXTURE: &str = "tests/fixtures/atherton-storage-contract.docx";
 fn edits_a_real_document_and_leaves_every_other_zip_entry_byte_identical() {
     let original_bytes = fs::read(FIXTURE).expect("fixture must exist");
 
-    let flat = read_docx(&original_bytes).expect("should read a real .docx");
+    let flat = read_docx(&original_bytes)
+        .expect("should read a real .docx")
+        .body;
     let needle = "Atherton Storage";
     let occurrences_before = flat.text.matches(needle).count();
     assert!(
@@ -37,8 +39,9 @@ fn edits_a_real_document_and_leaves_every_other_zip_entry_byte_identical() {
     )
     .expect("edit should succeed against a real document");
 
-    let flat_after =
-        read_docx(&edited_bytes).expect("edited docx should still be a valid, readable .docx");
+    let flat_after = read_docx(&edited_bytes)
+        .expect("edited docx should still be a valid, readable .docx")
+        .body;
     assert!(flat_after.text.starts_with("{{f.name}}"));
     assert_eq!(
         flat_after.text.matches(needle).count(),
@@ -81,7 +84,7 @@ fn edits_a_real_document_and_leaves_every_other_zip_entry_byte_identical() {
 #[test]
 fn document_xml_changes_only_inside_the_one_edited_runs_text_content() {
     let original_bytes = fs::read(FIXTURE).unwrap();
-    let flat = read_docx(&original_bytes).unwrap();
+    let flat = read_docx(&original_bytes).unwrap().body;
     let needle = "Atherton Storage";
     let start = flat.text.find(needle).unwrap();
     let end = start + needle.len();
