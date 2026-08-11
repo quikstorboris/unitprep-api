@@ -225,7 +225,19 @@ pub fn router(state: AppState) -> Router {
         // before any real cookie exists to send. `allow_origin` above is
         // already a specific list (never `*`), which credentialed CORS
         // requires regardless.
-        .allow_credentials(true);
+        .allow_credentials(true)
+        // Content-Disposition is not a CORS-safelisted response header,
+        // so without this, every file-download endpoint's
+        // `response.headers.get("Content-Disposition")` on the frontend
+        // (dedup/audit-log/user export, tagger apply -- every one of
+        // downloadBlob's callers) silently reads null and falls back to
+        // its hardcoded default filename, even though the real header
+        // is present on the wire. Same class of gap as the PUT/PATCH
+        // CORS fix above: a browser-only restriction with no server-side
+        // symptom, so it's invisible unless a download's real filename
+        // is deliberately checked against something other than its own
+        // fallback.
+        .expose_headers([axum::http::header::CONTENT_DISPOSITION]);
 
     // Rate limit for the endpoints an anonymous caller can reach without
     // ever having a valid session: passkey registration (both the
