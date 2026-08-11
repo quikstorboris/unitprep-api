@@ -1,7 +1,8 @@
 //! Wires `unitprep-template-tagger`'s two matchers and `docx-surgeon`'s
 //! region model together: given a whole document's flattened regions,
-//! finds every candidate across the body **and** every table cell, and
-//! builds the region-aware [`Edit`] each one would need to be applied.
+//! finds every candidate across the body **and** every table cell,
+//! assigns each a [`ConfidenceTier`], and builds the region-aware
+//! [`Edit`] each one would need to be applied.
 //!
 //! Domain logic only, same "no I/O" scope as its two dependencies --
 //! reading the actual `.docx` bytes, and any DB-backed pattern/tag
@@ -24,45 +25,65 @@ use unitprep_template_tagger::{
     detect_candidates, recognize_blanks, Candidate, LabelProximityPattern, TagValue,
 };
 
+/// Which review tier a candidate falls into, per the design's tier-1/
+/// tier-2/tier-3 split. Tier 3 ("no match, leave alone") is never a
+/// value here -- it's the absence of any [`RegionCandidate`] for a
+/// span, not something this type represents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfidenceTier {
+    /// Exactly one candidate was found for this exact `(region, start,
+    /// end)` span -- nothing else competes for it, so it's safe to
+    /// apply without asking.
+    Auto,
+    /// Two or more candidates cover the exact same span (e.g. two
+    /// patterns matching the same blank with different `tag_key`s, or a
+    /// value match and a blank match happening to land on identical
+    /// coordinates) -- a human has to pick.
+    NeedsReview,
+}
+
 /// One [`Candidate`] plus which region of the document it was found in
 /// -- a candidate's `start`/`end` are meaningless without knowing which
-/// region's text they're relative to.
+/// region's text they're relative to -- plus its computed
+/// [`ConfidenceTier`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegionCandidate {
     pub region: RegionRef,
     pub candidate: Candidate,
+    pub tier: ConfidenceTier,
 }
 
 /// Runs both matchers -- literal-value matching against `values`
 /// ([`detect_candidates`]), and label-proximity blank recognition
 /// against `patterns` ([`recognize_blanks`]) -- across every region of
 /// `doc`: the body, then every table cell in document order. Returns
-/// every candidate found, each tagged with which region it came from.
+/// every candidate found, each tagged with which region it came from
+/// and its [`ConfidenceTier`].
 ///
-/// Deliberately does not deduplicate, rank, or resolve ambiguity across
-/// or within regions -- same "propose, never modify, never silently
-/// collapse a judgment call" philosophy both matchers already hold
-/// individually. Two candidates for the same span (e.g. a value match
-/// and a blank match landing on the same text, or two patterns
-/// resolving the same blank to different tags) are both reported; a
-/// human reviewer decides what to do with that.
+/// Deliberately does not deduplicate or drop anything -- same "propose,
+/// never modify, never silently collapse a judgment call" philosophy
+/// both matchers already hold individually. Ambiguity (multiple
+/// candidates for the same exact span) is surfaced via `tier`, not by
+/// picking a winner: every one of the competing candidates is still
+/// returned, all marked [`ConfidenceTier::NeedsReview`], so a human
+/// reviewer sees the real choice rather than this crate's guess at it.
 pub fn find_candidates(
     doc: &FlatDocument,
     values: &[TagValue],
     patterns: &[LabelProximityPattern],
 ) -> Vec<RegionCandidate> {
-    let mut all = Vec::new();
-    collect_region(RegionRef::Body, &doc.body.text, values, patterns, &mut all);
+    let mut raw = Vec::new();
+    collect_region(RegionRef::Body, &doc.body.text, values, patterns, &mut raw);
     for (i, cell) in doc.table_cells.iter().enumerate() {
         collect_region(
             RegionRef::TableCell(i),
             &cell.text,
             values,
             patterns,
-            &mut all,
+            &mut raw,
         );
     }
-    all
+    assign_tiers(raw)
 }
 
 fn collect_region(
@@ -70,14 +91,43 @@ fn collect_region(
     text: &str,
     values: &[TagValue],
     patterns: &[LabelProximityPattern],
-    out: &mut Vec<RegionCandidate>,
+    out: &mut Vec<(RegionRef, Candidate)>,
 ) {
     for candidate in detect_candidates(text, values) {
-        out.push(RegionCandidate { region, candidate });
+        out.push((region, candidate));
     }
     for candidate in recognize_blanks(text, patterns) {
-        out.push(RegionCandidate { region, candidate });
+        out.push((region, candidate));
     }
+}
+
+/// A span is unambiguous (tier `Auto`) if exactly one candidate in the
+/// whole batch shares its exact `(region, start, end)`. Deliberately
+/// O(n^2) -- a real document's candidate count is small enough (tens,
+/// not thousands) that this is simpler and just as fast in practice as
+/// building a hash key out of [`RegionRef`], which would need it to
+/// implement `Hash` for no other reason than this one internal check.
+fn assign_tiers(raw: Vec<(RegionRef, Candidate)>) -> Vec<RegionCandidate> {
+    raw.iter()
+        .map(|(region, candidate)| {
+            let competing = raw
+                .iter()
+                .filter(|(r, c)| {
+                    r == region && c.start == candidate.start && c.end == candidate.end
+                })
+                .count();
+            let tier = if competing <= 1 {
+                ConfidenceTier::Auto
+            } else {
+                ConfidenceTier::NeedsReview
+            };
+            RegionCandidate {
+                region: *region,
+                candidate: candidate.clone(),
+                tier,
+            }
+        })
+        .collect()
 }
 
 /// Builds the [`Edit`] that would apply `candidate`'s substitution.
@@ -189,6 +239,71 @@ mod tests {
         // rather than one silently suppressing the other.
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].candidate.matched_text, "204");
+    }
+
+    #[test]
+    fn an_unambiguous_candidate_is_tier_auto() {
+        let xml = wrap(r#"<w:p><w:r><w:t>Tenant: John Smith</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+
+        let candidates = find_candidates(&doc, &[value("e.name", "John Smith")], &[]);
+
+        assert_eq!(candidates[0].tier, ConfidenceTier::Auto);
+    }
+
+    #[test]
+    fn two_patterns_matching_the_same_blank_are_both_tier_needs_review() {
+        let xml = wrap(r#"<w:p><w:r><w:t>Date: ______</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let patterns = [
+            label_pattern(
+                "m.indate",
+                "Date",
+                unitprep_template_tagger::LabelPosition::After,
+            ),
+            label_pattern(
+                "l.ptd",
+                "Date",
+                unitprep_template_tagger::LabelPosition::After,
+            ),
+        ];
+
+        let candidates = find_candidates(&doc, &[], &patterns);
+
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates
+            .iter()
+            .all(|c| c.tier == ConfidenceTier::NeedsReview));
+    }
+
+    #[test]
+    fn ambiguity_in_one_region_does_not_affect_a_candidate_in_another() {
+        let xml = wrap(&format!(
+            "{}{}",
+            r#"<w:p><w:r><w:t>Date: ______</w:t></w:r></w:p>"#,
+            r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>204</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#
+        ));
+        let doc = extract_flat_text(&xml);
+        let patterns = [
+            label_pattern(
+                "m.indate",
+                "Date",
+                unitprep_template_tagger::LabelPosition::After,
+            ),
+            label_pattern(
+                "l.ptd",
+                "Date",
+                unitprep_template_tagger::LabelPosition::After,
+            ),
+        ];
+
+        let candidates = find_candidates(&doc, &[value("u.num", "204")], &patterns);
+
+        let cell_candidate = candidates
+            .iter()
+            .find(|c| c.region == RegionRef::TableCell(0))
+            .unwrap();
+        assert_eq!(cell_candidate.tier, ConfidenceTier::Auto);
     }
 
     #[test]

@@ -14,6 +14,7 @@ use unitprep_core::in_memory_session_store::InMemorySessionStore;
 
 use crate::api::AppState;
 use crate::application::dedup_session_service::DedupSession;
+use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
 
 #[tokio::main]
@@ -90,6 +91,14 @@ async fn main() {
 
     dedup_session_store.start_cleanup_task();
 
+    // Same timeout policy again -- the QMS Template Tagging Assistant's
+    // own session store.
+    let tagger_session_store = Arc::new(InMemorySessionStore::<TaggerSession>::with_timeout(
+        std::time::Duration::from_secs(session_timeout_secs),
+    ));
+
+    tagger_session_store.start_cleanup_task();
+
     // See db.rs -- deliberately non-blocking (connect_lazy), since most
     // existing endpoints do not touch Postgres at all yet.
     let db_pool = db::connect().unwrap_or_else(|err| {
@@ -146,6 +155,7 @@ async fn main() {
     let state = AppState {
         unit_group_sessions: session_store,
         dedup_sessions: dedup_session_store,
+        tagger_sessions: tagger_session_store,
         db: db_pool,
         auth_backend,
         registration_ceremonies,

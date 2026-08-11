@@ -28,6 +28,7 @@ mod manual_file_upload;
 mod resolve_unit_format;
 mod select_group_file;
 pub(crate) mod select_unit_file;
+mod tagger;
 mod upload;
 pub(crate) mod validate;
 
@@ -53,6 +54,7 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 use unitprep_core::session_store::{SessionMetrics, SessionStore};
 
 use crate::application::dedup_session_service::DedupSession;
+use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
 
 #[derive(Clone)]
@@ -67,6 +69,10 @@ pub struct AppState {
     // Additive, per the comment above — a second tool's store, not a
     // rename of the first.
     pub dedup_sessions: Arc<dyn SessionStore<DedupSession>>,
+
+    // Third tool's store, same pattern as the two above — the QMS
+    // Template Tagging Assistant.
+    pub tagger_sessions: Arc<dyn SessionStore<TaggerSession>>,
 
     // The app_service-authenticated connection pool -- see db.rs for
     // why it is built lazily rather than blocking startup on Postgres
@@ -362,7 +368,8 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/roles", get(auth_roles::list_roles))
         .route(
             "/auth/configuration",
-            get(auth_configuration::get_configuration).put(auth_configuration::update_configuration),
+            get(auth_configuration::get_configuration)
+                .put(auth_configuration::update_configuration),
         )
         // Read: any authenticated caller, same reasoning as /auth/roles
         // above. Writes: gated on client_ops.manage_tags inside each
@@ -444,6 +451,9 @@ pub fn router(state: AppState) -> Router {
         .route("/dedup/check", post(dedup::check))
         .route("/dedup/report", post(dedup::report))
         .route("/dedup/export", post(dedup::export))
+        .route("/tagger/check", post(tagger::check))
+        .route("/tagger/report", post(tagger::report))
+        .route("/tagger/apply", post(tagger::apply))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(state)
         .layer(cors)
@@ -770,6 +780,10 @@ pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "dedup_test_support.rs"]
 pub(crate) mod dedup_test_support;
+
+#[cfg(test)]
+#[path = "tagger_test_support.rs"]
+pub(crate) mod tagger_test_support;
 
 /// Real HTTP-level tests, complementing (not replacing) the direct-call
 /// style above. Some bugs only exist at the router/middleware layer --

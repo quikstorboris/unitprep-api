@@ -38,6 +38,17 @@ unitprep-dedup = { path = "dedup" }
 # session/HTTP orchestration for it.
 unitprep-unit-group = { path = "unit-group" }
 
+# QMS Template Tagging Assistant: docx-surgeon reads/edits a .docx's
+# flattened regions, unitprep-tagger-pipeline wires it together with
+# unitprep-template-tagger's two matchers — same "binary owns session/
+# HTTP orchestration only" boundary as the two crates above. The binary
+# also depends on template-tagger directly (not just transitively via
+# tagger-pipeline) since the /tagger/check handler builds
+# LabelProximityPattern values straight from the DB.
+docx-surgeon = { path = "docx-surgeon" }
+unitprep-tagger-pipeline = { path = "tagger-pipeline" }
+unitprep-template-tagger = { path = "template-tagger" }
+
 # Core error handling
 anyhow = "1"
 

@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::application::dedup_session_service::DedupSession;
+use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
 use crate::auth::{AuthenticatedUser, AuthenticationCeremony, RegistrationCeremony};
 use unitprep_core::csv_document::CsvDocument;
@@ -20,6 +21,14 @@ use super::AppState;
 /// use one.
 pub(crate) fn empty_dedup_store() -> Arc<dyn SessionStore<DedupSession>> {
     Arc::new(InMemorySessionStore::<DedupSession>::new())
+}
+
+/// Same reasoning as `empty_dedup_store` above, for the tagger session
+/// store `AppState` now also requires. Shared with
+/// `tagger_test_support.rs`, which builds tagger sessions that actually
+/// use one.
+pub(crate) fn empty_tagger_store() -> Arc<dyn SessionStore<TaggerSession>> {
+    Arc::new(InMemorySessionStore::<TaggerSession>::new())
 }
 
 /// Same reasoning as `empty_dedup_store` above, for the registration-
@@ -163,6 +172,7 @@ pub fn empty_state() -> AppState {
     AppState {
         unit_group_sessions: Arc::new(InMemorySessionStore::<Session>::new()),
         dedup_sessions: empty_dedup_store(),
+        tagger_sessions: empty_tagger_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
@@ -205,6 +215,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
     AppState {
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
+        tagger_sessions: empty_tagger_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
@@ -274,6 +285,7 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
     AppState {
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
+        tagger_sessions: empty_tagger_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
@@ -321,6 +333,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
     AppState {
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
+        tagger_sessions: empty_tagger_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
@@ -378,6 +391,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
     AppState {
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
+        tagger_sessions: empty_tagger_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
@@ -459,6 +473,7 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
     AppState {
         unit_group_sessions: store,
         dedup_sessions: empty_dedup_store(),
+        tagger_sessions: empty_tagger_store(),
         db: test_db_pool(),
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
