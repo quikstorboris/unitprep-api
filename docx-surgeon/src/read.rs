@@ -38,12 +38,56 @@ pub struct FlatText {
 impl FlatText {
     /// The single run entirely containing `[flat_start, flat_end)`, if
     /// one exists. `None` if the range spans more than one run (or
-    /// none) -- see the edit module for why that case is refused
-    /// rather than guessed at.
+    /// none).
     pub fn run_containing(&self, flat_start: usize, flat_end: usize) -> Option<&RunSpan> {
         self.runs
             .iter()
             .find(|run| run.flat_start <= flat_start && flat_end <= run.flat_end)
+    }
+
+    /// Every run index touched by `[flat_start, flat_end)`, in document
+    /// order -- one for the common case, more when the range spans a
+    /// run boundary, empty if the range corresponds to no run at all
+    /// (out-of-bounds coordinates). See [`crate::edit::apply_edits`] for
+    /// how a multi-run result gets spliced.
+    ///
+    /// A zero-width range (`flat_start == flat_end`, an insertion point
+    /// rather than a span) is handled as a special case: it's resolved
+    /// inclusively on both ends, exactly like [`Self::run_containing`],
+    /// so a point sitting precisely on the boundary between two runs
+    /// resolves to the earlier one -- e.g. inserting immediately after
+    /// a label's own text lands inside the label's run even when the
+    /// blank that follows it is itself split across several further
+    /// runs. The strict, exclusive overlap test used for a real span
+    /// would otherwise match *nothing* for a zero-width range landing
+    /// exactly on a boundary.
+    pub(crate) fn runs_touching(&self, flat_start: usize, flat_end: usize) -> Vec<usize> {
+        if flat_start == flat_end {
+            return self
+                .runs
+                .iter()
+                .position(|run| run.flat_start <= flat_start && flat_end <= run.flat_end)
+                .into_iter()
+                .collect();
+        }
+
+        self.runs
+            .iter()
+            .enumerate()
+            .filter(|(_, run)| run.flat_end > flat_start && run.flat_start < flat_end)
+            .map(|(index, _)| index)
+            .collect()
+    }
+
+    /// Whether `apply_edits` could act on `[flat_start, flat_end)` at
+    /// all -- true for anything it can splice (one run, several spliced
+    /// together, or a zero-width insert landing on a run boundary),
+    /// false only for coordinates that touch no run whatsoever. Lets a
+    /// caller validate a batch of candidate edits up front and report
+    /// exactly which ones are the problem, rather than letting
+    /// `apply_edits` fail the whole batch on the first bad one.
+    pub fn is_editable_range(&self, flat_start: usize, flat_end: usize) -> bool {
+        !self.runs_touching(flat_start, flat_end).is_empty()
     }
 }
 

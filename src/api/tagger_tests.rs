@@ -85,6 +85,7 @@ async fn apply_returns_404_for_missing_session() {
         crate::api::test_support::test_user(),
         Json(TaggerApplyRequest {
             session_id: "missing".to_string(),
+            preserve_blanks: false,
             confirmed: vec![],
         }),
     )
@@ -103,6 +104,7 @@ async fn apply_returns_400_for_an_out_of_range_candidate_index() {
         crate::api::test_support::test_user(),
         Json(TaggerApplyRequest {
             session_id: "s1".to_string(),
+            preserve_blanks: false,
             confirmed: vec![ConfirmedSubstitution {
                 candidate_index: 0,
                 tag_key: "f.name".to_string(),
@@ -115,15 +117,14 @@ async fn apply_returns_400_for_an_out_of_range_candidate_index() {
 }
 
 #[tokio::test]
-async fn apply_reports_exactly_which_candidate_spans_multiple_runs() {
+async fn apply_succeeds_for_a_candidate_spanning_multiple_runs() {
     let original_bytes = std::fs::read(FIXTURE).unwrap();
     let doc = read_docx(&original_bytes).unwrap();
 
     // A span deliberately crossing from the first real run into the
     // second -- exactly the real-world case (a blank's underscore run
-    // split across multiple <w:t> elements) this validation exists to
-    // catch before it becomes an opaque "apply_failed" for the whole
-    // batch.
+    // split across multiple <w:t> elements) docx-surgeon now splices
+    // across rather than refusing.
     let first = doc.body.runs[0];
     let second = doc.body.runs[1];
     let candidates = vec![sample_candidate(
@@ -139,6 +140,33 @@ async fn apply_reports_exactly_which_candidate_spans_multiple_runs() {
         crate::api::test_support::test_user(),
         Json(TaggerApplyRequest {
             session_id: "s1".to_string(),
+            preserve_blanks: false,
+            confirmed: vec![ConfirmedSubstitution {
+                candidate_index: 0,
+                tag_key: "e.name".to_string(),
+            }],
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn apply_reports_exactly_which_candidate_has_stale_coordinates() {
+    let original_bytes = std::fs::read(FIXTURE).unwrap();
+
+    // Coordinates that touch no run at all -- the one case that still
+    // fails validation now that a multi-run span is applicable.
+    let candidates = vec![sample_candidate("e.name", "unused", 999_999, 999_999 + 10)];
+    let state = tagger_state_with_session("s1", original_bytes, "atherton.docx", candidates);
+
+    let response = apply(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(TaggerApplyRequest {
+            session_id: "s1".to_string(),
+            preserve_blanks: false,
             confirmed: vec![ConfirmedSubstitution {
                 candidate_index: 0,
                 tag_key: "e.name".to_string(),
@@ -174,6 +202,7 @@ async fn apply_produces_a_docx_with_the_confirmed_substitution() {
         crate::api::test_support::test_user(),
         Json(TaggerApplyRequest {
             session_id: "s1".to_string(),
+            preserve_blanks: false,
             confirmed: vec![ConfirmedSubstitution {
                 candidate_index: 0,
                 tag_key: "f.name".to_string(),
@@ -193,4 +222,42 @@ async fn apply_produces_a_docx_with_the_confirmed_substitution() {
         .unwrap();
     let edited_doc = read_docx(&bytes).unwrap();
     assert!(edited_doc.body.text.starts_with("{{f.name}}"));
+}
+
+#[tokio::test]
+async fn apply_with_preserve_blanks_inserts_the_tag_without_removing_the_matched_text() {
+    let original_bytes = std::fs::read(FIXTURE).unwrap();
+    let doc = read_docx(&original_bytes).unwrap();
+    let start = doc.body.text.find("Atherton Storage").unwrap();
+    let end = start + "Atherton Storage".len();
+
+    let candidates = vec![sample_candidate("f.name", "Atherton Storage", start, end)];
+    let state = tagger_state_with_session("s1", original_bytes, "atherton.docx", candidates);
+
+    let response = apply(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(TaggerApplyRequest {
+            session_id: "s1".to_string(),
+            preserve_blanks: true,
+            confirmed: vec![ConfirmedSubstitution {
+                candidate_index: 0,
+                tag_key: "f.name".to_string(),
+            }],
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let edited_doc = read_docx(&bytes).unwrap();
+    // The tag lands right before the matched text -- "Atherton Storage"
+    // itself is still there, not replaced.
+    assert!(edited_doc
+        .body
+        .text
+        .starts_with("{{f.name}}Atherton Storage"));
 }

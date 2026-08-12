@@ -130,15 +130,41 @@ fn assign_tiers(raw: Vec<(RegionRef, Candidate)>) -> Vec<RegionCandidate> {
         .collect()
 }
 
-/// Builds the [`Edit`] that would apply `candidate`'s substitution.
-/// `replacement` is the caller's choice (typically `{{tag_key}}`) --
-/// this crate has no opinion on merge-tag templating syntax, only on
-/// where the substitution goes.
-pub fn to_edit(candidate: &RegionCandidate, replacement: String) -> Edit {
+/// How a confirmed substitution's `replacement` text lands relative to
+/// the matched span -- an OM-facing choice (some prefer a clean tagged
+/// document with the blank gone entirely; others prefer keeping the
+/// visual blank line, e.g. matching a signature-line convention already
+/// seen in the corpus: `/s/{{e.name}}______________`), not something
+/// this crate decides on its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubstitutionStyle {
+    /// Replace the matched span outright -- the underscores (or
+    /// whatever literal text detect_candidates matched) are gone,
+    /// `replacement` is all that's left in their place.
+    Replace,
+    /// Insert `replacement` immediately before the matched span,
+    /// removing nothing. Only meaningful for a blank
+    /// (`recognize_blanks`'s candidates) -- inserting before an
+    /// already-filled value (`detect_candidates`'s candidates) would
+    /// leave the old value sitting right next to the tag rather than
+    /// replaced by it. The caller decides which candidates this applies
+    /// to; this function has no notion of where a candidate came from.
+    InsertBeforeSpan,
+}
+
+/// Builds the [`Edit`] that would apply `candidate`'s substitution in
+/// the given `style`. `replacement` is the caller's choice (typically
+/// `{{tag_key}}`) -- this crate has no opinion on merge-tag templating
+/// syntax, only on where the substitution goes.
+pub fn to_edit(candidate: &RegionCandidate, replacement: String, style: SubstitutionStyle) -> Edit {
+    let flat_end = match style {
+        SubstitutionStyle::Replace => candidate.candidate.end,
+        SubstitutionStyle::InsertBeforeSpan => candidate.candidate.start,
+    };
     Edit {
         region: candidate.region,
         flat_start: candidate.candidate.start,
-        flat_end: candidate.candidate.end,
+        flat_end,
         replacement,
     }
 }
@@ -312,7 +338,11 @@ mod tests {
         let doc = extract_flat_text(&xml);
         let candidates = find_candidates(&doc, &[value("e.name", "John Smith")], &[]);
 
-        let edit = to_edit(&candidates[0], "{{e.name}}".to_string());
+        let edit = to_edit(
+            &candidates[0],
+            "{{e.name}}".to_string(),
+            SubstitutionStyle::Replace,
+        );
 
         assert_eq!(edit.region, RegionRef::Body);
         assert_eq!(edit.flat_start, candidates[0].candidate.start);
@@ -334,7 +364,13 @@ mod tests {
 
         let edits: Vec<Edit> = candidates
             .iter()
-            .map(|c| to_edit(c, format!("{{{{{}}}}}", c.candidate.tag_key)))
+            .map(|c| {
+                to_edit(
+                    c,
+                    format!("{{{{{}}}}}", c.candidate.tag_key),
+                    SubstitutionStyle::Replace,
+                )
+            })
             .collect();
 
         let edited_xml = apply_edits(&xml, &doc, &edits).unwrap();
@@ -342,5 +378,27 @@ mod tests {
 
         assert_eq!(reflattened.body.text, "Tenant: {{e.name}}");
         assert_eq!(reflattened.table_cells[0].text, "{{u.num}}");
+    }
+
+    #[test]
+    fn insert_before_span_style_keeps_the_blank_intact() {
+        let xml = wrap(r#"<w:p><w:r><w:t>Move-In Date: ______</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let patterns = [label_pattern(
+            "m.indate",
+            "Move-In Date",
+            unitprep_template_tagger::LabelPosition::After,
+        )];
+        let candidates = find_candidates(&doc, &[], &patterns);
+
+        let edit = to_edit(
+            &candidates[0],
+            "{{m.indate}}".to_string(),
+            SubstitutionStyle::InsertBeforeSpan,
+        );
+        let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
+        let reflattened = extract_flat_text(&edited_xml).body;
+
+        assert_eq!(reflattened.text, "Move-In Date: {{m.indate}}______");
     }
 }

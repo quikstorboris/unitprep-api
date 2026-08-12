@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use docx_surgeon::{edit_docx, read_docx, RegionRef};
 use unitprep_core::session_store::SessionStoreExt;
 use unitprep_core::uploaded_file::UploadedFile;
-use unitprep_tagger_pipeline::{find_candidates, to_edit, ConfidenceTier, RegionCandidate};
+use unitprep_tagger_pipeline::{
+    find_candidates, to_edit, ConfidenceTier, RegionCandidate, SubstitutionStyle,
+};
 use unitprep_template_tagger::{LabelPosition, LabelProximityPattern};
 
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
@@ -386,6 +388,16 @@ pub struct ConfirmedSubstitution {
 pub struct TaggerApplyRequest {
     pub session_id: String,
     pub confirmed: Vec<ConfirmedSubstitution>,
+    /// When true, every confirmed substitution is inserted immediately
+    /// before its matched span rather than replacing it -- the blank
+    /// (or, for a `detect_candidates` match, the already-filled value
+    /// sitting next to the new tag) stays in the document. An OM-facing
+    /// style choice, applied uniformly to the whole apply call, not
+    /// something this handler has an opinion on. Defaults to `false`
+    /// (replace outright, the original behavior) so an older caller
+    /// that never sends this field keeps working unchanged.
+    #[serde(default)]
+    pub preserve_blanks: bool,
 }
 
 /// One confirmed substitution that couldn't be turned into an edit --
@@ -412,15 +424,16 @@ pub struct TaggerApplyErrorBody {
 /// handler only ever builds edits from candidates the caller explicitly
 /// listed, never from `session.candidates` wholesale.
 ///
-/// Every edit is checked against a real run in the document *before*
-/// any are applied. A blank's underscore run can be split across
-/// multiple `<w:t>` elements in the real XML (common in real-world
-/// Word documents -- a formatting change, a spell-check restart point,
-/// anything that gives Word a reason to end one run and start another
-/// mid-span) -- docx-surgeon correctly refuses to guess at splicing
-/// across that boundary, per its own "flag conservatively" design. The
-/// alternative to checking up front -- letting edit_docx fail on the
-/// whole batch -- gives the reviewer no way to tell which one
+/// Every edit is checked against the document *before* any are
+/// applied, even though docx-surgeon can now splice an edit across
+/// several runs (a blank's underscore run is often split across
+/// multiple `<w:t>` elements in the real XML -- a formatting change, a
+/// spell-check restart point, anything that gives Word a reason to end
+/// one run and start another mid-span, even though it reads as one
+/// unbroken blank on screen). The remaining failure mode this still
+/// catches is coordinates that touch no run at all (a stale session).
+/// The alternative -- letting edit_docx fail the whole batch on the
+/// first bad one -- would still give the reviewer no way to tell which
 /// confirmation was the problem, only "something failed."
 pub async fn apply(
     State(state): State<AppState>,
@@ -455,6 +468,12 @@ pub async fn apply(
         }
     };
 
+    let style = if request.preserve_blanks {
+        SubstitutionStyle::InsertBeforeSpan
+    } else {
+        SubstitutionStyle::Replace
+    };
+
     let mut edits = Vec::with_capacity(request.confirmed.len());
     let mut failed = Vec::new();
     for confirmed in &request.confirmed {
@@ -472,17 +491,14 @@ pub async fn apply(
                 .into_response();
         };
 
-        let edit = to_edit(candidate, format!("{{{{{}}}}}", confirmed.tag_key));
+        let edit = to_edit(candidate, format!("{{{{{}}}}}", confirmed.tag_key), style);
         let region_text = doc.region(edit.region);
-        if region_text
-            .run_containing(edit.flat_start, edit.flat_end)
-            .is_none()
-        {
+        if !region_text.is_editable_range(edit.flat_start, edit.flat_end) {
             failed.push(FailedSubstitution {
                 candidate_index: confirmed.candidate_index,
                 tag_key: confirmed.tag_key.clone(),
-                reason: "This text spans more than one formatting run in the document \
-                         and can't be safely edited automatically -- try excluding it."
+                reason: "This text doesn't correspond to any position in the document \
+                         (the session may be stale) -- try re-uploading."
                     .to_string(),
             });
             continue;

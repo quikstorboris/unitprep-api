@@ -15,13 +15,13 @@ pub struct Edit {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum EditError {
-    /// The edit's range doesn't fall entirely inside one `<w:t>` run --
-    /// refused rather than guessed at. Splicing across a run boundary
-    /// would mean editing two separate XML elements for what the flat
-    /// text shows as one contiguous span, which this crate's whole
-    /// safety model (touch only the exact bytes of a run being
-    /// replaced) isn't built to reason about correctly.
-    SpansMultipleRuns {
+    /// The edit's coordinates touch no run at all -- refused rather
+    /// than guessed at. This is distinct from spanning multiple runs
+    /// (which `apply_edits` now handles by splicing across them); this
+    /// is coordinates that don't correspond to any real text position,
+    /// which should only happen from a genuinely stale or malformed
+    /// `Edit`.
+    NoMatchingRun {
         region: RegionRef,
         flat_start: usize,
         flat_end: usize,
@@ -37,20 +37,43 @@ pub enum EditError {
     },
 }
 
+/// One run's own contribution to an edit -- usually the edit's whole
+/// story (the common single-run case), but an edit spanning a run
+/// boundary produces one fragment per touched run. Only the *first*
+/// touched run's fragment carries the edit's actual replacement text;
+/// every other touched run's fragment removes its own portion with
+/// nothing put back, since the full replacement already landed exactly
+/// once. Local (run-relative) coordinates, not the outer flat-text
+/// coordinates an [`Edit`] carries.
+struct Fragment {
+    local_start: usize,
+    local_end: usize,
+    text: String,
+}
+
 /// Applies every edit to `document_xml`, returning the modified XML.
 ///
-/// Each edit must fall entirely within a single run's decoded text --
-/// see [`EditError::SpansMultipleRuns`]. A run touched by one or more
-/// edits always has its *entire* raw XML text content replaced
-/// wholesale (decode -> splice in decoded space -> re-encode -> replace
-/// the whole `<w:t>...</w:t>` content), even when an edit only touches
-/// part of that run's text. This is deliberate, not a shortcut: slicing
-/// raw XML bytes mid-entity (`&amp;` is 5 bytes, decodes to 1) would
-/// silently corrupt the document the moment a run's text contains one.
-/// Replacing the whole run's content atomically after a decode/re-
-/// encode round trip makes that failure mode impossible by
-/// construction, at the cost of only ever touching whole runs, never
-/// partial byte ranges within one.
+/// An edit may span more than one run -- a blank's underscore run can
+/// be split across several `<w:t>` elements in real documents (a
+/// formatting change mid-run, a spell-check restart point, anything
+/// that gives Word a reason to end one run and start another) even
+/// though it reads as one unbroken blank on screen. When that happens,
+/// the first touched run keeps its own lead-in text and gets the edit's
+/// full replacement appended; every run fully consumed by the edit
+/// (including the touched portion of the last one) is emptied rather
+/// than deleted outright -- the run *element* survives with empty
+/// `<w:t>` content, so no formatting attribute anywhere is discarded,
+/// only the text inside the affected runs changes.
+///
+/// A run touched by one or more edits always has its *entire* raw XML
+/// text content replaced wholesale (decode -> splice in decoded space
+/// -> re-encode -> replace the whole `<w:t>...</w:t>` content), even
+/// when an edit only touches part of that run's text. This is
+/// deliberate, not a shortcut: slicing raw XML bytes mid-entity
+/// (`&amp;` is 5 bytes, decodes to 1) would silently corrupt the
+/// document the moment a run's text contains one. Replacing the whole
+/// run's content atomically after a decode/re-encode round trip makes
+/// that failure mode impossible by construction.
 ///
 /// Every byte of `document_xml` outside a targeted run's `<w:t>...
 /// </w:t>` content is copied through unchanged -- this is what makes
@@ -68,51 +91,63 @@ pub fn apply_edits(
 ) -> Result<String, EditError> {
     check_no_overlaps(edits)?;
 
-    // Group edits by the (region, run) they land in, since more than
-    // one edit can legitimately target the same run -- and a run index
-    // is only unique *within* its own region, never across regions.
-    let mut by_run: Vec<(RegionRef, usize, Vec<&Edit>)> = Vec::new();
+    // Group fragments by the (region, run) they land in -- more than
+    // one edit can legitimately target the same run, and now a single
+    // edit spanning multiple runs contributes one fragment per run too.
+    // A run index is only unique *within* its own region, never across
+    // regions.
+    let mut by_run: Vec<(RegionRef, usize, Vec<Fragment>)> = Vec::new();
     for edit in edits {
         let flat = doc.region(edit.region);
-        let run = flat.run_containing(edit.flat_start, edit.flat_end).ok_or(
-            EditError::SpansMultipleRuns {
+        let touched = flat.runs_touching(edit.flat_start, edit.flat_end);
+        if touched.is_empty() {
+            return Err(EditError::NoMatchingRun {
                 region: edit.region,
                 flat_start: edit.flat_start,
                 flat_end: edit.flat_end,
-            },
-        )?;
-        let run_index = flat
-            .runs
-            .iter()
-            .position(|r| r.flat_start == run.flat_start && r.flat_end == run.flat_end)
-            .expect("run_containing returned a run that isn't in this region's runs");
+            });
+        }
 
-        match by_run
-            .iter_mut()
-            .find(|(region, idx, _)| *region == edit.region && *idx == run_index)
-        {
-            Some((_, _, group)) => group.push(edit),
-            None => by_run.push((edit.region, run_index, vec![edit])),
+        for (position, &run_index) in touched.iter().enumerate() {
+            let run = flat.runs[run_index];
+            let local_start = edit.flat_start.max(run.flat_start) - run.flat_start;
+            let local_end = edit.flat_end.min(run.flat_end) - run.flat_start;
+            let text = if position == 0 {
+                edit.replacement.clone()
+            } else {
+                String::new()
+            };
+            let fragment = Fragment {
+                local_start,
+                local_end,
+                text,
+            };
+
+            match by_run
+                .iter_mut()
+                .find(|(region, idx, _)| *region == edit.region && *idx == run_index)
+            {
+                Some((_, _, group)) => group.push(fragment),
+                None => by_run.push((edit.region, run_index, vec![fragment])),
+            }
         }
     }
 
-    // For each affected run, splice its edits into the run's own
+    // For each affected run, splice its fragments into the run's own
     // decoded text (local coordinates), then re-encode the whole thing.
     let mut replacements: Vec<(usize, usize, String)> = Vec::new();
     for (region, run_index, mut group) in by_run {
         let flat = doc.region(region);
         let run = flat.runs[run_index];
-        group.sort_by_key(|e| e.flat_start);
+        group.sort_by_key(|f| f.local_start);
 
         let original = &flat.text[run.flat_start..run.flat_end];
         let mut rebuilt = String::new();
         let mut cursor = 0usize;
-        for edit in group {
-            let local_start = edit.flat_start - run.flat_start;
-            let local_end = edit.flat_end - run.flat_start;
-            rebuilt.push_str(&original[cursor..local_start]);
-            rebuilt.push_str(&edit.replacement);
-            cursor = local_end;
+        for fragment in group {
+            rebuilt.push_str(&original[cursor..fragment.local_start]);
+            rebuilt.push_str(&fragment.text);
+            cursor = fragment.local_end;
         }
         rebuilt.push_str(&original[cursor..]);
 
@@ -259,19 +294,80 @@ mod tests {
     }
 
     #[test]
-    fn refuses_an_edit_spanning_two_runs() {
+    fn splices_an_edit_spanning_two_runs() {
+        // "John Smith" straddles both runs -- the first run keeps its
+        // own lead-in ("Tenant: "), gets the full replacement appended,
+        // and the second run's touched portion (all of it, here) is
+        // emptied rather than refused.
         let xml =
             wrap(r#"<w:p><w:r><w:t>Tenant: John</w:t></w:r><w:r><w:t> Smith</w:t></w:r></w:p>"#);
         let doc = extract_flat_text(&xml);
 
-        let result = apply_edits(&xml, &doc, &[body_edit(8, 18, "{{e.name}}")]);
+        let edited = apply_edits(&xml, &doc, &[body_edit(8, 18, "{{e.name}}")]).unwrap();
+
+        let reflattened = extract_flat_text(&edited).body;
+        assert_eq!(reflattened.text, "Tenant: {{e.name}}");
+    }
+
+    #[test]
+    fn splices_an_edit_spanning_three_runs_leaving_each_ones_untouched_edges_intact() {
+        // Mirrors the real bug this generalizes from: a blank's
+        // underscore run split into three separate <w:t> elements by
+        // Word for no visible reason (Sumas Mini Storage's real
+        // "UNIT #__________________" + "__" + "_"). The label's own
+        // text, in the first run, must survive; the fully-consumed
+        // middle run and the touched tail of the last run must both end
+        // up empty; nothing outside the touched runs may move.
+        let xml = wrap(
+            r#"<w:p><w:r><w:t>UNIT #____</w:t></w:r><w:r><w:t>__</w:t></w:r><w:r><w:t>_ (initial)</w:t></w:r></w:p>"#,
+        );
+        let doc = extract_flat_text(&xml);
+        let blank_start = doc.body.text.find("____").unwrap();
+        let blank_end = doc.body.text.find(" (initial)").unwrap();
+
+        let edited = apply_edits(
+            &xml,
+            &doc,
+            &[body_edit(blank_start, blank_end, "{{u.num}}")],
+        )
+        .unwrap();
+
+        let reflattened = extract_flat_text(&edited).body;
+        assert_eq!(reflattened.text, "UNIT #{{u.num}} (initial)");
+    }
+
+    #[test]
+    fn a_zero_width_insert_lands_before_a_blank_split_across_runs() {
+        // The "preserve the blank" mode: insert only, nothing removed.
+        // The underscores after the insertion point are themselves
+        // split across two runs (same shape as the real Sumas bug), but
+        // a zero-width edit never needs to touch them at all -- it
+        // resolves to the label's own run, which is untouched by the
+        // split.
+        let xml = wrap(r#"<w:p><w:r><w:t>UNIT #</w:t></w:r><w:r><w:t>____</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let insert_at = doc.body.text.find("____").unwrap();
+
+        let edited =
+            apply_edits(&xml, &doc, &[body_edit(insert_at, insert_at, "{{u.num}}")]).unwrap();
+
+        let reflattened = extract_flat_text(&edited).body;
+        assert_eq!(reflattened.text, "UNIT #{{u.num}}____");
+    }
+
+    #[test]
+    fn refuses_an_edit_touching_no_run_at_all() {
+        let xml = wrap(r#"<w:p><w:r><w:t>John</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+
+        let result = apply_edits(&xml, &doc, &[body_edit(100, 110, "{{e.name}}")]);
 
         assert_eq!(
             result,
-            Err(EditError::SpansMultipleRuns {
+            Err(EditError::NoMatchingRun {
                 region: RegionRef::Body,
-                flat_start: 8,
-                flat_end: 18
+                flat_start: 100,
+                flat_end: 110
             })
         );
     }
