@@ -138,9 +138,20 @@ fn assign_tiers(raw: Vec<(RegionRef, Candidate)>) -> Vec<RegionCandidate> {
 /// this crate decides on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubstitutionStyle {
-    /// Replace the matched span outright -- the underscores (or
-    /// whatever literal text detect_candidates matched) are gone,
-    /// `replacement` is all that's left in their place.
+    /// Replace the matched span outright. For a `detect_candidates`
+    /// match (an already-filled value), `replacement` is all that's
+    /// left in the value's place -- no padding, since a real value's
+    /// width has no particular meaning to preserve.
+    ///
+    /// For a blank (`recognize_blanks`'s underscore-run candidates),
+    /// the underscores are gone but the *width* they occupied is kept:
+    /// `replacement` is centered inside the span with plain spaces
+    /// filling what's left on either side, so a later mail-merge fill
+    /// (and the surrounding tab-stop layout right now) doesn't have the
+    /// blank's whole width yanked out from under it. Degrades to a
+    /// plain, unpadded replacement if `replacement` is already as long
+    /// as the blank or longer -- same reasoning as
+    /// [`Self::PreserveBlank`]'s degrade case.
     Replace,
     /// Keep the blank, with `replacement` landing in the middle of it --
     /// the underscores (or whatever else `matched_text` is) on either
@@ -165,15 +176,35 @@ pub enum SubstitutionStyle {
 /// syntax, only on where the substitution goes.
 pub fn to_edit(candidate: &RegionCandidate, replacement: String, style: SubstitutionStyle) -> Edit {
     let matched_len = candidate.candidate.end - candidate.candidate.start;
+    let is_blank = is_underscore_run(&candidate.candidate.matched_text);
 
-    let (flat_start, flat_end) = match style {
-        SubstitutionStyle::Replace => (candidate.candidate.start, candidate.candidate.end),
+    let (flat_start, flat_end, replacement) = match style {
+        SubstitutionStyle::Replace if is_blank && replacement.len() < matched_len => {
+            let total_padding = matched_len - replacement.len();
+            let left_padding = total_padding / 2;
+            let right_padding = total_padding - left_padding;
+            let padded = format!(
+                "{}{replacement}{}",
+                " ".repeat(left_padding),
+                " ".repeat(right_padding)
+            );
+            (candidate.candidate.start, candidate.candidate.end, padded)
+        }
+        SubstitutionStyle::Replace => (
+            candidate.candidate.start,
+            candidate.candidate.end,
+            replacement,
+        ),
         SubstitutionStyle::PreserveBlank if replacement.len() < matched_len => {
             let left_padding = (matched_len - replacement.len()) / 2;
             let start = candidate.candidate.start + left_padding;
-            (start, start + replacement.len())
+            (start, start + replacement.len(), replacement)
         }
-        SubstitutionStyle::PreserveBlank => (candidate.candidate.start, candidate.candidate.end),
+        SubstitutionStyle::PreserveBlank => (
+            candidate.candidate.start,
+            candidate.candidate.end,
+            replacement,
+        ),
     };
 
     Edit {
@@ -182,6 +213,15 @@ pub fn to_edit(candidate: &RegionCandidate, replacement: String, style: Substitu
         flat_end,
         replacement,
     }
+}
+
+/// Whether `matched_text` is a blank -- an underscore-run candidate
+/// from [`recognize_blanks`], as opposed to a real already-filled value
+/// from [`detect_candidates`]. Width-preserving padding only makes
+/// sense for the former; a real value's matched text has no "blank" to
+/// keep the shape of.
+fn is_underscore_run(matched_text: &str) -> bool {
+    !matched_text.is_empty() && matched_text.chars().all(|c| c == '_')
 }
 
 #[cfg(test)]
@@ -423,6 +463,76 @@ mod tests {
             reflattened.text,
             "Move-In Date: _________{{m.indate}}_________"
         );
+    }
+
+    #[test]
+    fn replace_style_pads_a_removed_blank_with_spaces_to_keep_its_width() {
+        // 27 underscores, "{{u.dim}}" is 9 chars -- 18 chars of padding
+        // split 9/9, same centering math as PreserveBlank but with
+        // spaces instead of underscores surviving on either side.
+        let xml = wrap(r#"<w:p><w:r><w:t>SIZE___________________________CITY</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let patterns = [label_pattern(
+            "u.dim",
+            "SIZE",
+            unitprep_template_tagger::LabelPosition::After,
+        )];
+        let candidates = find_candidates(&doc, &[], &patterns);
+
+        let edit = to_edit(
+            &candidates[0],
+            "{{u.dim}}".to_string(),
+            SubstitutionStyle::Replace,
+        );
+        let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
+        let reflattened = extract_flat_text(&edited_xml).body;
+
+        assert_eq!(reflattened.text, "SIZE         {{u.dim}}         CITY");
+    }
+
+    #[test]
+    fn replace_style_degrades_to_a_plain_replacement_when_the_blank_is_too_short() {
+        // 6 underscores, "{{m.indate}}" is 12 chars -- no room to pad,
+        // so the underscores are just gone, same as before this
+        // width-preserving behavior existed.
+        let xml = wrap(r#"<w:p><w:r><w:t>Move-In Date: ______</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let patterns = [label_pattern(
+            "m.indate",
+            "Move-In Date",
+            unitprep_template_tagger::LabelPosition::After,
+        )];
+        let candidates = find_candidates(&doc, &[], &patterns);
+
+        let edit = to_edit(
+            &candidates[0],
+            "{{m.indate}}".to_string(),
+            SubstitutionStyle::Replace,
+        );
+        let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
+        let reflattened = extract_flat_text(&edited_xml).body;
+
+        assert_eq!(reflattened.text, "Move-In Date: {{m.indate}}");
+    }
+
+    #[test]
+    fn replace_style_does_not_pad_an_already_filled_value() {
+        // "Atherton Storage" (16 chars) is a real detect_candidates
+        // match, not a blank -- Replace must not start padding real
+        // values with spaces just because the tag is shorter.
+        let xml = wrap(r#"<w:p><w:r><w:t>Tenant: Atherton Storage</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let candidates = find_candidates(&doc, &[value("f.name", "Atherton Storage")], &[]);
+
+        let edit = to_edit(
+            &candidates[0],
+            "{{f.name}}".to_string(),
+            SubstitutionStyle::Replace,
+        );
+        let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
+        let reflattened = extract_flat_text(&edited_xml).body;
+
+        assert_eq!(reflattened.text, "Tenant: {{f.name}}");
     }
 
     #[test]
