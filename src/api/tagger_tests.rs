@@ -260,3 +260,63 @@ async fn apply_with_preserve_blanks_centers_the_tag_inside_the_matched_text() {
     // original matched text on each side) survive around it.
     assert!(edited_doc.body.text.starts_with("Ath{{f.name}}age"));
 }
+
+#[tokio::test]
+async fn apply_without_preserve_blanks_hides_a_blanks_underscores_instead_of_deleting_them() {
+    let original_bytes = std::fs::read(FIXTURE).unwrap();
+    let doc = read_docx(&original_bytes).unwrap();
+    // The fixture's real "Name:  _____...Space #:" blank -- 33
+    // underscores. "{{e.name}}" is 10 chars -- 23 chars of padding
+    // split 11/12.
+    let blank_start = doc.body.text.find("_____").unwrap();
+    let blank_len = doc.body.text[blank_start..]
+        .find(|c: char| c != '_')
+        .unwrap();
+    let blank_end = blank_start + blank_len;
+
+    let candidates = vec![sample_candidate(
+        "e.name",
+        &"_".repeat(blank_len),
+        blank_start,
+        blank_end,
+    )];
+    let state = tagger_state_with_session("s1", original_bytes, "atherton.docx", candidates);
+
+    let response = apply(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(TaggerApplyRequest {
+            session_id: "s1".to_string(),
+            preserve_blanks: false,
+            confirmed: vec![ConfirmedSubstitution {
+                candidate_index: 0,
+                tag_key: "e.name".to_string(),
+            }],
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let raw_xml = read_document_xml_from_docx(&bytes);
+    let edited_doc = read_docx(&bytes).unwrap();
+
+    // The underscores are still really there -- just invisible -- so
+    // the flattened text reads exactly like the visible PreserveBlank
+    // style would.
+    assert!(edited_doc.body.text.contains("{{e.name}}"));
+    assert!(edited_doc.body.text.contains(&"_".repeat(blank_len)));
+    // But the raw XML proves they were actually hidden, not left visible.
+    assert!(raw_xml.contains("<w:color w:val=\"FFFFFF\"/>"));
+}
+
+fn read_document_xml_from_docx(bytes: &[u8]) -> String {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut entry = zip.by_name("word/document.xml").unwrap();
+    let mut contents = String::new();
+    std::io::Read::read_to_string(&mut entry, &mut contents).unwrap();
+    contents
+}

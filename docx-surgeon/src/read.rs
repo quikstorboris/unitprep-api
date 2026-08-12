@@ -23,6 +23,25 @@ pub struct RunSpan {
     pub xml_content_start: usize,
     pub xml_content_end: usize,
     pub is_underlined: bool,
+    /// Byte offset of this run's own `<w:r` opening bracket -- the start
+    /// of the *whole* run element, not just its `<w:t>` content. Needed
+    /// to rebuild a run from scratch (splitting it into more than one
+    /// `<w:r>`, e.g. [`crate::edit::apply_hidden_blank_edits`]) rather
+    /// than just replacing its text content in place.
+    pub run_start: usize,
+    /// Byte offset immediately after this run's closing `</w:r>`.
+    pub run_end: usize,
+    /// Byte offset of this run's `<w:t` opening bracket. Everything in
+    /// `[run_start, t_open_start)` is the run's own opening tag plus its
+    /// optional `<w:rPr>...</w:rPr>` -- reused verbatim (or, for a
+    /// hidden fragment, with a color injected) when rebuilding a split
+    /// run, rather than reconstructed from scratch.
+    pub t_open_start: usize,
+    /// Byte range of this run's whole `<w:rPr>...</w:rPr>` (or
+    /// self-closing `<w:rPr/>`), if it has one at all. `None` for a run
+    /// with no run properties element -- a hidden fragment then needs a
+    /// brand new `<w:rPr>` inserted rather than one to clone and modify.
+    pub rpr_range: Option<(usize, usize)>,
 }
 
 /// The flattened plain text of one addressable region, plus enough of a
@@ -194,8 +213,13 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
 
     let mut in_run_props = false;
     let mut current_run_underlined = false;
+    let mut current_run_start = 0usize;
+    let mut current_rpr_open_start = 0usize;
+    let mut current_rpr_range: Option<(usize, usize)> = None;
+    let mut pushed_run_this_element = false;
 
     loop {
+        let pos_before = reader.buffer_position() as usize;
         match reader.read_event() {
             Ok(Event::Eof) => break,
             Err(_) => break,
@@ -213,11 +237,16 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
                 }
                 b"r" => {
                     current_run_underlined = false;
+                    current_run_start = pos_before;
+                    current_rpr_range = None;
+                    pushed_run_this_element = false;
                 }
                 b"rPr" => {
                     in_run_props = true;
+                    current_rpr_open_start = pos_before;
                 }
                 b"t" => {
+                    let t_open_start = pos_before;
                     let content_start = reader.buffer_position() as usize;
                     match reader.read_event() {
                         Ok(Event::Text(t)) => {
@@ -229,7 +258,11 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
                                 content_start,
                                 content_end,
                                 current_run_underlined,
+                                current_run_start,
+                                t_open_start,
+                                current_rpr_range,
                             );
+                            pushed_run_this_element = true;
                         }
                         Ok(Event::End(_)) => {
                             // Empty <w:t></w:t> -- zero-length run, still recorded.
@@ -239,7 +272,11 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
                                 content_start,
                                 content_start,
                                 current_run_underlined,
+                                current_run_start,
+                                t_open_start,
+                                current_rpr_range,
                             );
+                            pushed_run_this_element = true;
                         }
                         _ => {}
                     }
@@ -255,6 +292,10 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
                     });
                     current_run_underlined = !explicitly_none;
                 }
+                b"rPr" => {
+                    // Self-closing <w:rPr/> -- an empty run-properties element.
+                    current_rpr_range = Some((pos_before, reader.buffer_position() as usize));
+                }
                 b"t" => {
                     // Self-closing <w:t/> -- zero-length run.
                     let pos = reader.buffer_position() as usize;
@@ -264,13 +305,29 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
                         pos,
                         pos,
                         current_run_underlined,
+                        current_run_start,
+                        pos_before,
+                        current_rpr_range,
                     );
+                    pushed_run_this_element = true;
                 }
                 _ => {}
             },
 
             Ok(Event::End(e)) => match e.local_name().as_ref() {
-                b"rPr" => in_run_props = false,
+                b"rPr" => {
+                    in_run_props = false;
+                    current_rpr_range =
+                        Some((current_rpr_open_start, reader.buffer_position() as usize));
+                }
+                b"r" => {
+                    if pushed_run_this_element {
+                        let run_end = reader.buffer_position() as usize;
+                        if let Some(run) = current_acc(&mut cell_stack, &mut body).runs.last_mut() {
+                            run.run_end = run_end;
+                        }
+                    }
+                }
                 b"tc" => {
                     if let Some(acc) = cell_stack.pop() {
                         table_cells.push(acc.finish());
@@ -298,12 +355,16 @@ fn current_acc<'a>(
     cell_stack.last_mut().unwrap_or(body)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_run(
     acc: &mut Accumulator,
     decoded: &str,
     xml_content_start: usize,
     xml_content_end: usize,
     is_underlined: bool,
+    run_start: usize,
+    t_open_start: usize,
+    rpr_range: Option<(usize, usize)>,
 ) {
     let flat_start = acc.text.len();
     acc.text.push_str(decoded);
@@ -314,6 +375,13 @@ fn push_run(
         xml_content_start,
         xml_content_end,
         is_underlined,
+        run_start,
+        // Corrected once the run's own </w:r> is reached -- a run's
+        // <w:t> always closes before its own </w:r>, so this is never
+        // observed by any caller before then.
+        run_end: xml_content_end,
+        t_open_start,
+        rpr_range,
     });
 }
 
@@ -393,6 +461,70 @@ mod tests {
         let flat = extract_flat_text(&xml).body;
 
         assert!(!flat.runs[0].is_underlined);
+    }
+
+    #[test]
+    fn run_start_and_end_bracket_the_whole_run_element() {
+        let xml = wrap(r#"<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"#);
+        let flat = extract_flat_text(&xml).body;
+        let run = flat.runs[0];
+
+        assert_eq!(
+            &xml[run.run_start..run.run_end],
+            r#"<w:r><w:t>Hello</w:t></w:r>"#
+        );
+    }
+
+    #[test]
+    fn t_open_start_points_at_the_ts_own_opening_tag() {
+        let xml = wrap(r#"<w:p><w:r><w:t xml:space="preserve">Hello</w:t></w:r></w:p>"#);
+        let flat = extract_flat_text(&xml).body;
+        let run = flat.runs[0];
+
+        assert_eq!(
+            &xml[run.t_open_start..run.xml_content_start],
+            r#"<w:t xml:space="preserve">"#
+        );
+    }
+
+    #[test]
+    fn rpr_range_is_none_when_the_run_has_no_run_properties() {
+        let xml = wrap(r#"<w:p><w:r><w:t>Hello</w:t></w:r></w:p>"#);
+        let flat = extract_flat_text(&xml).body;
+
+        assert_eq!(flat.runs[0].rpr_range, None);
+    }
+
+    #[test]
+    fn rpr_range_covers_a_paired_run_properties_element() {
+        let xml =
+            wrap(r#"<w:p><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>Hello</w:t></w:r></w:p>"#);
+        let flat = extract_flat_text(&xml).body;
+        let (start, end) = flat.runs[0].rpr_range.unwrap();
+
+        assert_eq!(&xml[start..end], r#"<w:rPr><w:sz w:val="20"/></w:rPr>"#);
+    }
+
+    #[test]
+    fn rpr_range_covers_a_self_closing_run_properties_element() {
+        let xml = wrap(r#"<w:p><w:r><w:rPr/><w:t>Hello</w:t></w:r></w:p>"#);
+        let flat = extract_flat_text(&xml).body;
+        let (start, end) = flat.runs[0].rpr_range.unwrap();
+
+        assert_eq!(&xml[start..end], r#"<w:rPr/>"#);
+    }
+
+    #[test]
+    fn run_bounds_are_correct_for_the_second_of_two_runs_in_a_paragraph() {
+        let xml =
+            wrap(r#"<w:p><w:r><w:t>Tenant: </w:t></w:r><w:r><w:t>John Smith</w:t></w:r></w:p>"#);
+        let flat = extract_flat_text(&xml).body;
+        let run = flat.runs[1];
+
+        assert_eq!(
+            &xml[run.run_start..run.run_end],
+            r#"<w:r><w:t>John Smith</w:t></w:r>"#
+        );
     }
 
     #[test]

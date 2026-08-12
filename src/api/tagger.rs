@@ -15,11 +15,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use docx_surgeon::{edit_docx, read_docx, RegionRef};
+use docx_surgeon::{edit_docx_all, read_docx, Edit, HiddenBlankEdit, RegionRef};
 use unitprep_core::session_store::SessionStoreExt;
 use unitprep_core::uploaded_file::UploadedFile;
 use unitprep_tagger_pipeline::{
-    find_candidates, to_edit, ConfidenceTier, RegionCandidate, SubstitutionStyle,
+    find_candidates, to_edit, AppliedEdit, ConfidenceTier, RegionCandidate, SubstitutionStyle,
 };
 use unitprep_template_tagger::{LabelPosition, LabelProximityPattern};
 
@@ -490,7 +490,8 @@ pub async fn apply(
         SubstitutionStyle::Replace
     };
 
-    let mut edits = Vec::with_capacity(request.confirmed.len());
+    let mut edits: Vec<Edit> = Vec::new();
+    let mut hidden_edits: Vec<HiddenBlankEdit> = Vec::new();
     let mut failed = Vec::new();
     for confirmed in &request.confirmed {
         let Some(candidate) = candidates.get(confirmed.candidate_index) else {
@@ -507,9 +508,13 @@ pub async fn apply(
                 .into_response();
         };
 
-        let edit = to_edit(candidate, format!("{{{{{}}}}}", confirmed.tag_key), style);
-        let region_text = doc.region(edit.region);
-        if !region_text.is_editable_range(edit.flat_start, edit.flat_end) {
+        let applied = to_edit(candidate, format!("{{{{{}}}}}", confirmed.tag_key), style);
+        let (region, editable) = match &applied {
+            AppliedEdit::Plain(edit) => (edit.region, (edit.flat_start, edit.flat_end)),
+            AppliedEdit::HiddenBlank(edit) => (edit.region, (edit.blank_start, edit.blank_end)),
+        };
+        let region_text = doc.region(region);
+        if !region_text.is_editable_range(editable.0, editable.1) {
             failed.push(FailedSubstitution {
                 candidate_index: confirmed.candidate_index,
                 tag_key: confirmed.tag_key.clone(),
@@ -519,7 +524,10 @@ pub async fn apply(
             });
             continue;
         }
-        edits.push(edit);
+        match applied {
+            AppliedEdit::Plain(edit) => edits.push(edit),
+            AppliedEdit::HiddenBlank(edit) => hidden_edits.push(edit),
+        }
     }
 
     if !failed.is_empty() {
@@ -552,7 +560,7 @@ pub async fn apply(
             .into_response();
     }
 
-    let edited_bytes = match edit_docx(&original_bytes, &edits) {
+    let edited_bytes = match edit_docx_all(&original_bytes, &edits, &hidden_edits) {
         Ok(bytes) => bytes,
         Err(err) => {
             tracing::warn!(session_id = %request.session_id, error = ?err, "Tagger apply failed");

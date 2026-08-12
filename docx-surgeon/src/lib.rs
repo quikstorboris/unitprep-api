@@ -38,7 +38,9 @@
 pub mod edit;
 pub mod read;
 
-pub use edit::{apply_edits, Edit, EditError};
+pub use edit::{
+    apply_all_edits, apply_edits, apply_hidden_blank_edits, Edit, EditError, HiddenBlankEdit,
+};
 pub use read::{extract_flat_text, FlatDocument, FlatText, RegionRef, RunSpan};
 
 use std::io::{Cursor, Read, Write};
@@ -81,9 +83,22 @@ pub fn read_docx(docx_bytes: &[u8]) -> Result<FlatDocument, DocxError> {
 /// byte from the input; within `document.xml`, every byte outside an
 /// edited run's text content is likewise untouched.
 pub fn edit_docx(docx_bytes: &[u8], edits: &[Edit]) -> Result<Vec<u8>, DocxError> {
+    edit_docx_all(docx_bytes, edits, &[])
+}
+
+/// Same as [`edit_docx`], but also accepts a batch of
+/// [`HiddenBlankEdit`]s to apply in the same pass -- see
+/// [`apply_all_edits`] for why a mix of both kinds must be applied
+/// together rather than via two separate calls.
+pub fn edit_docx_all(
+    docx_bytes: &[u8],
+    edits: &[Edit],
+    hidden_edits: &[HiddenBlankEdit],
+) -> Result<Vec<u8>, DocxError> {
     let document_xml = read_document_xml(docx_bytes)?;
     let flat = extract_flat_text(&document_xml);
-    let edited_xml = apply_edits(&document_xml, &flat, edits).map_err(DocxError::Edit)?;
+    let edited_xml =
+        apply_all_edits(&document_xml, &flat, edits, hidden_edits).map_err(DocxError::Edit)?;
 
     let mut input_zip = zip::ZipArchive::new(Cursor::new(docx_bytes))?;
     let mut output_buffer = Vec::new();

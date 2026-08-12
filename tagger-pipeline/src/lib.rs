@@ -16,11 +16,12 @@
 //!
 //! **Hard rule inherited from both dependencies: propose, never
 //! modify.** [`find_candidates`] never applies anything; [`to_edit`]
-//! only *builds* an [`Edit`] from an already-confirmed candidate and a
-//! caller-supplied replacement -- applying it is still
-//! `docx_surgeon::apply_edits`'s job, called explicitly by the caller.
+//! only *builds* an [`AppliedEdit`] from an already-confirmed candidate
+//! and a caller-supplied replacement -- applying it is still
+//! `docx_surgeon::apply_all_edits`'s job, called explicitly by the
+//! caller.
 
-use docx_surgeon::{Edit, FlatDocument, RegionRef};
+use docx_surgeon::{Edit, FlatDocument, HiddenBlankEdit, RegionRef};
 use unitprep_template_tagger::{
     detect_candidates, recognize_blanks, Candidate, LabelProximityPattern, TagValue,
 };
@@ -144,14 +145,18 @@ pub enum SubstitutionStyle {
     /// width has no particular meaning to preserve.
     ///
     /// For a blank (`recognize_blanks`'s underscore-run candidates),
-    /// the underscores are gone but the *width* they occupied is kept:
-    /// `replacement` is centered inside the span with plain spaces
-    /// filling what's left on either side, so a later mail-merge fill
-    /// (and the surrounding tab-stop layout right now) doesn't have the
-    /// blank's whole width yanked out from under it. Degrades to a
-    /// plain, unpadded replacement if `replacement` is already as long
-    /// as the blank or longer -- same reasoning as
-    /// [`Self::PreserveBlank`]'s degrade case.
+    /// the underscores read as gone but the *width* they occupied is
+    /// kept: `replacement` lands centered in the middle of the blank,
+    /// and the underscores on either side survive -- unchanged, not
+    /// even in position -- but recolored to match a white page
+    /// background so they're invisible (see
+    /// [`docx_surgeon::HiddenBlankEdit`]'s doc comment for why keeping
+    /// the real characters, rather than substituting an equal *count*
+    /// of some other character, is the only way to make the surviving
+    /// width provably exact regardless of font). Degrades to a plain,
+    /// unpadded replacement if `replacement` is already as long as the
+    /// blank or longer -- same reasoning as [`Self::PreserveBlank`]'s
+    /// degrade case.
     Replace,
     /// Keep the blank, with `replacement` landing in the middle of it --
     /// the underscores (or whatever else `matched_text` is) on either
@@ -170,48 +175,66 @@ pub enum SubstitutionStyle {
     PreserveBlank,
 }
 
-/// Builds the [`Edit`] that would apply `candidate`'s substitution in
-/// the given `style`. `replacement` is the caller's choice (typically
+/// What [`to_edit`] built for one candidate -- which of `docx-surgeon`'s
+/// two edit kinds depends on both `style` and whether the candidate is
+/// a blank, so the caller needs to route each to the matching batch
+/// (`docx_surgeon::apply_all_edits` takes both at once).
+#[derive(Debug, Clone)]
+pub enum AppliedEdit {
+    Plain(Edit),
+    HiddenBlank(HiddenBlankEdit),
+}
+
+/// Builds the edit that would apply `candidate`'s substitution in the
+/// given `style`. `replacement` is the caller's choice (typically
 /// `{{tag_key}}`) -- this crate has no opinion on merge-tag templating
 /// syntax, only on where the substitution goes.
-pub fn to_edit(candidate: &RegionCandidate, replacement: String, style: SubstitutionStyle) -> Edit {
-    let matched_len = candidate.candidate.end - candidate.candidate.start;
+pub fn to_edit(
+    candidate: &RegionCandidate,
+    replacement: String,
+    style: SubstitutionStyle,
+) -> AppliedEdit {
+    let blank_start = candidate.candidate.start;
+    let blank_end = candidate.candidate.end;
+    let matched_len = blank_end - blank_start;
     let is_blank = is_underscore_run(&candidate.candidate.matched_text);
 
-    let (flat_start, flat_end, replacement) = match style {
+    match style {
         SubstitutionStyle::Replace if is_blank && replacement.len() < matched_len => {
-            let total_padding = matched_len - replacement.len();
-            let left_padding = total_padding / 2;
-            let right_padding = total_padding - left_padding;
-            let padded = format!(
-                "{}{replacement}{}",
-                " ".repeat(left_padding),
-                " ".repeat(right_padding)
-            );
-            (candidate.candidate.start, candidate.candidate.end, padded)
+            let left_padding = (matched_len - replacement.len()) / 2;
+            let tag_start = blank_start + left_padding;
+            let tag_end = tag_start + replacement.len();
+            AppliedEdit::HiddenBlank(HiddenBlankEdit {
+                region: candidate.region,
+                blank_start,
+                blank_end,
+                tag_start,
+                tag_end,
+                replacement,
+            })
         }
-        SubstitutionStyle::Replace => (
-            candidate.candidate.start,
-            candidate.candidate.end,
+        SubstitutionStyle::Replace => AppliedEdit::Plain(Edit {
+            region: candidate.region,
+            flat_start: blank_start,
+            flat_end: blank_end,
             replacement,
-        ),
+        }),
         SubstitutionStyle::PreserveBlank if replacement.len() < matched_len => {
             let left_padding = (matched_len - replacement.len()) / 2;
-            let start = candidate.candidate.start + left_padding;
-            (start, start + replacement.len(), replacement)
+            let start = blank_start + left_padding;
+            AppliedEdit::Plain(Edit {
+                region: candidate.region,
+                flat_start: start,
+                flat_end: start + replacement.len(),
+                replacement,
+            })
         }
-        SubstitutionStyle::PreserveBlank => (
-            candidate.candidate.start,
-            candidate.candidate.end,
+        SubstitutionStyle::PreserveBlank => AppliedEdit::Plain(Edit {
+            region: candidate.region,
+            flat_start: blank_start,
+            flat_end: blank_end,
             replacement,
-        ),
-    };
-
-    Edit {
-        region: candidate.region,
-        flat_start,
-        flat_end,
-        replacement,
+        }),
     }
 }
 
@@ -227,7 +250,21 @@ fn is_underscore_run(matched_text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use docx_surgeon::{apply_edits, extract_flat_text};
+    use docx_surgeon::{apply_all_edits, apply_edits, extract_flat_text};
+
+    fn plain(edit: AppliedEdit) -> Edit {
+        match edit {
+            AppliedEdit::Plain(edit) => edit,
+            AppliedEdit::HiddenBlank(_) => panic!("expected a plain Edit, got a HiddenBlankEdit"),
+        }
+    }
+
+    fn hidden(edit: AppliedEdit) -> HiddenBlankEdit {
+        match edit {
+            AppliedEdit::HiddenBlank(edit) => edit,
+            AppliedEdit::Plain(_) => panic!("expected a HiddenBlankEdit, got a plain Edit"),
+        }
+    }
 
     fn value(tag_key: &str, value: &str) -> TagValue {
         TagValue {
@@ -394,11 +431,11 @@ mod tests {
         let doc = extract_flat_text(&xml);
         let candidates = find_candidates(&doc, &[value("e.name", "John Smith")], &[]);
 
-        let edit = to_edit(
+        let edit = plain(to_edit(
             &candidates[0],
             "{{e.name}}".to_string(),
             SubstitutionStyle::Replace,
-        );
+        ));
 
         assert_eq!(edit.region, RegionRef::Body);
         assert_eq!(edit.flat_start, candidates[0].candidate.start);
@@ -421,11 +458,11 @@ mod tests {
         let edits: Vec<Edit> = candidates
             .iter()
             .map(|c| {
-                to_edit(
+                plain(to_edit(
                     c,
                     format!("{{{{{}}}}}", c.candidate.tag_key),
                     SubstitutionStyle::Replace,
-                )
+                ))
             })
             .collect();
 
@@ -451,11 +488,11 @@ mod tests {
         )];
         let candidates = find_candidates(&doc, &[], &patterns);
 
-        let edit = to_edit(
+        let edit = plain(to_edit(
             &candidates[0],
             "{{m.indate}}".to_string(),
             SubstitutionStyle::PreserveBlank,
-        );
+        ));
         let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
         let reflattened = extract_flat_text(&edited_xml).body;
 
@@ -466,10 +503,11 @@ mod tests {
     }
 
     #[test]
-    fn replace_style_pads_a_removed_blank_with_spaces_to_keep_its_width() {
+    fn replace_style_hides_a_removed_blanks_underscores_instead_of_deleting_them() {
         // 27 underscores, "{{u.dim}}" is 9 chars -- 18 chars of padding
-        // split 9/9, same centering math as PreserveBlank but with
-        // spaces instead of underscores surviving on either side.
+        // split 9/9. Unlike PreserveBlank, the surviving underscores
+        // aren't meant to be seen: Replace now produces a
+        // HiddenBlankEdit, which recolors them instead of showing them.
         let xml = wrap(r#"<w:p><w:r><w:t>SIZE___________________________CITY</w:t></w:r></w:p>"#);
         let doc = extract_flat_text(&xml);
         let patterns = [label_pattern(
@@ -479,15 +517,20 @@ mod tests {
         )];
         let candidates = find_candidates(&doc, &[], &patterns);
 
-        let edit = to_edit(
+        let edit = hidden(to_edit(
             &candidates[0],
             "{{u.dim}}".to_string(),
             SubstitutionStyle::Replace,
-        );
-        let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
+        ));
+        let edited_xml = apply_all_edits(&xml, &doc, &[], &[edit]).unwrap();
         let reflattened = extract_flat_text(&edited_xml).body;
 
-        assert_eq!(reflattened.text, "SIZE         {{u.dim}}         CITY");
+        // The underscores are still really there, just invisible -- so
+        // the flattened text still shows them, same as PreserveBlank
+        // would, but the raw XML proves they were actually hidden
+        // rather than left visible.
+        assert_eq!(reflattened.text, "SIZE_________{{u.dim}}_________CITY");
+        assert_eq!(edited_xml.matches("<w:color w:val=\"FFFFFF\"/>").count(), 2);
     }
 
     #[test]
@@ -504,11 +547,11 @@ mod tests {
         )];
         let candidates = find_candidates(&doc, &[], &patterns);
 
-        let edit = to_edit(
+        let edit = plain(to_edit(
             &candidates[0],
             "{{m.indate}}".to_string(),
             SubstitutionStyle::Replace,
-        );
+        ));
         let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
         let reflattened = extract_flat_text(&edited_xml).body;
 
@@ -524,11 +567,11 @@ mod tests {
         let doc = extract_flat_text(&xml);
         let candidates = find_candidates(&doc, &[value("f.name", "Atherton Storage")], &[]);
 
-        let edit = to_edit(
+        let edit = plain(to_edit(
             &candidates[0],
             "{{f.name}}".to_string(),
             SubstitutionStyle::Replace,
-        );
+        ));
         let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
         let reflattened = extract_flat_text(&edited_xml).body;
 
@@ -548,11 +591,11 @@ mod tests {
         )];
         let candidates = find_candidates(&doc, &[], &patterns);
 
-        let edit = to_edit(
+        let edit = plain(to_edit(
             &candidates[0],
             "{{m.indate}}".to_string(),
             SubstitutionStyle::PreserveBlank,
-        );
+        ));
         let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
         let reflattened = extract_flat_text(&edited_xml).body;
 
