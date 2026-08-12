@@ -225,11 +225,13 @@ async fn apply_produces_a_docx_with_the_confirmed_substitution() {
 }
 
 #[tokio::test]
-async fn apply_with_preserve_blanks_inserts_the_tag_without_removing_the_matched_text() {
+async fn apply_with_preserve_blanks_centers_the_tag_inside_the_matched_text() {
     let original_bytes = std::fs::read(FIXTURE).unwrap();
     let doc = read_docx(&original_bytes).unwrap();
     let start = doc.body.text.find("Atherton Storage").unwrap();
     let end = start + "Atherton Storage".len();
+    // "Atherton Storage" is 16 chars, "{{f.name}}" is 10 -- 6 chars of
+    // padding split 3/3, so "Ath" and "age" survive on either side.
 
     let candidates = vec![sample_candidate("f.name", "Atherton Storage", start, end)];
     let state = tagger_state_with_session("s1", original_bytes, "atherton.docx", candidates);
@@ -254,10 +256,7 @@ async fn apply_with_preserve_blanks_inserts_the_tag_without_removing_the_matched
         .await
         .unwrap();
     let edited_doc = read_docx(&bytes).unwrap();
-    // The tag lands right before the matched text -- "Atherton Storage"
-    // itself is still there, not replaced.
-    assert!(edited_doc
-        .body
-        .text
-        .starts_with("{{f.name}}Atherton Storage"));
+    // The tag lands in the middle -- "Ath" and "age" (3 chars of the
+    // original matched text on each side) survive around it.
+    assert!(edited_doc.body.text.starts_with("Ath{{f.name}}age"));
 }

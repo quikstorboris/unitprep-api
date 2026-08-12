@@ -184,6 +184,14 @@ struct LabelProximityPatternJson {
     label: String,
     position: String,
     max_gap_chars: usize,
+    #[serde(default)]
+    requires_preceding_anchor: Option<PrecedingAnchorJson>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrecedingAnchorJson {
+    text: String,
+    within_chars: usize,
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -231,6 +239,12 @@ async fn load_label_proximity_patterns(
                 label: parsed.label,
                 position,
                 max_gap_chars: parsed.max_gap_chars,
+                requires_preceding_anchor: parsed.requires_preceding_anchor.map(|a| {
+                    unitprep_template_tagger::PrecedingAnchor {
+                        text: a.text,
+                        within_chars: a.within_chars,
+                    }
+                }),
             })
         })
         .collect())
@@ -388,14 +402,16 @@ pub struct ConfirmedSubstitution {
 pub struct TaggerApplyRequest {
     pub session_id: String,
     pub confirmed: Vec<ConfirmedSubstitution>,
-    /// When true, every confirmed substitution is inserted immediately
-    /// before its matched span rather than replacing it -- the blank
-    /// (or, for a `detect_candidates` match, the already-filled value
-    /// sitting next to the new tag) stays in the document. An OM-facing
-    /// style choice, applied uniformly to the whole apply call, not
-    /// something this handler has an opinion on. Defaults to `false`
-    /// (replace outright, the original behavior) so an older caller
-    /// that never sends this field keeps working unchanged.
+    /// When true, every confirmed substitution keeps its matched span
+    /// (the blank, or, for a `detect_candidates` match, the already-
+    /// filled value) instead of replacing it outright -- the tag lands
+    /// centered inside it, with whatever's left of the original text
+    /// split evenly on either side (see
+    /// `SubstitutionStyle::PreserveBlank`). An OM-facing style choice,
+    /// applied uniformly to the whole apply call, not something this
+    /// handler has an opinion on. Defaults to `false` (replace outright,
+    /// the original behavior) so an older caller that never sends this
+    /// field keeps working unchanged.
     #[serde(default)]
     pub preserve_blanks: bool,
 }
@@ -469,7 +485,7 @@ pub async fn apply(
     };
 
     let style = if request.preserve_blanks {
-        SubstitutionStyle::InsertBeforeSpan
+        SubstitutionStyle::PreserveBlank
     } else {
         SubstitutionStyle::Replace
     };

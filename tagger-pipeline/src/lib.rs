@@ -142,14 +142,21 @@ pub enum SubstitutionStyle {
     /// whatever literal text detect_candidates matched) are gone,
     /// `replacement` is all that's left in their place.
     Replace,
-    /// Insert `replacement` immediately before the matched span,
-    /// removing nothing. Only meaningful for a blank
-    /// (`recognize_blanks`'s candidates) -- inserting before an
-    /// already-filled value (`detect_candidates`'s candidates) would
-    /// leave the old value sitting right next to the tag rather than
-    /// replaced by it. The caller decides which candidates this applies
-    /// to; this function has no notion of where a candidate came from.
-    InsertBeforeSpan,
+    /// Keep the blank, with `replacement` landing in the middle of it --
+    /// the underscores (or whatever else `matched_text` is) on either
+    /// side stay, split as evenly as possible. If the blank is too
+    /// short to fit `replacement` with anything left over on either
+    /// side, this degrades to [`Self::Replace`] -- there's no
+    /// meaningful "preserved blank" left to keep once the tag itself
+    /// would fill the whole span or more.
+    ///
+    /// Only meaningful for a blank (`recognize_blanks`'s candidates) --
+    /// centering a tag inside an already-filled value
+    /// (`detect_candidates`'s candidates) would leave fragments of the
+    /// old value on both sides of the new tag rather than replaced by
+    /// it. The caller decides which candidates this applies to; this
+    /// function has no notion of where a candidate came from.
+    PreserveBlank,
 }
 
 /// Builds the [`Edit`] that would apply `candidate`'s substitution in
@@ -157,13 +164,21 @@ pub enum SubstitutionStyle {
 /// `{{tag_key}}`) -- this crate has no opinion on merge-tag templating
 /// syntax, only on where the substitution goes.
 pub fn to_edit(candidate: &RegionCandidate, replacement: String, style: SubstitutionStyle) -> Edit {
-    let flat_end = match style {
-        SubstitutionStyle::Replace => candidate.candidate.end,
-        SubstitutionStyle::InsertBeforeSpan => candidate.candidate.start,
+    let matched_len = candidate.candidate.end - candidate.candidate.start;
+
+    let (flat_start, flat_end) = match style {
+        SubstitutionStyle::Replace => (candidate.candidate.start, candidate.candidate.end),
+        SubstitutionStyle::PreserveBlank if replacement.len() < matched_len => {
+            let left_padding = (matched_len - replacement.len()) / 2;
+            let start = candidate.candidate.start + left_padding;
+            (start, start + replacement.len())
+        }
+        SubstitutionStyle::PreserveBlank => (candidate.candidate.start, candidate.candidate.end),
     };
+
     Edit {
         region: candidate.region,
-        flat_start: candidate.candidate.start,
+        flat_start,
         flat_end,
         replacement,
     }
@@ -191,6 +206,7 @@ mod tests {
             label: label.to_string(),
             position,
             max_gap_chars: 5,
+            requires_preceding_anchor: None,
         }
     }
 
@@ -381,7 +397,38 @@ mod tests {
     }
 
     #[test]
-    fn insert_before_span_style_keeps_the_blank_intact() {
+    fn preserve_blank_style_centers_the_tag_with_underscores_on_both_sides() {
+        // 30 underscores, "{{m.indate}}" is 12 chars -- 18 chars of
+        // padding split 9/9.
+        let xml = wrap(
+            r#"<w:p><w:r><w:t>Move-In Date: ______________________________</w:t></w:r></w:p>"#,
+        );
+        let doc = extract_flat_text(&xml);
+        let patterns = [label_pattern(
+            "m.indate",
+            "Move-In Date",
+            unitprep_template_tagger::LabelPosition::After,
+        )];
+        let candidates = find_candidates(&doc, &[], &patterns);
+
+        let edit = to_edit(
+            &candidates[0],
+            "{{m.indate}}".to_string(),
+            SubstitutionStyle::PreserveBlank,
+        );
+        let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
+        let reflattened = extract_flat_text(&edited_xml).body;
+
+        assert_eq!(
+            reflattened.text,
+            "Move-In Date: _________{{m.indate}}_________"
+        );
+    }
+
+    #[test]
+    fn preserve_blank_style_degrades_to_replace_when_the_blank_is_too_short() {
+        // 6 underscores, "{{m.indate}}" is 12 chars -- no room to keep
+        // any of the blank on either side, so it's just replaced.
         let xml = wrap(r#"<w:p><w:r><w:t>Move-In Date: ______</w:t></w:r></w:p>"#);
         let doc = extract_flat_text(&xml);
         let patterns = [label_pattern(
@@ -394,11 +441,11 @@ mod tests {
         let edit = to_edit(
             &candidates[0],
             "{{m.indate}}".to_string(),
-            SubstitutionStyle::InsertBeforeSpan,
+            SubstitutionStyle::PreserveBlank,
         );
         let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
         let reflattened = extract_flat_text(&edited_xml).body;
 
-        assert_eq!(reflattened.text, "Move-In Date: {{m.indate}}______");
+        assert_eq!(reflattened.text, "Move-In Date: {{m.indate}}");
     }
 }

@@ -10,6 +10,24 @@ pub struct LabelProximityPattern {
     pub label: String,
     pub position: LabelPosition,
     pub max_gap_chars: usize,
+    /// A second label that must appear somewhere in the
+    /// `within_chars` immediately *before* this pattern's own label,
+    /// or the match is skipped entirely. Exists for the common
+    /// "the same field label is reused for two different people/
+    /// sections" shape -- a document with both an occupant and an
+    /// alternate contact often labels both address blanks bare
+    /// `ADDRESS:`, with nothing to tell them apart except which
+    /// section header (`OCCUPANT NAME` vs. `ALTERNATE NAME`) came
+    /// before each one. `None` for the common case of a label that
+    /// only ever appears once.
+    pub requires_preceding_anchor: Option<PrecedingAnchor>,
+}
+
+/// See [`LabelProximityPattern::requires_preceding_anchor`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrecedingAnchor {
+    pub text: String,
+    pub within_chars: usize,
 }
 
 /// Where the blank sits relative to the pattern's label -- `After` for
@@ -69,6 +87,12 @@ pub fn recognize_blanks(document_text: &str, patterns: &[LabelProximityPattern])
 
     for pattern in patterns {
         for (label_start, label_end) in find_word_bounded_matches(document_text, &pattern.label) {
+            if let Some(anchor) = &pattern.requires_preceding_anchor {
+                if !anchor_precedes(document_text, label_start, anchor) {
+                    continue;
+                }
+            }
+
             for &(blank_start, blank_end) in &blanks {
                 let gap = match pattern.position {
                     LabelPosition::After if blank_start >= label_end => blank_start - label_end,
@@ -90,6 +114,34 @@ pub fn recognize_blanks(document_text: &str, patterns: &[LabelProximityPattern])
 
     candidates.sort_by_key(|candidate| candidate.start);
     candidates
+}
+
+/// Whether `anchor.text` appears (word-bounded, same ASCII-folding
+/// convention as every other match in this crate) anywhere in the
+/// `anchor.within_chars` bytes immediately before `label_start`. Only
+/// looks backward -- an anchor is a *preceding* section header, not
+/// just "somewhere nearby" -- so a document with two sections sharing
+/// a label never lets the later section's anchor satisfy the earlier
+/// section's pattern (position 750 is never "before" position 200).
+fn anchor_precedes(document_text: &str, label_start: usize, anchor: &PrecedingAnchor) -> bool {
+    let window_start = char_boundary_at_or_after(
+        document_text,
+        label_start.saturating_sub(anchor.within_chars),
+    );
+    let window = &document_text[window_start..label_start];
+    !find_word_bounded_matches(window, &anchor.text).is_empty()
+}
+
+/// The smallest char-boundary-safe index `>= idx` -- `label_start -
+/// within_chars` is an arbitrary byte offset that can land mid-
+/// character if the text contains anything outside ASCII; walking
+/// forward to the next real boundary keeps the slice in
+/// [`anchor_precedes`] from panicking.
+fn char_boundary_at_or_after(text: &str, mut idx: usize) -> usize {
+    while idx < text.len() && !text.is_char_boundary(idx) {
+        idx += 1;
+    }
+    idx
 }
 
 /// Every byte-range `(start, end)` in `text` covering a maximal run of
@@ -133,6 +185,22 @@ mod tests {
             label: label.to_string(),
             position,
             max_gap_chars,
+            requires_preceding_anchor: None,
+        }
+    }
+
+    fn anchored_pattern(
+        tag_key: &str,
+        label: &str,
+        anchor_text: &str,
+        within_chars: usize,
+    ) -> LabelProximityPattern {
+        LabelProximityPattern {
+            requires_preceding_anchor: Some(PrecedingAnchor {
+                text: anchor_text.to_string(),
+                within_chars,
+            }),
+            ..pattern(tag_key, label, LabelPosition::After, 5)
         }
     }
 
@@ -236,6 +304,57 @@ mod tests {
             text,
             &[pattern("m.indate", "Move-In Date", LabelPosition::After, 5)],
         );
+
+        assert!(candidates.is_empty());
+    }
+
+    #[test]
+    fn an_anchored_pattern_only_matches_the_occurrence_after_its_anchor() {
+        // The exact real-world shape this exists for: the same bare
+        // label ("ADDRESS:") reused for two different people, each
+        // introduced by its own section header.
+        let text = "OCCUPANT NAME: John\nADDRESS: ________\n\n\
+                     ALTERNATE NAME: Jane\nADDRESS: ________";
+        let occupant_address = anchored_pattern("e.address", "ADDRESS:", "OCCUPANT NAME", 30);
+
+        let candidates = recognize_blanks(text, &[occupant_address]);
+
+        assert_eq!(candidates.len(), 1);
+        // The first ADDRESS: (right after OCCUPANT NAME), not the second.
+        assert_eq!(candidates[0].start, text.find("________").unwrap());
+    }
+
+    #[test]
+    fn two_anchored_patterns_correctly_split_a_document_with_two_sections() {
+        let text = "OCCUPANT NAME: John\nADDRESS: ________\n\n\
+                     ALTERNATE NAME: Jane\nADDRESS: ________";
+        let occupant_address = anchored_pattern("e.address", "ADDRESS:", "OCCUPANT NAME", 30);
+        let alternate_address = anchored_pattern("e.a.address", "ADDRESS:", "ALTERNATE NAME", 30);
+
+        let candidates = recognize_blanks(text, &[occupant_address, alternate_address]);
+
+        // Two candidates, not four -- each pattern matched exactly the
+        // one occurrence its anchor actually precedes, so neither blank
+        // ends up ambiguous (tier NeedsReview) the way an unanchored
+        // pair sharing the same bare label would.
+        assert_eq!(candidates.len(), 2);
+        let first_blank = text.find("________").unwrap();
+        let second_blank = text.rfind("________").unwrap();
+        assert!(candidates
+            .iter()
+            .any(|c| c.tag_key == "e.address" && c.start == first_blank));
+        assert!(candidates
+            .iter()
+            .any(|c| c.tag_key == "e.a.address" && c.start == second_blank));
+    }
+
+    #[test]
+    fn an_anchor_further_back_than_within_chars_does_not_satisfy_the_pattern() {
+        let text = "OCCUPANT NAME: John and a lot of padding text in between here\
+                     ADDRESS: ________";
+        let occupant_address = anchored_pattern("e.address", "ADDRESS:", "OCCUPANT NAME", 10);
+
+        let candidates = recognize_blanks(text, &[occupant_address]);
 
         assert!(candidates.is_empty());
     }

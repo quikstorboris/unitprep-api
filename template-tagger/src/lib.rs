@@ -35,4 +35,4 @@ pub mod detect;
 pub mod recognize;
 
 pub use detect::{detect_candidates, Candidate, TagValue};
-pub use recognize::{recognize_blanks, LabelPosition, LabelProximityPattern};
+pub use recognize::{recognize_blanks, LabelPosition, LabelProximityPattern, PrecedingAnchor};
