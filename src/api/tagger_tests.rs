@@ -115,6 +115,51 @@ async fn apply_returns_400_for_an_out_of_range_candidate_index() {
 }
 
 #[tokio::test]
+async fn apply_reports_exactly_which_candidate_spans_multiple_runs() {
+    let original_bytes = std::fs::read(FIXTURE).unwrap();
+    let doc = read_docx(&original_bytes).unwrap();
+
+    // A span deliberately crossing from the first real run into the
+    // second -- exactly the real-world case (a blank's underscore run
+    // split across multiple <w:t> elements) this validation exists to
+    // catch before it becomes an opaque "apply_failed" for the whole
+    // batch.
+    let first = doc.body.runs[0];
+    let second = doc.body.runs[1];
+    let candidates = vec![sample_candidate(
+        "e.name",
+        "unused",
+        first.flat_start,
+        second.flat_end,
+    )];
+    let state = tagger_state_with_session("s1", original_bytes, "atherton.docx", candidates);
+
+    let response = apply(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(TaggerApplyRequest {
+            session_id: "s1".to_string(),
+            confirmed: vec![ConfirmedSubstitution {
+                candidate_index: 0,
+                tag_key: "e.name".to_string(),
+            }],
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(body["error"], "unappliable_substitutions");
+    assert_eq!(body["failed"][0]["candidate_index"], 0);
+    assert_eq!(body["failed"][0]["tag_key"], "e.name");
+}
+
+#[tokio::test]
 async fn apply_produces_a_docx_with_the_confirmed_substitution() {
     let original_bytes = std::fs::read(FIXTURE).unwrap();
     let doc = read_docx(&original_bytes).unwrap();

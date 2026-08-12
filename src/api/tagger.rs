@@ -388,12 +388,40 @@ pub struct TaggerApplyRequest {
     pub confirmed: Vec<ConfirmedSubstitution>,
 }
 
+/// One confirmed substitution that couldn't be turned into an edit --
+/// reported back so the reviewer knows exactly which one to uncheck,
+/// rather than an opaque all-or-nothing failure.
+#[derive(Debug, Serialize)]
+pub struct FailedSubstitution {
+    pub candidate_index: usize,
+    pub tag_key: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaggerApplyErrorBody {
+    pub error: &'static str,
+    pub message: String,
+    pub failed: Vec<FailedSubstitution>,
+}
+
 /// Applies every confirmed substitution and returns the finished
 /// `.docx` for download. Nothing is applied that wasn't named in
 /// `confirmed` -- the "propose, never modify" rule both matchers and
 /// docx-surgeon already hold is enforced structurally here too: this
 /// handler only ever builds edits from candidates the caller explicitly
 /// listed, never from `session.candidates` wholesale.
+///
+/// Every edit is checked against a real run in the document *before*
+/// any are applied. A blank's underscore run can be split across
+/// multiple `<w:t>` elements in the real XML (common in real-world
+/// Word documents -- a formatting change, a spell-check restart point,
+/// anything that gives Word a reason to end one run and start another
+/// mid-span) -- docx-surgeon correctly refuses to guess at splicing
+/// across that boundary, per its own "flag conservatively" design. The
+/// alternative to checking up front -- letting edit_docx fail on the
+/// whole batch -- gives the reviewer no way to tell which one
+/// confirmation was the problem, only "something failed."
 pub async fn apply(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -416,7 +444,19 @@ pub async fn apply(
         None => return session_not_found(),
     };
 
+    // read_docx already validated these exact bytes at /check time, so
+    // a failure here can only mean something is very wrong with the
+    // stored session bytes, not with the file itself.
+    let doc = match read_docx(&original_bytes) {
+        Ok(doc) => doc,
+        Err(err) => {
+            tracing::error!(session_id = %request.session_id, error = ?err, "Tagger apply failed to re-read the stored document");
+            return internal_error("Could not rebuild this session's document");
+        }
+    };
+
     let mut edits = Vec::with_capacity(request.confirmed.len());
+    let mut failed = Vec::new();
     for confirmed in &request.confirmed {
         let Some(candidate) = candidates.get(confirmed.candidate_index) else {
             return (
@@ -431,7 +471,53 @@ pub async fn apply(
             )
                 .into_response();
         };
-        edits.push(to_edit(candidate, format!("{{{{{}}}}}", confirmed.tag_key)));
+
+        let edit = to_edit(candidate, format!("{{{{{}}}}}", confirmed.tag_key));
+        let region_text = doc.region(edit.region);
+        if region_text
+            .run_containing(edit.flat_start, edit.flat_end)
+            .is_none()
+        {
+            failed.push(FailedSubstitution {
+                candidate_index: confirmed.candidate_index,
+                tag_key: confirmed.tag_key.clone(),
+                reason: "This text spans more than one formatting run in the document \
+                         and can't be safely edited automatically -- try excluding it."
+                    .to_string(),
+            });
+            continue;
+        }
+        edits.push(edit);
+    }
+
+    if !failed.is_empty() {
+        tracing::warn!(
+            session_id = %request.session_id,
+            failed_count = failed.len(),
+            "Tagger apply rejected -- one or more confirmed substitutions cannot be applied"
+        );
+        // Names the specific tag(s) directly in `message` -- not just in
+        // `failed` -- so the existing generic error-banner display (which
+        // only ever shows `message`) is still actionable without needing
+        // a dedicated per-row UI treatment.
+        let tag_list = failed
+            .iter()
+            .map(|f| f.tag_key.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(TaggerApplyErrorBody {
+                error: "unappliable_substitutions",
+                message: format!(
+                    "Could not apply: {tag_list} -- the matched text spans more than one \
+                     formatting run in the document. Uncheck {} and try again.",
+                    if failed.len() == 1 { "it" } else { "these" }
+                ),
+                failed,
+            }),
+        )
+            .into_response();
     }
 
     let edited_bytes = match edit_docx(&original_bytes, &edits) {
