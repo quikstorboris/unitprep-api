@@ -136,7 +136,33 @@ pub async fn create_invite(
     // Redundant with the RLS policy by design, not by accident -- see the
     // module docs.
     if let Err(response) = admin
-        .require_permission(&state.db, "users.manage", "create_invite", user_agent, ip_address)
+        .require_permission(
+            &state.db,
+            "users.manage",
+            "create_invite",
+            user_agent,
+            ip_address,
+        )
+        .await
+    {
+        return response;
+    }
+
+    // Every other path that sets a user's role (grant_role/revoke_role in
+    // auth_user_role.rs) requires users.manage_roles -- this one assigns
+    // a brand-new account's first role and must be held to the same bar.
+    // Without this, a narrower custom role holding users.manage but not
+    // users.manage_roles (a "can invite people" role, deliberately not
+    // "can grant admin") could still invite someone straight in as
+    // admin, fully bypassing the reason that second permission exists.
+    if let Err(response) = admin
+        .require_permission(
+            &state.db,
+            "users.manage_roles",
+            "create_invite",
+            user_agent,
+            ip_address,
+        )
         .await
     {
         return response;
@@ -544,7 +570,13 @@ pub async fn recover_account(
 
     // Redundant with the RLS policy by design -- see create_invite above.
     if let Err(response) = admin
-        .require_permission(&state.db, "users.manage", "recover_account", user_agent, ip_address)
+        .require_permission(
+            &state.db,
+            "users.manage",
+            "recover_account",
+            user_agent,
+            ip_address,
+        )
         .await
     {
         return response;
@@ -878,6 +910,37 @@ mod tests {
         let response = create_invite(
             State(empty_state()),
             onboarding_manager_user(),
+            test_addr(),
+            HeaderMap::new(),
+            Json(request("ada@example.com", "quikstor")),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Regression test: a caller holding `users.manage` but not
+    /// `users.manage_roles` must still be refused. Before this gate, such
+    /// a role -- e.g. a narrower "can invite people" role deliberately
+    /// scoped without the ability to grant admin -- could invite a
+    /// brand-new account straight in as `admin`, bypassing the entire
+    /// reason `users.manage_roles` exists as a separate permission from
+    /// `grant_role`/`revoke_role`'s own gate.
+    #[tokio::test]
+    async fn create_invite_refuses_users_manage_without_users_manage_roles() {
+        let narrow_role_user = crate::auth::AuthenticatedUser {
+            user_id: uuid::Uuid::new_v4(),
+            role_keys: vec!["custom_inviter".to_string()],
+            permission_keys: ["users.manage".to_string()].into_iter().collect(),
+            token_hash: vec![0u8; 32],
+            elevated_until: None,
+            requires_step_up: false,
+            passkey_reverified_until: None,
+        };
+
+        let response = create_invite(
+            State(empty_state()),
+            narrow_role_user,
             test_addr(),
             HeaderMap::new(),
             Json(request("ada@example.com", "quikstor")),
