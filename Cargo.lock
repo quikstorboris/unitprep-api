@@ -426,7 +426,7 @@ dependencies = [
  "encoding_rs",
  "fast-float2",
  "log",
- "quick-xml 0.41.0",
+ "quick-xml",
  "serde",
  "zip 8.6.0",
 ]
@@ -804,7 +804,7 @@ dependencies = [
 name = "docx-surgeon"
 version = "0.1.0"
 dependencies = [
- "quick-xml 0.36.2",
+ "quick-xml",
  "zip 2.4.2",
 ]
 
@@ -2277,15 +2277,6 @@ checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quick-xml"
-version = "0.36.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7649a7b4df05aed9ea7ec6f628c67c9953a43869b8bc50929569b2999d443fe"
-dependencies = [
- "memchr",
-]
-
-[[package]]
-name = "quick-xml"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
@@ -3589,7 +3580,7 @@ dependencies = [
  "csv",
  "parking_lot",
  "proptest",
- "quick-xml 0.41.0",
+ "quick-xml",
  "serde",
  "tokio",
  "tracing",

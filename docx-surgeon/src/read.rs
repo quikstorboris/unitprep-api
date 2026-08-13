@@ -248,38 +248,61 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
                 b"t" => {
                     let t_open_start = pos_before;
                     let content_start = reader.buffer_position() as usize;
-                    match reader.read_event() {
-                        Ok(Event::Text(t)) => {
-                            let content_end = reader.buffer_position() as usize;
-                            let decoded = t.unescape().map(|s| s.into_owned()).unwrap_or_default();
-                            push_run(
-                                current_acc(&mut cell_stack, &mut body),
-                                &decoded,
-                                content_start,
-                                content_end,
-                                current_run_underlined,
-                                current_run_start,
-                                t_open_start,
-                                current_rpr_range,
-                            );
-                            pushed_run_this_element = true;
+                    let mut decoded = String::new();
+                    let mut content_end = content_start;
+                    // quick-xml 0.41 (unlike 0.36) splits an entity or
+                    // character reference (`&amp;`, `&#39;`) out of
+                    // Event::Text into its own Event::GeneralRef -- a
+                    // `<w:t>` containing one used to arrive as a single
+                    // Text event, now arrives as Text/GeneralRef/Text (or
+                    // just GeneralRef, if the reference is the whole
+                    // content). Loop and accumulate every content event
+                    // up to the closing tag instead of reading exactly
+                    // one, so a `<w:t>Smith &amp; Sons</w:t>` still
+                    // decodes to one string. An empty `<w:t></w:t>` still
+                    // falls out of this loop with `decoded` empty and
+                    // `content_end == content_start`, matching the prior
+                    // explicit zero-length case.
+                    loop {
+                        match reader.read_event() {
+                            Ok(Event::Text(t)) => {
+                                content_end = reader.buffer_position() as usize;
+                                let charset_decoded = t.decode().unwrap_or_default();
+                                let unescaped = quick_xml::escape::unescape(&charset_decoded)
+                                    .unwrap_or_default();
+                                decoded.push_str(&unescaped);
+                            }
+                            Ok(Event::GeneralRef(r)) => {
+                                content_end = reader.buffer_position() as usize;
+                                if let Ok(Some(ch)) = r.resolve_char_ref() {
+                                    decoded.push(ch);
+                                } else if let Ok(name) = r.decode() {
+                                    if let Some(resolved) =
+                                        quick_xml::escape::resolve_predefined_entity(&name)
+                                    {
+                                        decoded.push_str(resolved);
+                                    }
+                                }
+                            }
+                            Ok(Event::CData(t)) => {
+                                content_end = reader.buffer_position() as usize;
+                                decoded.push_str(&t.decode().unwrap_or_default());
+                            }
+                            Ok(Event::End(_)) | Ok(Event::Eof) | Err(_) => break,
+                            _ => break,
                         }
-                        Ok(Event::End(_)) => {
-                            // Empty <w:t></w:t> -- zero-length run, still recorded.
-                            push_run(
-                                current_acc(&mut cell_stack, &mut body),
-                                "",
-                                content_start,
-                                content_start,
-                                current_run_underlined,
-                                current_run_start,
-                                t_open_start,
-                                current_rpr_range,
-                            );
-                            pushed_run_this_element = true;
-                        }
-                        _ => {}
                     }
+                    push_run(
+                        current_acc(&mut cell_stack, &mut body),
+                        &decoded,
+                        content_start,
+                        content_end,
+                        current_run_underlined,
+                        current_run_start,
+                        t_open_start,
+                        current_rpr_range,
+                    );
+                    pushed_run_this_element = true;
                 }
                 _ => {}
             },
