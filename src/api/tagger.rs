@@ -15,7 +15,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use docx_surgeon::{edit_docx_all, read_docx, Edit, HiddenBlankEdit, RegionRef};
+use docx_surgeon::{edit_docx_all, read_docx, Edit, RegionRef, UnderlineEdit};
 use unitprep_core::session_store::SessionStoreExt;
 use unitprep_core::uploaded_file::UploadedFile;
 use unitprep_tagger_pipeline::{
@@ -491,7 +491,7 @@ pub async fn apply(
     };
 
     let mut edits: Vec<Edit> = Vec::new();
-    let mut hidden_edits: Vec<HiddenBlankEdit> = Vec::new();
+    let mut underline_edits: Vec<UnderlineEdit> = Vec::new();
     let mut failed = Vec::new();
     for confirmed in &request.confirmed {
         let Some(candidate) = candidates.get(confirmed.candidate_index) else {
@@ -511,7 +511,7 @@ pub async fn apply(
         let applied = to_edit(candidate, format!("{{{{{}}}}}", confirmed.tag_key), style);
         let (region, editable) = match &applied {
             AppliedEdit::Plain(edit) => (edit.region, (edit.flat_start, edit.flat_end)),
-            AppliedEdit::HiddenBlank(edit) => (edit.region, (edit.blank_start, edit.blank_end)),
+            AppliedEdit::Underline(edit) => (edit.region, (edit.flat_start, edit.flat_end)),
         };
         let region_text = doc.region(region);
         if !region_text.is_editable_range(editable.0, editable.1) {
@@ -526,7 +526,7 @@ pub async fn apply(
         }
         match applied {
             AppliedEdit::Plain(edit) => edits.push(edit),
-            AppliedEdit::HiddenBlank(edit) => hidden_edits.push(edit),
+            AppliedEdit::Underline(edit) => underline_edits.push(edit),
         }
     }
 
@@ -560,7 +560,7 @@ pub async fn apply(
             .into_response();
     }
 
-    let edited_bytes = match edit_docx_all(&original_bytes, &edits, &hidden_edits) {
+    let edited_bytes = match edit_docx_all(&original_bytes, &edits, &underline_edits) {
         Ok(bytes) => bytes,
         Err(err) => {
             tracing::warn!(session_id = %request.session_id, error = ?err, "Tagger apply failed");

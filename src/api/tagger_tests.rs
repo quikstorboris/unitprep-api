@@ -262,12 +262,11 @@ async fn apply_with_preserve_blanks_centers_the_tag_inside_the_matched_text() {
 }
 
 #[tokio::test]
-async fn apply_without_preserve_blanks_hides_a_blanks_underscores_instead_of_deleting_them() {
+async fn apply_without_preserve_blanks_deletes_a_blanks_underscores_and_underlines_the_tag() {
     let original_bytes = std::fs::read(FIXTURE).unwrap();
     let doc = read_docx(&original_bytes).unwrap();
     // The fixture's real "Name:  _____...Space #:" blank -- 33
-    // underscores. "{{e.name}}" is 10 chars -- 23 chars of padding
-    // split 11/12.
+    // underscores.
     let blank_start = doc.body.text.find("_____").unwrap();
     let blank_len = doc.body.text[blank_start..]
         .find(|c: char| c != '_')
@@ -304,13 +303,16 @@ async fn apply_without_preserve_blanks_hides_a_blanks_underscores_instead_of_del
     let raw_xml = read_document_xml_from_docx(&bytes);
     let edited_doc = read_docx(&bytes).unwrap();
 
-    // The underscores are still really there -- just invisible -- so
-    // the flattened text reads exactly like the visible PreserveBlank
-    // style would.
-    assert!(edited_doc.body.text.contains("{{e.name}}"));
-    assert!(edited_doc.body.text.contains(&"_".repeat(blank_len)));
-    // But the raw XML proves they were actually hidden, not left visible.
-    assert!(raw_xml.contains("<w:color w:val=\"FFFFFF\"/>"));
+    // The underscores at this specific blank are genuinely gone -- not
+    // hidden, deleted -- with the tag landing directly where they were.
+    // (The fixture has other same-length underscore runs elsewhere for
+    // unrelated fields, so this checks the exact position, not a
+    // document-wide substring search.)
+    assert!(edited_doc.body.text[blank_start..].starts_with("{{e.name}}"));
+    // The tag itself is underlined so it still reads as a filled-in
+    // blank -- immediately followed by the run's <w:t> (whatever
+    // attributes that tag happens to carry, e.g. xml:space).
+    assert!(raw_xml.contains(r#"<w:u w:val="single"/></w:rPr><w:t"#));
 }
 
 fn read_document_xml_from_docx(bytes: &[u8]) -> String {
