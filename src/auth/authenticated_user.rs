@@ -219,7 +219,7 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 /// matching rows, not something expected in practice but not a crash
 /// either.
 #[allow(clippy::type_complexity)]
-async fn query_session(
+pub(crate) async fn query_session(
     token_hash: &[u8],
     db: &PgPool,
 ) -> Result<
@@ -530,5 +530,54 @@ mod tests {
         let reverified_only = user_with_passkey_reverification(Some(deadline));
         assert!(reverified_only.is_passkey_reverified());
         assert!(!reverified_only.is_elevated());
+    }
+
+    /// Integration test for the exact gap that already caused a live
+    /// incident: `query_session` queried a `permission_keys` column that
+    /// no migration had actually added, caught only when a real login hit
+    /// it in production (see migration `resolve_session_returns_permission_keys`'s
+    /// own commit message). Nothing in this crate's fast, offline test
+    /// suite could have caught that -- every other test here (and
+    /// throughout this crate) runs against `test_support::empty_state()`'s
+    /// deliberately-unreachable pool, which fails on connection, never on
+    /// a bad query.
+    ///
+    /// Needs a real, reachable Postgres with every migration applied
+    /// (`DATABASE_URL` from `.env.local`) -- `#[ignore]`d so the fast
+    /// offline suite this crate otherwise is stays fast and offline. Run
+    /// explicitly with `cargo test -- --ignored query_session` after any
+    /// change to `resolve_session` or to what `query_session` selects
+    /// from it -- neither repo has CI yet to run this automatically, so
+    /// it depends on a human remembering to.
+    ///
+    /// A freshly generated token_hash matches no real session, so
+    /// `resolve_session`'s `UPDATE ... RETURNING` returns zero rows -- but
+    /// Postgres validates every column named in a query's SELECT/RETURNING
+    /// list at parse time regardless of whether any row ever matches, so a
+    /// query referencing a column that doesn't exist fails exactly the
+    /// same way here as it did in production. No session or user fixture
+    /// is needed at all.
+    #[tokio::test]
+    #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
+    async fn query_sessions_own_sql_is_valid_against_the_real_schema() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let db = crate::db::connect()
+            .expect("DATABASE_URL must be a well-formed connection string -- see .env.local");
+
+        let (_, token_hash) = crate::auth::generate_token();
+
+        let result = query_session(&token_hash, &db).await;
+
+        assert!(
+            result.is_ok(),
+            "query_session's SQL must be valid against the real, migrated schema -- got: {:?}",
+            result.err()
+        );
+        assert_eq!(
+            result.unwrap(),
+            None,
+            "a freshly generated token_hash must match no real session"
+        );
     }
 }
