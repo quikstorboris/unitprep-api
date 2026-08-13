@@ -46,3 +46,39 @@ pub async fn role_keys_for_user(
 
     Ok(keys.unwrap_or_default())
 }
+
+/// Counts active admins other than `excluded_user_id`, for a caller about
+/// to revoke/deactivate one and refuse doing so if it would zero out
+/// admins entirely.
+///
+/// Locks the `admin` role row itself before counting -- a `FOR UPDATE` on
+/// the count query alone is not enough. Two concurrent callers each
+/// acting on a *different* admin only ever lock (or don't lock) rows
+/// belonging to the *other* admin, so their row locks never conflict:
+/// both can see "one other admin remains" from their own still-isolated
+/// snapshot and both commit, leaving zero. Locking one row shared by both
+/// transactions -- the `admin` role itself -- is what actually forces the
+/// second caller to wait for the first to commit (or roll back) before it
+/// re-counts, so the check runs against up-to-date reality instead of two
+/// transactions' mutually-blind snapshots.
+pub async fn remaining_active_admins_excluding(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    excluded_user_id: Uuid,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query("SELECT id FROM auth.roles WHERE key = 'admin' FOR UPDATE")
+        .fetch_one(&mut **tx)
+        .await?;
+
+    sqlx::query_scalar(
+        "SELECT count(*) FROM auth.users u
+           JOIN auth.user_roles ur ON ur.user_id = u.id
+           JOIN auth.roles r ON r.id = ur.role_id
+          WHERE r.key = 'admin'
+            AND u.status = 'active'::auth.user_status
+            AND u.deleted_at IS NULL
+            AND u.id != $1",
+    )
+    .bind(excluded_user_id)
+    .fetch_one(&mut **tx)
+    .await
+}

@@ -36,7 +36,10 @@ use uuid::Uuid;
 
 use crate::api::auth_invites::CreateInviteResponse;
 use crate::api::{internal_error, ApiErrorBody, AppState};
-use crate::auth::{audit_log, begin_rls_transaction, generate_token, AuthenticatedUser};
+use crate::auth::{
+    audit_log, begin_rls_transaction, generate_token, remaining_active_admins_excluding,
+    AuthenticatedUser,
+};
 use crate::bootstrap::invite_hours;
 
 #[derive(Debug, Serialize)]
@@ -157,20 +160,7 @@ pub async fn deactivate_user(
     // one able to undo it (short of the bootstrap-admin CLI's break-glass
     // path).
     if target_is_admin && prior_status == "active" {
-        let remaining_admins: Result<i64, sqlx::Error> = sqlx::query_scalar(
-            "SELECT count(*) FROM auth.users u
-               JOIN auth.user_roles ur ON ur.user_id = u.id
-               JOIN auth.roles r ON r.id = ur.role_id
-              WHERE r.key = 'admin'
-                AND u.status = 'active'::auth.user_status
-                AND u.deleted_at IS NULL
-                AND u.id != $1",
-        )
-        .bind(target_user_id)
-        .fetch_one(&mut *tx)
-        .await;
-
-        match remaining_admins {
+        match remaining_active_admins_excluding(&mut tx, target_user_id).await {
             Ok(0) => {
                 if let Err(err) = tx.rollback().await {
                     tracing::error!(error = %err, "failed to roll back a last-admin deactivation");
