@@ -63,11 +63,7 @@ fn not_found() -> Response {
 }
 
 fn conflict(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
+    (StatusCode::CONFLICT, Json(ApiErrorBody { error, message })).into_response()
 }
 
 /// Confirms the target account exists and isn't soft-deleted -- same
@@ -178,13 +174,14 @@ pub async fn grant_role(
         );
     }
 
-    if let Err(err) =
-        sqlx::query("INSERT INTO auth.user_roles (user_id, role_id, granted_by) VALUES ($1, $2, $3)")
-            .bind(target_user_id)
-            .bind(role_id)
-            .bind(admin.user_id)
-            .execute(&mut *tx)
-            .await
+    if let Err(err) = sqlx::query(
+        "INSERT INTO auth.user_roles (user_id, role_id, granted_by) VALUES ($1, $2, $3)",
+    )
+    .bind(target_user_id)
+    .bind(role_id)
+    .bind(admin.user_id)
+    .execute(&mut *tx)
+    .await
     {
         tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "role grant insert failed");
         if let Err(err) = tx.rollback().await {
@@ -347,12 +344,11 @@ pub async fn revoke_role(
         }
     }
 
-    if let Err(err) =
-        sqlx::query("DELETE FROM auth.user_roles WHERE user_id = $1 AND role_id = $2")
-            .bind(target_user_id)
-            .bind(role_id)
-            .execute(&mut *tx)
-            .await
+    if let Err(err) = sqlx::query("DELETE FROM auth.user_roles WHERE user_id = $1 AND role_id = $2")
+        .bind(target_user_id)
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await
     {
         tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "role revoke delete failed");
         if let Err(err) = tx.rollback().await {

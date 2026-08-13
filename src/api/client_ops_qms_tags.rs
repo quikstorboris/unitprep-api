@@ -74,11 +74,7 @@ fn not_found(tag_key: &str) -> Response {
 }
 
 fn conflict(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
+    (StatusCode::CONFLICT, Json(ApiErrorBody { error, message })).into_response()
 }
 
 fn request_context(headers: &HeaderMap) -> Option<&str> {

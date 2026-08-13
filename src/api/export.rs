@@ -54,43 +54,44 @@ pub async fn export(
     // Read-only session access.
     // This shape is deliberately future-proof for PR3.
     //
-    let session_data =
-        match state
-            .unit_group_sessions
-            .with_owned_session(&request.session_id, user.user_id, |session| {
-                if let Err(err) = session.require_stage(WorkflowStage::Analyzed) {
-                    tracing::warn!(
-                        session_id = %request.session_id,
-                        required = ?err.required,
-                        current = ?err.current,
-                        "Export attempted before validation/analysis completed"
-                    );
+    let session_data = match state.unit_group_sessions.with_owned_session(
+        &request.session_id,
+        user.user_id,
+        |session| {
+            if let Err(err) = session.require_stage(WorkflowStage::Analyzed) {
+                tracing::warn!(
+                    session_id = %request.session_id,
+                    required = ?err.required,
+                    current = ?err.current,
+                    "Export attempted before validation/analysis completed"
+                );
 
-                    return Err(err);
-                }
-
-                let validation = session
-                    .data
-                    .validation
-                    .clone()
-                    .expect("Analyzed stage guarantees validation data");
-
-                let analysis = session
-                    .data
-                    .analysis
-                    .clone()
-                    .expect("Analyzed stage guarantees analysis data");
-
-                Ok((validation, analysis, session.data_generation()))
-            }) {
-            Some(Ok(data)) => data,
-            Some(Err(err)) => {
-                return stage_conflict(err);
+                return Err(err);
             }
-            None => {
-                return session_not_found();
-            }
-        };
+
+            let validation = session
+                .data
+                .validation
+                .clone()
+                .expect("Analyzed stage guarantees validation data");
+
+            let analysis = session
+                .data
+                .analysis
+                .clone()
+                .expect("Analyzed stage guarantees analysis data");
+
+            Ok((validation, analysis, session.data_generation()))
+        },
+    ) {
+        Some(Ok(data)) => data,
+        Some(Err(err)) => {
+            return stage_conflict(err);
+        }
+        None => {
+            return session_not_found();
+        }
+    };
 
     let (validation, analysis, read_generation) = session_data;
 
@@ -168,9 +169,10 @@ pub async fn export(
     //
     // Tiny mutation scope.
     //
-    match state
-        .unit_group_sessions
-        .with_owned_session_mut(&request.session_id, user.user_id, |session| {
+    match state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             // Same TOCTOU concern as analyze.rs: a correction landing in
             // this gap already downgraded `workflow` back to `Validated`
             // as its own safety net — unconditionally calling
@@ -183,7 +185,8 @@ pub async fn export(
             } else {
                 false
             }
-        }) {
+        },
+    ) {
         Some(true) => {}
 
         Some(false) => {

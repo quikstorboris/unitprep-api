@@ -190,9 +190,10 @@ pub async fn analyze(
     // not each deep-clone the batch's facilities/groups/issues.
     let results = Arc::new(results);
 
-    match state
-        .unit_group_sessions
-        .with_owned_session_mut(&request.session_id, user.user_id, |session| {
+    match state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             // A correction/exemption/exclusion/acknowledgment landing in
             // the gap between the read above and this write-back already
             // downgraded `workflow` back to `Validated` as its own safety
@@ -207,7 +208,8 @@ pub async fn analyze(
             } else {
                 false
             }
-        }) {
+        },
+    ) {
         Some(true) => {}
 
         Some(false) => {

@@ -180,11 +180,11 @@ pub async fn report(
     user: AuthenticatedUser,
     Json(request): Json<DedupSessionRequest>,
 ) -> Response {
-    match state.dedup_sessions.with_owned_session(
-        &request.session_id,
-        user.user_id,
-        |session| (session.report.clone(), session.records.clone()),
-    ) {
+    match state
+        .dedup_sessions
+        .with_owned_session(&request.session_id, user.user_id, |session| {
+            (session.report.clone(), session.records.clone())
+        }) {
         Some((report, records)) => Json(build_report_view(&report, &records)).into_response(),
         None => session_not_found(),
     }

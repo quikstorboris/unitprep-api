@@ -39,8 +39,9 @@ pub async fn list_roles(State(state): State<AppState>, user: AuthenticatedUser) 
     };
 
     #[allow(clippy::type_complexity)]
-    let rows: Result<Vec<(String, String, Option<String>, bool, Vec<String>)>, sqlx::Error> = sqlx::query_as(
-        "SELECT r.key, r.label, r.description, r.is_system,
+    let rows: Result<Vec<(String, String, Option<String>, bool, Vec<String>)>, sqlx::Error> =
+        sqlx::query_as(
+            "SELECT r.key, r.label, r.description, r.is_system,
                 COALESCE(
                     array_agg(rp.permission_key ORDER BY rp.permission_key)
                         FILTER (WHERE rp.permission_key IS NOT NULL),
@@ -50,9 +51,9 @@ pub async fn list_roles(State(state): State<AppState>, user: AuthenticatedUser) 
            LEFT JOIN auth.role_permissions rp ON rp.role_id = r.id
           GROUP BY r.id, r.key, r.label, r.description, r.is_system
           ORDER BY r.key",
-    )
-    .fetch_all(&mut *tx)
-    .await;
+        )
+        .fetch_all(&mut *tx)
+        .await;
 
     let rows = match rows {
         Ok(rows) => rows,
