@@ -111,6 +111,7 @@ async fn analyze_returns_404_for_a_session_belonging_to_a_different_user() {
         token_hash: vec![0u8; 32],
         elevated_until: None,
         requires_step_up: false,
+        passkey_reverified_until: None,
     };
 
     let response = analyze(

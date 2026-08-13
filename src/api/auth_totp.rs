@@ -160,6 +160,23 @@ fn locked_out() -> Response {
         .into_response()
 }
 
+/// Self-service TOTP *re*-enrolment (an account that already has a
+/// confirmed factor) requires a fresh passkey re-verification first --
+/// see auth_passkey_reverify.rs's module docs for why. First-time
+/// enrolment (no confirmed factor yet) is never gated by this: there is
+/// nothing yet for a hijacked session to be replacing, and first-time
+/// setup happens at admin-driven onboarding, not self-service.
+fn passkey_reverification_required() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(ApiErrorBody {
+            error: "passkey_reverification_required",
+            message: "Verify your passkey before replacing your authenticator app.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
 pub async fn enroll_begin(
     State(state): State<AppState>,
     user: AuthenticatedUser,
@@ -167,6 +184,17 @@ pub async fn enroll_begin(
 ) -> Response {
     if !totp_configured() {
         return not_configured();
+    }
+
+    match load_own_confirmed_secret(&state, user.user_id).await {
+        Ok(Some(_)) if !user.is_passkey_reverified() => {
+            return passkey_reverification_required();
+        }
+        Ok(_) => {}
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to check for an existing confirmed TOTP secret");
+            return internal_error("Could not start TOTP enrolment");
+        }
     }
 
     let user_agent = headers
@@ -253,6 +281,16 @@ pub async fn enroll_confirm(
         }
     };
 
+    // Same lockout enforced here as on step_up -- previously this branch
+    // read the pending secret's lock state but never checked it, so an
+    // authenticated caller (or a session hijacked before step-up) could
+    // submit unlimited guesses against a just-generated candidate secret
+    // during enrolment with no rate limit at all.
+    if loaded.is_locked {
+        tracing::warn!(user_id = %user.user_id, "TOTP enrolment confirmation refused: locked out");
+        return locked_out();
+    }
+
     // No prior accepted step for a secret that has never been confirmed --
     // there is nothing yet for this code to replay against.
     let matched_step = match verify_code(
@@ -273,6 +311,23 @@ pub async fn enroll_confirm(
     };
 
     let Some(matched_step) = matched_step else {
+        // Same counter step_up's wrong-code branch uses -- shared per
+        // user_id, not per pending-vs-confirmed state (confirm_own_secret
+        // already resets it on success either way).
+        let attempts: Result<i32, sqlx::Error> =
+            sqlx::query_scalar("SELECT auth.record_totp_failure($1)")
+                .bind(user.user_id)
+                .fetch_one(&state.db)
+                .await;
+
+        let failed_attempts = match attempts {
+            Ok(count) => Some(count),
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, "failed to record a TOTP failure during enrolment");
+                None
+            }
+        };
+
         tracing::warn!(user_id = %user.user_id, "TOTP enrolment confirmation rejected");
         audit_log::record(
             &state.db,
@@ -281,7 +336,7 @@ pub async fn enroll_confirm(
             user_agent,
             None,
             audit_log::Change::none(),
-            serde_json::json!({ "reason": "code_rejected" }),
+            serde_json::json!({ "reason": "code_rejected", "failed_attempts": failed_attempts }),
         )
         .await;
         return wrong_code();
@@ -471,6 +526,7 @@ fn unauthorized_session_gone() -> Response {
 struct LoadedSecret {
     secret_encrypted: Vec<u8>,
     email: String,
+    is_locked: bool,
 }
 
 /// Reads the caller's own email under their own identity.
@@ -499,8 +555,9 @@ async fn load_own_secret(
 ) -> Result<Option<LoadedSecret>, sqlx::Error> {
     let mut tx = begin_owner_rls_transaction(&state.db, user_id).await?;
 
-    let row: Option<(Vec<u8>, String)> = sqlx::query_as(
-        "SELECT t.pending_secret_encrypted, u.email::text
+    let row: Option<(Vec<u8>, String, bool)> = sqlx::query_as(
+        "SELECT t.pending_secret_encrypted, u.email::text,
+                (t.locked_until IS NOT NULL AND t.locked_until > now())
            FROM auth.totp_credentials t
            JOIN auth.users u ON u.id = t.user_id
           WHERE t.user_id = $1 AND t.pending_secret_encrypted IS NOT NULL",
@@ -511,10 +568,13 @@ async fn load_own_secret(
 
     tx.commit().await?;
 
-    Ok(row.map(|(secret_encrypted, email)| LoadedSecret {
-        secret_encrypted,
-        email,
-    }))
+    Ok(
+        row.map(|(secret_encrypted, email, is_locked)| LoadedSecret {
+            secret_encrypted,
+            email,
+            is_locked,
+        }),
+    )
 }
 
 struct LoadedConfirmedSecret {
@@ -657,6 +717,7 @@ mod tests {
                 token_hash: vec![0u8; 32],
                 elevated_until: None,
                 requires_step_up: false,
+                passkey_reverified_until: None,
             },
             HeaderMap::new(),
             Json(TotpCodeRequest {
@@ -693,6 +754,7 @@ mod tests {
                 token_hash: vec![0u8; 32],
                 elevated_until: None,
                 requires_step_up: false,
+                passkey_reverified_until: None,
             },
             HeaderMap::new(),
         )

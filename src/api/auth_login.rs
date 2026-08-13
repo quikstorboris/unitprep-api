@@ -586,7 +586,7 @@ async fn assess_login_risk(
 /// Reads a user's credentials under their own identity. Safe to scope this
 /// way because `user_id` comes from server-side ceremony state, never from
 /// the request.
-async fn load_credentials_for_user(
+pub(crate) async fn load_credentials_for_user(
     state: &AppState,
     user_id: Uuid,
 ) -> Result<Vec<StoredCredential>, sqlx::Error> {
@@ -614,7 +614,7 @@ async fn load_credentials_for_user(
 /// last-used stamp. Scoped by `credential_id` as well as `user_id` so a
 /// backend that somehow reported a credential belonging to someone else
 /// updates nothing rather than the wrong row.
-async fn persist_credential_use(
+pub(crate) async fn persist_credential_use(
     state: &AppState,
     user_id: Uuid,
     outcome: &crate::auth::AuthenticationOutcome,

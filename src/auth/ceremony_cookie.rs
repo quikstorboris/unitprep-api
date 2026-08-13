@@ -13,6 +13,13 @@ pub const REGISTRATION_CEREMONY_COOKIE: &str = "unitprep_reg_ceremony";
 /// overwrite the first ceremony's id, stranding it until it expired.
 pub const LOGIN_CEREMONY_COOKIE: &str = "unitprep_login_ceremony";
 
+/// Carries an in-progress *passkey re-verification* ceremony's id -- the
+/// mid-session, prove-you-still-hold-your-passkey check that gates
+/// self-service TOTP re-enrolment. A distinct name from the other two for
+/// the same reason they are distinct from each other: this can legitimately
+/// run alongside a login or registration ceremony in a different tab.
+pub const REVERIFY_CEREMONY_COOKIE: &str = "unitprep_reverify_ceremony";
+
 /// Same Secure-attribute policy as the real session cookie (see
 /// session_cookie.rs) -- reads the same env var so local HTTP-only dev
 /// doesn't need a second toggle for what is, from a transport-security

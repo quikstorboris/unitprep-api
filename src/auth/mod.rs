@@ -15,13 +15,13 @@ pub use authenticated_user::{
     begin_owner_rls_transaction, begin_rls_transaction, step_up_required, try_authenticated_user,
     AuthenticatedUser,
 };
-pub use roles::{remaining_active_admins_excluding, resolve_role_id, role_keys_for_user};
 pub use authentication_ceremony::AuthenticationCeremony;
 pub use ceremony_cookie::{
     clear_ceremony_cookie, issue_ceremony_cookie, read_ceremony_cookie, LOGIN_CEREMONY_COOKIE,
-    REGISTRATION_CEREMONY_COOKIE,
+    REGISTRATION_CEREMONY_COOKIE, REVERIFY_CEREMONY_COOKIE,
 };
 pub use registration_ceremony::RegistrationCeremony;
+pub use roles::{remaining_active_admins_excluding, resolve_role_id, role_keys_for_user};
 // SESSION_COOKIE_NAME is deliberately NOT re-exported. Nothing outside
 // session_cookie.rs needs the raw name -- issue/read/clear all take and
 // return jars, which is the point of having them -- and re-exporting it left

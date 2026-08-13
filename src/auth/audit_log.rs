@@ -120,6 +120,18 @@ pub mod event {
     /// regardless of which action prompted it.
     pub const TOTP_STEP_UP_FAILED: &str = "totp_step_up_failed";
 
+    /// An already-signed-in caller proved a fresh passkey assertion,
+    /// elevating their own session for a short window
+    /// (auth.record_passkey_reverify) so a sensitive action (replacing
+    /// TOTP) can proceed. The passkey-based mirror of
+    /// `TOTP_STEP_UP_SUCCEEDED` -- each factor step-up-gates changes to
+    /// the *other* factor, so a hijacked session cannot silently replace
+    /// both using only itself.
+    pub const PASSKEY_REVERIFY_SUCCEEDED: &str = "passkey_reverify_succeeded";
+
+    /// A passkey re-verification assertion failed or was abandoned.
+    pub const PASSKEY_REVERIFY_FAILED: &str = "passkey_reverify_failed";
+
     /// A successful login came from an IP address or user_agent never seen
     /// before for an account that has prior session history (Phase II
     /// anomaly signal, see auth_login.rs's `assess_login_risk`). Recorded

@@ -53,11 +53,27 @@ pub struct AuthenticatedUser {
     /// against. While true, the extractor below refuses every route except
     /// the handful needed to clear it; see `STEP_UP_ALLOWED_PATHS`.
     pub requires_step_up: bool,
+
+    /// None if this session has never completed a passkey re-verification,
+    /// or if a past one has expired -- both mean "not currently
+    /// re-verified" to every caller, same shape as `elevated_until`. A
+    /// separate column/field from `elevated_until`, not a reuse of it: the
+    /// two answer different questions (proved a TOTP code vs. proved a
+    /// passkey assertion) -- see `is_passkey_reverified` and
+    /// `auth.record_passkey_reverify`.
+    pub passkey_reverified_until: Option<DateTime<Utc>>,
 }
 
 impl AuthenticatedUser {
     pub fn is_elevated(&self) -> bool {
         self.elevated_until.is_some_and(|until| until > Utc::now())
+    }
+
+    /// Mirrors `is_elevated`, for the passkey-based step-up that gates
+    /// self-service TOTP re-enrolment (see auth_passkey_reverify.rs).
+    pub fn is_passkey_reverified(&self) -> bool {
+        self.passkey_reverified_until
+            .is_some_and(|until| until > Utc::now())
     }
 
     pub fn has_permission(&self, permission_key: &str) -> bool {
@@ -163,7 +179,14 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             internal_error()
         })?;
 
-        let Some((user_id, role_keys, permission_keys, elevated_until, requires_step_up)) = row
+        let Some((
+            user_id,
+            role_keys,
+            permission_keys,
+            elevated_until,
+            requires_step_up,
+            passkey_reverified_until,
+        )) = row
         else {
             record_expired_access_attempt(state, &token_hash, parts).await;
             return Err(unauthorized());
@@ -183,6 +206,7 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             token_hash,
             elevated_until,
             requires_step_up,
+            passkey_reverified_until,
         })
     }
 }
@@ -205,12 +229,13 @@ async fn query_session(
         Option<Vec<String>>,
         Option<DateTime<Utc>>,
         bool,
+        Option<DateTime<Utc>>,
     )>,
     sqlx::Error,
 > {
     sqlx::query_as(
-        "SELECT user_id, role_keys, permission_keys, elevated_until, requires_step_up \
-         FROM auth.resolve_session($1, $2)",
+        "SELECT user_id, role_keys, permission_keys, elevated_until, requires_step_up, \
+         passkey_reverified_until FROM auth.resolve_session($1, $2)",
     )
     .bind(token_hash)
     .bind(session_idle_timeout_minutes())
@@ -285,8 +310,14 @@ pub async fn try_authenticated_user(
 ) -> Option<AuthenticatedUser> {
     let raw_token = read_session_cookie(jar)?;
     let token_hash = hash_token(&raw_token);
-    let (user_id, role_keys, permission_keys, elevated_until, requires_step_up) =
-        query_session(&token_hash, &state.db).await.ok()??;
+    let (
+        user_id,
+        role_keys,
+        permission_keys,
+        elevated_until,
+        requires_step_up,
+        passkey_reverified_until,
+    ) = query_session(&token_hash, &state.db).await.ok()??;
 
     if requires_step_up {
         return None;
@@ -299,6 +330,7 @@ pub async fn try_authenticated_user(
         token_hash,
         elevated_until,
         requires_step_up,
+        passkey_reverified_until,
     })
 }
 
@@ -428,6 +460,16 @@ mod tests {
             token_hash: vec![0u8; 32],
             elevated_until,
             requires_step_up: false,
+            passkey_reverified_until: None,
+        }
+    }
+
+    fn user_with_passkey_reverification(
+        passkey_reverified_until: Option<DateTime<Utc>>,
+    ) -> AuthenticatedUser {
+        AuthenticatedUser {
+            passkey_reverified_until,
+            ..user_with_elevation(None)
         }
     }
 
@@ -454,5 +496,39 @@ mod tests {
         user.permission_keys.insert("users.manage".to_string());
         assert!(user.has_permission("users.manage"));
         assert!(!user.has_permission("client_ops.perform"));
+    }
+
+    #[test]
+    fn never_reverified_is_not_passkey_reverified() {
+        assert!(!user_with_passkey_reverification(None).is_passkey_reverified());
+    }
+
+    #[test]
+    fn a_future_reverification_deadline_is_passkey_reverified() {
+        let deadline = Utc::now() + chrono::Duration::minutes(5);
+        assert!(user_with_passkey_reverification(Some(deadline)).is_passkey_reverified());
+    }
+
+    #[test]
+    fn a_past_reverification_deadline_is_not_passkey_reverified() {
+        let deadline = Utc::now() - chrono::Duration::seconds(1);
+        assert!(!user_with_passkey_reverification(Some(deadline)).is_passkey_reverified());
+    }
+
+    /// The two step-up mechanisms are independent -- proving a TOTP code
+    /// must not somehow also count as having proved a passkey, or vice
+    /// versa (that would defeat the reason there are two separate columns
+    /// at all: each protects changes to the *other* factor).
+    #[test]
+    fn elevation_and_passkey_reverification_do_not_imply_each_other() {
+        let deadline = Utc::now() + chrono::Duration::minutes(5);
+
+        let elevated_only = user_with_elevation(Some(deadline));
+        assert!(elevated_only.is_elevated());
+        assert!(!elevated_only.is_passkey_reverified());
+
+        let reverified_only = user_with_passkey_reverification(Some(deadline));
+        assert!(reverified_only.is_passkey_reverified());
+        assert!(!reverified_only.is_elevated());
     }
 }

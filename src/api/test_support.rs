@@ -105,6 +105,7 @@ pub fn test_user() -> AuthenticatedUser {
         token_hash: vec![0u8; 32],
         elevated_until: None,
         requires_step_up: false,
+        passkey_reverified_until: None,
     }
 }
 
@@ -135,6 +136,7 @@ pub fn admin_user() -> AuthenticatedUser {
         token_hash: vec![0u8; 32],
         elevated_until: None,
         requires_step_up: false,
+        passkey_reverified_until: None,
     }
 }
 
@@ -156,6 +158,7 @@ pub fn onboarding_manager_user() -> AuthenticatedUser {
         token_hash: vec![0u8; 32],
         elevated_until: None,
         requires_step_up: false,
+        passkey_reverified_until: None,
     }
 }
 
@@ -179,6 +182,7 @@ pub fn department_manager_user() -> AuthenticatedUser {
         token_hash: vec![0u8; 32],
         elevated_until: None,
         requires_step_up: false,
+        passkey_reverified_until: None,
     }
 }
 
