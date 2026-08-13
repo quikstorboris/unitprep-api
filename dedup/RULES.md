@@ -39,16 +39,43 @@ name) to decide which category leads the note when more than one
 differs — but *every* differing category gets described in the note
 now (see rule 6), not just the lead one.
 
-**Special case**: if the *only* difference is that every unit has a
-non-blank email and all of them are mutually distinct (no format/`@`
-validation — just present and different), the note says "these may be
-separate tenants" instead of "please fix this" — a shared name with
-genuinely different emails is a real thing (two different people, same
-name) and shouldn't be presented as an error.
+**Special case**: the note says "these may be separate tenants"
+instead of "please fix this" only when Email **and** Address are the
+*only two* differing categories, and each is non-blank and mutually
+distinct across every unit. Both conditions are required — a shared
+name with a genuinely different email *and* a genuinely different
+home address looks like two different people who happen to share a
+name, not one person with a typo. **Email differing alone is not
+enough**: since a category only appears as "differing" when it
+actually differs, "Email is the only entry" by itself would mean every
+other field — including address — already *matches*, which is exactly
+the same-person-typo'd-their-email case, not the separate-tenants one.
+This was a real, shipped bug (fixed 2026-08-10, caught on real client
+data): the old condition checked only "Email differs and all emails
+distinct," which could only ever fire in the same-person case,
+never the separate-tenants case it claimed to detect.
+
+**Corroborating case**: conversely, when Email is the *only* differing
+category and the address *and* phone are both present and identical
+across every unit, the note explicitly names this as likely one person
+with a mistyped email, rather than leaving the reader to notice the
+matching address/phone unassisted.
 
 **Implements**: `comparison.rs` (`find_differing_categories`,
 `contact_info_matches`), `types/fields.rs` (`FieldCategory`,
-`FIELD_SPECS`, `CATEGORY_PRIORITY`), `report.rs` (`flag_groups`).
+`FIELD_SPECS`, `CATEGORY_PRIORITY`), `report.rs` (`flag_groups`),
+`note_composer.rs` (`compose_group_note`), `phrasing.rs`
+(`all_addresses_present_and_distinct`, `address_present_and_shared`,
+`phone_present_and_shared`).
+
+**Excluded fields**: `PhoneNumberPrefix`/`AlternateContactPhoneNumberPrefix`
+are not compared at all (same treatment as `Gender`/`DateOfBirth` —
+absent from `FieldName` entirely, not merely never differing). Legacy
+QSX never exposed the prefix field to users, so any difference there
+is migration noise, not a correctable discrepancy — matches the
+reference skill's own current stance. The raw values still round-trip
+in the CSV/XLSX export (`dedup_export_plan.rs`'s `COLUMNS`); only the
+comparison-taxonomy layer excludes them.
 
 ## 3. Typo/name-variant detection
 
@@ -100,6 +127,22 @@ Four signals, each independent:
 **Guardrails, deliberately conservative**:
 - A blank value never counts as "shared" — two tenants both having an
   empty phone field is not a match.
+- A placeholder value someone typed as a stand-in for "not applicable"
+  instead of leaving the field blank (`n/a`, `na`, `none`, `tbd`,
+  `unknown`, `n.a.`, `not applicable`, `null`, `nil`, `xxx`) never
+  counts as shared either, checked against the raw trimmed+lowercased
+  value before any field-kind-specific normalization runs. Added
+  2026-08-10 after the literal string `"None"` in
+  `AlternateContactLastName` connected four otherwise-unrelated tenants
+  in real client data.
+- A phone value with fewer than 10 digits after normalization never
+  counts as a shared phone — a shorter value is a truncated fragment
+  (an area-code stub, a partial paste), not a real number. Added
+  2026-08-10 after a 3-digit `AlternateContactPhoneNumber` fragment
+  (`"978"`) connected an unrelated tenant to the facility's own account
+  in real client data. Scoped to this signal only — a short/garbage
+  phone *difference between two units of the same tenant* is still a
+  real mismatch under rule 2's blank-vs-filled-always-differs policy.
 - A value connecting **more than 3 distinct tenants** is excluded
   entirely (`MAX_CLUSTER_SIZE`) — a value that popular is far more
   likely a shared office number or a generic mailing address than a
@@ -112,6 +155,31 @@ Four signals, each independent:
   this crate (`normalization.rs`) — no second, independently-drifting
   comparison logic.
 
+**Households, not one row per signal** (added 2026-08-10): every
+(signal, value) cluster that passes the guardrails above is merged
+into a *household* by transitive closure — two clusters that share
+even one tenant belong to the same household, regardless of which
+signal connected them. This is what turns e.g. a spousal pair matching
+on phone, email, *and* alternate contact into one candidate naming
+them once with three pieces of evidence, instead of three separate
+rows each repeating the same two names; it's also what connects a
+three-tenant chain (A shares a phone with B, B shares an email with C,
+A and C share nothing directly) into one household instead of two
+disjoint pairs a reader would have to notice are related themselves.
+A household capped at more than `MAX_HOUSEHOLD_SIZE` (8) members is
+excluded entirely — deliberately more generous than `MAX_CLUSTER_SIZE`
+since each piece of evidence is already individually filtered, this
+guards only against a pathological chain of individually-small,
+individually-unremarkable clusters accreting into one implausibly
+large "family."
+
+The composed note reflects this: a household with exactly one piece of
+evidence keeps the original single-signal wording; a household with
+more than one groups evidence by which specific members it connects
+first (so multiple signals shared by the *same* pair combine into one
+clause), then joins distinct-subset clauses with "; " and a single
+shared closing sentence — never repeating "A and B" once per signal.
+
 **Explicitly rejected as a trigger**: bare unit-number adjacency (e.g.
 81F/81G/81H). Real-world signal, observed at least once, but far too
 weak *on its own* — it doesn't require any of the four signals above,
@@ -119,8 +187,10 @@ so it was deliberately not implemented as a standalone check. If a
 future finding happens to also be in adjacent units, that's noted as
 supporting context in a human summary, never as its own trigger.
 
-**Implements**: `relatedness.rs` (`find_related_tenant_candidates`),
-`report.rs` (wired in alongside rule 3).
+**Implements**: `relatedness.rs` (`find_related_tenant_candidates`,
+`RelatedTenantEvidence`), `note_composer.rs`
+(`compose_relatedness_note`, `RelatednessEvidenceInput`), `report.rs`
+(wired in alongside rule 3).
 
 ## Normalization rules (used by rules 2 and 4)
 
