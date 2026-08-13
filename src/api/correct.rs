@@ -51,7 +51,7 @@ enum CorrectNotReady {
 /// the original parsed data.
 pub async fn correct(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<CorrectRequest>,
 ) -> Response {
     let key = CorrectionKey {
@@ -60,9 +60,10 @@ pub async fn correct(
         field: request.field.to_lowercase(),
     };
 
-    let response = state
-        .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+    let response = state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             let occurrences =
                 session.unit_number_occurrences(&request.file_name, &request.unit_number);
 
@@ -100,7 +101,8 @@ pub async fn correct(
             );
 
             run_validation(session, &request.session_id).map_err(CorrectNotReady::Stage)
-        });
+        },
+    );
 
     match response {
         Some(Ok(response)) => Json(response).into_response(),

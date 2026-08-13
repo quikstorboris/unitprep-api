@@ -33,14 +33,15 @@ use crate::auth::AuthenticatedUser;
 
 pub async fn discover(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<DiscoverRequest>,
 ) -> Response {
     let started = Instant::now();
 
-    let response = state
-        .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+    let response = state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             let response = compute_discovery(session);
 
             tracing::info!(
@@ -59,7 +60,8 @@ pub async fn discover(
             );
 
             response
-        });
+        },
+    );
 
     match response {
         Some(response) => Json(response).into_response(),

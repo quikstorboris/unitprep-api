@@ -45,7 +45,7 @@ pub struct ExportRequest {
 
 pub async fn export(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<ExportRequest>,
 ) -> Response {
     let started = Instant::now();
@@ -57,7 +57,7 @@ pub async fn export(
     let session_data =
         match state
             .unit_group_sessions
-            .with_session(&request.session_id, |session| {
+            .with_owned_session(&request.session_id, user.user_id, |session| {
                 if let Err(err) = session.require_stage(WorkflowStage::Analyzed) {
                     tracing::warn!(
                         session_id = %request.session_id,
@@ -170,7 +170,7 @@ pub async fn export(
     //
     match state
         .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+        .with_owned_session_mut(&request.session_id, user.user_id, |session| {
             // Same TOCTOU concern as analyze.rs: a correction landing in
             // this gap already downgraded `workflow` back to `Validated`
             // as its own safety net — unconditionally calling

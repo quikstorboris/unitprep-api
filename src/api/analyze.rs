@@ -48,17 +48,20 @@ pub struct AnalyzeResponse {
 
 pub async fn analyze(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<AnalyzeRequest>,
 ) -> Response {
     let started = Instant::now();
 
-    // `with_session`'s own `None` means the session itself doesn't exist
-    // (expired or invalid id) — distinct from the closure returning
-    // `Err`, which means the session exists but isn't ready for a
-    // business-logic reason (wrong stage, or ambiguous group file).
-    let analysis_inputs = match state.unit_group_sessions.with_session(
+    // `with_owned_session`'s own `None` means the session itself doesn't
+    // exist, is cancelled, or belongs to a different owner (indistinguishable
+    // on purpose, see core::session_store) — distinct from the closure
+    // returning `Err`, which means the session exists and is this caller's
+    // but isn't ready for a business-logic reason (wrong stage, or
+    // ambiguous group file).
+    let analysis_inputs = match state.unit_group_sessions.with_owned_session(
         &request.session_id,
+        user.user_id,
         |session| {
             if let Err(err) = session.require_stage(WorkflowStage::Validated) {
                 tracing::warn!(
@@ -189,7 +192,7 @@ pub async fn analyze(
 
     match state
         .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+        .with_owned_session_mut(&request.session_id, user.user_id, |session| {
             // A correction/exemption/exclusion/acknowledgment landing in
             // the gap between the read above and this write-back already
             // downgraded `workflow` back to `Validated` as its own safety

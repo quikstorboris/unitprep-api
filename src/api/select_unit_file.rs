@@ -34,12 +34,13 @@ enum SelectNotReady {
 
 pub async fn select_unit_file(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<SelectUnitFileRequest>,
 ) -> Response {
-    let result = state
-        .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+    let result = state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
                 tracing::warn!(
                     session_id = %request.session_id,
@@ -108,7 +109,8 @@ pub async fn select_unit_file(
             );
 
             Ok(compute_discovery(session))
-        });
+        },
+    );
 
     match result {
         Some(Ok(response)) => Json(response).into_response(),

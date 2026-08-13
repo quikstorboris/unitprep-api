@@ -355,14 +355,15 @@ pub async fn check(
 /// refresh, without re-uploading the file.
 pub async fn report(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<TaggerSessionRequest>,
 ) -> Response {
-    let session_data = state
-        .tagger_sessions
-        .with_session(&request.session_id, |session| {
-            (session.original_bytes.clone(), session.candidates.clone())
-        });
+    let session_data =
+        state
+            .tagger_sessions
+            .with_owned_session(&request.session_id, user.user_id, |session| {
+                (session.original_bytes.clone(), session.candidates.clone())
+            });
 
     let (original_bytes, candidates) = match session_data {
         Some(data) => data,
@@ -458,15 +459,16 @@ pub async fn apply(
 ) -> Response {
     let started = Instant::now();
 
-    let session_data = state
-        .tagger_sessions
-        .with_session(&request.session_id, |session| {
-            (
-                session.original_bytes.clone(),
-                session.original_file_name.clone(),
-                session.candidates.clone(),
-            )
-        });
+    let session_data =
+        state
+            .tagger_sessions
+            .with_owned_session(&request.session_id, user.user_id, |session| {
+                (
+                    session.original_bytes.clone(),
+                    session.original_file_name.clone(),
+                    session.candidates.clone(),
+                )
+            });
 
     let (original_bytes, original_file_name, candidates) = match session_data {
         Some(data) => data,

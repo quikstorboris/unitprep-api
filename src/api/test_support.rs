@@ -77,6 +77,20 @@ pub(crate) fn test_auth_backend() -> std::sync::Arc<dyn crate::auth::AuthBackend
     )
 }
 
+/// Fixed, obviously-fake caller id shared by `test_user()` and every
+/// session-building fixture below (`uploaded_state`, `validated_state`,
+/// `dedup_state_with_report`, etc.) -- so a test that builds a session
+/// with one of those fixtures and then calls a handler with `test_user()`
+/// gets a caller that already owns the session it built, matching the
+/// overwhelmingly common case, without every one of those call sites
+/// needing to thread a shared id through by hand. A test that
+/// specifically wants a session belonging to someone else constructs its
+/// own mismatched id instead (see `with_owned_session`'s IDOR regression
+/// tests).
+pub fn test_user_id() -> uuid::Uuid {
+    uuid::Uuid::from_u128(1)
+}
+
 /// A stand-in authenticated caller for tool-route tests, now that every
 /// tool endpoint requires a valid session. Role/permissions don't matter
 /// here -- tool routes only require *authentication*, not any particular
@@ -85,7 +99,7 @@ pub(crate) fn test_auth_backend() -> std::sync::Arc<dyn crate::auth::AuthBackend
 /// reason).
 pub fn test_user() -> AuthenticatedUser {
     AuthenticatedUser {
-        user_id: uuid::Uuid::new_v4(),
+        user_id: test_user_id(),
         role_keys: Vec::new(),
         permission_keys: HashSet::new(),
         token_hash: vec![0u8; 32],
@@ -204,7 +218,7 @@ pub fn unit_document(file_name: &str, rows: Vec<[&str; 4]>) -> CsvDocument {
 /// `/discover` itself needs (it classifies documents on the fly, so
 /// requires no particular stage going in).
 pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
-    let mut session = Session::new(session_id.to_string(), None);
+    let mut session = Session::new(session_id.to_string(), Some(test_user_id()));
 
     session.data.documents = Arc::new(documents);
 
@@ -228,7 +242,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
 /// success-path test needs: a session with nothing blocking export at
 /// all, unlike `analyzed_state_with_errors` above.
 pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
-    let mut session = Session::new(session_id.to_string(), None);
+    let mut session = Session::new(session_id.to_string(), Some(test_user_id()));
 
     let unit_file_names: Vec<String> = documents.iter().map(|d| d.file_name.clone()).collect();
 
@@ -297,7 +311,7 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
 /// files — the minimum stage `/validate`, `/correct`, and
 /// `/exempt-dimensions` need.
 pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
-    let mut session = Session::new(session_id.to_string(), None);
+    let mut session = Session::new(session_id.to_string(), Some(test_user_id()));
 
     let unit_file_names: Vec<String> = documents.iter().map(|d| d.file_name.clone()).collect();
 
@@ -345,7 +359,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
 /// `/analyze` needs to actually run instead of hitting its own
 /// not-ready gate.
 pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
-    let mut session = Session::new(session_id.to_string(), None);
+    let mut session = Session::new(session_id.to_string(), Some(test_user_id()));
 
     let unit_file_names: Vec<String> = documents.iter().map(|d| d.file_name.clone()).collect();
 
@@ -404,7 +418,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
 /// "blocked by unresolved errors" tests need: a session that's
 /// legitimately blocked, not just missing.
 pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>) -> AppState {
-    let mut session = Session::new(session_id.to_string(), None);
+    let mut session = Session::new(session_id.to_string(), Some(test_user_id()));
 
     let unit_file_names: Vec<String> = documents.iter().map(|d| d.file_name.clone()).collect();
 

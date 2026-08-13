@@ -48,7 +48,7 @@ async fn select_unit_file_returns_409_before_discovery_completes() {
         .unit_group_sessions
         .save(crate::application::unit_group_session::Session::new(
             "s1".to_string(),
-            None,
+            Some(crate::api::test_support::test_user_id()),
         ));
 
     let response = select_unit_file(

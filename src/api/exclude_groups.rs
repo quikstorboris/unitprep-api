@@ -26,12 +26,13 @@ pub struct ExcludeGroupsRequest {
 /// Runs validation once at the end, not once per group.
 pub async fn exclude_groups(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<ExcludeGroupsRequest>,
 ) -> Response {
-    let response = state
-        .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+    let response = state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             for group_name in &request.group_names {
                 if request.excluded {
                     session.exclude_group(group_name.clone());
@@ -48,7 +49,8 @@ pub async fn exclude_groups(
             );
 
             run_validation(session, &request.session_id)
-        });
+        },
+    );
 
     respond(response)
 }

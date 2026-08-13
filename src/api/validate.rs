@@ -190,14 +190,14 @@ pub fn run_validation(
 
 pub async fn validate(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<ValidateRequest>,
 ) -> Response {
-    let response = state
-        .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
-            run_validation(session, &request.session_id)
-        });
+    let response = state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| run_validation(session, &request.session_id),
+    );
 
     match response {
         Some(Ok(response)) => Json(response).into_response(),

@@ -153,10 +153,10 @@ pub async fn check(
 
     let (report, records) = state
         .dedup_sessions
-        .with_session(&session_id, |session| {
+        .with_owned_session(&session_id, user.user_id, |session| {
             (session.report.clone(), session.records.clone())
         })
-        .expect("session was just created and saved");
+        .expect("session was just created and saved with this same owner_id");
 
     tracing::info!(
         session_id = %session_id,
@@ -177,14 +177,14 @@ pub async fn check(
 /// without re-uploading the file.
 pub async fn report(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<DedupSessionRequest>,
 ) -> Response {
-    match state
-        .dedup_sessions
-        .with_session(&request.session_id, |session| {
-            (session.report.clone(), session.records.clone())
-        }) {
+    match state.dedup_sessions.with_owned_session(
+        &request.session_id,
+        user.user_id,
+        |session| (session.report.clone(), session.records.clone()),
+    ) {
         Some((report, records)) => Json(build_report_view(&report, &records)).into_response(),
         None => session_not_found(),
     }
@@ -201,11 +201,11 @@ pub async fn export(
 ) -> Response {
     let started = Instant::now();
 
-    let session_data = match state
-        .dedup_sessions
-        .with_session(&request.session_id, |session| {
-            (session.report.clone(), session.records.clone())
-        }) {
+    let session_data = match state.dedup_sessions.with_owned_session(
+        &request.session_id,
+        user.user_id,
+        |session| (session.report.clone(), session.records.clone()),
+    ) {
         Some(data) => data,
         None => return session_not_found(),
     };

@@ -37,7 +37,7 @@ enum ExemptNotReady {
 /// corrected value. Immediately re-runs validation, mirroring `/correct`.
 pub async fn exempt_dimensions(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<ExemptDimensionsRequest>,
 ) -> Response {
     let key = DimensionExemptionKey {
@@ -45,9 +45,10 @@ pub async fn exempt_dimensions(
         unit_number: request.unit_number.clone(),
     };
 
-    let response = state
-        .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+    let response = state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             if session.unit_number_occurrences(&request.file_name, &request.unit_number) == 0 {
                 tracing::warn!(
                     session_id = %request.session_id,
@@ -69,7 +70,8 @@ pub async fn exempt_dimensions(
             );
 
             run_validation(session, &request.session_id).map_err(ExemptNotReady::Stage)
-        });
+        },
+    );
 
     match response {
         Some(Ok(response)) => Json(response).into_response(),

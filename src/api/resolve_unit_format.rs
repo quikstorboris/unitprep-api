@@ -65,13 +65,14 @@ enum ResolveNotReady {
 
 pub async fn resolve_unit_format(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<ResolveUnitFormatRequest>,
 ) -> Response {
     let result = state
         .unit_group_sessions
-        .with_session_mut(
+        .with_owned_session_mut(
             &request.session_id,
+            user.user_id,
             |session| {
                 if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
                     tracing::warn!(

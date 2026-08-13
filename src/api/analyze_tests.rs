@@ -83,6 +83,48 @@ async fn analyze_finds_net_new_groups_with_no_reference_file() {
     assert_eq!(body["net_new_group_details"][0], "10x10 Inside Climate");
 }
 
+/// Regression test for the session-ownership IDOR closed by switching
+/// every session-touching handler from `with_session`/`with_session_mut`
+/// to `with_owned_session`/`with_owned_session_mut` (see
+/// `core::session_store`'s own doc comment for the mechanism). A fully
+/// ready, genuinely analyzable session belonging to `test_user()` must be
+/// completely invisible to a *different* authenticated caller -- not just
+/// blocked from mutating it, but indistinguishable from a session that
+/// doesn't exist at all, exactly like an unrecognized `session_id` would
+/// be. `analyze_finds_net_new_groups_with_no_reference_file` above proves
+/// this exact session succeeds for its real owner; this proves the same
+/// session 404s for anyone else.
+#[tokio::test]
+async fn analyze_returns_404_for_a_session_belonging_to_a_different_user() {
+    let state = validated_state(
+        "s1",
+        vec![unit_document(
+            "units.csv",
+            vec![["A01", "10x10 Inside Climate", "10", "10"]],
+        )],
+    );
+
+    let someone_else = crate::auth::AuthenticatedUser {
+        user_id: uuid::Uuid::new_v4(),
+        role_keys: Vec::new(),
+        permission_keys: std::collections::HashSet::new(),
+        token_hash: vec![0u8; 32],
+        elevated_until: None,
+        requires_step_up: false,
+    };
+
+    let response = analyze(
+        State(state),
+        someone_else,
+        Json(AnalyzeRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 /// Regression test for the session write-back race documented on
 /// `analyze()`'s `with_session_mut` call: if the session vanishes
 /// (expires, or is explicitly cancelled by a concurrent request) in the

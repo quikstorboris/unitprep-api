@@ -24,7 +24,7 @@ use crate::auth::AuthenticatedUser;
 /// this file to actually get used during analysis.
 pub async fn upload_group_file(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     multipart: Multipart,
 ) -> Response {
     let fields = match extract_manual_upload_fields(multipart).await {
@@ -42,7 +42,7 @@ pub async fn upload_group_file(
         }
     };
 
-    apply_group_file_upload(&state, &fields.session_id, document)
+    apply_group_file_upload(&state, &fields.session_id, user.user_id, document)
 }
 
 /// The testable core, separated from the Multipart-extracting handler
@@ -51,11 +51,12 @@ pub async fn upload_group_file(
 pub(crate) fn apply_group_file_upload(
     state: &AppState,
     session_id: &str,
+    owner_id: uuid::Uuid,
     document: CsvDocument,
 ) -> Response {
     let result = state
         .unit_group_sessions
-        .with_session_mut(session_id, |session| {
+        .with_owned_session_mut(session_id, owner_id, |session| {
             session.require_stage(WorkflowStage::Discovered)?;
 
             let file_name = document.file_name.clone();

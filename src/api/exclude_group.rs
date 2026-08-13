@@ -27,12 +27,13 @@ pub struct ExcludeGroupRequest {
 /// exclusion is actually applied.
 pub async fn exclude_group(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<ExcludeGroupRequest>,
 ) -> Response {
-    let response = state
-        .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+    let response = state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             if request.excluded {
                 session.exclude_group(request.group_name.clone());
             } else {
@@ -47,7 +48,8 @@ pub async fn exclude_group(
             );
 
             run_validation(session, &request.session_id)
-        });
+        },
+    );
 
     respond(response)
 }

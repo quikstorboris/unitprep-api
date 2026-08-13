@@ -35,7 +35,7 @@ pub struct CancelSessionResponse {
 
 pub async fn cancel_session(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<CancelSessionRequest>,
 ) -> impl IntoResponse {
     // Read the session's total lifetime AND mark it cancelled in the same
@@ -58,9 +58,10 @@ pub async fn cancel_session(
     // a nonexistent one and return `None`, instead of silently applying a
     // mutation to an object about to be detached from the map with no way
     // to ever look it up again.
-    let age_ms = state
-        .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+    let age_ms = state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             let age_ms = SystemTime::now()
                 .duration_since(session.metadata.created_at)
                 .unwrap_or_default()
@@ -69,11 +70,22 @@ pub async fn cancel_session(
             session.metadata.cancelled = true;
 
             age_ms
-        });
+        },
+    );
 
     let deleted = age_ms.is_some();
 
-    state.unit_group_sessions.delete(&request.session_id);
+    // Only delete when the owned-session check above actually found and
+    // touched this caller's own session -- otherwise a session that
+    // exists but belongs to someone else would still get destroyed by
+    // this unconditional call, silently reopening the exact
+    // denial-of-service gap `with_owned_session_mut` above exists to
+    // close. Calling `delete` on an unknown id is already a documented
+    // no-op, so skipping it whenever `deleted` is false changes nothing
+    // observable for that case.
+    if deleted {
+        state.unit_group_sessions.delete(&request.session_id);
+    }
 
     tracing::info!(
         session_id = %request.session_id,
@@ -99,13 +111,14 @@ mod tests {
     #[tokio::test]
     async fn cancel_reports_deleted_true_for_a_real_session() {
         let state = empty_state();
+        let user = crate::api::test_support::test_user();
         state
             .unit_group_sessions
-            .save(Session::new("s1".to_string(), None));
+            .save(Session::new("s1".to_string(), Some(user.user_id)));
 
         let response = cancel_session(
             State(state.clone()),
-            crate::api::test_support::test_user(),
+            user,
             Json(CancelSessionRequest {
                 session_id: "s1".to_string(),
             }),

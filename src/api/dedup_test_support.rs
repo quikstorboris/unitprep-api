@@ -13,6 +13,7 @@ use crate::api::test_support::empty_dedup_store;
 use crate::api::test_support::empty_tagger_store;
 use crate::api::test_support::test_auth_backend;
 use crate::api::test_support::test_db_pool;
+use crate::api::test_support::test_user_id;
 use crate::api::AppState;
 use crate::application::dedup_session_service::DedupSession;
 use crate::application::unit_group_session::Session;
@@ -30,7 +31,7 @@ pub fn dedup_state_with_report(
     let store = empty_dedup_store();
     store.save(DedupSession::new(
         session_id.to_string(),
-        None,
+        Some(test_user_id()),
         records,
         report,
     ));

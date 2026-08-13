@@ -30,6 +30,7 @@ async fn returns_404_for_missing_session() {
     let response = apply_group_file_upload(
         &empty_state(),
         "missing",
+        crate::api::test_support::test_user_id(),
         document("groups.csv", vec!["Name"]),
     );
 
@@ -44,10 +45,15 @@ async fn returns_409_before_discovery_completes() {
         .unit_group_sessions
         .save(crate::application::unit_group_session::Session::new(
             "s1".to_string(),
-            None,
+            Some(crate::api::test_support::test_user_id()),
         ));
 
-    let response = apply_group_file_upload(&state, "s1", document("groups.csv", vec!["Name"]));
+    let response = apply_group_file_upload(
+        &state,
+        "s1",
+        crate::api::test_support::test_user_id(),
+        document("groups.csv", vec!["Name"]),
+    );
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
 }
@@ -66,6 +72,7 @@ async fn manually_uploaded_file_becomes_the_selected_group_file() {
     let response = apply_group_file_upload(
         &state,
         "s1",
+        crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description"]),
     );
 
@@ -87,6 +94,7 @@ async fn manually_uploaded_file_with_conforming_headers_is_valid() {
     let response = apply_group_file_upload(
         &state,
         "s1",
+        crate::api::test_support::test_user_id(),
         document(
             "master_groups.csv",
             vec!["Name", "Description", "AssignedTo", "Status", "LastUpdated"],
@@ -107,6 +115,7 @@ async fn manually_uploaded_file_with_minimal_headers_is_valid() {
     let response = apply_group_file_upload(
         &state,
         "s1",
+        crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description", "Active"]),
     );
 
@@ -125,6 +134,7 @@ async fn reuploading_a_different_file_resets_confirmation() {
     apply_group_file_upload(
         &state,
         "s1",
+        crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description", "Active"]),
     );
 
@@ -140,6 +150,7 @@ async fn reuploading_a_different_file_resets_confirmation() {
     let response = apply_group_file_upload(
         &state,
         "s1",
+        crate::api::test_support::test_user_id(),
         document(
             "different_groups.csv",
             vec!["Name", "Description", "Active"],
@@ -162,6 +173,7 @@ async fn manual_selection_survives_a_subsequent_discovery_recompute() {
     apply_group_file_upload(
         &state,
         "s1",
+        crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description"]),
     );
 

@@ -37,12 +37,13 @@ pub struct AcknowledgeGroupWarningsRequest {
 /// needs its own, separate acknowledgment.
 pub async fn acknowledge_group_warnings(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<AcknowledgeGroupWarningsRequest>,
 ) -> Response {
-    let response = state
-        .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+    let response = state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             for group_name in &request.group_names {
                 if request.acknowledged {
                     session.acknowledge_group_check(request.check.clone(), group_name.clone());
@@ -60,7 +61,8 @@ pub async fn acknowledge_group_warnings(
             );
 
             run_validation(session, &request.session_id)
-        });
+        },
+    );
 
     respond(response)
 }

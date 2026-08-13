@@ -13,6 +13,7 @@ use crate::api::test_support::empty_dedup_store;
 use crate::api::test_support::empty_tagger_store;
 use crate::api::test_support::test_auth_backend;
 use crate::api::test_support::test_db_pool;
+use crate::api::test_support::test_user_id;
 use crate::api::AppState;
 use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
@@ -31,7 +32,7 @@ pub fn tagger_state_with_session(
     let store = empty_tagger_store();
     store.save(TaggerSession::new(
         session_id.to_string(),
-        None,
+        Some(test_user_id()),
         original_bytes,
         original_file_name.to_string(),
         candidates,

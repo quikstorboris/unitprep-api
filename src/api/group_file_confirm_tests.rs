@@ -52,7 +52,7 @@ async fn returns_409_before_discovery_completes() {
         .unit_group_sessions
         .save(crate::application::unit_group_session::Session::new(
             "s1".to_string(),
-            None,
+            Some(crate::api::test_support::test_user_id()),
         ));
 
     let response = confirm_group_file(
@@ -94,6 +94,7 @@ async fn rejects_confirming_an_invalid_format_file() {
     apply_group_file_upload(
         &state,
         "s1",
+        crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description"]),
     );
 
@@ -120,6 +121,7 @@ async fn confirms_a_valid_selected_file() {
     apply_group_file_upload(
         &state,
         "s1",
+        crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description", "Active"]),
     );
 
@@ -168,6 +170,7 @@ async fn confirming_the_group_file_is_what_makes_discovery_ready() {
     apply_group_file_upload(
         &state,
         "s1",
+        crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description", "Active"]),
     );
 

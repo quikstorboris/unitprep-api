@@ -72,14 +72,15 @@ fn build_new_group_name(request: &CorrectGroupRequest) -> String {
 /// rather than a new storage mechanism.
 pub async fn correct_group(
     State(state): State<AppState>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Json(request): Json<CorrectGroupRequest>,
 ) -> Response {
     let new_group_name = build_new_group_name(&request);
 
-    let result = state
-        .unit_group_sessions
-        .with_session_mut(&request.session_id, |session| {
+    let result = state.unit_group_sessions.with_owned_session_mut(
+        &request.session_id,
+        user.user_id,
+        |session| {
             if let Err(err) = session
                 .require_stage(crate::application::unit_group_session::WorkflowStage::Discovered)
             {
@@ -189,7 +190,8 @@ pub async fn correct_group(
             );
 
             run_validation(session, &request.session_id).map_err(CorrectGroupNotReady::Stage)
-        });
+        },
+    );
 
     match result {
         Some(Ok(response)) => Json(response).into_response(),
