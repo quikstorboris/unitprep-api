@@ -72,6 +72,41 @@ async fn report_returns_the_stored_report() {
         .contains("unit 101"));
 }
 
+/// Regression test for the session-ownership IDOR fix (see
+/// core::session_store's with_owned_session): a dedup session
+/// belonging to one user must be completely invisible to a different
+/// authenticated caller, not just blocked from mutating it. dedup has
+/// its own session store, entirely separate from unit-group's -- this
+/// proves the fix reaches this store too, not just the one covered by
+/// analyze_tests.rs's equivalent test.
+#[tokio::test]
+async fn report_returns_404_for_a_session_belonging_to_a_different_user() {
+    let records = vec![sample_record("101", "a@example.com")];
+    let dedup_report = unitprep_dedup::run(records.clone());
+    let state = dedup_state_with_report("s1", records, dedup_report);
+
+    let someone_else = crate::auth::AuthenticatedUser {
+        user_id: uuid::Uuid::new_v4(),
+        role_keys: Vec::new(),
+        permission_keys: std::collections::HashSet::new(),
+        token_hash: vec![0u8; 32],
+        elevated_until: None,
+        requires_step_up: false,
+        passkey_reverified_until: None,
+    };
+
+    let response = report(
+        State(state),
+        someone_else,
+        Json(DedupSessionRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn export_returns_404_for_missing_session() {
     let response = export(

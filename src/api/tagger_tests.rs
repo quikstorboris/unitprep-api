@@ -78,6 +78,50 @@ async fn report_returns_the_stored_candidates_with_a_snippet() {
         .contains("Atherton Storage"));
 }
 
+/// Regression test for the session-ownership IDOR fix (see
+/// core::session_store's with_owned_session): a tagger session
+/// belonging to one user must be completely invisible to a different
+/// authenticated caller. The tagger session store is entirely separate
+/// from unit-group's and dedup's own -- and tagger.rs's report/apply
+/// handlers were the one instance of this gap the original audit's
+/// agent-scoping missed, so this store specifically is worth its own
+/// direct proof, not just trusting the same fix generalizes.
+#[tokio::test]
+async fn report_returns_404_for_a_session_belonging_to_a_different_user() {
+    let original_bytes = std::fs::read(FIXTURE).expect("fixture must exist");
+    let doc = read_docx(&original_bytes).expect("fixture should be a valid .docx");
+    let start = doc
+        .body
+        .text
+        .find("Atherton Storage")
+        .expect("fixture should mention the facility name");
+    let end = start + "Atherton Storage".len();
+
+    let candidates = vec![sample_candidate("f.name", "Atherton Storage", start, end)];
+    let state = tagger_state_with_session("s1", original_bytes, "atherton.docx", candidates);
+
+    let someone_else = crate::auth::AuthenticatedUser {
+        user_id: uuid::Uuid::new_v4(),
+        role_keys: Vec::new(),
+        permission_keys: std::collections::HashSet::new(),
+        token_hash: vec![0u8; 32],
+        elevated_until: None,
+        requires_step_up: false,
+        passkey_reverified_until: None,
+    };
+
+    let response = report(
+        State(state),
+        someone_else,
+        Json(TaggerSessionRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
 #[tokio::test]
 async fn apply_returns_404_for_missing_session() {
     let response = apply(
