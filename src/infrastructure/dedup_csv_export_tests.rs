@@ -99,8 +99,11 @@ fn generate_csv_writes_a_related_tenants_section() {
         typo_variant_candidates: vec![],
         related_tenant_candidates: vec![RelatedTenantCandidate {
             group_keys: vec!["janedoe".to_string(), "johnsmith".to_string()],
-            signal: RelatednessSignal::SharedPhone,
-            shared_value: "5551234".to_string(),
+            evidence: vec![unitprep_dedup::RelatedTenantEvidence {
+                signal: RelatednessSignal::SharedPhone,
+                shared_value: "5551234".to_string(),
+                group_keys: vec!["janedoe".to_string(), "johnsmith".to_string()],
+            }],
             note: "These tenants share the same phone number (5551234) despite having different \
                    names — worth checking whether these are related tenants."
                 .to_string(),

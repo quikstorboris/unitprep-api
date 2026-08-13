@@ -125,8 +125,11 @@ fn generate_xlsx_writes_a_related_tenants_section_without_crashing() {
         typo_variant_candidates: vec![],
         related_tenant_candidates: vec![unitprep_dedup::RelatedTenantCandidate {
             group_keys: vec!["janedoe".to_string(), "johnsmith".to_string()],
-            signal: unitprep_dedup::RelatednessSignal::SharedPhone,
-            shared_value: "5551234".to_string(),
+            evidence: vec![unitprep_dedup::RelatedTenantEvidence {
+                signal: unitprep_dedup::RelatednessSignal::SharedPhone,
+                shared_value: "5551234".to_string(),
+                group_keys: vec!["janedoe".to_string(), "johnsmith".to_string()],
+            }],
             note: "These tenants share the same phone number (5551234).".to_string(),
         }],
     };

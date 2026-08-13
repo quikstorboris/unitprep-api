@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use crate::normalization::normalize_value;
-use crate::types::{kind_for, FieldName, TenantGroup};
+use crate::types::{kind_for, FieldKind, FieldName, TenantGroup};
 
 /// This group's unit numbers, sorted. The base list `units_phrase` turns
 /// into a properly-worded phrase — kept separate so callers that need
@@ -37,8 +37,10 @@ pub fn units_phrase(units: &[&str]) -> String {
 
 /// `"A"` / `"A and B"` / `"A, B, and C"` — a comma before the final
 /// "and" only once there are 3+ items, matching normal English (nobody
-/// writes "A, and B").
-fn oxford_join(items: &[&str]) -> String {
+/// writes "A, and B"). `pub(crate)` so `note_composer` can reuse it for
+/// joining a household's shared values (e.g. two phone numbers under
+/// one signal) rather than a second copy of the same joining rule.
+pub(crate) fn oxford_join(items: &[&str]) -> String {
     match items {
         [] => String::new(),
         [one] => one.to_string(),
@@ -213,6 +215,47 @@ pub(crate) fn all_addresses_present_and_distinct(group: &TenantGroup) -> bool {
     let addresses: Vec<String> = addresses.into_iter().flatten().collect();
     let unique: HashSet<&String> = addresses.iter().collect();
     unique.len() == addresses.len()
+}
+
+/// True if every record's primary home address is present (non-blank)
+/// and IDENTICAL across the group — the corroborating "this is really
+/// one person" signal for an email-only mismatch, as opposed to two
+/// records that both merely happen to have a blank address (which
+/// proves nothing). The mirror image of
+/// `all_addresses_present_and_distinct` above: that one wants every
+/// address different, this one wants every address the same.
+pub(crate) fn address_present_and_shared(group: &TenantGroup) -> bool {
+    let mut addresses = group.records.iter().map(|r| {
+        crate::relatedness::full_address(
+            &r.address_street1,
+            &r.address_street2,
+            &r.address_city,
+            &r.address_state,
+            &r.address_postal_code,
+        )
+    });
+    let Some(Some(first)) = addresses.next() else {
+        return false;
+    };
+    addresses.all(|a| a.as_deref() == Some(first.as_str()))
+}
+
+/// True if every record's primary phone number is present (non-blank)
+/// and IDENTICAL across the group — the phone half of the same
+/// corroborating signal `address_present_and_shared` provides.
+pub(crate) fn phone_present_and_shared(group: &TenantGroup) -> bool {
+    let mut phones = group.records.iter().map(|r| {
+        let normalized = normalize_value(FieldKind::Phone, &r.phone_number);
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    });
+    let Some(Some(first)) = phones.next() else {
+        return false;
+    };
+    phones.all(|p| p.as_deref() == Some(first.as_str()))
 }
 
 #[cfg(test)]

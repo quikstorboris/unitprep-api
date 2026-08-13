@@ -36,6 +36,53 @@ use crate::types::{FieldKind, TenantGroup};
 /// speculatively.
 const MAX_CLUSTER_SIZE: usize = 3;
 
+/// Caps how large a *household* (the transitive union of every tenant
+/// connected via any signal, not any single value) can grow before
+/// it's excluded entirely. Deliberately more generous than
+/// `MAX_CLUSTER_SIZE`, since a household's evidence has already been
+/// individually filtered — this guards only against a pathological
+/// chain (A-B via one value, B-C via an unrelated value, C-D via a
+/// third, none of them individually too-common) accreting into one
+/// implausibly large "family," not against normal household size.
+const MAX_HOUSEHOLD_SIZE: usize = 8;
+
+/// A real (not `is_empty`) value that's still not real evidence — a
+/// placeholder someone typed as a stand-in for "not applicable"
+/// instead of leaving the field blank. Found in real production data:
+/// the literal string `"None"` sitting in `AlternateContactLastName`
+/// on four otherwise-unrelated tenants, all normalizing to the exact
+/// same "shared" alternate-contact value. Deliberately excludes bare
+/// single characters like `x`/`-`, which are common short real values
+/// (an alt-contact first initial) rather than placeholders. Checked
+/// against the raw, trim+lowercased value — not run through
+/// `normalize_value`'s `FieldKind::Address` punctuation folding first,
+/// since that can mangle a token (`"n/a"` → `"n a"`) before comparison.
+const PLACEHOLDER_TOKENS: &[&str] = &[
+    "n/a",
+    "na",
+    "none",
+    "tbd",
+    "unknown",
+    "n.a.",
+    "not applicable",
+    "null",
+    "nil",
+    "xxx",
+];
+
+fn is_placeholder(raw: &str) -> bool {
+    PLACEHOLDER_TOKENS.contains(&raw.trim().to_lowercase().as_str())
+}
+
+/// A normalized phone value with fewer digits than a real US phone
+/// number can have is a truncated fragment (an area-code stub, a
+/// partial paste), not a real shared identity — e.g. `"978"` sitting
+/// in `AlternateContactPhoneNumber` on two otherwise-unrelated
+/// records. `v` is expected already digit-only (post
+/// `normalize_value(FieldKind::Phone, _)`), so this is a plain length
+/// check, not a second normalization pass.
+const MIN_PHONE_DIGITS: usize = 10;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RelatednessSignal {
     SharedPhone,
@@ -44,29 +91,60 @@ pub enum RelatednessSignal {
     SharedHomeAddress,
 }
 
-/// Two or more tenants (by group key) who share `shared_value` under
-/// `signal`, despite having different name keys. `group_keys` is
-/// sorted and always has at least 2, at most `MAX_CLUSTER_SIZE` entries
-/// — anything outside that range is filtered out before this type is
-/// ever constructed.
+/// One piece of evidence within a household: `group_keys` (a subset of
+/// the household's full member list, always at least 2, at most
+/// `MAX_CLUSTER_SIZE`) share `shared_value` under `signal`. A household
+/// with evidence from more than one signal, or more than one value
+/// under the same signal, carries one of these per distinct
+/// (signal, value) pair — not one per pair of tenants, since three
+/// tenants sharing one phone number is one piece of evidence, not
+/// three.
+#[derive(Debug, Clone, Serialize)]
+pub struct RelatedTenantEvidence {
+    pub signal: RelatednessSignal,
+    pub shared_value: String,
+    pub group_keys: Vec<String>,
+}
+
+/// A household: the full transitive union of every tenant connected to
+/// every other by *any* shared-value evidence, despite having
+/// different name keys. `group_keys` (sorted, at least 2, at most
+/// `MAX_HOUSEHOLD_SIZE`) is the union across every entry in `evidence`
+/// — not every member necessarily shares every piece of evidence with
+/// every other member directly, only transitively through the chain.
+/// `note` is one composed account of every piece of evidence, not one
+/// note per signal — see `note_composer::compose_relatedness_note`.
 #[derive(Debug, Clone, Serialize)]
 pub struct RelatedTenantCandidate {
     pub group_keys: Vec<String>,
-    pub signal: RelatednessSignal,
-    pub shared_value: String,
+    pub evidence: Vec<RelatedTenantEvidence>,
     pub note: String,
 }
 
 /// Runs all four signals over `groups` (every distinct tenant, not
 /// just multi-unit ones — a relationship can exist between two
-/// single-unit tenants) and returns every surfaced candidate, most
-/// tenants connected first.
+/// single-unit tenants), then merges every resulting (signal, value)
+/// cluster into households by transitive closure: two clusters that
+/// share even one tenant belong to the same household, and every
+/// piece of evidence connecting any member is kept, not just the
+/// evidence connecting the specific pair a reader might expect. This
+/// is what turns e.g. five separate "Diana and Donald share X" rows
+/// (one per shared field) into one row naming Diana and Donald once
+/// with all five pieces of evidence listed, and what connects a
+/// three-tenant chain (A shares a phone with B, B shares an email with
+/// C, A and C share nothing directly) into one household instead of
+/// two disjoint pairs.
 pub fn find_related_tenant_candidates(
     groups: &[TenantGroup],
     composer: &dyn NoteComposer,
 ) -> Vec<RelatedTenantCandidate> {
-    let mut candidates = Vec::new();
+    struct RawEvidence {
+        signal: RelatednessSignal,
+        value: String,
+        keys: Vec<String>,
+    }
 
+    let mut raw = Vec::new();
     for signal in [
         RelatednessSignal::SharedPhone,
         RelatednessSignal::SharedEmail,
@@ -79,21 +157,113 @@ pub fn find_related_tenant_candidates(
                 continue;
             }
             keys.sort();
-
-            let member_groups: Vec<&TenantGroup> = keys
-                .iter()
-                .filter_map(|key| groups.iter().find(|g| &g.key == key))
-                .collect();
-
-            let note = composer.compose_relatedness_note(&member_groups, signal, &value);
-
-            candidates.push(RelatedTenantCandidate {
-                group_keys: keys,
+            raw.push(RawEvidence {
                 signal,
-                shared_value: value,
-                note,
+                value,
+                keys,
             });
         }
+    }
+
+    // Union-find over group keys: every key in one piece of evidence
+    // joins the same household. `union`ing each adjacent pair in a
+    // slice transitively joins the whole slice, since `find` follows
+    // parent chains to their root regardless of how many hops deep.
+    let mut parent: HashMap<String, String> = HashMap::new();
+    fn find(parent: &mut HashMap<String, String>, key: &str) -> String {
+        parent
+            .entry(key.to_string())
+            .or_insert_with(|| key.to_string());
+        let mut root = key.to_string();
+        while parent[&root] != root {
+            root = parent[&root].clone();
+        }
+        // Path compression: point every visited node straight at the
+        // root, so repeated lookups on a long chain stay cheap.
+        let mut node = key.to_string();
+        while parent[&node] != root {
+            let next = parent[&node].clone();
+            parent.insert(node, root.clone());
+            node = next;
+        }
+        root
+    }
+    fn union(parent: &mut HashMap<String, String>, a: &str, b: &str) {
+        let root_a = find(parent, a);
+        let root_b = find(parent, b);
+        if root_a != root_b {
+            parent.insert(root_a, root_b);
+        }
+    }
+
+    for evidence in &raw {
+        for pair in evidence.keys.windows(2) {
+            union(&mut parent, &pair[0], &pair[1]);
+        }
+    }
+
+    // Bucket every piece of evidence under its household's root key.
+    let mut households: HashMap<String, (std::collections::HashSet<String>, Vec<RawEvidence>)> =
+        HashMap::new();
+    for evidence in raw {
+        let root = find(&mut parent, &evidence.keys[0]);
+        let entry = households.entry(root).or_default();
+        entry.0.extend(evidence.keys.iter().cloned());
+        entry.1.push(evidence);
+    }
+
+    let mut candidates = Vec::new();
+    for (_, (member_set, mut evidence_list)) in households {
+        if member_set.len() > MAX_HOUSEHOLD_SIZE {
+            continue;
+        }
+        let mut group_keys: Vec<String> = member_set.into_iter().collect();
+        group_keys.sort();
+
+        evidence_list.sort_by(|a, b| {
+            signal_priority(a.signal)
+                .cmp(&signal_priority(b.signal))
+                .then(a.value.cmp(&b.value))
+        });
+
+        let member_groups: Vec<Vec<&TenantGroup>> = evidence_list
+            .iter()
+            .map(|e| {
+                e.keys
+                    .iter()
+                    .filter_map(|key| groups.iter().find(|g| &g.key == key))
+                    .collect()
+            })
+            .collect();
+
+        let evidence_input: Vec<crate::note_composer::RelatednessEvidenceInput> = evidence_list
+            .iter()
+            .zip(&member_groups)
+            .map(
+                |(e, groups)| crate::note_composer::RelatednessEvidenceInput {
+                    signal: e.signal,
+                    shared_value: &e.value,
+                    member_groups: groups.clone(),
+                },
+            )
+            .collect();
+
+        let note = composer.compose_relatedness_note(&evidence_input);
+
+        let evidence: Vec<RelatedTenantEvidence> = evidence_list
+            .into_iter()
+            .map(|e| RelatedTenantEvidence {
+                signal: e.signal,
+                shared_value: e.value,
+                group_keys: e.keys,
+            })
+            .collect();
+
+        candidates.push(RelatedTenantCandidate {
+            group_keys,
+            evidence,
+            note,
+        });
     }
 
     candidates.sort_by(|a, b| {
@@ -103,6 +273,20 @@ pub fn find_related_tenant_candidates(
             .then(a.group_keys.cmp(&b.group_keys))
     });
     candidates
+}
+
+/// Stable display order for a household's evidence list — same
+/// priority family as `CATEGORY_PRIORITY` elsewhere in this crate
+/// (phone/email first), so a reader sees the strongest-feeling
+/// evidence first regardless of which signal happened to be found
+/// first during the scan.
+fn signal_priority(signal: RelatednessSignal) -> u8 {
+    match signal {
+        RelatednessSignal::SharedPhone => 0,
+        RelatednessSignal::SharedEmail => 1,
+        RelatednessSignal::SharedAlternateContact => 2,
+        RelatednessSignal::SharedHomeAddress => 3,
+    }
 }
 
 /// Maps each shared, normalized value to every distinct tenant
@@ -153,8 +337,9 @@ fn phone_values(group: &TenantGroup) -> Vec<String> {
         .records
         .iter()
         .flat_map(|r| [r.phone_number.as_str(), r.alt_contact_phone_number.as_str()])
-        .filter(|v| !is_empty(v))
+        .filter(|v| !is_empty(v) && !is_placeholder(v))
         .map(|v| normalize_value(FieldKind::Phone, v))
+        .filter(|v| v.len() >= MIN_PHONE_DIGITS)
         .collect()
 }
 
@@ -163,7 +348,7 @@ fn email_values(group: &TenantGroup) -> Vec<String> {
         .records
         .iter()
         .flat_map(|r| [r.email.as_str(), r.alt_contact_email.as_str()])
-        .filter(|v| !is_empty(v))
+        .filter(|v| !is_empty(v) && !is_placeholder(v))
         .map(|v| normalize_value(FieldKind::Plain, v))
         .collect()
 }
@@ -185,7 +370,7 @@ fn alt_contact_identities(group: &TenantGroup) -> Vec<String> {
                 r.alt_contact_last_name.trim()
             );
             let name = name.trim();
-            if name.is_empty() {
+            if name.is_empty() || is_placeholder(name) {
                 None
             } else {
                 Some(normalize_value(FieldKind::Plain, name))
@@ -225,9 +410,9 @@ fn address_values(group: &TenantGroup) -> Vec<String> {
         .collect()
 }
 
-/// `pub(crate)` so `phrasing::all_addresses_present_and_distinct` can
-/// reuse the exact same "what counts as the same address" rule for the
-/// separate-tenants note check, rather than a second, possibly-drifting
+/// `pub(crate)` so `phrasing::all_addresses_present_and_distinct` (and
+/// `address_present_and_shared`) can reuse the exact same "what counts
+/// as the same address" rule, rather than a second, possibly-drifting
 /// definition living in two places.
 pub(crate) fn full_address(
     street1: &str,
@@ -236,7 +421,7 @@ pub(crate) fn full_address(
     state: &str,
     postal: &str,
 ) -> Option<String> {
-    if is_empty(street1) {
+    if is_empty(street1) || is_placeholder(street1) {
         return None;
     }
     // Every field keeps its position in the join, blank or not -- dropping

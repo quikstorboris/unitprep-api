@@ -66,11 +66,23 @@ pub struct RelatedTenantMemberView {
     pub units: Vec<String>,
 }
 
+/// One piece of a household's evidence, resolved to display info —
+/// `members` is the specific subset of the household that shares
+/// `shared_value` under `signal`, which can be smaller than the full
+/// household (see `unitprep_dedup::RelatedTenantEvidence`'s own doc
+/// comment on why a household's members don't all necessarily share
+/// every piece of its evidence directly).
+#[derive(Debug, Clone, Serialize)]
+pub struct RelatedTenantEvidenceView {
+    pub signal: RelatednessSignal,
+    pub shared_value: String,
+    pub members: Vec<RelatedTenantMemberView>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RelatedTenantView {
     pub members: Vec<RelatedTenantMemberView>,
-    pub signal: RelatednessSignal,
-    pub shared_value: String,
+    pub evidence: Vec<RelatedTenantEvidenceView>,
     pub note: String,
 }
 
@@ -166,30 +178,40 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
         })
         .collect();
 
+    let resolve_members = |keys: &[String]| -> Vec<RelatedTenantMemberView> {
+        keys.iter()
+            .map(|key| {
+                let group = find(key);
+                RelatedTenantMemberView {
+                    display_name: group
+                        .map(|g| g.records[0].display_name())
+                        .unwrap_or_default(),
+                    units: group
+                        .map(|g| group_units(g).into_iter().map(String::from).collect())
+                        .unwrap_or_default(),
+                }
+            })
+            .collect()
+    };
+
     let related_tenant_candidates = report
         .related_tenant_candidates
         .iter()
         .map(|candidate| {
-            let members = candidate
-                .group_keys
+            let members = resolve_members(&candidate.group_keys);
+            let evidence = candidate
+                .evidence
                 .iter()
-                .map(|key| {
-                    let group = find(key);
-                    RelatedTenantMemberView {
-                        display_name: group
-                            .map(|g| g.records[0].display_name())
-                            .unwrap_or_default(),
-                        units: group
-                            .map(|g| group_units(g).into_iter().map(String::from).collect())
-                            .unwrap_or_default(),
-                    }
+                .map(|e| RelatedTenantEvidenceView {
+                    signal: e.signal,
+                    shared_value: e.shared_value.clone(),
+                    members: resolve_members(&e.group_keys),
                 })
                 .collect();
 
             RelatedTenantView {
                 members,
-                signal: candidate.signal,
-                shared_value: candidate.shared_value.clone(),
+                evidence,
                 note: candidate.note.clone(),
             }
         })

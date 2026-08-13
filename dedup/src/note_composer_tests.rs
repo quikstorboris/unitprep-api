@@ -242,3 +242,174 @@ fn variant_note_uses_plural_units_when_a_side_has_more_than_one() {
     assert!(note.contains("units 101 and 102"));
     assert!(note.contains("unit 204"));
 }
+
+/// Real Rowley Self Storage shape: same tenant, matching address AND
+/// phone, only email differs by one character — the note should name
+/// this outright as likely a typo rather than leaving the reader to
+/// notice the matching address/phone on their own.
+#[test]
+fn email_mismatch_with_matching_address_and_phone_gets_the_likely_typo_sentence() {
+    let mut a = record("B207", "Christopher", "Muise", "mommamoose7@gmail.com");
+    a.address_street1 = "26 Campmeeting Rd".to_string();
+    a.address_city = "Topsfield".to_string();
+    a.phone_number = "9785004160".to_string();
+    let mut b = record("B256", "Christopher", "Muise", "mammamoose7@gmail.com");
+    b.address_street1 = "26 Campmeeting Rd".to_string();
+    b.address_city = "Topsfield".to_string();
+    b.phone_number = "9785004160".to_string();
+
+    let group = TenantGroup {
+        key: "muise".to_string(),
+        records: vec![a, b],
+    };
+    let differing = vec![FieldMismatch {
+        category: FieldCategory::Email,
+        fields: vec![FieldValueMismatch {
+            field: crate::types::FieldName::Email,
+            values: vec![
+                "mommamoose7@gmail.com".into(),
+                "mammamoose7@gmail.com".into(),
+            ],
+        }],
+    }];
+
+    let note = TemplateNoteComposer.compose_group_note(&group, &differing);
+    assert!(!note.contains("may be separate tenants"));
+    assert!(
+        note.contains("The matching address and phone suggest this is one person"),
+        "note should name the typo explicitly when address and phone both already match: \
+         {note}"
+    );
+}
+
+/// The same email-only mismatch, but with the address blank on both
+/// units — there's no corroborating evidence, so the note must NOT
+/// claim a likely typo just because nothing else differs either.
+#[test]
+fn email_mismatch_without_a_matching_address_does_not_get_the_likely_typo_sentence() {
+    let a = record("101", "John", "Smith", "a@example.com");
+    let b = record("204", "John", "Smith", "b.typo@example.com");
+
+    let group = TenantGroup {
+        key: "smith".to_string(),
+        records: vec![a, b],
+    };
+    let differing = vec![FieldMismatch {
+        category: FieldCategory::Email,
+        fields: vec![FieldValueMismatch {
+            field: crate::types::FieldName::Email,
+            values: vec!["a@example.com".into(), "b.typo@example.com".into()],
+        }],
+    }];
+
+    let note = TemplateNoteComposer.compose_group_note(&group, &differing);
+    assert!(!note.contains("The matching address and phone suggest"));
+}
+
+#[test]
+fn relatedness_note_with_a_single_piece_of_evidence_uses_the_original_wording() {
+    let a = TenantGroup {
+        key: "a".to_string(),
+        records: vec![record("A1", "John", "Smith", "")],
+    };
+    let b = TenantGroup {
+        key: "b".to_string(),
+        records: vec![record("B2", "Jane", "Doe", "")],
+    };
+
+    let evidence = vec![RelatednessEvidenceInput {
+        signal: RelatednessSignal::SharedPhone,
+        shared_value: "5551234",
+        member_groups: vec![&a, &b],
+    }];
+
+    let note = TemplateNoteComposer.compose_relatedness_note(&evidence);
+    assert_eq!(
+        note,
+        "John Smith (unit A1) and Jane Doe (unit B2) share the same phone number (5551234) \
+         despite having different names — worth checking whether these are related tenants."
+    );
+}
+
+/// The real-world case this restructuring exists for: one pair of
+/// tenants sharing three different signals must produce ONE combined
+/// sentence naming the pair once, not three separate clauses each
+/// repeating "John Smith and Jane Doe".
+#[test]
+fn relatedness_note_combines_multiple_signals_for_the_same_pair_into_one_clause() {
+    let a = TenantGroup {
+        key: "a".to_string(),
+        records: vec![record("A1", "John", "Smith", "")],
+    };
+    let b = TenantGroup {
+        key: "b".to_string(),
+        records: vec![record("B2", "Jane", "Doe", "")],
+    };
+
+    let evidence = vec![
+        RelatednessEvidenceInput {
+            signal: RelatednessSignal::SharedPhone,
+            shared_value: "5551234",
+            member_groups: vec![&a, &b],
+        },
+        RelatednessEvidenceInput {
+            signal: RelatednessSignal::SharedEmail,
+            shared_value: "shared@example.com",
+            member_groups: vec![&a, &b],
+        },
+    ];
+
+    let note = TemplateNoteComposer.compose_relatedness_note(&evidence);
+    assert_eq!(note.matches("John Smith").count(), 1, "note: {note}");
+    assert!(note.contains("phone number (5551234)"));
+    assert!(note.contains("email address (shared@example.com)"));
+    assert!(note.ends_with("worth checking whether these are related tenants."));
+}
+
+/// Two pieces of evidence connecting DIFFERENT subsets of a
+/// three-tenant household (A-B via phone, B-C via email) must produce
+/// two clauses, each naming only the pair it actually applies to —
+/// not implying A and C share something they don't.
+#[test]
+fn relatedness_note_keeps_evidence_for_different_subsets_in_separate_clauses() {
+    let a = TenantGroup {
+        key: "a".to_string(),
+        records: vec![record("P006", "Bruce", "Wile", "")],
+    };
+    let b = TenantGroup {
+        key: "b".to_string(),
+        records: vec![record("B246", "Robert", "Wiley", "")],
+    };
+    let c = TenantGroup {
+        key: "c".to_string(),
+        records: vec![record("A57", "Linda", "Wiley", "")],
+    };
+
+    let evidence = vec![
+        RelatednessEvidenceInput {
+            signal: RelatednessSignal::SharedPhone,
+            shared_value: "9787297509",
+            member_groups: vec![&a, &b],
+        },
+        RelatednessEvidenceInput {
+            signal: RelatednessSignal::SharedEmail,
+            shared_value: "wileyeng@comcast.net",
+            member_groups: vec![&b, &c],
+        },
+    ];
+
+    let note = TemplateNoteComposer.compose_relatedness_note(&evidence);
+    assert!(note.contains(
+        "Bruce Wile (unit P006) and Robert Wiley (unit B246) share the same phone number \
+         (9787297509)"
+    ));
+    assert!(note.contains(
+        "Robert Wiley (unit B246) and Linda Wiley (unit A57) share the same email address \
+         (wileyeng@comcast.net)"
+    ));
+    // Each clause names only its own pair — Bruce and Linda never
+    // appear together in the same clause, since they share nothing
+    // directly.
+    assert_eq!(note.matches("Bruce Wile").count(), 1);
+    assert_eq!(note.matches("Linda Wiley").count(), 1);
+}

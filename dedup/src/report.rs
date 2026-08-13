@@ -189,11 +189,12 @@ mod tests {
 
         assert_eq!(report.related_tenant_candidates.len(), 1);
         let related = &report.related_tenant_candidates[0];
+        assert_eq!(related.evidence.len(), 1);
         assert_eq!(
-            related.signal,
+            related.evidence[0].signal,
             crate::relatedness::RelatednessSignal::SharedPhone
         );
-        assert_eq!(related.shared_value, "5559876543");
+        assert_eq!(related.evidence[0].shared_value, "5559876543");
         assert_eq!(
             related.group_keys,
             vec!["maria garcia".to_string(), "robert chen".to_string()]

@@ -68,7 +68,12 @@ pub const NOTE_SHARED_ADDRESS: &str =
     different names — worth checking whether these are related tenants.";
 
 /// The base template for a relatedness signal, before placeholder
-/// substitution.
+/// substitution. Used verbatim only when a household's evidence is a
+/// single (signal, value) pair — the common case, and the one this
+/// wording was written for. A household with more than one piece of
+/// evidence composes its own combined sentence out of
+/// `RELATEDNESS_TRAILER` instead — see
+/// `note_composer::compose_relatedness_note`.
 pub fn relatedness_template_for_signal(signal: RelatednessSignal) -> &'static str {
     match signal {
         RelatednessSignal::SharedPhone => NOTE_SHARED_PHONE,
@@ -77,3 +82,12 @@ pub fn relatedness_template_for_signal(signal: RelatednessSignal) -> &'static st
         RelatednessSignal::SharedHomeAddress => NOTE_SHARED_ADDRESS,
     }
 }
+
+/// Appended once, after every piece of evidence, to close a household's
+/// combined sentence when it has more than one (signal, value) pair —
+/// see `note_composer::compose_relatedness_note`. The single-evidence
+/// case doesn't use this; it uses the full per-signal templates above,
+/// unchanged, exactly as before this module supported multi-evidence
+/// households at all.
+pub const RELATEDNESS_TRAILER: &str =
+    " — despite having different names, worth checking whether these are related tenants.";
