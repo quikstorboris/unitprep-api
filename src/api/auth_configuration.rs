@@ -80,14 +80,19 @@ pub async fn get_configuration(
     };
 
     #[allow(clippy::type_complexity)]
-    let row: Result<(Vec<String>, DateTime<Utc>, Option<Uuid>), sqlx::Error> = sqlx::query_as(
+    let row: Result<
+        (sqlx::types::Json<Vec<String>>, DateTime<Utc>, Option<Uuid>),
+        sqlx::Error,
+    > = sqlx::query_as(
         "SELECT step_up_actions, updated_at, updated_by FROM auth.auth_configuration WHERE id = 1",
     )
     .fetch_one(&mut *tx)
     .await;
 
     let (step_up_actions, updated_at, updated_by) = match row {
-        Ok(row) => row,
+        Ok((step_up_actions, updated_at, updated_by)) => {
+            (step_up_actions.0, updated_at, updated_by)
+        }
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, "configuration read query failed");
             return internal_error("Could not load security policies");
@@ -151,13 +156,13 @@ pub async fn update_configuration(
         }
     };
 
-    let prior: Result<Vec<String>, sqlx::Error> =
+    let prior: Result<sqlx::types::Json<Vec<String>>, sqlx::Error> =
         sqlx::query_scalar("SELECT step_up_actions FROM auth.auth_configuration WHERE id = 1")
             .fetch_one(&mut *tx)
             .await;
 
     let prior_actions = match prior {
-        Ok(actions) => actions,
+        Ok(actions) => actions.0,
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to read prior configuration during update");
             return internal_error("Could not update security policies");
@@ -169,7 +174,7 @@ pub async fn update_configuration(
             SET step_up_actions = $1, updated_by = $2
           WHERE id = 1",
     )
-    .bind(&request.step_up_actions)
+    .bind(sqlx::types::Json(&request.step_up_actions))
     .bind(admin.user_id)
     .execute(&mut *tx)
     .await
