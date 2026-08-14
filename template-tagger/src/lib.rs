@@ -8,6 +8,12 @@
 //!   proximity library, finds blank underscore runs near a recognized
 //!   label -- no known value required, for template documents that
 //!   haven't been filled in at all.
+//! - [`recognize_filled_values`]: the same label-proximity library, but
+//!   for a label's value when it's already filled in with real content
+//!   rather than left blank (a system-generated notice, a completed
+//!   lease) -- bounded by paragraph/tab breaks and other labels rather
+//!   than by an underscore run's own self-delimiting edges, so always
+//!   lower-confidence than a `recognize_blanks` match.
 //!
 //! Domain logic only -- no session state, no HTTP layer, no `.docx`
 //! parsing. Depends on nothing but `std`, per the workspace's
@@ -35,4 +41,7 @@ pub mod detect;
 pub mod recognize;
 
 pub use detect::{detect_candidates, Candidate, TagValue};
-pub use recognize::{recognize_blanks, LabelPosition, LabelProximityPattern, PrecedingAnchor};
+pub use recognize::{
+    recognize_blanks, recognize_filled_values, LabelPosition, LabelProximityPattern,
+    PrecedingAnchor,
+};

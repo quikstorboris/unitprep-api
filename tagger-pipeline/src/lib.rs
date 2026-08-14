@@ -23,7 +23,8 @@
 
 use docx_surgeon::{Edit, FlatDocument, RegionRef, UnderlineEdit};
 use unitprep_template_tagger::{
-    detect_candidates, recognize_blanks, Candidate, LabelProximityPattern, TagValue,
+    detect_candidates, recognize_blanks, recognize_filled_values, Candidate, LabelProximityPattern,
+    TagValue,
 };
 
 /// Which review tier a candidate falls into, per the design's tier-1/
@@ -54,16 +55,18 @@ pub struct RegionCandidate {
     pub tier: ConfidenceTier,
 }
 
-/// Runs both matchers -- literal-value matching against `values`
-/// ([`detect_candidates`]), and label-proximity blank recognition
-/// against `patterns` ([`recognize_blanks`]) -- across every region of
-/// `doc`: the body, then every table cell in document order. Returns
-/// every candidate found, each tagged with which region it came from
-/// and its [`ConfidenceTier`].
+/// Runs all three matchers -- literal-value matching against `values`
+/// ([`detect_candidates`]), label-proximity blank recognition against
+/// `patterns` ([`recognize_blanks`]), and label-proximity *filled*-value
+/// recognition against the same `patterns`
+/// ([`recognize_filled_values`]) -- across every region of `doc`: the
+/// body, then every table cell in document order. Returns every
+/// candidate found, each tagged with which region it came from and its
+/// [`ConfidenceTier`].
 ///
 /// Deliberately does not deduplicate or drop anything -- same "propose,
 /// never modify, never silently collapse a judgment call" philosophy
-/// both matchers already hold individually. Ambiguity (multiple
+/// every matcher already holds individually. Ambiguity (multiple
 /// candidates for the same exact span) is surfaced via `tier`, not by
 /// picking a winner: every one of the competing candidates is still
 /// returned, all marked [`ConfidenceTier::NeedsReview`], so a human
@@ -92,36 +95,48 @@ fn collect_region(
     text: &str,
     values: &[TagValue],
     patterns: &[LabelProximityPattern],
-    out: &mut Vec<(RegionRef, Candidate)>,
+    out: &mut Vec<(RegionRef, Candidate, bool)>,
 ) {
     for candidate in detect_candidates(text, values) {
-        out.push((region, candidate));
+        out.push((region, candidate, false));
     }
     for candidate in recognize_blanks(text, patterns) {
-        out.push((region, candidate));
+        out.push((region, candidate, false));
+    }
+    // A filled-value guess is a boundary inference, not an exact match
+    // (unlike the two above, both unambiguous by construction) -- see
+    // `recognize_filled_values`'s own doc comment. `force_review: true`
+    // routes it to `ConfidenceTier::NeedsReview` unconditionally in
+    // `assign_tiers` below, regardless of whether anything else
+    // competes for the same span.
+    for candidate in recognize_filled_values(text, patterns) {
+        out.push((region, candidate, true));
     }
 }
 
 /// A span is unambiguous (tier `Auto`) if exactly one candidate in the
-/// whole batch shares its exact `(region, start, end)`. One pass builds
-/// per-span counts, a second maps `raw` against them -- O(n) rather than
-/// the previous O(n^2) re-scan of the whole batch per candidate, which
-/// made a large or adversarial document's candidate count quadratic in
+/// whole batch shares its exact `(region, start, end)` *and* that
+/// candidate isn't itself a lower-confidence boundary guess (see
+/// `force_review` on the raw tuple, set by `collect_region` for
+/// `recognize_filled_values`'s candidates). One pass builds per-span
+/// counts, a second maps `raw` against them -- O(n) rather than the
+/// previous O(n^2) re-scan of the whole batch per candidate, which made
+/// a large or adversarial document's candidate count quadratic in
 /// processing cost (see `MAX_CANDIDATES` at this crate's call site for
 /// the accompanying hard cap).
-fn assign_tiers(raw: Vec<(RegionRef, Candidate)>) -> Vec<RegionCandidate> {
+fn assign_tiers(raw: Vec<(RegionRef, Candidate, bool)>) -> Vec<RegionCandidate> {
     let mut counts: std::collections::HashMap<(RegionRef, usize, usize), usize> =
         std::collections::HashMap::new();
-    for (region, candidate) in &raw {
+    for (region, candidate, _) in &raw {
         *counts
             .entry((*region, candidate.start, candidate.end))
             .or_insert(0) += 1;
     }
 
     raw.into_iter()
-        .map(|(region, candidate)| {
+        .map(|(region, candidate, force_review)| {
             let competing = counts[&(region, candidate.start, candidate.end)];
-            let tier = if competing <= 1 {
+            let tier = if competing <= 1 && !force_review {
                 ConfidenceTier::Auto
             } else {
                 ConfidenceTier::NeedsReview
@@ -336,8 +351,11 @@ mod tests {
     #[test]
     fn reports_candidates_from_both_matchers_without_deduplicating() {
         // "204" is both a known value AND sits right after a
-        // label_proximity pattern's label -- both matchers legitimately
-        // find something here, and both are reported.
+        // label_proximity pattern's label with nothing else nearby --
+        // all three matchers legitimately find something here (detect_
+        // candidates via the known value, recognize_filled_values via
+        // the label proximity, recognize_blanks nothing since there's
+        // no underscore run), and none suppress each other.
         let xml = wrap(r#"<w:p><w:r><w:t>Unit No.: 204</w:t></w:r></w:p>"#);
         let doc = extract_flat_text(&xml);
         let patterns = [label_pattern(
@@ -348,12 +366,41 @@ mod tests {
 
         let candidates = find_candidates(&doc, &[value("u.num", "204")], &patterns);
 
-        // detect_candidates finds "204"; recognize_blanks finds nothing
-        // here (no underscore run) -- so only the literal match shows,
-        // proving the two matchers really did both run independently
-        // rather than one silently suppressing the other.
+        // Both real finds land on the exact same span, so this also
+        // proves force_review kicks in even when there'd otherwise be
+        // no ambiguity: without it, 2 identical-content candidates for
+        // one span already means competing > 1 -> NeedsReview on its
+        // own, so a dedicated single-filled-value-match tier assertion
+        // lives in `a_filled_value_match_always_needs_review` below.
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates.iter().all(|c| c.candidate.matched_text == "204"));
+        assert!(candidates
+            .iter()
+            .all(|c| c.tier == ConfidenceTier::NeedsReview));
+    }
+
+    #[test]
+    fn a_filled_value_match_always_needs_review() {
+        // No known values supplied (unlike the test above) -- "204" is
+        // recognized ONLY via label proximity to an already-filled
+        // value, with nothing else competing for the same span. Proves
+        // force_review, not span competition, is what puts this in
+        // NeedsReview: a single candidate with zero competitors would
+        // otherwise be Auto by the same rule every other matcher's
+        // candidates follow.
+        let xml = wrap(r#"<w:p><w:r><w:t>Unit No.: 204</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let patterns = [label_pattern(
+            "u.num",
+            "Unit No.",
+            unitprep_template_tagger::LabelPosition::After,
+        )];
+
+        let candidates = find_candidates(&doc, &[], &patterns);
+
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].candidate.matched_text, "204");
+        assert_eq!(candidates[0].tier, ConfidenceTier::NeedsReview);
     }
 
     #[test]
