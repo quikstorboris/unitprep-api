@@ -65,17 +65,6 @@ struct RowScan {
 }
 
 impl RowScan {
-    fn group_fingerprint(&mut self, group: &str) -> (bool, GroupFingerprint) {
-        self.group_fingerprints
-            .entry(group.to_string())
-            .or_insert_with(|| {
-                (
-                    group_checks::is_odd_group_name(group),
-                    parse_fingerprint(group),
-                )
-            })
-            .clone()
-    }
     fn record_row(
         &mut self,
         row: &[String],
@@ -130,7 +119,19 @@ impl RowScan {
         // agree there's a real, positive value there.
         let group_is_malformed = has_malformed_dimension_attempt(group);
 
-        let (is_odd_group, fingerprint) = self.group_fingerprint(group);
+        // Only a reference is needed below, so a fresh entry's tuple is
+        // stored once and never cloned back out -- a repeat group name
+        // (the normal case) costs a hash lookup, not a fingerprint copy.
+        let (is_odd_group, fingerprint) = self
+            .group_fingerprints
+            .entry(group.to_string())
+            .or_insert_with(|| {
+                (
+                    group_checks::is_odd_group_name(group),
+                    parse_fingerprint(group),
+                )
+            });
+        let is_odd_group = *is_odd_group;
 
         // `is_odd_group_name` already excludes malformed attempts on
         // its own (see its doc comment) -- no need to repeat that
@@ -152,15 +153,15 @@ impl RowScan {
             self.bad_dimensions.push(unit.clone());
         }
 
-        if row_checks::climate_mismatches_group(row, indices.climate_controlled, &fingerprint) {
+        if row_checks::climate_mismatches_group(row, indices.climate_controlled, fingerprint) {
             self.climate_mismatches.push(unit.clone());
         }
 
-        if row_checks::locality_mismatches_group(row, indices.locality, &fingerprint) {
+        if row_checks::locality_mismatches_group(row, indices.locality, fingerprint) {
             self.locality_mismatches.push(unit.clone());
         }
 
-        if row_checks::dimensions_mismatch_group(row, indices.width, indices.length, &fingerprint) {
+        if row_checks::dimensions_mismatch_group(row, indices.width, indices.length, fingerprint) {
             self.unitgroup_dimension_mismatches.push(unit.clone());
         }
     }
