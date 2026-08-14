@@ -103,28 +103,32 @@ fn collect_region(
 }
 
 /// A span is unambiguous (tier `Auto`) if exactly one candidate in the
-/// whole batch shares its exact `(region, start, end)`. Deliberately
-/// O(n^2) -- a real document's candidate count is small enough (tens,
-/// not thousands) that this is simpler and just as fast in practice as
-/// building a hash key out of [`RegionRef`], which would need it to
-/// implement `Hash` for no other reason than this one internal check.
+/// whole batch shares its exact `(region, start, end)`. One pass builds
+/// per-span counts, a second maps `raw` against them -- O(n) rather than
+/// the previous O(n^2) re-scan of the whole batch per candidate, which
+/// made a large or adversarial document's candidate count quadratic in
+/// processing cost (see `MAX_CANDIDATES` at this crate's call site for
+/// the accompanying hard cap).
 fn assign_tiers(raw: Vec<(RegionRef, Candidate)>) -> Vec<RegionCandidate> {
-    raw.iter()
+    let mut counts: std::collections::HashMap<(RegionRef, usize, usize), usize> =
+        std::collections::HashMap::new();
+    for (region, candidate) in &raw {
+        *counts
+            .entry((*region, candidate.start, candidate.end))
+            .or_insert(0) += 1;
+    }
+
+    raw.into_iter()
         .map(|(region, candidate)| {
-            let competing = raw
-                .iter()
-                .filter(|(r, c)| {
-                    r == region && c.start == candidate.start && c.end == candidate.end
-                })
-                .count();
+            let competing = counts[&(region, candidate.start, candidate.end)];
             let tier = if competing <= 1 {
                 ConfidenceTier::Auto
             } else {
                 ConfidenceTier::NeedsReview
             };
             RegionCandidate {
-                region: *region,
-                candidate: candidate.clone(),
+                region,
+                candidate,
                 tier,
             }
         })

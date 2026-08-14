@@ -32,6 +32,15 @@ use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 /// the whole region back to the browser.
 const SNIPPET_CONTEXT_CHARS: usize = 30;
 
+/// Hard ceiling on how many candidates one `/tagger/check` run will
+/// process past `find_candidates` -- a real template's candidate count is
+/// "tens, not thousands" per `assign_tiers`'s own doc comment; this bounds
+/// a pathological or adversarial document (e.g. a blank repeated
+/// thousands of times) well above any real template but far below where
+/// building candidate views, cloning matched text, and storing the
+/// session would become its own resource concern.
+const MAX_CANDIDATES: usize = 2000;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegionView {
@@ -325,6 +334,28 @@ pub async fn check(
     }
 
     let candidates = find_candidates(&doc, &[], &patterns);
+
+    if candidates.len() > MAX_CANDIDATES {
+        tracing::warn!(
+            file = %file.file_name,
+            candidate_count = candidates.len(),
+            "Tagger check rejected -- candidate count exceeds MAX_CANDIDATES"
+        );
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ApiErrorBody {
+                error: "too_many_candidates",
+                message: format!(
+                    "This document has too many potential matches to review ({} found, {} max). \
+                     It may not be a template intended for tagging.",
+                    candidates.len(),
+                    MAX_CANDIDATES
+                ),
+            }),
+        )
+            .into_response();
+    }
+
     let candidate_views = build_candidate_views(&doc, &candidates);
 
     let session_id = TaggerSessionService::new(Arc::clone(&state.tagger_sessions)).create_session(

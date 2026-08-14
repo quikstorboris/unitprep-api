@@ -155,7 +155,7 @@ impl FlatDocument {
 /// both have a run at `flat_start: 0` -- it is never meaningful to
 /// compare flat coordinates across regions without knowing which region
 /// each side belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RegionRef {
     Body,
     TableCell(usize),
