@@ -178,10 +178,10 @@ pub fn find_related_tenant_candidates(
             .iter()
             .zip(&member_groups)
             .map(
-                |(e, groups)| crate::note_composer::RelatednessEvidenceInput {
+                |(e, member_group)| crate::note_composer::RelatednessEvidenceInput {
                     signal: e.signal,
                     shared_value: &e.value,
-                    member_groups: groups.clone(),
+                    member_groups: member_group.clone(),
                 },
             )
             .collect();
