@@ -26,7 +26,7 @@ pub struct RunSpan {
     /// Byte offset of this run's own `<w:r` opening bracket -- the start
     /// of the *whole* run element, not just its `<w:t>` content. Needed
     /// to rebuild a run from scratch (splitting it into more than one
-    /// `<w:r>`, e.g. [`crate::edit::apply_hidden_blank_edits`]) rather
+    /// `<w:r>`, e.g. [`crate::edit::apply_underline_edits`]/[`crate::edit::apply_all_edits`]) rather
     /// than just replacing its text content in place.
     pub run_start: usize,
     /// Byte offset immediately after this run's closing `</w:r>`.
