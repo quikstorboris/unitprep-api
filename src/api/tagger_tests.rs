@@ -366,3 +366,95 @@ fn read_document_xml_from_docx(bytes: &[u8]) -> String {
     std::io::Read::read_to_string(&mut entry, &mut contents).unwrap();
     contents
 }
+
+// `check` takes a real `axum::extract::Multipart` like `upload` does --
+// see upload_tests.rs's own doc comment for why these tests build a real
+// multipart body rather than bypassing the extractor.
+mod check_tests {
+    use axum::body::Body;
+    use axum::extract::FromRequest;
+    use axum::http::{Request, StatusCode};
+
+    use super::*;
+    use crate::api::test_support::empty_state;
+
+    const BOUNDARY: &str = "UnitPrepTaggerCheckTestBoundary";
+
+    fn file_part(field_name: &str, file_name: &str, content: &str) -> String {
+        format!(
+            "--{BOUNDARY}\r\n\
+             Content-Disposition: form-data; name=\"{field_name}\"; filename=\"{file_name}\"\r\n\
+             Content-Type: application/octet-stream\r\n\r\n\
+             {content}\r\n"
+        )
+    }
+
+    fn closing_boundary() -> String {
+        format!("--{BOUNDARY}--\r\n")
+    }
+
+    async fn multipart_from(body: String, state: &AppState) -> Multipart {
+        let request = Request::builder()
+            .method("POST")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={BOUNDARY}"),
+            )
+            .body(Body::from(body))
+            .unwrap();
+
+        Multipart::from_request(request, state).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn check_returns_400_when_no_file_was_uploaded() {
+        let state = empty_state();
+        let multipart = multipart_from(closing_boundary(), &state).await;
+
+        let response = check(
+            State(state),
+            crate::api::test_support::test_user(),
+            multipart,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "no_file_uploaded");
+    }
+
+    // Reaches read_docx (no DB round trip needed to get here -- that only
+    // happens after a file successfully parses as a .docx), so this
+    // doesn't need a real Postgres connection despite `check` needing one
+    // for the happy path.
+    #[tokio::test]
+    async fn check_returns_400_for_a_file_that_is_not_a_valid_docx() {
+        let state = empty_state();
+        let mut body = file_part(
+            "file",
+            "not-a-template.docx",
+            "this is plain text, not a zip",
+        );
+        body.push_str(&closing_boundary());
+        let multipart = multipart_from(body, &state).await;
+
+        let response = check(
+            State(state),
+            crate::api::test_support::test_user(),
+            multipart,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["error"], "invalid_docx");
+    }
+}
