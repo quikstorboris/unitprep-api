@@ -1,0 +1,48 @@
+use std::sync::Arc;
+
+use unitprep_core::session_store::SessionStore;
+
+use crate::application::dedup_session_service::DedupSession;
+use crate::application::tagger_session_service::TaggerSession;
+use crate::application::unit_group_session::Session;
+
+#[derive(Clone)]
+pub struct AppState {
+    // Named for the tool it serves, not just "the store" — UnitPrep is
+    // moving toward multiple tools each with their own session type and
+    // their own store instance (see unitprep-core's generic
+    // SessionStore<S>); this field will get company (e.g.
+    // `dedup_sessions`) rather than being renamed later under pressure.
+    pub unit_group_sessions: Arc<dyn SessionStore<Session>>,
+
+    // Additive, per the comment above — a second tool's store, not a
+    // rename of the first.
+    pub dedup_sessions: Arc<dyn SessionStore<DedupSession>>,
+
+    // Third tool's store, same pattern as the two above — the QMS
+    // Template Tagging Assistant.
+    pub tagger_sessions: Arc<dyn SessionStore<TaggerSession>>,
+
+    // The app_service-authenticated connection pool -- see db.rs for
+    // why it is built lazily rather than blocking startup on Postgres
+    // being reachable.
+    pub db: sqlx::PgPool,
+
+    // See auth/mod.rs for the AuthBackend trait -- Arc<dyn ...>, same
+    // pattern as the session stores above, so a future backend swap is
+    // a new impl, not a rewrite of every call site.
+    pub auth_backend: Arc<dyn crate::auth::AuthBackend>,
+
+    // Ephemeral WebAuthn registration-ceremony state (see
+    // auth::RegistrationCeremony) -- same generic SessionStore engine as
+    // unit_group_sessions/dedup_sessions above, just a much shorter
+    // timeout, since a ceremony is one request/response round trip, not
+    // a standing session.
+    pub registration_ceremonies: Arc<dyn SessionStore<crate::auth::RegistrationCeremony>>,
+
+    // Login's counterpart to registration_ceremonies. A separate store,
+    // not a shared one: the two hold different webauthn-rs state types and
+    // can be in flight simultaneously (see the ceremony-cookie names in
+    // auth/ceremony_cookie.rs for the same reasoning).
+    pub authentication_ceremonies: Arc<dyn SessionStore<crate::auth::AuthenticationCeremony>>,
+}
