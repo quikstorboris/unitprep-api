@@ -405,7 +405,16 @@ pub async fn export_audit_logs(
         truncated_at,
     };
 
-    let bytes = render_audit_log_pdf(&report);
+    // CPU-bound (layout + font metrics over up to EXPORT_ROW_CAP rows), so
+    // it runs on the blocking pool rather than tying up an async worker
+    // thread for the duration of the render.
+    let bytes = match tokio::task::spawn_blocking(move || render_audit_log_pdf(&report)).await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            tracing::error!(error = %err, "audit log PDF render task panicked");
+            return internal_error("Could not generate the audit log PDF");
+        }
+    };
 
     let filename = format!("unitprep-audit-log-{}.pdf", Utc::now().format("%Y-%m-%d"));
 
