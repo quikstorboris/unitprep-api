@@ -128,11 +128,12 @@ fn ceremony_failed() -> Response {
 
 pub async fn login_begin(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     jar: CookieJar,
     headers: HeaderMap,
     Json(request): Json<LoginBeginRequest>,
 ) -> Response {
-    let user_agent = crate::api::user_agent_from(&headers);
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     let email = request.email.trim();
 
@@ -147,7 +148,7 @@ pub async fn login_begin(
             audit_log::event::LOGIN_FAILED,
             audit_log::Subjects::anonymous(),
             user_agent,
-            None,
+            ip_address,
             audit_log::Change::none(),
             serde_json::json!({ "reason": "empty_email" }),
         )
@@ -169,7 +170,7 @@ pub async fn login_begin(
                 audit_log::event::LOGIN_FAILED,
                 audit_log::Subjects::anonymous(),
                 user_agent,
-                None,
+                ip_address,
                 audit_log::Change::none(),
                 serde_json::json!({ "reason": "no_usable_credential", "email": email }),
             )
@@ -657,6 +658,7 @@ mod tests {
         // surface as a 500, not a 401.
         let response = login_begin(
             State(empty_state()),
+            test_addr(),
             CookieJar::new(),
             HeaderMap::new(),
             Json(LoginBeginRequest {

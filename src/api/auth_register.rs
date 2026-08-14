@@ -195,6 +195,7 @@ async fn reject_registration(
     reason: &'static str,
     actor_user_id: Option<Uuid>,
     user_agent: Option<&str>,
+    ip_address: Option<sqlx::types::ipnetwork::IpNetwork>,
 ) -> Response {
     // `warn`, matching a failed login ceremony: an ordinary client-side
     // outcome, not a server fault.
@@ -211,10 +212,7 @@ async fn reject_registration(
             target: None,
         },
         user_agent,
-        // No ConnectInfo here -- every call site of this helper is on the
-        // /begin leg, which does not take it (see login_begin for the same
-        // shape of decision on the login side).
-        None,
+        ip_address,
         audit_log::Change::none(),
         serde_json::json!({ "reason": reason }),
     )
@@ -266,11 +264,12 @@ struct RegistrationTarget {
 
 pub async fn register_begin(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     jar: CookieJar,
     headers: HeaderMap,
     Json(request): Json<RegisterBeginRequest>,
 ) -> Response {
-    let user_agent = crate::api::user_agent_from(&headers);
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     // Resolved ONCE. Asking twice (a second call to decide
     // which path this is) would both waste a round trip and open a window
@@ -332,7 +331,14 @@ pub async fn register_begin(
                 .map(str::trim)
                 .filter(|token| !token.is_empty())
             else {
-                return reject_registration(&state, "missing_invite_token", None, user_agent).await;
+                return reject_registration(
+                    &state,
+                    "missing_invite_token",
+                    None,
+                    user_agent,
+                    ip_address,
+                )
+                .await;
             };
 
             // Hashed immediately, and only the hash travels any further --
@@ -346,7 +352,14 @@ pub async fn register_begin(
             match invite_target(&state, &token_hash).await {
                 Ok(Some(target)) => target,
                 Ok(None) => {
-                    return reject_registration(&state, "invite_not_usable", None, user_agent).await
+                    return reject_registration(
+                        &state,
+                        "invite_not_usable",
+                        None,
+                        user_agent,
+                        ip_address,
+                    )
+                    .await
                 }
                 Err(err) => {
                     tracing::error!(error = %err, "invite registration lookup failed");
@@ -866,6 +879,7 @@ mod tests {
         // surface as a 500.
         let response = register_begin(
             State(empty_state()),
+            test_addr(),
             CookieJar::new(),
             HeaderMap::new(),
             Json(RegisterBeginRequest { invite_token: None }),
@@ -889,6 +903,7 @@ mod tests {
 
         let response = register_begin(
             State(empty_state()),
+            test_addr(),
             CookieJar::new(),
             HeaderMap::new(),
             Json(RegisterBeginRequest { invite_token: None }),
@@ -925,6 +940,7 @@ mod tests {
         let no_token = body_of(
             register_begin(
                 State(empty_state()),
+                test_addr(),
                 CookieJar::new(),
                 HeaderMap::new(),
                 Json(RegisterBeginRequest { invite_token: None }),
@@ -938,6 +954,7 @@ mod tests {
         let blank_token = body_of(
             register_begin(
                 State(empty_state()),
+                test_addr(),
                 CookieJar::new(),
                 HeaderMap::new(),
                 Json(RegisterBeginRequest {
@@ -965,6 +982,7 @@ mod tests {
 
         let response = register_begin(
             State(empty_state()),
+            test_addr(),
             CookieJar::new(),
             HeaderMap::new(),
             Json(RegisterBeginRequest {
