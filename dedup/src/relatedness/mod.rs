@@ -17,10 +17,19 @@
 //! Always advisory — same policy as typo-variant candidates (see
 //! `report`'s crate-level docs): every candidate is surfaced for human
 //! review, nothing here ever implies or merges shared identity.
+//!
+//! The transitive-closure union-find that turns per-signal shared-value
+//! clusters into households lives in `household` -- a genuinely separate
+//! concern from gathering the per-signal evidence and composing each
+//! household's note, which stay here.
+
+mod household;
 
 use std::collections::HashMap;
 
 use serde::Serialize;
+
+use household::{group_into_households, RawEvidence};
 
 use crate::normalization::{is_empty, normalize_value};
 use crate::note_composer::NoteComposer;
@@ -35,16 +44,6 @@ use crate::types::{FieldKind, TenantGroup};
 /// shows a genuine relationship this size being missed, not
 /// speculatively.
 const MAX_CLUSTER_SIZE: usize = 3;
-
-/// Caps how large a *household* (the transitive union of every tenant
-/// connected via any signal, not any single value) can grow before
-/// it's excluded entirely. Deliberately more generous than
-/// `MAX_CLUSTER_SIZE`, since a household's evidence has already been
-/// individually filtered — this guards only against a pathological
-/// chain (A-B via one value, B-C via an unrelated value, C-D via a
-/// third, none of them individually too-common) accreting into one
-/// implausibly large "family," not against normal household size.
-const MAX_HOUSEHOLD_SIZE: usize = 8;
 
 /// A real (not `is_empty`) value that's still not real evidence — a
 /// placeholder someone typed as a stand-in for "not applicable"
@@ -124,26 +123,15 @@ pub struct RelatedTenantCandidate {
 /// Runs all four signals over `groups` (every distinct tenant, not
 /// just multi-unit ones — a relationship can exist between two
 /// single-unit tenants), then merges every resulting (signal, value)
-/// cluster into households by transitive closure: two clusters that
-/// share even one tenant belong to the same household, and every
-/// piece of evidence connecting any member is kept, not just the
-/// evidence connecting the specific pair a reader might expect. This
-/// is what turns e.g. five separate "Diana and Donald share X" rows
-/// (one per shared field) into one row naming Diana and Donald once
-/// with all five pieces of evidence listed, and what connects a
-/// three-tenant chain (A shares a phone with B, B shares an email with
-/// C, A and C share nothing directly) into one household instead of
-/// two disjoint pairs.
+/// cluster into households by transitive closure (see `household`):
+/// two clusters that share even one tenant belong to the same
+/// household, and every piece of evidence connecting any member is
+/// kept, not just the evidence connecting the specific pair a reader
+/// might expect.
 pub fn find_related_tenant_candidates(
     groups: &[TenantGroup],
     composer: &dyn NoteComposer,
 ) -> Vec<RelatedTenantCandidate> {
-    struct RawEvidence {
-        signal: RelatednessSignal,
-        value: String,
-        keys: Vec<String>,
-    }
-
     let mut raw = Vec::new();
     for signal in [
         RelatednessSignal::SharedPhone,
@@ -165,58 +153,8 @@ pub fn find_related_tenant_candidates(
         }
     }
 
-    // Union-find over group keys: every key in one piece of evidence
-    // joins the same household. `union`ing each adjacent pair in a
-    // slice transitively joins the whole slice, since `find` follows
-    // parent chains to their root regardless of how many hops deep.
-    let mut parent: HashMap<String, String> = HashMap::new();
-    fn find(parent: &mut HashMap<String, String>, key: &str) -> String {
-        parent
-            .entry(key.to_string())
-            .or_insert_with(|| key.to_string());
-        let mut root = key.to_string();
-        while parent[&root] != root {
-            root = parent[&root].clone();
-        }
-        // Path compression: point every visited node straight at the
-        // root, so repeated lookups on a long chain stay cheap.
-        let mut node = key.to_string();
-        while parent[&node] != root {
-            let next = parent[&node].clone();
-            parent.insert(node, root.clone());
-            node = next;
-        }
-        root
-    }
-    fn union(parent: &mut HashMap<String, String>, a: &str, b: &str) {
-        let root_a = find(parent, a);
-        let root_b = find(parent, b);
-        if root_a != root_b {
-            parent.insert(root_a, root_b);
-        }
-    }
-
-    for evidence in &raw {
-        for pair in evidence.keys.windows(2) {
-            union(&mut parent, &pair[0], &pair[1]);
-        }
-    }
-
-    // Bucket every piece of evidence under its household's root key.
-    let mut households: HashMap<String, (std::collections::HashSet<String>, Vec<RawEvidence>)> =
-        HashMap::new();
-    for evidence in raw {
-        let root = find(&mut parent, &evidence.keys[0]);
-        let entry = households.entry(root).or_default();
-        entry.0.extend(evidence.keys.iter().cloned());
-        entry.1.push(evidence);
-    }
-
     let mut candidates = Vec::new();
-    for (_, (member_set, mut evidence_list)) in households {
-        if member_set.len() > MAX_HOUSEHOLD_SIZE {
-            continue;
-        }
+    for (member_set, mut evidence_list) in group_into_households(raw) {
         let mut group_keys: Vec<String> = member_set.into_iter().collect();
         group_keys.sort();
 
@@ -440,5 +378,5 @@ pub(crate) fn full_address(
 }
 
 #[cfg(test)]
-#[path = "relatedness_tests.rs"]
+#[path = "../relatedness_tests.rs"]
 mod tests;
