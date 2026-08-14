@@ -85,17 +85,26 @@ impl DedupSessionService {
     /// (which tolerates and skips unparseable files), this is a single
     /// QMS export file — a parse/ingest failure here is a real error to
     /// surface to the caller, not something to silently skip.
+    /// Returns the freshly built report and records alongside the new
+    /// session id, so the caller can use them directly rather than
+    /// immediately re-fetching (and re-cloning) the very session just
+    /// saved below.
     pub fn create_session(
         &self,
         file: UploadedFile,
         owner_id: Option<Uuid>,
-    ) -> anyhow::Result<String> {
+    ) -> anyhow::Result<(String, DedupReport, Vec<TenantRecord>)> {
         let document = parse_document(&file)?;
         let records = records_from_csv_document(&document)?;
         let dedup_report = report::run(records.clone());
 
         let session_id = Uuid::new_v4().to_string();
-        let session = DedupSession::new(session_id.clone(), owner_id, records, dedup_report);
+        let session = DedupSession::new(
+            session_id.clone(),
+            owner_id,
+            records.clone(),
+            dedup_report.clone(),
+        );
 
         tracing::info!(
             session_id = %session_id,
@@ -107,6 +116,6 @@ impl DedupSessionService {
 
         self.store.save(session);
 
-        Ok(session_id)
+        Ok((session_id, dedup_report, records))
     }
 }

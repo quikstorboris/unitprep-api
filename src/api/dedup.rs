@@ -130,10 +130,12 @@ pub async fn check(
 
     let file_name = file.file_name.clone();
 
-    let session_id = match DedupSessionService::new(Arc::clone(&state.dedup_sessions))
-        .create_session(file, Some(user.user_id))
+    let (session_id, report, records) = match DedupSessionService::new(Arc::clone(
+        &state.dedup_sessions,
+    ))
+    .create_session(file, Some(user.user_id))
     {
-        Ok(id) => id,
+        Ok(created) => created,
         Err(err) => {
             // A parse/ingest failure here describes a problem with the
             // uploaded file itself (missing FirtLast column, unsupported
@@ -150,13 +152,6 @@ pub async fn check(
                 .into_response();
         }
     };
-
-    let (report, records) = state
-        .dedup_sessions
-        .with_owned_session(&session_id, user.user_id, |session| {
-            (session.report.clone(), session.records.clone())
-        })
-        .expect("session was just created and saved with this same owner_id");
 
     tracing::info!(
         session_id = %session_id,
