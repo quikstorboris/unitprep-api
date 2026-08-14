@@ -218,6 +218,7 @@ struct PatternRow {
 async fn load_label_proximity_patterns(
     tx: &mut sqlx::PgConnection,
 ) -> Result<Vec<LabelProximityPattern>, sqlx::Error> {
+    // sentence_pattern rows (the other `kind`) and qms_tag.value_shape aren't consumed here yet.
     let rows: Vec<PatternRow> = sqlx::query_as(
         "SELECT tag_key, pattern FROM client_ops.tag_pattern
           WHERE kind = 'label_proximity' AND is_active = true",
