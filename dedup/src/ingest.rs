@@ -87,3 +87,49 @@ pub fn records_from_csv_document(doc: &CsvDocument) -> Result<Vec<TenantRecord>>
         })
         .collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn document(headers: Vec<&str>, rows: Vec<Vec<&str>>) -> CsvDocument {
+        CsvDocument {
+            file_name: "test.csv".to_string(),
+            headers: headers.into_iter().map(String::from).collect(),
+            rows: rows
+                .into_iter()
+                .map(|row| row.into_iter().map(String::from).collect())
+                .collect(),
+            modified_at: None,
+        }
+    }
+
+    #[test]
+    fn builds_a_tenant_record_from_a_matching_row() {
+        let doc = document(
+            vec!["CustNumb", "UnitNumber", "FirtLast", "Email"],
+            vec![vec!["C1", "101", "Doe, Jane", "jane@example.com"]],
+        );
+
+        let records = records_from_csv_document(&doc).expect("known-good document");
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].cust_numb, "C1");
+        assert_eq!(records[0].unit_number, "101");
+        assert_eq!(records[0].first_last, "Doe, Jane");
+        assert_eq!(records[0].email, "jane@example.com");
+        // Every column this crate doesn't recognize/wasn't present is left
+        // at TenantRecord::default() rather than erroring -- same
+        // tolerance the reference script has via dict.get(field, "").
+        assert_eq!(records[0].company_name, "");
+    }
+
+    #[test]
+    fn refuses_a_document_missing_the_required_firtlast_column() {
+        let doc = document(vec!["CustNumb", "UnitNumber"], vec![vec!["C1", "101"]]);
+
+        let err = records_from_csv_document(&doc).expect_err("FirtLast is required");
+
+        assert!(err.to_string().contains("FirtLast"));
+    }
+}
