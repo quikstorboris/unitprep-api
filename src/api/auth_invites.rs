@@ -128,10 +128,7 @@ pub async fn create_invite(
     headers: HeaderMap,
     Json(request): Json<CreateInviteRequest>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
-    let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     // Redundant with the RLS policy by design, not by accident -- see the
     // module docs.
@@ -563,10 +560,7 @@ pub async fn recover_account(
     headers: HeaderMap,
     Json(request): Json<RecoverAccountRequest>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
-    let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     // Redundant with the RLS policy by design -- see create_invite above.
     if let Err(response) = admin

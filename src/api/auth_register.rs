@@ -97,8 +97,8 @@ use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{
     action_requires_step_up, audit_log, begin_owner_rls_transaction, begin_rls_transaction,
     clear_ceremony_cookie, generate_token, hash_token, issue_ceremony_cookie, issue_session_cookie,
-    read_ceremony_cookie, step_up_required, try_authenticated_user, RegisteredCredential,
-    RegistrationCeremony, ADD_PASSKEY, REGISTRATION_CEREMONY_COOKIE,
+    read_ceremony_cookie, session_lifetime_hours, step_up_required, try_authenticated_user,
+    RegisteredCredential, RegistrationCeremony, ADD_PASSKEY, REGISTRATION_CEREMONY_COOKIE,
 };
 
 /// How long a started-but-unfinished ceremony stays valid. Deliberately
@@ -106,19 +106,6 @@ use crate::auth::{
 /// the cookie expiring and the server-side state expiring must not
 /// disagree, or one of the two silently decides the real TTL.
 const CEREMONY_TTL_MINUTES: i64 = 5;
-
-/// Lifetime of a session issued by a successful invite registration.
-/// Overridable per deployment, same convention as `SESSION_TIMEOUT_SECS`
-/// / `HOST` / `PORT` in `main.rs`. A non-positive or unparseable value
-/// falls back to the default rather than producing an
-/// already-expired session.
-fn session_lifetime_hours() -> i64 {
-    std::env::var("SESSION_LIFETIME_HOURS")
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .filter(|hours| *hours > 0)
-        .unwrap_or(12)
-}
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterBeginRequest {
@@ -283,9 +270,7 @@ pub async fn register_begin(
     headers: HeaderMap,
     Json(request): Json<RegisterBeginRequest>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
+    let user_agent = crate::api::user_agent_from(&headers);
 
     // Resolved ONCE. Asking twice (a second call to decide
     // which path this is) would both waste a round trip and open a window
@@ -511,9 +496,7 @@ pub async fn register_finish(
     // the failure path below needs it too, and a value extracted twice is
     // a value that eventually gets extracted differently in one of the
     // two places.
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     let Some(ceremony_id) = read_ceremony_cookie(&jar, REGISTRATION_CEREMONY_COOKIE) else {
         return ceremony_not_found();
@@ -574,7 +557,7 @@ pub async fn register_finish(
                 audit_log::event::REGISTRATION_FAILED,
                 audit_log::Subjects::by(user_id),
                 user_agent,
-                Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+                ip_address,
                 audit_log::Change::none(),
                 serde_json::json!({
                     "reason": "credential_rejected",
@@ -617,7 +600,7 @@ pub async fn register_finish(
                 audit_log::event::REGISTRATION_FAILED,
                 audit_log::Subjects::by(user_id),
                 user_agent,
-                Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+                ip_address,
                 audit_log::Change::none(),
                 serde_json::json!({
                     "reason": "invite_consumed_elsewhere",
@@ -645,7 +628,7 @@ pub async fn register_finish(
         audit_log::event::PASSKEY_REGISTERED,
         audit_log::Subjects::by(user_id),
         user_agent,
-        Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+        ip_address,
         audit_log::Change::none(),
         // `device_bound` is captured here rather than left to be read off
         // the credential row later. The flag exists purely for admin

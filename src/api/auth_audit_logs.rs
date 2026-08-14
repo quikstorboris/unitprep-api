@@ -84,6 +84,63 @@ fn parse_user_ids(raw: &str) -> Result<Vec<Uuid>, String> {
         .collect()
 }
 
+/// Shared `event_type` filter for `list_audit_logs` and
+/// `fetch_filtered_audit_logs` -- a no-op on an empty list, `IN (...)`
+/// otherwise. `column` is always a literal passed by the caller (never
+/// request input), so building it into the SQL text is not an injection
+/// risk; it exists only because the two call sites qualify the column
+/// differently (`event_type` vs. `fetch_filtered_audit_logs`'s joined
+/// `l.event_type`).
+fn push_event_type_filter(
+    builder: &mut QueryBuilder<sqlx::Postgres>,
+    column: &str,
+    event_types: &[String],
+) {
+    if event_types.is_empty() {
+        return;
+    }
+
+    builder.push(format!(" AND {column} IN ("));
+    {
+        let mut separated = builder.separated(", ");
+        for event_type in event_types {
+            separated.push_bind(event_type.clone());
+        }
+    }
+    builder.push(")");
+}
+
+/// Shared "actor or target" user-id filter, same reasoning and column-
+/// parameterization as `push_event_type_filter` above. Always uses `IN
+/// (...)` rather than special-casing a single id with `=` -- the two are
+/// equivalent SQL, and one shape for both callers is the point.
+fn push_user_id_filter(
+    builder: &mut QueryBuilder<sqlx::Postgres>,
+    actor_column: &str,
+    target_column: &str,
+    user_ids: &[Uuid],
+) {
+    if user_ids.is_empty() {
+        return;
+    }
+
+    builder.push(format!(" AND ({actor_column} IN ("));
+    {
+        let mut separated = builder.separated(", ");
+        for user_id in user_ids {
+            separated.push_bind(*user_id);
+        }
+    }
+    builder.push(format!(") OR {target_column} IN ("));
+    {
+        let mut separated = builder.separated(", ");
+        for user_id in user_ids {
+            separated.push_bind(*user_id);
+        }
+    }
+    builder.push("))");
+}
+
 #[derive(Debug, Serialize)]
 pub struct AuditLogEntry {
     pub id: i64,
@@ -151,55 +208,9 @@ pub async fn list_audit_logs(
         builder.push(" AND id < ").push_bind(before_id);
     }
     if let Some(raw) = &query.event_type {
-        let values = parse_event_types(raw);
-        match values.len() {
-            0 => {}
-            1 => {
-                builder
-                    .push(" AND event_type = ")
-                    .push_bind(values.into_iter().next().expect("checked len == 1"));
-            }
-            _ => {
-                builder.push(" AND event_type IN (");
-                {
-                    let mut separated = builder.separated(", ");
-                    for value in values {
-                        separated.push_bind(value);
-                    }
-                }
-                builder.push(")");
-            }
-        }
+        push_event_type_filter(&mut builder, "event_type", &parse_event_types(raw));
     }
-    match user_ids.len() {
-        0 => {}
-        1 => {
-            let user_id = user_ids[0];
-            builder
-                .push(" AND (actor_user_id = ")
-                .push_bind(user_id)
-                .push(" OR target_user_id = ")
-                .push_bind(user_id)
-                .push(")");
-        }
-        _ => {
-            builder.push(" AND (actor_user_id IN (");
-            {
-                let mut separated = builder.separated(", ");
-                for user_id in &user_ids {
-                    separated.push_bind(*user_id);
-                }
-            }
-            builder.push(") OR target_user_id IN (");
-            {
-                let mut separated = builder.separated(", ");
-                for user_id in &user_ids {
-                    separated.push_bind(*user_id);
-                }
-            }
-            builder.push("))");
-        }
-    }
+    push_user_id_filter(&mut builder, "actor_user_id", "target_user_id", &user_ids);
 
     // Newest first -- the audit viewer's primary access pattern, matching
     // the index the schema already carries on created_at. Ordered by id
@@ -504,34 +515,13 @@ async fn fetch_filtered_audit_logs(
         .push(" AND l.created_at <= ")
         .push_bind(request.date_to);
 
-    if !request.event_types.is_empty() {
-        builder.push(" AND l.event_type IN (");
-        {
-            let mut separated = builder.separated(", ");
-            for event_type in &request.event_types {
-                separated.push_bind(event_type.clone());
-            }
-        }
-        builder.push(")");
-    }
-
-    if !request.user_ids.is_empty() {
-        builder.push(" AND (l.actor_user_id IN (");
-        {
-            let mut separated = builder.separated(", ");
-            for user_id in &request.user_ids {
-                separated.push_bind(*user_id);
-            }
-        }
-        builder.push(") OR l.target_user_id IN (");
-        {
-            let mut separated = builder.separated(", ");
-            for user_id in &request.user_ids {
-                separated.push_bind(*user_id);
-            }
-        }
-        builder.push("))");
-    }
+    push_event_type_filter(&mut builder, "l.event_type", &request.event_types);
+    push_user_id_filter(
+        &mut builder,
+        "l.actor_user_id",
+        "l.target_user_id",
+        &request.user_ids,
+    );
 
     if let Some(ip) = ip_filter {
         builder.push(" AND l.ip_address = ").push_bind(ip);
@@ -607,10 +597,7 @@ pub async fn export_audit_logs(
     headers: HeaderMap,
     Json(request): Json<ExportAuditLogsRequest>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
-    let ip_address = Some(IpNetwork::from(addr.ip()));
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     // Redundant with the RLS policy by design -- see list_audit_logs above.
     if let Err(response) = admin

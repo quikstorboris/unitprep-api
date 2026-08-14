@@ -43,24 +43,14 @@ use unitprep_core::session_store::SessionStoreExt;
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{
     audit_log, begin_owner_rls_transaction, clear_ceremony_cookie, generate_token,
-    issue_ceremony_cookie, issue_session_cookie, read_ceremony_cookie, AuthenticationCeremony,
-    StoredCredential, LOGIN_CEREMONY_COOKIE,
+    issue_ceremony_cookie, issue_session_cookie, read_ceremony_cookie, session_lifetime_hours,
+    AuthenticationCeremony, StoredCredential, LOGIN_CEREMONY_COOKIE,
 };
 
 /// Matches the registration ceremony's TTL and the ceremony store's own
 /// timeout in `main.rs` -- see the note there on why this is fixed rather
 /// than env-tunable.
 const CEREMONY_TTL_MINUTES: i64 = 5;
-
-/// Same override and same default as the bootstrap-registration path, so a
-/// session's lifetime does not depend on which endpoint minted it.
-fn session_lifetime_hours() -> i64 {
-    std::env::var("SESSION_LIFETIME_HOURS")
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .filter(|hours| *hours > 0)
-        .unwrap_or(12)
-}
 
 #[derive(Debug, Deserialize)]
 pub struct LoginBeginRequest {
@@ -142,9 +132,7 @@ pub async fn login_begin(
     headers: HeaderMap,
     Json(request): Json<LoginBeginRequest>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
+    let user_agent = crate::api::user_agent_from(&headers);
 
     let email = request.email.trim();
 
@@ -282,9 +270,7 @@ pub async fn login_finish(
     headers: HeaderMap,
     Json(request): Json<LoginFinishRequest>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
+    let user_agent = crate::api::user_agent_from(&headers);
 
     let Some(ceremony_id) = read_ceremony_cookie(&jar, LOGIN_CEREMONY_COOKIE) else {
         return ceremony_not_found();

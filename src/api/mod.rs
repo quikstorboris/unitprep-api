@@ -58,6 +58,13 @@ use crate::application::dedup_session_service::DedupSession;
 use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
 
+/// Ceiling for `/tagger/check`'s upload specifically, well under the
+/// router-wide `DefaultBodyLimit` below -- a `.docx` template is XML plus
+/// occasional embedded media, not a bulk data export, so 10MB comfortably
+/// covers a real template while bounding a pathological upload much
+/// tighter than the general 100MB ceiling meant for other endpoints.
+const TAGGER_CHECK_BODY_LIMIT_BYTES: usize = 10 * 1024 * 1024;
+
 #[derive(Clone)]
 pub struct AppState {
     // Named for the tool it serves, not just "the store" — UnitPrep is
@@ -186,6 +193,29 @@ pub(crate) fn internal_error(context: &str) -> Response {
         }),
     )
         .into_response()
+}
+
+/// The browser/IP pair nearly every auth handler pulls out of the request
+/// to pass into `audit_log::record` -- `user_agent` borrows from `headers`,
+/// which is why this takes a reference rather than an owned `HeaderMap`.
+/// Handlers with no `ConnectInfo<SocketAddr>` extractor on their route (no
+/// IP to report) use `user_agent_from` alone instead of this.
+pub(crate) fn request_context(
+    headers: &axum::http::HeaderMap,
+    addr: std::net::SocketAddr,
+) -> (Option<&str>, Option<sqlx::types::ipnetwork::IpNetwork>) {
+    (
+        user_agent_from(headers),
+        Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip())),
+    )
+}
+
+/// Just the `User-Agent` half of `request_context`, for handlers whose
+/// route has no `ConnectInfo<SocketAddr>` extractor to pair it with.
+pub(crate) fn user_agent_from(headers: &axum::http::HeaderMap) -> Option<&str> {
+    headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
 }
 
 /// Origins allowed to call this API. Defaults to the frontend dev servers
@@ -342,6 +372,15 @@ pub fn router(state: AppState) -> Router {
                 .error_handler(rate_limit_exceeded_with_audit("invite", state.db.clone())),
         );
 
+    // Tighter than the router-wide DefaultBodyLimit near the bottom of
+    // this function -- see TAGGER_CHECK_BODY_LIMIT_BYTES's own doc
+    // comment. Split into its own router purely so the layer applies to
+    // this one route, same "split for layer scoping" pattern as
+    // auth_routes/invite_routes above.
+    let tagger_check_route = Router::new()
+        .route("/tagger/check", post(tagger::check))
+        .layer(DefaultBodyLimit::max(TAGGER_CHECK_BODY_LIMIT_BYTES));
+
     Router::new()
         .route("/health", get(health))
         .route("/health/db", get(health_db))
@@ -475,9 +514,9 @@ pub fn router(state: AppState) -> Router {
         .route("/dedup/check", post(dedup::check))
         .route("/dedup/report", post(dedup::report))
         .route("/dedup/export", post(dedup::export))
-        .route("/tagger/check", post(tagger::check))
         .route("/tagger/report", post(tagger::report))
         .route("/tagger/apply", post(tagger::apply))
+        .merge(tagger_check_route)
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(state)
         .layer(cors)

@@ -93,9 +93,7 @@ pub async fn logout_everywhere(
 }
 
 async fn sign_out(state: AppState, jar: CookieJar, headers: HeaderMap, scope: Scope) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
+    let user_agent = crate::api::user_agent_from(&headers);
 
     // Read BEFORE clearing, and the order is load-bearing. Clearing adds an
     // expired cookie with an empty value (see `clear_session_cookie` for why

@@ -88,10 +88,7 @@ pub async fn deactivate_user(
     headers: HeaderMap,
     Path(target_user_id): Path<Uuid>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
-    let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     // Redundant with the RLS policy / set_user_status's own SECURITY
     // DEFINER check by design -- see auth_invites.rs's module doc for why
@@ -249,10 +246,7 @@ pub async fn reactivate_user(
     headers: HeaderMap,
     Path(target_user_id): Path<Uuid>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
-    let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     // Same two-layer reasoning as deactivate_user above.
     if let Err(response) = admin

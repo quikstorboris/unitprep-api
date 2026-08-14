@@ -45,6 +45,27 @@ pub fn validate_cookie_security(rp_origin: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// How long a freshly issued session lives before its absolute expiry
+/// (`auth.sessions.expires_at`), set once at login/registration and never
+/// extended -- the other half of the Phase II session-hardening pair
+/// alongside `authenticated_user::session_idle_timeout_minutes`, which
+/// bounds how long a session can sit unused. Same override-and-default
+/// shape, same floor-of-a-positive-value reasoning: a misconfigured
+/// `SESSION_LIFETIME_HOURS=0` (or negative, or non-numeric) silently
+/// read as "sessions never expire" would defeat the whole point of
+/// having an absolute ceiling, so it falls back to the default instead.
+///
+/// Previously duplicated verbatim in `auth_login.rs` and
+/// `auth_register.rs`, each noting in a comment that it had to match the
+/// other -- a real drift risk the comments only documented, never closed.
+pub fn session_lifetime_hours() -> i64 {
+    std::env::var("SESSION_LIFETIME_HOURS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .filter(|hours| *hours > 0)
+        .unwrap_or(12)
+}
+
 /// Builds the Set-Cookie response for a freshly issued session --
 /// httpOnly (unreadable to page JS, so an XSS bug cannot exfiltrate
 /// it), SameSite=Strict (never sent on a cross-site request, including a

@@ -29,7 +29,8 @@ pub use roles::{remaining_active_admins_excluding, resolve_role_id, role_keys_fo
 // eventually". The ceremony-cookie constants are re-exported because callers
 // genuinely pass them, choosing between the login and registration cookie.
 pub use session_cookie::{
-    clear_session_cookie, issue_session_cookie, read_session_cookie, validate_cookie_security,
+    clear_session_cookie, issue_session_cookie, read_session_cookie, session_lifetime_hours,
+    validate_cookie_security,
 };
 pub use session_token::{generate_token, hash_token};
 pub use step_up_policy::{action_requires_step_up, ADD_PASSKEY};

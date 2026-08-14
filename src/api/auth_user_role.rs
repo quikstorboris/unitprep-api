@@ -89,10 +89,7 @@ pub async fn grant_role(
     Path(target_user_id): Path<Uuid>,
     Json(request): Json<GrantRoleRequest>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
-    let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     if let Err(response) = admin
         .require_permission(
@@ -234,10 +231,7 @@ pub async fn revoke_role(
     headers: HeaderMap,
     Path((target_user_id, role_key)): Path<(Uuid, String)>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
-    let ip_address = Some(sqlx::types::ipnetwork::IpNetwork::from(addr.ip()));
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     if let Err(response) = admin
         .require_permission(

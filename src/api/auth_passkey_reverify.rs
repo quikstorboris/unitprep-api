@@ -169,9 +169,7 @@ pub async fn reverify_finish(
     jar: CookieJar,
     Json(request): Json<ReverifyFinishRequest>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
+    let user_agent = crate::api::user_agent_from(&headers);
 
     let Some(ceremony_id) = read_ceremony_cookie(&jar, REVERIFY_CEREMONY_COOKIE) else {
         return ceremony_not_found();

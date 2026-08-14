@@ -197,9 +197,7 @@ pub async fn enroll_begin(
         }
     }
 
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
+    let user_agent = crate::api::user_agent_from(&headers);
 
     // The account's own email, read under the caller's own identity. Used as
     // the label an authenticator app displays, so it must be the real
@@ -268,9 +266,7 @@ pub async fn enroll_confirm(
         return not_configured();
     }
 
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
+    let user_agent = crate::api::user_agent_from(&headers);
 
     let loaded = match load_own_secret(&state, user.user_id).await {
         Ok(Some(loaded)) => loaded,
@@ -373,9 +369,7 @@ pub async fn step_up(
     headers: HeaderMap,
     Json(request): Json<TotpCodeRequest>,
 ) -> Response {
-    let user_agent = headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok());
+    let user_agent = crate::api::user_agent_from(&headers);
 
     if !totp_configured() {
         return not_configured();
