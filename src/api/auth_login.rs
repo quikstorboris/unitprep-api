@@ -183,6 +183,17 @@ pub async fn login_begin(
         }
     };
 
+    // Accepted residual risk: this branch does strictly more work than the
+    // `Ok(None)` rejection above (a local WebAuthn challenge is built here;
+    // that path returns right after the DB round trip), so a precise enough
+    // timing measurement could distinguish "no such account" from "account
+    // exists" even though the HTTP response is identical either way -- the
+    // same class of gap `login_unavailable`'s doc comment already accepts
+    // for response content. Not mitigated with a dummy challenge because
+    // `start_passkey_authentication` needs a real credential to build one
+    // against; the local crypto step is also cheap relative to the DB
+    // round trip and network jitter both paths already incur, which makes
+    // this impractical to exploit reliably over a real network.
     let challenge = match state.auth_backend.start_authentication(&credentials.stored) {
         Ok(challenge) => challenge,
         Err(err) => {
