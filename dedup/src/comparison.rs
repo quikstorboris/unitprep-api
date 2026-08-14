@@ -57,20 +57,39 @@ fn distinct_display_values(
 
     for record in group {
         let raw = record.field(field).trim();
-        let blank = is_empty(raw);
-        let display = if blank {
-            "(blank)".to_string()
-        } else {
-            raw.to_string()
-        };
-        by_key
-            .entry((blank, normalize_value(kind, raw)))
-            .or_insert(display);
+        let (key, display) = blank_aware_key(kind, raw);
+        by_key.entry(key).or_insert(display);
     }
 
     let mut values: Vec<String> = by_key.into_values().collect();
-    values.sort_by_key(|v| (v == "(blank)", v.clone()));
+    values.sort_by_key(|v| blank_last_sort_key(v));
     values
+}
+
+/// The `(is_blank, normalized value)` key both `distinct_display_values`
+/// above and `phrasing::units_by_value` group records by, paired with the
+/// display string for a raw value (`"(blank)"` for a blank value, the raw
+/// value otherwise). Shared so both call sites treat "the same value" the
+/// exact same way `field_matches_across` below does when it decides a
+/// mismatch -- not a merely similar rule kept in sync by hand.
+pub(crate) fn blank_aware_key(
+    kind: crate::types::FieldKind,
+    raw: &str,
+) -> ((bool, String), String) {
+    let blank = is_empty(raw);
+    let display = if blank {
+        "(blank)".to_string()
+    } else {
+        raw.to_string()
+    };
+    ((blank, normalize_value(kind, raw)), display)
+}
+
+/// Sort key that puts `"(blank)"` last, then alphabetically -- the shared
+/// display convention both `distinct_display_values` and
+/// `phrasing::units_by_value` use for cross-record value listings.
+pub(crate) fn blank_last_sort_key(value: &str) -> (bool, String) {
+    (value == "(blank)", value.to_string())
 }
 
 /// True if every non-`Name`-category field already matches (after

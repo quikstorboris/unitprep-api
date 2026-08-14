@@ -146,20 +146,14 @@ fn units_by_value(group: &TenantGroup, field: FieldName) -> Vec<(String, Vec<&st
 
     for record in &group.records {
         let raw = record.field(field).trim();
-        let blank = raw.is_empty();
-        let display = if blank {
-            "(blank)".to_string()
-        } else {
-            raw.to_string()
-        };
-        let key = (blank, normalize_value(kind, raw));
+        let (key, display) = crate::comparison::blank_aware_key(kind, raw);
 
         let entry = by_key.entry(key).or_insert_with(|| (display, Vec::new()));
         entry.1.push(record.unit_number.as_str());
     }
 
     let mut by_value: Vec<(String, Vec<&str>)> = by_key.into_values().collect();
-    by_value.sort_by_key(|(value, _)| (value == "(blank)", value.clone()));
+    by_value.sort_by_key(|(value, _)| crate::comparison::blank_last_sort_key(value));
 
     for (_, units) in &mut by_value {
         units.sort_unstable();
