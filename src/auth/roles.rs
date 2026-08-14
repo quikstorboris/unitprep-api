@@ -61,6 +61,20 @@ pub async fn role_keys_for_user(
 /// second caller to wait for the first to commit (or roll back) before it
 /// re-counts, so the check runs against up-to-date reality instead of two
 /// transactions' mutually-blind snapshots.
+///
+/// Must be called from a transaction whose RLS context (see
+/// `begin_rls_transaction`) actually holds the `admin` role -- not just
+/// any authenticated caller. `SELECT ... FOR UPDATE` is governed by
+/// `auth.roles`' SELECT policy (any authenticated caller) *and* its
+/// UPDATE policy (`roles_update_admin_only`, admin-only), since acquiring
+/// a lock is treated as a preliminary step toward a possible update; a
+/// non-admin's `FOR UPDATE` silently sees zero rows here (a hard
+/// `RowNotFound`, not a graceful refusal) even though a plain `SELECT`
+/// with the same GUCs would return the row fine. In practice this is
+/// always satisfied -- the only two callers (`revoke_role`/
+/// `deactivate_user`) already require an admin caller to reach this far
+/// -- but it is exactly the kind of thing that looks like "any
+/// authenticated caller" from this function's signature alone.
 pub async fn remaining_active_admins_excluding(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     excluded_user_id: Uuid,
@@ -81,4 +95,100 @@ pub async fn remaining_active_admins_excluding(
     .bind(excluded_user_id)
     .fetch_one(&mut **tx)
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    /// Real concurrency test for the last-active-admin race fix: proves
+    /// the `FOR UPDATE` lock on the shared `admin` role row genuinely
+    /// serializes two concurrent callers, rather than trusting the
+    /// reasoning in this function's own doc comment unverified.
+    ///
+    /// Needs a real, reachable Postgres (`DATABASE_URL` from `.env.local`)
+    /// -- `#[ignore]`d for the same reason `query_session`'s real-schema
+    /// test is: this crate's fast offline suite stays fast and offline by
+    /// default. Run explicitly with
+    /// `cargo test -- --ignored remaining_active_admins_excluding`.
+    ///
+    /// Two genuinely separate connections (not two `Transaction`s sharing
+    /// one) each start a transaction and call
+    /// `remaining_active_admins_excluding`. The first holds its lock for
+    /// a deliberate delay before committing; the second call is timed --
+    /// if the lock is doing its job, the second call cannot return until
+    /// the first transaction ends, so the elapsed time must be at least
+    /// as long as the first's hold duration. The original, race-prone
+    /// shape (no `FOR UPDATE` at all) would let both calls return almost
+    /// immediately, failing this assertion -- this test would have
+    /// caught the race this function exists to close.
+    ///
+    /// Uses `begin_rls_transaction` rather than a bare `db.begin()` --
+    /// `auth.roles` is RLS-protected (`roles_select_authenticated`
+    /// requires `app.current_user_id` to be set to *something*, any
+    /// authenticated caller), and every real call site already runs
+    /// inside one of these. A bare connection sees zero rows under RLS,
+    /// not an error, which would have made this test fail confusingly
+    /// on `RowNotFound` instead of proving anything about the lock.
+    #[tokio::test]
+    #[ignore = "needs a real, reachable Postgres -- see doc comment"]
+    async fn remaining_active_admins_excluding_serializes_concurrent_callers() {
+        let _ = dotenvy::from_filename(".env.local");
+        let db = crate::db::connect().expect("DATABASE_URL must be set -- see .env.local");
+
+        const HOLD: Duration = Duration::from_millis(400);
+        // FOR UPDATE on auth.roles is governed by its SELECT policy AND
+        // its admin-only UPDATE policy at once (see this function's own
+        // doc comment) -- an empty role set here would silently see zero
+        // rows instead of proving anything about the lock.
+        let admin_role_keys = [String::from("admin")];
+
+        let (lock_acquired_tx, lock_acquired_rx) = tokio::sync::oneshot::channel();
+
+        let first = {
+            let db = db.clone();
+            let admin_role_keys = admin_role_keys.clone();
+            tokio::spawn(async move {
+                let mut tx =
+                    crate::auth::begin_rls_transaction(&db, Uuid::new_v4(), &admin_role_keys)
+                        .await
+                        .expect("first transaction should begin");
+                remaining_active_admins_excluding(&mut tx, Uuid::new_v4())
+                    .await
+                    .expect("first call should succeed");
+                let _ = lock_acquired_tx.send(());
+                tokio::time::sleep(HOLD).await;
+                tx.commit().await.expect("first transaction should commit");
+            })
+        };
+
+        lock_acquired_rx
+            .await
+            .expect("first task should signal after acquiring the lock");
+
+        let started = Instant::now();
+        let mut second_tx =
+            crate::auth::begin_rls_transaction(&db, Uuid::new_v4(), &admin_role_keys)
+                .await
+                .expect("second transaction should begin");
+        remaining_active_admins_excluding(&mut second_tx, Uuid::new_v4())
+            .await
+            .expect("second call should succeed once the lock is free");
+        second_tx
+            .commit()
+            .await
+            .expect("second transaction should commit");
+        let elapsed = started.elapsed();
+
+        first.await.expect("first task should not panic");
+
+        assert!(
+            elapsed >= HOLD,
+            "the second caller returned after only {elapsed:?}, before the first \
+             transaction's {HOLD:?} hold ended -- the shared-role-row lock is not \
+             actually serializing concurrent callers"
+        );
+    }
 }
