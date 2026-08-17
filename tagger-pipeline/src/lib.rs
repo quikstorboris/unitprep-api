@@ -184,12 +184,20 @@ pub enum SubstitutionStyle {
     /// meaningful "preserved blank" left to keep once the tag itself
     /// would fill the whole span or more.
     ///
+    /// For a blank, the inserted tag itself is *also* given underline
+    /// formatting (same reasoning as [`Self::Replace`]'s own blank
+    /// case) -- the surrounding kept underscores are untouched, but the
+    /// tag sitting between them should still read as "this was a blank
+    /// line," not as plain text that happens to have underscores on
+    /// either side of it.
+    ///
     /// Only meaningful for a blank (`recognize_blanks`'s candidates) --
     /// centering a tag inside an already-filled value
     /// (`detect_candidates`'s candidates) would leave fragments of the
     /// old value on both sides of the new tag rather than replaced by
-    /// it. The caller decides which candidates this applies to; this
-    /// function has no notion of where a candidate came from.
+    /// it, and there's no blank to underline in that case either. The
+    /// caller decides which candidates this applies to; this function
+    /// has no notion of where a candidate came from.
     PreserveBlank,
 }
 
@@ -233,13 +241,29 @@ pub fn to_edit(
         SubstitutionStyle::PreserveBlank if replacement.len() < matched_len => {
             let left_padding = (matched_len - replacement.len()) / 2;
             let start = blank_start + left_padding;
-            AppliedEdit::Plain(Edit {
-                region: candidate.region,
-                flat_start: start,
-                flat_end: start + replacement.len(),
-                replacement,
-            })
+            let end = start + replacement.len();
+            if is_blank {
+                AppliedEdit::Underline(UnderlineEdit {
+                    region: candidate.region,
+                    flat_start: start,
+                    flat_end: end,
+                    replacement,
+                })
+            } else {
+                AppliedEdit::Plain(Edit {
+                    region: candidate.region,
+                    flat_start: start,
+                    flat_end: end,
+                    replacement,
+                })
+            }
         }
+        SubstitutionStyle::PreserveBlank if is_blank => AppliedEdit::Underline(UnderlineEdit {
+            region: candidate.region,
+            flat_start: blank_start,
+            flat_end: blank_end,
+            replacement,
+        }),
         SubstitutionStyle::PreserveBlank => AppliedEdit::Plain(Edit {
             region: candidate.region,
             flat_start: blank_start,
@@ -519,7 +543,8 @@ mod tests {
     #[test]
     fn preserve_blank_style_centers_the_tag_with_underscores_on_both_sides() {
         // 30 underscores, "{{m.indate}}" is 12 chars -- 18 chars of
-        // padding split 9/9.
+        // padding split 9/9. The kept underscores stay plain; only the
+        // tag itself in the middle is underlined.
         let xml = wrap(
             r#"<w:p><w:r><w:t>Move-In Date: ______________________________</w:t></w:r></w:p>"#,
         );
@@ -531,17 +556,20 @@ mod tests {
         )];
         let candidates = find_candidates(&doc, &[], &patterns);
 
-        let edit = plain(to_edit(
+        let edit = underlined(to_edit(
             &candidates[0],
             "{{m.indate}}".to_string(),
             SubstitutionStyle::PreserveBlank,
         ));
-        let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
+        let edited_xml = apply_all_edits(&xml, &doc, &[], &[edit]).unwrap();
         let reflattened = extract_flat_text(&edited_xml).body;
 
         assert_eq!(
             reflattened.text,
             "Move-In Date: _________{{m.indate}}_________"
+        );
+        assert!(
+            edited_xml.contains(r#"<w:rPr><w:u w:val="single"/></w:rPr><w:t>{{m.indate}}</w:t>"#)
         );
     }
 
@@ -591,7 +619,8 @@ mod tests {
     #[test]
     fn preserve_blank_style_degrades_to_replace_when_the_blank_is_too_short() {
         // 6 underscores, "{{m.indate}}" is 12 chars -- no room to keep
-        // any of the blank on either side, so it's just replaced.
+        // any of the blank on either side, so it's just replaced, same
+        // as Replace's own blank case (underlined, not plain).
         let xml = wrap(r#"<w:p><w:r><w:t>Move-In Date: ______</w:t></w:r></w:p>"#);
         let doc = extract_flat_text(&xml);
         let patterns = [label_pattern(
@@ -601,14 +630,36 @@ mod tests {
         )];
         let candidates = find_candidates(&doc, &[], &patterns);
 
-        let edit = plain(to_edit(
+        let edit = underlined(to_edit(
             &candidates[0],
             "{{m.indate}}".to_string(),
+            SubstitutionStyle::PreserveBlank,
+        ));
+        let edited_xml = apply_all_edits(&xml, &doc, &[], &[edit]).unwrap();
+        let reflattened = extract_flat_text(&edited_xml).body;
+
+        assert_eq!(reflattened.text, "Move-In Date: {{m.indate}}");
+    }
+
+    #[test]
+    fn preserve_blank_style_does_not_underline_an_already_filled_value() {
+        // "Smith" (5 chars) is a real detect_candidates match, not a
+        // blank; "{{e.lname}}" (11 chars) is longer than it, so this
+        // hits PreserveBlank's own too-short-to-center fallback (a full
+        // replace, same as Replace's shape) -- but since there's no
+        // blank here, it must stay a plain Edit, not underlined.
+        let xml = wrap(r#"<w:p><w:r><w:t>Last name: Smith</w:t></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let candidates = find_candidates(&doc, &[value("e.lname", "Smith")], &[]);
+
+        let edit = plain(to_edit(
+            &candidates[0],
+            "{{e.lname}}".to_string(),
             SubstitutionStyle::PreserveBlank,
         ));
         let edited_xml = apply_edits(&xml, &doc, &[edit]).unwrap();
         let reflattened = extract_flat_text(&edited_xml).body;
 
-        assert_eq!(reflattened.text, "Move-In Date: {{m.indate}}");
+        assert_eq!(reflattened.text, "Last name: {{e.lname}}");
     }
 }
