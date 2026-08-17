@@ -39,3 +39,4 @@ REFACTOR.md
 # Local editor/tool state -- e.g. if this repo is opened as an Obsidian
 # vault to read its markdown docs.
 .obsidian/
+.mcp.json
