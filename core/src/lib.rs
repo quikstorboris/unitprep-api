@@ -9,3 +9,4 @@ pub mod parsing;
 pub mod session;
 pub mod session_store;
 pub mod uploaded_file;
+pub mod vendor_format;

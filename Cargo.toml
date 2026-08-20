@@ -82,6 +82,13 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Session IDs
 uuid = { version = "1", features = ["v4"] }
 
+# client_ops::vendor_format's in-memory registry cache -- same
+# non-poisoning-on-panic rationale unitprep-core already uses it for
+# (see that crate's own Cargo.toml comment): a panicked reader/writer
+# must never permanently wedge vendor recognition for the rest of the
+# process's life the way a poisoned std::sync::RwLock would.
+parking_lot = "0.12"
+
 # ZIP export generation
 zip = "2"
 

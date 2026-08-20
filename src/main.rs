@@ -105,6 +105,35 @@ async fn main() {
         panic!("Failed to configure the database pool: {err}");
     });
 
+    // Group Prep's and dedup's vendor-format registries -- an in-memory
+    // snapshot per content type, loaded once here (best-effort; see
+    // `initial_cache`'s own doc comment for why a failure here doesn't
+    // panic startup, matching `db_pool`'s own non-blocking stance just
+    // above) and kept fresh by a background task, never queried per
+    // request. See `client_ops::vendor_format`'s module doc comment for
+    // the full reasoning.
+    let unit_vendors = client_ops::vendor_format::initial_cache(
+        &db_pool,
+        unitprep_core::vendor_format::ContentType::Units,
+    )
+    .await;
+    client_ops::vendor_format::start_refresh_task(
+        unit_vendors.clone(),
+        db_pool.clone(),
+        unitprep_core::vendor_format::ContentType::Units,
+    );
+
+    let tenant_vendors = client_ops::vendor_format::initial_cache(
+        &db_pool,
+        unitprep_core::vendor_format::ContentType::Tenants,
+    )
+    .await;
+    client_ops::vendor_format::start_refresh_task(
+        tenant_vendors.clone(),
+        db_pool.clone(),
+        unitprep_core::vendor_format::ContentType::Tenants,
+    );
+
     // WEBAUTHN_RP_ID must be a valid domain suffix of WEBAUTHN_RP_ORIGIN
     // (e.g. "example.com" with "https://app.example.com") -- defaults
     // match local frontend dev, same as CORS_ALLOWED_ORIGINS below.
@@ -160,6 +189,8 @@ async fn main() {
         auth_backend,
         registration_ceremonies,
         authentication_ceremonies,
+        unit_vendors,
+        tenant_vendors,
     };
 
     let app = api::router(state);

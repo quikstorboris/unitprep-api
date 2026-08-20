@@ -5,6 +5,7 @@ use unitprep_core::session_store::SessionStore;
 use crate::application::dedup_session_service::DedupSession;
 use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
+use crate::client_ops::vendor_format::VendorFormatCache;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -45,4 +46,21 @@ pub struct AppState {
     // can be in flight simultaneously (see the ceremony-cookie names in
     // auth/ceremony_cookie.rs for the same reasoning).
     pub authentication_ceremonies: Arc<dyn SessionStore<crate::auth::AuthenticationCeremony>>,
+
+    // Group Prep's recognized unit-file vendor registry (`client_ops.
+    // vendor_format` where content_type = 'units') -- an in-memory
+    // snapshot refreshed on a timer by
+    // `client_ops::vendor_format::start_refresh_task`, not queried per
+    // request. See that module's doc comment for why: discovery's own
+    // handlers are called directly by a large existing test suite
+    // against a pool that never connects, and those tests must stay
+    // DB-free.
+    pub unit_vendors: VendorFormatCache,
+
+    // Dedup's own vendor registry (content_type = 'tenants'), same
+    // caching reasoning as `unit_vendors` above -- a distinct field
+    // rather than one cache keyed by content type, matching how
+    // `unit_group_sessions`/`dedup_sessions` above are already separate
+    // fields per tool rather than one map.
+    pub tenant_vendors: VendorFormatCache,
 }
