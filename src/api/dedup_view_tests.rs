@@ -150,3 +150,66 @@ fn typo_variant_resolves_real_display_names_and_units() {
     assert_eq!(variant.display_name_b, "Warren Carroll");
     assert_eq!(variant.units_b, vec!["204"]);
 }
+
+/// Regression test for a real bug: `contact_info_matches` alone reads
+/// as "everything matches" or "nothing matches" with no middle ground,
+/// but the underlying check is all-or-nothing across every non-Name
+/// field — a pair that matches on phone/address and differs only on
+/// email still gets a flat "differs." `differing_categories` exists so
+/// the UI can name the actual gap instead.
+#[test]
+fn typo_variant_names_which_categories_actually_differ() {
+    let records = vec![
+        record("101", "Warren", "Carolle", "warren@example.com"),
+        record("204", "Warren", "Carroll", "different@example.com"),
+    ];
+
+    let report = DedupReport {
+        typo_variant_candidates: vec![TypoVariantCandidate {
+            key_a: "warrencarolle".to_string(),
+            key_b: "warrencarroll".to_string(),
+            ratio: 0.95,
+            contact_info_matches: false,
+            note: "note text".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let view = build_report_view(&report, &records);
+    let variant = &view.typo_variant_candidates[0];
+
+    assert_eq!(variant.differing_categories, vec![FieldCategory::Email]);
+    // The whole reason these two are a typo-variant candidate is that
+    // their names differ slightly -- that must never show up as a
+    // "differing category" here, or every candidate would trivially
+    // list Name and the field would carry zero information.
+    assert!(!variant.differing_categories.contains(&FieldCategory::Name));
+}
+
+/// The complement: when every non-Name field genuinely matches,
+/// `differing_categories` must be empty, not just `contact_info_matches`
+/// being true -- the UI renders "Contact info matches" specifically
+/// when this list is empty.
+#[test]
+fn typo_variant_differing_categories_is_empty_when_contact_info_matches() {
+    let records = vec![
+        record("101", "Warren", "Carolle", "same@example.com"),
+        record("204", "Warren", "Carroll", "same@example.com"),
+    ];
+
+    let report = DedupReport {
+        typo_variant_candidates: vec![TypoVariantCandidate {
+            key_a: "warrencarolle".to_string(),
+            key_b: "warrencarroll".to_string(),
+            ratio: 0.95,
+            contact_info_matches: true,
+            note: "note text".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let view = build_report_view(&report, &records);
+    let variant = &view.typo_variant_candidates[0];
+
+    assert!(variant.differing_categories.is_empty());
+}

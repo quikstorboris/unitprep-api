@@ -57,6 +57,12 @@ pub struct TypoVariantView {
     pub display_name_b: String,
     pub units_b: Vec<String>,
     pub contact_info_matches: bool,
+    /// Which non-Name categories actually differ across the combined
+    /// pair — empty when `contact_info_matches` is true. Lets the UI
+    /// name what disagrees (or confirm nothing does) instead of
+    /// collapsing to a bare "differs"/"matches" that hides how much of
+    /// the contact info actually lines up.
+    pub differing_categories: Vec<FieldCategory>,
     pub note: String,
 }
 
@@ -159,6 +165,28 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
             let group_a = find(&candidate.key_a);
             let group_b = find(&candidate.key_b);
 
+            // `contact_info_matches` alone only says "does EVERY
+            // non-name field match, with no exceptions" -- true and
+            // false read fine at the extremes, but a pair that matches
+            // on phone/email/address and differs only on, say,
+            // CompanyName still gets a flat "differs," which reads as
+            // "nothing matches" when almost everything did. Naming
+            // which categories actually differ (empty when
+            // `contact_info_matches` is true) is what the UI needs to
+            // avoid that — see `FlaggedGroupsSection.tsx`'s own
+            // `categories` field for the equivalent on flagged groups.
+            let combined: Vec<TenantRecord> = group_a
+                .into_iter()
+                .chain(group_b)
+                .flat_map(|g| g.records.clone())
+                .collect();
+            let differing_categories: Vec<FieldCategory> =
+                unitprep_dedup::comparison::find_differing_categories(&combined)
+                    .into_iter()
+                    .map(|m| m.category)
+                    .filter(|category| *category != FieldCategory::Name)
+                    .collect();
+
             TypoVariantView {
                 display_name_a: group_a
                     .map(|g| g.records[0].display_name())
@@ -173,6 +201,7 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
                     .map(|g| group_units(g).into_iter().map(String::from).collect())
                     .unwrap_or_default(),
                 contact_info_matches: candidate.contact_info_matches,
+                differing_categories,
                 note: candidate.note.clone(),
             }
         })
