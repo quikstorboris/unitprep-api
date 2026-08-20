@@ -1,12 +1,20 @@
-//! Guards against CSV/XLSX formula injection (CWE-1236): a cell value
+//! Guards against CSV formula injection (CWE-1236): a cell value
 //! beginning with `=`, `+`, `-`, `@`, tab, or carriage return is treated
 //! as a live formula (or DDE command, for the older prefixes) by Excel
-//! and similar spreadsheet apps when the file is opened. Export data
-//! here ultimately comes from tenant/unit records in uploaded facility
+//! and similar spreadsheet apps when a delimited text file is *opened* —
+//! there's no cell-type metadata in CSV, so Excel's own open heuristic
+//! re-infers each cell's type from the raw text. Export data here
+//! ultimately comes from tenant/unit records in uploaded facility
 //! files, and these exports are handed straight to facility managers to
 //! open in Excel — a crafted field value must not become a live formula.
 //! Prefixing with a leading apostrophe is the standard mitigation
 //! (OWASP): it forces the cell to be read as literal text.
+//!
+//! For every genuine CSV writer in this codebase — deliberately NOT for
+//! `dedup_xlsx_export.rs`, which writes a real .xlsx with explicit
+//! cell-type metadata Excel trusts instead of re-inferring, so there is
+//! nothing for this mitigation to guard against there; see that
+//! module's own doc comment for the verification behind that claim.
 
 const RISKY_PREFIXES: [char; 6] = ['=', '+', '-', '@', '\t', '\r'];
 

@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 
 use calamine::{open_workbook_auto_from_rs, Data, Reader};
 
@@ -6,6 +6,21 @@ use super::*;
 use unitprep_dedup::types::{
     FieldCategory, FieldMismatch, FieldName, FieldValueMismatch, FlaggedGroup, TenantGroup,
 };
+
+/// Reads `sheet1.xml` (the only worksheet this workbook ever writes)
+/// straight out of the generated .xlsx's zip container — the raw OOXML
+/// markup, for asserting on formatting `calamine` (a values-only reader)
+/// has no concept of: freeze panes, autofilter range, merged cells,
+/// explicit column widths.
+fn read_sheet_xml(xlsx_bytes: &[u8]) -> String {
+    let mut archive = zip::ZipArchive::new(Cursor::new(xlsx_bytes)).expect("valid xlsx/zip");
+    let mut file = archive
+        .by_name("xl/worksheets/sheet1.xml")
+        .expect("workbook always has exactly one worksheet");
+    let mut xml = String::new();
+    file.read_to_string(&mut xml).expect("valid UTF-8 XML");
+    xml
+}
 
 fn record(unit: &str, alt_phone: &str) -> TenantRecord {
     TenantRecord {
@@ -146,4 +161,98 @@ fn generate_xlsx_writes_a_related_tenants_section_without_crashing() {
         .iter()
         .find(|row| row[2].contains("share the same phone number"));
     assert!(note_row.is_some());
+}
+
+/// Regression test for a real reported bug: a `PhoneNumberPrefix` value
+/// of `"+1"` must round-trip as plain text, not `'+1` — the leading
+/// apostrophe is a CSV-import convention with no meaning in a real
+/// .xlsx cell, and rendered literally in some viewers. See this
+/// module's own doc comment for why `sanitize_cell` doesn't belong here
+/// the way it does in `dedup_csv_export.rs`.
+#[test]
+fn a_leading_plus_value_round_trips_without_a_csv_style_apostrophe() {
+    let group = TenantGroup {
+        key: "smith".to_string(),
+        records: vec![
+            TenantRecord {
+                unit_number: "101".to_string(),
+                phone_number_prefix: "+1".to_string(),
+                ..record("101", "")
+            },
+            record("102", "5551234"),
+        ],
+    };
+
+    let report = DedupReport {
+        flagged_groups: vec![FlaggedGroup {
+            group,
+            mismatches: vec![FieldMismatch {
+                category: FieldCategory::AltContact,
+                fields: vec![FieldValueMismatch {
+                    field: FieldName::AltContactPhoneNumber,
+                    values: vec!["5551234".into(), "(blank)".into()],
+                }],
+            }],
+            note: "note".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let xlsx_bytes = generate_xlsx(&report, &[]).expect("xlsx generation should succeed");
+    let rows = read_back(xlsx_bytes);
+
+    let prefix_col = COLUMNS
+        .iter()
+        .position(|&c| c == "PhoneNumberPrefix")
+        .expect("PhoneNumberPrefix is a real column");
+
+    assert_eq!(rows[1][prefix_col], "+1");
+}
+
+/// Covers the formatting fixes `calamine` (values only, no formatting
+/// concept) can't see: the Note column is capped and wrapped rather
+/// than autofit out to Excel's 255-character ceiling, the header row is
+/// frozen, the whole data range has an autofilter, and a section banner
+/// is merged across every column instead of sitting alone in column A.
+#[test]
+fn formatting_fixes_are_present_in_the_raw_worksheet_xml() {
+    let group = TenantGroup {
+        key: "smith".to_string(),
+        records: vec![record("101", ""), record("102", "5551234")],
+    };
+
+    let report = DedupReport {
+        flagged_groups: vec![FlaggedGroup {
+            group,
+            mismatches: vec![],
+            note: "note".to_string(),
+        }],
+        typo_variant_candidates: vec![],
+        related_tenant_candidates: vec![unitprep_dedup::RelatedTenantCandidate {
+            group_keys: vec!["smith".to_string()],
+            evidence: vec![],
+            note: "related note".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let xlsx_bytes = generate_xlsx(&report, &[]).expect("xlsx generation should succeed");
+    let xml = read_sheet_xml(&xlsx_bytes);
+
+    assert!(
+        xml.contains("<pane") && xml.contains(r#"ySplit="1""#),
+        "expected a frozen pane below the header row: {xml}"
+    );
+    assert!(xml.contains("<autoFilter"), "expected an autofilter: {xml}");
+    assert!(
+        xml.contains("<mergeCell "),
+        "expected the section banner row to be a merged cell: {xml}"
+    );
+
+    let note_col_index = NOTE_COLUMN + 1; // OOXML <col> indices are 1-based.
+    assert!(
+        xml.contains(&format!(r#"min="{note_col_index}" max="{note_col_index}""#))
+            && xml.contains(r#"customWidth="1""#),
+        "expected an explicit width on the Note column: {xml}"
+    );
 }
