@@ -39,6 +39,22 @@ name) to decide which category leads the note when more than one
 differs — but *every* differing category gets described in the note
 now (see rule 6), not just the lead one.
 
+**Placeholder carve-out, `Plain` fields only** (added 2026-08-19): a
+placeholder value someone typed as a stand-in for "not applicable"
+(the same `PLACEHOLDER_TOKENS` list rule 4 uses — `n/a`, `none`, `tbd`,
+etc., now shared from `normalization.rs`) counts as blank here too,
+for `FieldKind::Plain` fields only — a name-like free-text field has no
+meaningful distinction between "None" and blank; both unambiguously
+mean "nothing." **Deliberately NOT extended to `Phone`/`Address`** —
+those keep the strict blank-vs-filled rule above unchanged, since a
+garbage phone/address value is still real signal worth a facility
+manager's attention there (see the existing
+`a_garbage_phone_value_does_not_match_a_genuinely_blank_one` test).
+Fixed after the literal string `"None"` in `AlternateContactLastName`
+produced a spurious AltContact mismatch on real client data (Westpark)
+— the same failure class rule 4's own placeholder guard was added for
+2026-08-10, just in the comparison path instead of the relatedness one.
+
 **Special case**: the note says "these may be separate tenants"
 instead of "please fix this" only when Email **and** Address are the
 *only two* differing categories, and each is non-blank and mutually
@@ -95,6 +111,18 @@ tenants' other contact info already matches only changes the note's
 *wording* (confirms vs. flags a discrepancy), never whether the pair
 gets surfaced at all.
 
+**UI display, not just the note** (added 2026-08-19): the on-screen
+"Contact Info" column used to render a bare `contact_info_matches`
+boolean as "Contact info matches"/"Contact info differs" — misleading
+whenever a pair matches on most fields and differs on only one, which
+still read as a flat "differs" with no indication how much actually
+lined up. `dedup_view.rs`'s `TypoVariantView` now also carries
+`differing_categories` (via `comparison::find_differing_categories` on
+the combined pair, Name category excluded — the whole point of a typo
+candidate is that names differ, that's not new information), and the
+frontend names the actual differing category/categories instead of a
+bare "differs."
+
 **Runs over every tenant**, including single-unit ones — two
 single-unit tenants can be the same person under two misspelled keys
 just as easily as two multi-unit ones.
@@ -134,7 +162,10 @@ Four signals, each independent:
   value before any field-kind-specific normalization runs. Added
   2026-08-10 after the literal string `"None"` in
   `AlternateContactLastName` connected four otherwise-unrelated tenants
-  in real client data.
+  in real client data. `PLACEHOLDER_TOKENS`/`is_placeholder` moved to
+  `normalization.rs` 2026-08-19 (was private to this module) so rule 2
+  could reuse the exact same list for its own, more narrowly-scoped
+  carve-out rather than growing a second copy.
 - A phone value with fewer than 10 digits after normalization never
   counts as a shared phone — a shorter value is a truncated fragment
   (an area-code stub, a partial paste), not a real number. Added
@@ -233,9 +264,23 @@ deliberately an API-layer concern, not domain logic):
   `build_export_plan`) and its `cell_refs` submodule (col-letter math,
   `first_cell_ref` for XLSX's hyperlink target).
 - `src/infrastructure/dedup_csv_export.rs` — CSV writer over the plan.
+  Runs every cell through `csv_safety::sanitize_cell` (CSV formula-
+  injection guard, CWE-1236) — real CSV has no cell-type metadata, so
+  this is load-bearing here.
 - `src/infrastructure/dedup_xlsx_export.rs` — XLSX writer over the same
-  plan; adds per-cluster background color and a clickable hyperlink on
-  each note to its first cited cell.
+  plan; adds per-cluster background color, a clickable hyperlink on
+  each note to its first cited cell, a frozen header row, an
+  autofilter over the full data range, and merges/fills each section
+  banner row across every column. The Note column's width is capped
+  (not blindly autofit — a long correction note can otherwise hit
+  Excel's own 255-character autofit ceiling and push every later
+  column off-screen) and wraps. Deliberately does NOT run cells through
+  `sanitize_cell`: a real .xlsx cell carries explicit type metadata
+  Excel trusts instead of re-inferring from a leading character, so
+  there's nothing for that CSV-specific mitigation to guard against —
+  applying it anyway was itself a shipped bug (a `PhoneNumberPrefix` of
+  `"+1"` rendered as the literal text `'+1` in some viewers). Fixed
+  2026-08-19 alongside the other export-formatting findings above.
 
 ## Explicitly considered and NOT implemented
 
