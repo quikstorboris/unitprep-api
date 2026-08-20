@@ -31,7 +31,7 @@ use serde::Serialize;
 
 use household::{group_into_households, RawEvidence};
 
-use crate::normalization::{is_empty, normalize_value};
+use crate::normalization::{is_empty, is_placeholder, normalize_value};
 use crate::note_composer::NoteComposer;
 use crate::types::{FieldKind, TenantGroup};
 
@@ -44,34 +44,6 @@ use crate::types::{FieldKind, TenantGroup};
 /// shows a genuine relationship this size being missed, not
 /// speculatively.
 const MAX_CLUSTER_SIZE: usize = 3;
-
-/// A real (not `is_empty`) value that's still not real evidence — a
-/// placeholder someone typed as a stand-in for "not applicable"
-/// instead of leaving the field blank. Found in real production data:
-/// the literal string `"None"` sitting in `AlternateContactLastName`
-/// on four otherwise-unrelated tenants, all normalizing to the exact
-/// same "shared" alternate-contact value. Deliberately excludes bare
-/// single characters like `x`/`-`, which are common short real values
-/// (an alt-contact first initial) rather than placeholders. Checked
-/// against the raw, trim+lowercased value — not run through
-/// `normalize_value`'s `FieldKind::Address` punctuation folding first,
-/// since that can mangle a token (`"n/a"` → `"n a"`) before comparison.
-const PLACEHOLDER_TOKENS: &[&str] = &[
-    "n/a",
-    "na",
-    "none",
-    "tbd",
-    "unknown",
-    "n.a.",
-    "not applicable",
-    "null",
-    "nil",
-    "xxx",
-];
-
-fn is_placeholder(raw: &str) -> bool {
-    PLACEHOLDER_TOKENS.contains(&raw.trim().to_lowercase().as_str())
-}
 
 /// A normalized phone value with fewer digits than a real US phone
 /// number can have is a truncated fragment (an area-code stub, a

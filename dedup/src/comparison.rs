@@ -1,11 +1,42 @@
 //! Pass 2: within a multi-unit group, find which contact-info
 //! categories disagree. Ported from the reference script's
-//! `find_differing_categories` / `contact_info_matches`.
+//! `find_differing_categories` / `contact_info_matches`. Blank vs.
+//! filled counts as differing (an incomplete record is a mismatch, not
+//! a match) — except that a `FieldKind::Plain` value which is itself a
+//! placeholder (`"None"`, `"N/A"`, ...) counts as blank too, not as
+//! real differing text. See `is_blank_for_comparison`.
 
-use crate::normalization::{is_empty, normalize_value};
+use crate::normalization::{is_empty, is_placeholder, normalize_value};
 use crate::types::{
-    FieldMismatch, FieldName, FieldValueMismatch, TenantRecord, CATEGORY_PRIORITY, FIELD_SPECS,
+    FieldKind, FieldMismatch, FieldName, FieldValueMismatch, TenantRecord, CATEGORY_PRIORITY,
+    FIELD_SPECS,
 };
+
+/// Whether `raw` should be treated as blank for mismatch-detection
+/// purposes — genuinely blank, or (for `FieldKind::Plain` fields only) a
+/// placeholder like `"None"`/`"N/A"` typed as a stand-in for leaving the
+/// field empty. Real bug this closes: `"None"` sitting in
+/// `AlternateContactLastName` compared as real, differing text against
+/// a genuinely blank cell on another unit, flagging a spurious AltContact
+/// mismatch.
+///
+/// Deliberately scoped to `Plain` only — `Phone`/`Address` do NOT get
+/// this treatment here, unlike in `relatedness.rs`, which excludes
+/// placeholders from every signal regardless of kind. A phone field
+/// containing `"N/A"` is still a real, correctable mismatch against a
+/// genuinely blank phone field under this crate's own "blank vs. filled
+/// always differs" rule (see `field_matches_across`'s doc comment and
+/// its `a_garbage_phone_value_does_not_match_a_genuinely_blank_one`
+/// regression test) — that data-quality signal is exactly what a
+/// facility manager needs to see for a field like Phone/Address, where
+/// "something was typed, even if it's garbage" is meaningfully
+/// different information from "nothing was typed at all." A name-like
+/// free-text field (AlternateContactLastName, CompanyName, ...) has no
+/// such distinction to lose: "None" and blank both unambiguously mean
+/// "no value," so treating them as equal loses nothing.
+fn is_blank_for_comparison(kind: FieldKind, raw: &str) -> bool {
+    is_empty(raw) || (kind == FieldKind::Plain && is_placeholder(raw))
+}
 
 /// For each field category (in priority order), checks whether any of
 /// its fields differ (after normalization) across `group`. Returns one
@@ -76,13 +107,32 @@ pub(crate) fn blank_aware_key(
     kind: crate::types::FieldKind,
     raw: &str,
 ) -> ((bool, String), String) {
-    let blank = is_empty(raw);
-    let display = if blank {
+    let display = if is_blank_for_comparison(kind, raw) {
         "(blank)".to_string()
     } else {
         raw.to_string()
     };
-    ((blank, normalize_value(kind, raw)), display)
+    (comparison_key(kind, raw), display)
+}
+
+/// The `(is_blank-for-comparison, normalized-or-empty value)` pair both
+/// `blank_aware_key` and `field_matches_across` compare on. A value that
+/// counts as blank for comparison purposes (genuinely blank, or a
+/// `FieldKind::Plain` placeholder — see `is_blank_for_comparison`)
+/// always contributes an empty normalized value here, not whatever
+/// `normalize_value` would otherwise produce (`"none"` for the literal
+/// string `"None"`) — otherwise a placeholder and a genuinely blank
+/// value would carry the same `blank` flag but still compare unequal on
+/// the second half of the tuple, silently undoing the whole point of
+/// treating them as the same value.
+fn comparison_key(kind: crate::types::FieldKind, raw: &str) -> (bool, String) {
+    let blank = is_blank_for_comparison(kind, raw);
+    let normalized = if blank {
+        String::new()
+    } else {
+        normalize_value(kind, raw)
+    };
+    (blank, normalized)
 }
 
 /// Sort key that puts `"(blank)"` last, then alphabetically -- the shared
@@ -107,19 +157,21 @@ pub fn contact_info_matches(group: &[TenantRecord]) -> bool {
 /// empty string (e.g. a phone field containing "N/A" or "----", which
 /// `normalize_phone` reduces to "" for having no digits) must never
 /// compare equal here -- per this crate's own rule that blank-vs-filled
-/// always counts as a mismatch, not a match. Comparing raw blank-ness
-/// alongside the normalized value (rather than the normalized value
-/// alone) is what keeps that rule honest for fields where normalization
+/// always counts as a mismatch, not a match, UNLESS `comparison_key`'s
+/// own placeholder carve-out for `FieldKind::Plain` applies (a name-like
+/// field's `"None"`/`"N/A"` is nothing worth distinguishing from blank —
+/// see `is_blank_for_comparison`). Comparing raw blank-ness alongside
+/// the normalized value (rather than the normalized value alone) is
+/// what keeps the general rule honest for fields where normalization
 /// can produce an empty string from non-empty input.
 fn field_matches_across(
     group: &[TenantRecord],
     name: FieldName,
     kind: crate::types::FieldKind,
 ) -> bool {
-    let mut values = group.iter().map(|r| {
-        let raw = r.field(name);
-        (is_empty(raw), normalize_value(kind, raw))
-    });
+    let mut values = group
+        .iter()
+        .map(|r| comparison_key(kind, r.field(name)));
     let first = match values.next() {
         Some(v) => v,
         None => return true,
@@ -270,5 +322,55 @@ mod tests {
         ];
         let differing = find_differing_categories(&group);
         assert!(differing.iter().all(|m| m.category != FieldCategory::Phone));
+    }
+
+    /// Regression test for a real bug (Westpark facility, unit 257):
+    /// the literal string `"None"` in `AlternateContactLastName` on one
+    /// unit, genuinely blank on another, must not surface a spurious
+    /// AltContact mismatch — `"None"` here unambiguously means "no
+    /// alternate contact," the same thing a blank cell means.
+    #[test]
+    fn a_none_placeholder_in_a_plain_field_matches_a_genuinely_blank_one() {
+        let group = vec![
+            TenantRecord {
+                alt_contact_last_name: "None".to_string(),
+                ..Default::default()
+            },
+            TenantRecord {
+                alt_contact_last_name: "".to_string(),
+                ..Default::default()
+            },
+        ];
+        let differing = find_differing_categories(&group);
+        assert!(
+            differing.iter().all(|m| m.category != FieldCategory::AltContact),
+            "a placeholder value in a Plain field must match a genuinely blank one: {differing:?}"
+        );
+    }
+
+    /// The same placeholder carve-out must NOT extend to Phone/Address —
+    /// unlike a Plain field, "something was typed, even garbage" is real
+    /// signal there (see `is_blank_for_comparison`'s own doc comment).
+    /// This is the existing `a_garbage_phone_value_does_not_match_a_
+    /// genuinely_blank_one` test's own guarantee, re-asserted here using
+    /// a literal placeholder token ("N/A") specifically, since that's
+    /// the exact overlap case this fix could have silently broken.
+    #[test]
+    fn a_placeholder_token_as_a_phone_value_still_differs_from_blank() {
+        let group = vec![
+            TenantRecord {
+                phone_number: "N/A".to_string(),
+                ..Default::default()
+            },
+            TenantRecord {
+                phone_number: "".to_string(),
+                ..Default::default()
+            },
+        ];
+        let differing = find_differing_categories(&group);
+        assert!(
+            differing.iter().any(|m| m.category == FieldCategory::Phone),
+            "a placeholder token in a Phone field must still count as a mismatch against blank"
+        );
     }
 }

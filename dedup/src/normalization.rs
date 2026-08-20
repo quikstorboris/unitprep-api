@@ -40,6 +40,39 @@ pub fn is_empty(value: &str) -> bool {
     value.trim().is_empty()
 }
 
+/// A real (not `is_empty`) value that's still not real evidence — a
+/// placeholder someone typed as a stand-in for "not applicable" instead
+/// of leaving the field blank. Found in real production data: the
+/// literal string `"None"` sitting in `AlternateContactLastName`.
+/// Deliberately excludes bare single characters like `x`/`-`, which are
+/// common short real values (an alt-contact first initial) rather than
+/// placeholders. Checked against the raw, trim+lowercased value — not
+/// run through `normalize_value`'s `FieldKind::Address` punctuation
+/// folding first, since that can mangle a token (`"n/a"` → `"n a"`)
+/// before comparison.
+///
+/// Shared between `relatedness.rs` (excluded from every relatedness
+/// signal — a placeholder must never look like a shared identifying
+/// detail) and `comparison.rs` (excluded from `FieldKind::Plain`
+/// mismatch detection only — see that module's own doc comment on why
+/// `Phone`/`Address` deliberately do NOT get this treatment there).
+pub(crate) const PLACEHOLDER_TOKENS: &[&str] = &[
+    "n/a",
+    "na",
+    "none",
+    "tbd",
+    "unknown",
+    "n.a.",
+    "not applicable",
+    "null",
+    "nil",
+    "xxx",
+];
+
+pub(crate) fn is_placeholder(raw: &str) -> bool {
+    PLACEHOLDER_TOKENS.contains(&raw.trim().to_lowercase().as_str())
+}
+
 /// Case-insensitive normalization; `FieldKind::Address` values are
 /// further normalized (period-stripped, punctuation-stripped, each
 /// token run through the street-suffix table); `FieldKind::Phone`
