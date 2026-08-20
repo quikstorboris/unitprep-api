@@ -8,9 +8,9 @@
 //! together.
 
 use unitprep_core::csv_document::CsvDocument;
+use unitprep_core::vendor_format::{detect_vendor, VendorFormat};
 use unitprep_unit_group::{
-    build_batch_from_documents, detect_vendor, is_uncommon_group_name, DiscoveryResult,
-    UnitFileCandidate,
+    build_batch_from_documents, is_uncommon_group_name, DiscoveryResult, UnitFileCandidate,
 };
 
 use crate::application::unit_group_session::Session;
@@ -30,13 +30,14 @@ pub(super) struct UnitFileSelection {
 pub(super) fn reconcile_unit_file_selection(
     session: &Session,
     previous: &Option<DiscoveryResult>,
+    unit_vendors: &[VendorFormat],
 ) -> UnitFileSelection {
     let mut candidates: Vec<UnitFileCandidate> = Vec::new();
     let mut group_files: Vec<String> = Vec::new();
     let mut unrecognized_count = 0usize;
 
     for document in session.data.documents.iter() {
-        if let Some(vendor) = detect_vendor(document) {
+        if let Some(vendor) = detect_vendor(document, unit_vendors) {
             candidates.push(UnitFileCandidate {
                 file_name: document.file_name.clone(),
                 modified_at: document.modified_at,

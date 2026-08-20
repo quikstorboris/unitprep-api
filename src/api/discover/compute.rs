@@ -4,9 +4,10 @@
 //! recomputed discovery view back.
 
 use unitprep_core::csv_document::CsvDocument;
+use unitprep_core::vendor_format::{detect_vendor, VendorFormat};
 use unitprep_unit_group::{
-    detect_vendor, mapping_from_vendor, DiscoveryResult, FieldMappingEntry,
-    CANONICAL_TARGET_FIELDS, REQUIRED_TARGET_FIELDS,
+    mapping_from_vendor, DiscoveryResult, FieldMappingEntry, CANONICAL_TARGET_FIELDS,
+    REQUIRED_TARGET_FIELDS,
 };
 
 use crate::application::unit_group_session::Session;
@@ -20,10 +21,25 @@ use super::selection::{
 /// Classifies every document in `session`, resolves unit/group file
 /// selection against any prior selection still valid, stores the result
 /// on the session, and returns the API-facing response for it.
-pub(crate) fn compute_discovery(session: &mut Session) -> DiscoverResponse {
+///
+/// `unit_vendors` is loaded from `client_ops.vendor_format` by the
+/// caller (an async DB read) before entering the session lock this runs
+/// inside — that lock's own closure is synchronous, so the load can't
+/// happen in here.
+pub(crate) fn compute_discovery(
+    session: &mut Session,
+    unit_vendors: &[VendorFormat],
+) -> DiscoverResponse {
     let previous = session.data.discovery.clone();
 
-    let selection = reconcile_unit_file_selection(session, &previous);
+    // Stashed for `Session::effective_documents`'s own auto-detect
+    // fallback, used by callers well outside this discovery flow
+    // (validate/analyze/correct/...) that have no reason to thread the
+    // registry through themselves — see `SessionData::unit_vendors`'s
+    // own doc comment.
+    session.data.unit_vendors = unit_vendors.to_vec();
+
+    let selection = reconcile_unit_file_selection(session, &previous, unit_vendors);
 
     let group_readiness = resolve_group_file_readiness(session, &selection.group_files, &previous);
 
@@ -60,7 +76,7 @@ pub(crate) fn compute_discovery(session: &mut Session) -> DiscoverResponse {
         .and_then(|name| session.data.documents.iter().find(|d| &d.file_name == name));
 
     let (detected_vendor_name, source_headers, suggested_mapping) = match current_document {
-        Some(document) => match detect_vendor(document) {
+        Some(document) => match detect_vendor(document, unit_vendors) {
             Some(vendor) => {
                 let suggested: Vec<FieldMappingEntry> = mapping_from_vendor(vendor)
                     .into_iter()
@@ -113,7 +129,7 @@ pub(crate) fn compute_discovery(session: &mut Session) -> DiscoverResponse {
                 .documents
                 .iter()
                 .find(|d| &d.file_name == name)
-                .and_then(detect_vendor)
+                .and_then(|document| detect_vendor(document, unit_vendors))
                 .map(|vendor| vendor.name.to_string())
         })
     } else {

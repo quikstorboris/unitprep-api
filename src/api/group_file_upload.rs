@@ -42,7 +42,12 @@ pub async fn upload_group_file(
         }
     };
 
-    apply_group_file_upload(&state, &fields.session_id, user.user_id, document)
+    // See `client_ops::vendor_format`'s module doc comment -- a
+    // synchronous read of the cached registry, never a per-request DB
+    // call.
+    let unit_vendors = state.unit_vendors.read().clone();
+
+    apply_group_file_upload(&state, &fields.session_id, user.user_id, document, &unit_vendors)
 }
 
 /// The testable core, separated from the Multipart-extracting handler
@@ -53,6 +58,7 @@ pub(crate) fn apply_group_file_upload(
     session_id: &str,
     owner_id: uuid::Uuid,
     document: CsvDocument,
+    unit_vendors: &[unitprep_core::vendor_format::VendorFormat],
 ) -> Response {
     let result =
         state
@@ -85,7 +91,7 @@ pub(crate) fn apply_group_file_upload(
                     "Master group file manually uploaded"
                 );
 
-                Ok(compute_discovery(session))
+                Ok(compute_discovery(session, unit_vendors))
             });
 
     match result {

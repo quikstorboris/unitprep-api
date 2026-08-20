@@ -31,6 +31,11 @@ pub async fn confirm_group_file(
     user: AuthenticatedUser,
     Json(request): Json<ConfirmGroupFileRequest>,
 ) -> Response {
+    // See `client_ops::vendor_format`'s module doc comment -- a
+    // synchronous read of the cached registry, never a per-request DB
+    // call.
+    let unit_vendors = state.unit_vendors.read().clone();
+
     let result = state.unit_group_sessions.with_owned_session_mut(&request.session_id, user.user_id, |session| {
         if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
             tracing::warn!(
@@ -91,7 +96,7 @@ pub async fn confirm_group_file(
             "Master group file confirmed"
         );
 
-        Ok(compute_discovery(session))
+        Ok(compute_discovery(session, &unit_vendors))
     });
 
     match result {

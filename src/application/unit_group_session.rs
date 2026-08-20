@@ -72,6 +72,21 @@ pub struct SessionData {
     /// `GroupCheckAcknowledgmentKey`.
     pub group_check_acknowledgments: HashSet<GroupCheckAcknowledgmentKey>,
 
+    /// A snapshot of `client_ops.vendor_format`'s unit-file rows, taken
+    /// whenever `/discover` (or any of the other discovery-recomputing
+    /// endpoints) last ran — stashed here specifically so
+    /// `effective_documents`'s own auto-detect fallback below has
+    /// something to call `detect_vendor` against without every one of
+    /// its many unrelated callers (`validate`, `analyze`, `correct`,
+    /// `correct_group`, `exclude_group`) needing to thread the registry
+    /// through from `AppState` themselves. A session is short-lived (see
+    /// the idle timeout) and the registry changes rarely, so this being
+    /// very slightly stale by the time analyze/validate run a few
+    /// minutes after the discovery that populated it is an acceptable
+    /// trade against rippling one more parameter through five handler
+    /// files that have nothing to do with vendor recognition.
+    pub unit_vendors: Vec<unitprep_core::vendor_format::VendorFormat>,
+
     /// Bumped by every mutation that can change what `effective_documents`
     /// produces (corrections, exemptions, group exclusion/inclusion,
     /// group-check acknowledgment, a re-uploaded document) — see
@@ -159,7 +174,7 @@ impl Session {
             .map(
                 |document| match self.data.format_resolutions.get(&document.file_name) {
                     Some(mapping) => apply_field_mapping(document, mapping),
-                    None => match detect_vendor(document) {
+                    None => match detect_vendor(document, &self.data.unit_vendors) {
                         Some(vendor) => apply_field_mapping(document, &mapping_from_vendor(vendor)),
                         None => document.clone(),
                     },

@@ -42,11 +42,18 @@ pub async fn discover(
 ) -> Response {
     let started = Instant::now();
 
+    // A synchronous read of the in-memory registry snapshot -- see
+    // `client_ops::vendor_format`'s module doc comment for why this is
+    // never a per-request DB call. Cloned up front (not read inside the
+    // session-lock closure below) so the lock guard's lifetime never has
+    // to interact with the session lock's own.
+    let unit_vendors = state.unit_vendors.read().clone();
+
     let response = state.unit_group_sessions.with_owned_session_mut(
         &request.session_id,
         user.user_id,
         |session| {
-            let response = compute_discovery(session);
+            let response = compute_discovery(session, &unit_vendors);
 
             tracing::info!(
                 session_id = %request.session_id,

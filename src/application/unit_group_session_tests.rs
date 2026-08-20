@@ -14,6 +14,33 @@ fn document(file_name: &str, headers: Vec<&str>) -> CsvDocument {
     }
 }
 
+/// DoorSwap's real signature/mapping, hand-built to mirror the
+/// `client_ops.vendor_format` registry migration's seed row -- vendor
+/// recognition is DB-backed data now, so `effective_documents`'s own
+/// auto-detect fallback (see `SessionData::unit_vendors`) needs a
+/// fixture list here the same way a live session would carry a snapshot
+/// taken by `compute_discovery`.
+fn door_swap_vendor() -> unitprep_core::vendor_format::VendorFormat {
+    unitprep_core::vendor_format::VendorFormat {
+        name: "DoorSwap".to_string(),
+        content_type: unitprep_core::vendor_format::ContentType::Units,
+        signature_headers: vec!["Unit", "Unit Type", "Status", "Customer"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+        field_mapping: vec![
+            ("Number", "Unit"),
+            ("UnitGroup", "Unit Type"),
+            ("Status", "Status"),
+            ("Customer", "Customer"),
+        ]
+        .into_iter()
+        .map(|(t, s)| (t.to_string(), s.to_string()))
+        .collect(),
+        transform_key: None,
+    }
+}
+
 fn discovery_result() -> DiscoveryResult {
     DiscoveryResult {
         unit_file_names: vec!["units.csv".to_string()],
@@ -311,6 +338,7 @@ fn effective_documents_auto_detects_vendor_when_no_stored_resolution_exists() {
         "units.csv",
         vec!["Unit", "Unit Type", "Status", "Customer"],
     ));
+    session.data.unit_vendors = vec![door_swap_vendor()];
 
     let effective = session.effective_documents();
 

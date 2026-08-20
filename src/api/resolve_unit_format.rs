@@ -64,6 +64,11 @@ pub async fn resolve_unit_format(
     user: AuthenticatedUser,
     Json(request): Json<ResolveUnitFormatRequest>,
 ) -> Response {
+    // See `client_ops::vendor_format`'s module doc comment -- a
+    // synchronous read of the cached registry, never a per-request DB
+    // call.
+    let unit_vendors = state.unit_vendors.read().clone();
+
     let result = state
         .unit_group_sessions
         .with_owned_session_mut(
@@ -115,7 +120,7 @@ pub async fn resolve_unit_format(
                         "Unit file format reset complete"
                     );
 
-                    return Ok(compute_discovery(session));
+                    return Ok(compute_discovery(session, &unit_vendors));
                 }
 
                 let file_name = match current_unit_file_to_resolve(session) {
@@ -151,6 +156,7 @@ pub async fn resolve_unit_format(
                             &request.session_id,
                             &file_name,
                             &document,
+                            &unit_vendors,
                         )?;
                     }
 
@@ -181,7 +187,7 @@ pub async fn resolve_unit_format(
                     }
                 }
 
-                Ok(compute_discovery(session))
+                Ok(compute_discovery(session, &unit_vendors))
             },
         );
 

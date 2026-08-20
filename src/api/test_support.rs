@@ -5,14 +5,82 @@ use crate::application::dedup_session_service::DedupSession;
 use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
 use crate::auth::{AuthenticatedUser, AuthenticationCeremony, RegistrationCeremony};
+use crate::client_ops::vendor_format::VendorFormatCache;
 use unitprep_core::csv_document::CsvDocument;
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
 use unitprep_core::session_store::SessionStore;
+use unitprep_core::vendor_format::{ContentType, VendorFormat};
 use unitprep_unit_group::{
     AnalysisResults, BatchRun, DiscoveryResult, Severity, ValidationIssueSummary, ValidationResult,
 };
 
 use super::AppState;
+
+/// Hand-built fixtures mirroring the `client_ops.vendor_format` registry
+/// migration's seed rows for `content_type = 'units'` -- kept in sync by
+/// hand, the same trade-off `unit-group::format_tests`' own fixtures
+/// make, so every test builder below can populate `AppState::
+/// unit_vendors` without touching Postgres (see
+/// `client_ops::vendor_format`'s module doc comment for why request
+/// handling itself never does either).
+fn default_unit_vendors_fixture() -> Vec<VendorFormat> {
+    let vendor = |name: &str, signature: &[&str], mapping: &[(&str, &str)]| VendorFormat {
+        name: name.to_string(),
+        content_type: ContentType::Units,
+        signature_headers: signature.iter().map(|s| s.to_string()).collect(),
+        field_mapping: mapping
+            .iter()
+            .map(|(t, s)| (t.to_string(), s.to_string()))
+            .collect(),
+        transform_key: None,
+    };
+
+    vec![
+        vendor(
+            "Storage Commander",
+            &["UnitGroup", "Number", "Category", "Locality"],
+            &[
+                ("Number", "Number"),
+                ("UnitGroup", "UnitGroup"),
+                ("Category", "Category"),
+                ("InsideOutside", "Locality"),
+            ],
+        ),
+        vendor(
+            "QSX",
+            &["UnitGroup", "Number", "Category"],
+            &[
+                ("Number", "Number"),
+                ("UnitGroup", "UnitGroup"),
+                ("Category", "Category"),
+            ],
+        ),
+        vendor(
+            "DoorSwap",
+            &["Unit", "Unit Type", "Status", "Customer"],
+            &[
+                ("Number", "Unit"),
+                ("UnitGroup", "Unit Type"),
+                ("Status", "Status"),
+                ("Customer", "Customer"),
+            ],
+        ),
+    ]
+}
+
+/// Every test builder below populates `unit_vendors` with this, and
+/// `tenant_vendors` with `empty_vendor_cache()` -- none of these
+/// UnitGroup-focused fixtures exercise dedup's own vendor recognition
+/// (see `dedup_test_support.rs`, which builds dedup sessions that do).
+pub(crate) fn default_unit_vendors_cache() -> VendorFormatCache {
+    Arc::new(parking_lot::RwLock::new(default_unit_vendors_fixture()))
+}
+
+/// An empty registry -- for the tool/content-type a given fixture isn't
+/// exercising vendor recognition for at all.
+pub(crate) fn empty_vendor_cache() -> VendorFormatCache {
+    Arc::new(parking_lot::RwLock::new(Vec::new()))
+}
 
 /// Every test builder below needs a dedup session store too, even
 /// though none of these UnitGroup-focused fixtures populate it —
@@ -195,6 +263,8 @@ pub fn empty_state() -> AppState {
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
         authentication_ceremonies: empty_auth_ceremony_store(),
+        unit_vendors: default_unit_vendors_cache(),
+        tenant_vendors: empty_vendor_cache(),
     }
 }
 
@@ -238,6 +308,8 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
         authentication_ceremonies: empty_auth_ceremony_store(),
+        unit_vendors: default_unit_vendors_cache(),
+        tenant_vendors: empty_vendor_cache(),
     }
 }
 
@@ -308,6 +380,8 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
         authentication_ceremonies: empty_auth_ceremony_store(),
+        unit_vendors: default_unit_vendors_cache(),
+        tenant_vendors: empty_vendor_cache(),
     }
 }
 
@@ -356,6 +430,8 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
         authentication_ceremonies: empty_auth_ceremony_store(),
+        unit_vendors: default_unit_vendors_cache(),
+        tenant_vendors: empty_vendor_cache(),
     }
 }
 
@@ -414,6 +490,8 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
         authentication_ceremonies: empty_auth_ceremony_store(),
+        unit_vendors: default_unit_vendors_cache(),
+        tenant_vendors: empty_vendor_cache(),
     }
 }
 
@@ -496,5 +574,7 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
         authentication_ceremonies: empty_auth_ceremony_store(),
+        unit_vendors: default_unit_vendors_cache(),
+        tenant_vendors: empty_vendor_cache(),
     }
 }

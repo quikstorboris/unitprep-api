@@ -28,8 +28,8 @@ pub use corrections::{
     GroupCheckAcknowledgmentKey,
 };
 pub use format::{
-    apply_field_mapping, detect_vendor, mapping_from_vendor, FieldMapping, VendorFormat,
-    CANONICAL_TARGET_FIELDS, REQUIRED_TARGET_FIELDS, VENDOR_FORMATS,
+    apply_field_mapping, detect_vendor, mapping_from_vendor, ContentType, FieldMapping,
+    VendorFormat, CANONICAL_TARGET_FIELDS, REQUIRED_TARGET_FIELDS,
 };
 pub use models::{
     AdvisoryIssue, AnalysisResults, BatchRun, DiscoveryResult, Facility, FieldMappingEntry,

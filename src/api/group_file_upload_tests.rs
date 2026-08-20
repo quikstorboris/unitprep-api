@@ -32,6 +32,7 @@ async fn returns_404_for_missing_session() {
         "missing",
         crate::api::test_support::test_user_id(),
         document("groups.csv", vec!["Name"]),
+        &[],
     );
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -53,6 +54,7 @@ async fn returns_409_before_discovery_completes() {
         "s1",
         crate::api::test_support::test_user_id(),
         document("groups.csv", vec!["Name"]),
+        &[],
     );
 
     assert_eq!(response.status(), StatusCode::CONFLICT);
@@ -74,6 +76,7 @@ async fn manually_uploaded_file_becomes_the_selected_group_file() {
         "s1",
         crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description"]),
+        &[],
     );
 
     assert_eq!(response.status(), StatusCode::OK);
@@ -99,6 +102,7 @@ async fn manually_uploaded_file_with_conforming_headers_is_valid() {
             "master_groups.csv",
             vec!["Name", "Description", "AssignedTo", "Status", "LastUpdated"],
         ),
+        &[],
     );
 
     let body = body_json(response).await;
@@ -117,6 +121,7 @@ async fn manually_uploaded_file_with_minimal_headers_is_valid() {
         "s1",
         crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description", "Active"]),
+        &[],
     );
 
     let body = body_json(response).await;
@@ -136,6 +141,7 @@ async fn reuploading_a_different_file_resets_confirmation() {
         "s1",
         crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description", "Active"]),
+        &[],
     );
 
     crate::api::group_file_confirm::confirm_group_file(
@@ -155,6 +161,7 @@ async fn reuploading_a_different_file_resets_confirmation() {
             "different_groups.csv",
             vec!["Name", "Description", "Active"],
         ),
+        &[],
     );
 
     let body = body_json(response).await;
@@ -175,6 +182,7 @@ async fn manual_selection_survives_a_subsequent_discovery_recompute() {
         "s1",
         crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description"]),
+        &[],
     );
 
     let recomputed = crate::api::discover::discover(

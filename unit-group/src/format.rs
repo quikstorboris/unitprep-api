@@ -1,48 +1,33 @@
-// Vendor-format recognition and field mapping for unit-list source files.
+// Group Prep's own canonical target-field list and the manual-mapping
+// machinery built around it. Vendor *recognition* (signature headers,
+// detect_vendor, per-vendor default mappings) used to live in this file
+// as hardcoded QSX/Storage Commander/DoorSwap consts; it's now shared,
+// DB-backed data in `client_ops.vendor_format`, read through
+// `unitprep_core::vendor_format` (re-exported below) so both this crate
+// and `unitprep-dedup` use the exact same recognition mechanics instead
+// of each growing its own copy. See that migration and
+// `core::vendor_format`'s doc comment for the full reasoning.
 //
-// Discovery used to hard-code exactly one shape (QSX's own header names).
-// Onboarding a second PMS export (DoorSwap) that uses a completely
-// different vocabulary for the same two concepts — a unit identifier and
-// a group/dimension descriptor — means every vendor now goes through the
-// same recognize -> confirm-or-map flow, QSX included. Adding a third
-// vendor later should mean adding one more `VendorFormat` entry here, not
-// touching discovery's control flow again.
-//
-// The static target-field list below is deliberately the literal union of
-// both known vendors' own raw headers, not an invented abstract schema —
-// see the project's design notes. Only `Number` and `UnitGroup` are
-// actually required by the rest of the pipeline (`validate_document`,
-// `build_batch_from_documents`); everything else is carried through for
-// the optional cross-check validations when a vendor happens to supply it.
+// What's left here is genuinely tool-specific: which canonical fields
+// Group Prep's own pipeline requires, and the "every target field, with
+// an explicit `None` for anything unmapped" shape the manual-mapping UI
+// needs (`FieldMapping`) — a different shape from
+// `core::VendorFormat::field_mapping`, which only ever lists fields a
+// vendor actually supplies.
 
 use unitprep_core::csv_document::CsvDocument;
+pub use unitprep_core::vendor_format::{detect_vendor, ContentType, VendorFormat};
 
-pub struct VendorFormat {
-    pub name: &'static str,
-
-    /// Headers that must all be present (via `CsvDocument::header_index`,
-    /// so case/separator-insensitive) for a document to be recognized as
-    /// this vendor's export.
-    pub signature_headers: &'static [&'static str],
-
-    /// (canonical target field, this vendor's own header for it) pairs.
-    /// Hand-authored, not derived by matching names against
-    /// `CANONICAL_TARGET_FIELDS` — a vendor's raw vocabulary is often
-    /// *part of* that union list under its own literal name (DoorSwap's
-    /// `Unit`/`Unit Type` are two such entries), so a name-matching rule
-    /// would leave the canonical `Number`/`UnitGroup` columns empty. Every
-    /// vendor must explicitly say which of its own headers is the unit
-    /// identifier and which is the group/dimension descriptor.
-    pub default_mapping: &'static [(&'static str, &'static str)],
-}
-
-/// The union of every known vendor's real, distinct raw headers — QSX
-/// first (its headers already equal today's canonical names, since QSX is
-/// the format the canonical vocabulary was originally bootstrapped from),
-/// then Storage Commander's two extra fields (`MonitoringEnabled`,
-/// `SmartLockEnabled` — otherwise identical to QSX aside from renaming
-/// `InsideOutside` to `Locality`), then DoorSwap's additional fields. No
-/// overlap between the lists.
+/// The union of every known unit-file vendor's real, distinct raw
+/// headers — QSX first (its headers already equal today's canonical
+/// names, since QSX is the format the canonical vocabulary was
+/// originally bootstrapped from), then Storage Commander's two extra
+/// fields, then DoorSwap's additional fields. No overlap between the
+/// lists. This stays a Rust constant (rather than also moving into the
+/// DB) because it isn't vendor data — it's this crate's own pipeline
+/// requirement, the same fact `REQUIRED_TARGET_FIELDS` below encodes; a
+/// self-service "add a vendor" flow maps a new vendor's headers *onto*
+/// this list, it never grows the list itself.
 pub const CANONICAL_TARGET_FIELDS: &[&str] = &[
     "Number",
     "UnitGroup",
@@ -88,124 +73,15 @@ pub const CANONICAL_TARGET_FIELDS: &[&str] = &[
 /// should refuse to submit until both of these have a real selection.
 pub const REQUIRED_TARGET_FIELDS: &[&str] = &["Number", "UnitGroup"];
 
-pub const QSX: VendorFormat = VendorFormat {
-    name: "QSX",
-    // Unchanged from discovery's original check — already proven against
-    // the real export (`KAH_QMS_Units_Template.csv`).
-    signature_headers: &["UnitGroup", "Number", "Category"],
-    default_mapping: &[
-        ("Number", "Number"),
-        ("UnitGroup", "UnitGroup"),
-        ("Category", "Category"),
-        ("StandardRate", "StandardRate"),
-        ("Active", "Active"),
-        ("Damaged", "Damaged"),
-        ("Width", "Width"),
-        ("Length", "Length"),
-        ("Height", "Height"),
-        ("InsideOutside", "InsideOutside"),
-        ("Covered", "Covered"),
-        ("DoorType", "DoorType"),
-        ("DoorWidth", "DoorWidth"),
-        ("DoorHeight", "DoorHeight"),
-        ("NearElevator", "NearElevator"),
-        ("BottleCapacity", "BottleCapacity"),
-        ("Floor", "Floor"),
-        ("ClimateControlled", "ClimateControlled"),
-        ("Class", "Class"),
-        ("Power", "Power"),
-        ("Alarm", "Alarm"),
-        ("DriveUpAccess", "DriveUpAccess"),
-        ("Furnished", "Furnished"),
-        ("Lighting", "Lighting"),
-        ("Area", "Area"),
-        ("DoorCount", "DoorCount"),
-        ("ConversionType", "ConversionType"),
-    ],
-};
-
-/// Same shape as QSX aside from two differences (confirmed against a real
-/// export, "Absolute Storage of Franklin Park"): `InsideOutside` is named
-/// `Locality` instead, and two extra columns (`MonitoringEnabled`,
-/// `SmartLockEnabled`) are appended. `Locality` is required in the
-/// signature specifically so this is checked (see `VENDOR_FORMATS`'
-/// ordering) — and matches — before the plain QSX signature, which lacks
-/// it entirely and would otherwise false-positive on this export too
-/// (all three of its own signature headers are a subset of this one's).
-pub const STORAGE_COMMANDER: VendorFormat = VendorFormat {
-    name: "Storage Commander",
-    signature_headers: &["UnitGroup", "Number", "Category", "Locality"],
-    default_mapping: &[
-        ("Number", "Number"),
-        ("UnitGroup", "UnitGroup"),
-        ("Category", "Category"),
-        ("StandardRate", "StandardRate"),
-        ("Active", "Active"),
-        ("Damaged", "Damaged"),
-        ("Width", "Width"),
-        ("Length", "Length"),
-        ("Height", "Height"),
-        ("InsideOutside", "Locality"),
-        ("Covered", "Covered"),
-        ("DoorType", "DoorType"),
-        ("DoorWidth", "DoorWidth"),
-        ("DoorHeight", "DoorHeight"),
-        ("NearElevator", "NearElevator"),
-        ("BottleCapacity", "BottleCapacity"),
-        ("Floor", "Floor"),
-        ("ClimateControlled", "ClimateControlled"),
-        ("Class", "Class"),
-        ("Power", "Power"),
-        ("Alarm", "Alarm"),
-        ("DriveUpAccess", "DriveUpAccess"),
-        ("Furnished", "Furnished"),
-        ("Lighting", "Lighting"),
-        ("Area", "Area"),
-        ("DoorCount", "DoorCount"),
-        ("ConversionType", "ConversionType"),
-        ("MonitoringEnabled", "MonitoringEnabled"),
-        ("SmartLockEnabled", "SmartLockEnabled"),
-    ],
-};
-
-pub const DOOR_SWAP: VendorFormat = VendorFormat {
-    name: "DoorSwap",
-    signature_headers: &["Unit", "Unit Type", "Status", "Customer"],
-    default_mapping: &[
-        // The actual translation — DoorSwap's own identifier/descriptor
-        // columns feed the canonical fields the pipeline requires.
-        ("Number", "Unit"),
-        ("UnitGroup", "Unit Type"),
-        ("Status", "Status"),
-        ("Customer", "Customer"),
-        ("Phone", "Phone"),
-        ("Cell Phone", "Cell Phone"),
-        ("Email", "Email"),
-        ("Balance", "Balance"),
-    ],
-};
-
-// Storage Commander before QSX: `detect_vendor` returns the first match,
-// and Storage Commander's signature is a strict superset of QSX's own —
-// checking QSX first would misclassify every Storage Commander export as
-// QSX (see `STORAGE_COMMANDER`'s doc comment).
-pub const VENDOR_FORMATS: &[VendorFormat] = &[STORAGE_COMMANDER, QSX, DOOR_SWAP];
-
 /// A resolved field mapping: one entry per canonical target field, with
 /// the source header (exact spelling as it appears in the document being
-/// mapped) that supplies it, or `None` if that target has nothing mapped.
+/// mapped) that supplies it, or `None` if that target has nothing
+/// mapped. Distinct from `VendorFormat::field_mapping` (which only lists
+/// fields the vendor actually supplies) because the manual-mapping UI
+/// needs to show and store a decision for every canonical field,
+/// including "nothing," not just the ones a detected vendor happened to
+/// declare.
 pub type FieldMapping = Vec<(String, Option<String>)>;
-
-/// Returns the first registered vendor whose full signature is present in
-/// `document`'s headers, or `None` if it matches none of them.
-pub fn detect_vendor(document: &CsvDocument) -> Option<&'static VendorFormat> {
-    VENDOR_FORMATS.iter().find(|vendor| {
-        vendor
-            .signature_headers
-            .iter()
-            .all(|header| document.header_index(header).is_some())
-    })
-}
 
 /// Builds the field mapping a "confirm this vendor" action applies:
 /// every canonical target field, mapped to that vendor's declared source
@@ -215,10 +91,10 @@ pub fn mapping_from_vendor(vendor: &VendorFormat) -> FieldMapping {
         .iter()
         .map(|target| {
             let source = vendor
-                .default_mapping
+                .field_mapping
                 .iter()
                 .find(|(t, _)| t == target)
-                .map(|(_, source)| source.to_string());
+                .map(|(_, source)| source.clone());
 
             (target.to_string(), source)
         })

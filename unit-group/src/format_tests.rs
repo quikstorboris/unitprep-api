@@ -12,6 +12,87 @@ fn document(headers: Vec<&str>, rows: Vec<Vec<&str>>) -> CsvDocument {
     }
 }
 
+/// Hand-built fixtures mirroring the `client_ops.vendor_format` seed
+/// data (registry migration) exactly -- vendor recognition itself moved
+/// to DB-backed data, so these tests exercise the pure `detect_vendor`/
+/// `mapping_from_vendor`/`apply_field_mapping` logic against a
+/// representative `Vec<VendorFormat>` rather than a live database. Keep
+/// this in sync with the migration's seed rows by hand; there's no
+/// automated link between the two, the same trade-off any test fixture
+/// mirroring seed data makes.
+fn vendor(name: &str, signature: &[&str], mapping: &[(&str, &str)]) -> VendorFormat {
+    VendorFormat {
+        name: name.to_string(),
+        content_type: ContentType::Units,
+        signature_headers: signature.iter().map(|s| s.to_string()).collect(),
+        field_mapping: mapping
+            .iter()
+            .map(|(t, s)| (t.to_string(), s.to_string()))
+            .collect(),
+        transform_key: None,
+    }
+}
+
+fn qsx() -> VendorFormat {
+    vendor(
+        "QSX",
+        &["UnitGroup", "Number", "Category"],
+        &[
+            ("Number", "Number"),
+            ("UnitGroup", "UnitGroup"),
+            ("Category", "Category"),
+            ("StandardRate", "StandardRate"),
+            ("Active", "Active"),
+            ("Damaged", "Damaged"),
+            ("Width", "Width"),
+            ("Length", "Length"),
+            ("Height", "Height"),
+            ("InsideOutside", "InsideOutside"),
+        ],
+    )
+}
+
+fn storage_commander() -> VendorFormat {
+    vendor(
+        "Storage Commander",
+        &["UnitGroup", "Number", "Category", "Locality"],
+        &[
+            ("Number", "Number"),
+            ("UnitGroup", "UnitGroup"),
+            ("Category", "Category"),
+            ("InsideOutside", "Locality"),
+            ("MonitoringEnabled", "MonitoringEnabled"),
+            ("SmartLockEnabled", "SmartLockEnabled"),
+        ],
+    )
+}
+
+fn door_swap() -> VendorFormat {
+    vendor(
+        "DoorSwap",
+        &["Unit", "Unit Type", "Status", "Customer"],
+        &[
+            ("Number", "Unit"),
+            ("UnitGroup", "Unit Type"),
+            ("Status", "Status"),
+            ("Customer", "Customer"),
+            ("Phone", "Phone"),
+            ("Cell Phone", "Cell Phone"),
+            ("Email", "Email"),
+            ("Balance", "Balance"),
+        ],
+    )
+}
+
+/// Storage Commander before QSX, mirroring `VENDOR_FORMATS`' old
+/// ordering and the registry migration's own seed-row order: Storage
+/// Commander's real export also satisfies plain QSX's own (smaller)
+/// signature, so it must be checked first or every Storage Commander
+/// export would misclassify as QSX.
+fn all_vendors() -> Vec<VendorFormat> {
+    vec![storage_commander(), qsx(), door_swap()]
+}
+
 #[test]
 fn detects_qsx_by_its_real_export_headers() {
     // The exact header set from the real QSX export
@@ -31,7 +112,11 @@ fn detects_qsx_by_its_real_export_headers() {
         vec![],
     );
 
-    assert_eq!(detect_vendor(&doc).map(|v| v.name), Some("QSX"));
+    let vendors = all_vendors();
+    assert_eq!(
+        detect_vendor(&doc, &vendors).map(|v| v.name.as_str()),
+        Some("QSX")
+    );
 }
 
 /// Storage Commander's signature (`UnitGroup`/`Number`/`Category`) is a
@@ -59,15 +144,17 @@ fn detects_storage_commander_by_its_real_export_headers() {
         vec![],
     );
 
+    let vendors = all_vendors();
     assert_eq!(
-        detect_vendor(&doc).map(|v| v.name),
+        detect_vendor(&doc, &vendors).map(|v| v.name.as_str()),
         Some("Storage Commander")
     );
 }
 
 #[test]
 fn storage_commander_default_mapping_translates_locality_to_inside_outside() {
-    let mapping = mapping_from_vendor(&STORAGE_COMMANDER);
+    let storage_commander = storage_commander();
+    let mapping = mapping_from_vendor(&storage_commander);
 
     let inside_outside_source = mapping
         .iter()
@@ -87,7 +174,11 @@ fn a_true_qsx_export_without_locality_still_detects_as_qsx() {
         vec![],
     );
 
-    assert_eq!(detect_vendor(&doc).map(|v| v.name), Some("QSX"));
+    let vendors = all_vendors();
+    assert_eq!(
+        detect_vendor(&doc, &vendors).map(|v| v.name.as_str()),
+        Some("QSX")
+    );
 }
 
 #[test]
@@ -106,19 +197,25 @@ fn detects_door_swap_by_its_real_export_headers() {
         vec![],
     );
 
-    assert_eq!(detect_vendor(&doc).map(|v| v.name), Some("DoorSwap"));
+    let vendors = all_vendors();
+    assert_eq!(
+        detect_vendor(&doc, &vendors).map(|v| v.name.as_str()),
+        Some("DoorSwap")
+    );
 }
 
 #[test]
 fn detects_neither_for_unrelated_headers() {
     let doc = document(vec!["Foo", "Bar", "Baz"], vec![]);
 
-    assert!(detect_vendor(&doc).is_none());
+    let vendors = all_vendors();
+    assert!(detect_vendor(&doc, &vendors).is_none());
 }
 
 #[test]
 fn door_swap_default_mapping_translates_unit_and_unit_type() {
-    let mapping = mapping_from_vendor(&DOOR_SWAP);
+    let door_swap = door_swap();
+    let mapping = mapping_from_vendor(&door_swap);
 
     let number_source = mapping
         .iter()
@@ -144,7 +241,8 @@ fn door_swap_default_mapping_translates_unit_and_unit_type() {
 
 #[test]
 fn qsx_default_mapping_is_identity() {
-    let mapping = mapping_from_vendor(&QSX);
+    let qsx = qsx();
+    let mapping = mapping_from_vendor(&qsx);
 
     let unit_group_source = mapping
         .iter()
@@ -166,7 +264,8 @@ fn apply_field_mapping_confirms_door_swap_into_canonical_columns() {
         ]],
     );
 
-    let mapping = mapping_from_vendor(&DOOR_SWAP);
+    let door_swap = door_swap();
+    let mapping = mapping_from_vendor(&door_swap);
     let normalized = apply_field_mapping(&doc, &mapping);
 
     let number_index = normalized.header_index("number").unwrap();
@@ -199,7 +298,8 @@ fn apply_field_mapping_omits_canonical_fields_door_swap_never_maps() {
         ]],
     );
 
-    let mapping = mapping_from_vendor(&DOOR_SWAP);
+    let door_swap = door_swap();
+    let mapping = mapping_from_vendor(&door_swap);
     let normalized = apply_field_mapping(&doc, &mapping);
 
     assert_eq!(normalized.header_index("width"), None);

@@ -5,9 +5,9 @@
 //! `format_helpers` sibling, so they live here rather than in the
 //! handler file itself.
 
+use unitprep_core::vendor_format::{detect_vendor, VendorFormat};
 use unitprep_unit_group::{
-    detect_vendor, mapping_from_vendor, FieldMapping, CANONICAL_TARGET_FIELDS,
-    REQUIRED_TARGET_FIELDS,
+    mapping_from_vendor, FieldMapping, CANONICAL_TARGET_FIELDS, REQUIRED_TARGET_FIELDS,
 };
 
 use crate::api::resolve_unit_format::{MappingEntryInput, ResolveNotReady};
@@ -28,8 +28,9 @@ pub(crate) fn resolve_confirm_action(
     session_id: &str,
     file_name: &str,
     document: &unitprep_core::csv_document::CsvDocument,
+    unit_vendors: &[VendorFormat],
 ) -> Result<(), ResolveNotReady> {
-    let vendor = match detect_vendor(document) {
+    let vendor = match detect_vendor(document, unit_vendors) {
         Some(vendor) => vendor,
         None => {
             tracing::warn!(
@@ -98,7 +99,7 @@ pub(crate) fn resolve_confirm_action(
     for file_name in &resolved_files {
         tracing::info!(
             session_id = %session_id,
-            vendor = vendor.name,
+            vendor = %vendor.name,
             file = %file_name,
             "Unit file format resolved (bulk-confirmed)"
         );
@@ -106,7 +107,7 @@ pub(crate) fn resolve_confirm_action(
 
     tracing::info!(
         session_id = %session_id,
-        vendor = vendor.name,
+        vendor = %vendor.name,
         resolved_file_count = resolved_files.len(),
         "Unit file format bulk-confirm complete"
     );

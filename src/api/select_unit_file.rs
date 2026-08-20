@@ -37,6 +37,11 @@ pub async fn select_unit_file(
     user: AuthenticatedUser,
     Json(request): Json<SelectUnitFileRequest>,
 ) -> Response {
+    // See `client_ops::vendor_format`'s module doc comment -- a
+    // synchronous read of the cached registry, never a per-request DB
+    // call.
+    let unit_vendors = state.unit_vendors.read().clone();
+
     let result = state.unit_group_sessions.with_owned_session_mut(
         &request.session_id,
         user.user_id,
@@ -108,7 +113,7 @@ pub async fn select_unit_file(
                 "Unit file selection complete"
             );
 
-            Ok(compute_discovery(session))
+            Ok(compute_discovery(session, &unit_vendors))
         },
     );
 

@@ -11,6 +11,7 @@ use crate::api::test_support::empty_auth_ceremony_store;
 use crate::api::test_support::empty_ceremony_store;
 use crate::api::test_support::empty_dedup_store;
 use crate::api::test_support::empty_tagger_store;
+use crate::api::test_support::empty_vendor_cache;
 use crate::api::test_support::test_auth_backend;
 use crate::api::test_support::test_db_pool;
 use crate::api::test_support::test_user_id;
@@ -44,5 +45,7 @@ pub fn dedup_state_with_report(
         auth_backend: test_auth_backend(),
         registration_ceremonies: empty_ceremony_store(),
         authentication_ceremonies: empty_auth_ceremony_store(),
+        unit_vendors: empty_vendor_cache(),
+        tenant_vendors: empty_vendor_cache(),
     }
 }

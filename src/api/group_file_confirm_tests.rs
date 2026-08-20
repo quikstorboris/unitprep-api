@@ -96,6 +96,7 @@ async fn rejects_confirming_an_invalid_format_file() {
         "s1",
         crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description"]),
+        &[],
     );
 
     let response = confirm_group_file(
@@ -123,6 +124,7 @@ async fn confirms_a_valid_selected_file() {
         "s1",
         crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description", "Active"]),
+        &[],
     );
 
     let response = confirm_group_file(
@@ -172,6 +174,7 @@ async fn confirming_the_group_file_is_what_makes_discovery_ready() {
         "s1",
         crate::api::test_support::test_user_id(),
         document("master_groups.csv", vec!["Name", "Description", "Active"]),
+        &[],
     );
 
     let before_confirm = discover(
