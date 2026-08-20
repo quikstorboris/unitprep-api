@@ -22,10 +22,53 @@ use std::path::Path;
 
 use unitprep_core::parsing::parse_document;
 use unitprep_core::uploaded_file::UploadedFile;
+use unitprep_core::vendor_format::{ContentType, VendorFormat};
 use unitprep_dedup::ingest::records_from_csv_document;
 use unitprep_dedup::report::run;
 use unitprep_dedup::similarity::VARIANT_SURFACE_THRESHOLD;
 use unitprep_dedup::types::{FieldCategory, TenantRecord};
+
+/// QSX's real signature/mapping, mirroring the `client_ops.vendor_format`
+/// registry migration's seed row for `content_type = 'tenants'` -- both
+/// real fixtures this file reads are genuine QSX exports.
+fn qsx_vendor() -> VendorFormat {
+    let columns = [
+        "CustNumb",
+        "UnitNumber",
+        "FirtLast",
+        "FirstName",
+        "LastName",
+        "CompanyName",
+        "PhoneNumber",
+        "Email",
+        "AddressStreet1",
+        "AddressStreet2",
+        "AddressCity",
+        "AddressState",
+        "AddressPostalCode",
+        "AlternateContactFirstName",
+        "AlternateContactLastName",
+        "AlternateContactEmail",
+        "AlternateContactPhoneNumber",
+        "AlternateContactAddressStreet1",
+        "AlternateContactAddressStreet2",
+        "AlternateContactAddressCity",
+        "AlternateContactAddressState",
+        "AlternateContactAddressPostalCode",
+    ];
+
+    VendorFormat {
+        name: "QSX".to_string(),
+        content_type: ContentType::Tenants,
+        signature_headers: vec![
+            "FirtLast".to_string(),
+            "CustNumb".to_string(),
+            "AddressStreet1".to_string(),
+        ],
+        field_mapping: columns.iter().map(|c| (c.to_string(), c.to_string())).collect(),
+        transform_key: None,
+    }
+}
 
 fn load_records_from_env(env_var: &str) -> Vec<TenantRecord> {
     let path = std::env::var(env_var).unwrap_or_else(|_| {
@@ -45,7 +88,8 @@ fn load_records_from_env(env_var: &str) -> Vec<TenantRecord> {
         modified_at: None,
     };
     let document = parse_document(&uploaded).expect("fixture must parse as CSV");
-    records_from_csv_document(&document).expect("fixture must have a FirtLast column")
+    records_from_csv_document(&document, &[qsx_vendor()])
+        .expect("fixture must be a recognizable QSX export with a FirtLast column")
 }
 
 fn unit_numbers(records: &[TenantRecord]) -> Vec<&str> {

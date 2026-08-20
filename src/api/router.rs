@@ -327,6 +327,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/session/cancel", post(cancel_session::cancel_session))
         .route("/dedup/check", post(dedup::check))
+        .route("/dedup/detect-vendor", post(dedup::detect_vendor_format))
         .route("/dedup/report", post(dedup::report))
         .route("/dedup/export", post(dedup::export))
         .route("/tagger/report", post(tagger::report))

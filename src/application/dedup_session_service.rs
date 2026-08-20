@@ -16,6 +16,7 @@ use unitprep_core::parsing::parse_document;
 use unitprep_core::session::{HasSessionMetadata, SessionMetadata};
 use unitprep_core::session_store::SessionStore;
 use unitprep_core::uploaded_file::UploadedFile;
+use unitprep_core::vendor_format::VendorFormat;
 use unitprep_dedup::ingest::records_from_csv_document;
 use unitprep_dedup::{report, DedupReport, TenantRecord};
 
@@ -93,9 +94,10 @@ impl DedupSessionService {
         &self,
         file: UploadedFile,
         owner_id: Option<Uuid>,
+        tenant_vendors: &[VendorFormat],
     ) -> anyhow::Result<(String, DedupReport, Vec<TenantRecord>)> {
         let document = parse_document(&file)?;
-        let records = records_from_csv_document(&document)?;
+        let records = records_from_csv_document(&document, tenant_vendors)?;
         let dedup_report = report::run(records.clone());
 
         let session_id = Uuid::new_v4().to_string();

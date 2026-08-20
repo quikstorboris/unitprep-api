@@ -14,8 +14,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use unitprep_core::parsing::parse_document;
 use unitprep_core::session_store::SessionStoreExt;
 use unitprep_core::uploaded_file::UploadedFile;
+use unitprep_core::vendor_format::detect_vendor;
 use unitprep_dedup::{DedupReport, TenantRecord};
 
 use crate::api::dedup_view::{build_report_view, DedupReportView};
@@ -130,10 +132,15 @@ pub async fn check(
 
     let file_name = file.file_name.clone();
 
+    // A synchronous read of the in-memory registry snapshot -- see
+    // `client_ops::vendor_format`'s module doc comment for why this is
+    // never a per-request DB call.
+    let tenant_vendors = state.tenant_vendors.read().clone();
+
     let (session_id, report, records) = match DedupSessionService::new(Arc::clone(
         &state.dedup_sessions,
     ))
-    .create_session(file, Some(user.user_id))
+    .create_session(file, Some(user.user_id), &tenant_vendors)
     {
         Ok(created) => created,
         Err(err) => {
@@ -166,6 +173,78 @@ pub async fn check(
     let report = build_report_view(&report, &records);
 
     Json(DedupCheckResponse { session_id, report }).into_response()
+}
+
+#[derive(Debug, Serialize)]
+pub struct DedupDetectVendorResponse {
+    /// `None` when the file doesn't match any registered vendor's
+    /// signature — the frontend shows this as "unrecognized" and keeps
+    /// Run Check disabled, same outcome `/dedup/check` itself would
+    /// reach, just surfaced before the user commits to running it.
+    pub vendor_name: Option<String>,
+}
+
+/// Parses an uploaded file and reports which registered vendor (if any)
+/// its columns match — called as soon as a file is selected, before
+/// `/dedup/check` actually runs, so the UI can show "Vendor: {name}" and
+/// gate the Run Check button on the user confirming it. Deliberately
+/// does not build or store anything: no session, no ingest, no report.
+/// `/dedup/check` re-detects the vendor itself when it actually runs
+/// rather than trusting this call's result — the same "server
+/// re-verifies, never trusts the frontend's own gate" pattern Group
+/// Prep's bulk-confirm already uses.
+pub async fn detect_vendor_format(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    mut multipart: Multipart,
+) -> Response {
+    let file = match first_uploaded_file(&mut multipart).await {
+        Ok(Some(file)) => file,
+        Ok(None) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorBody {
+                    error: "no_file_uploaded",
+                    message: "No file was uploaded".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        Err(err) => {
+            tracing::error!(error = %err, "Multipart parser error during dedup vendor detection");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorBody {
+                    error: "multipart_error",
+                    message: err.to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let document = match parse_document(&file) {
+        Ok(document) => document,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorBody {
+                    error: "invalid_file",
+                    message: format!("Could not read '{}': {err}", file.file_name),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // A synchronous read of the in-memory registry snapshot -- see
+    // `client_ops::vendor_format`'s module doc comment for why this is
+    // never a per-request DB call.
+    let tenant_vendors = state.tenant_vendors.read().clone();
+
+    let vendor_name = detect_vendor(&document, &tenant_vendors).map(|v| v.name.clone());
+
+    Json(DedupDetectVendorResponse { vendor_name }).into_response()
 }
 
 /// Re-fetches a previously computed report — e.g. after a page refresh,
