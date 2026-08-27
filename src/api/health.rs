@@ -69,6 +69,8 @@ pub(super) async fn health_db(State(state): State<AppState>) -> Response {
 #[derive(Serialize)]
 pub(super) struct WhoamiResponse {
     user_id: String,
+    first_name: String,
+    last_name: String,
     roles: Vec<String>,
     permissions: Vec<String>,
     /// Whether a *confirmed* TOTP credential exists for this account --
@@ -118,6 +120,16 @@ pub(super) async fn whoami(
     })?
     .unwrap_or(false);
 
+    let (first_name, last_name): (String, String) =
+        sqlx::query_as("SELECT first_name, last_name FROM auth.users WHERE id = $1")
+            .bind(user.user_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|err| {
+                tracing::error!(error = %err, user_id = %user.user_id, "whoami: name lookup failed");
+                internal_error("Could not look up your account")
+            })?;
+
     tx.commit().await.map_err(|err| {
         tracing::error!(error = %err, user_id = %user.user_id, "whoami: commit failed");
         internal_error("Could not look up your account")
@@ -125,6 +137,8 @@ pub(super) async fn whoami(
 
     Ok(Json(WhoamiResponse {
         user_id: user.user_id.to_string(),
+        first_name,
+        last_name,
         roles: user.role_keys.clone(),
         permissions: user.permission_keys.iter().cloned().collect(),
         totp_enrolled,
