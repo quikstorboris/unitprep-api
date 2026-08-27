@@ -91,10 +91,11 @@ pub(crate) fn compute_discovery(
                     suggested,
                 )
             }
-            // Unreachable today -- every unit file candidate matched a
-            // vendor signature to become one at all -- kept correct
-            // (populated headers, not silently empty) rather than
-            // assuming it can never happen.
+            // A candidate matched a vendor signature to become one at
+            // all, but a file forced in via `/unit-file/upload` bypasses
+            // that -- real case now, not hypothetical. Falls back to the
+            // document's own headers with no suggested mapping, which is
+            // exactly what the manual-mapping UI needs.
             None => (None, document.headers.clone(), Vec::new()),
         },
         None => (None, Vec::new(), Vec::new()),

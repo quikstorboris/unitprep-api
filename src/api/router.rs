@@ -22,7 +22,7 @@ use super::{
     auth_register, auth_roles, auth_totp, auth_user_role, auth_user_status, auth_users,
     cancel_session, client_ops_qms_tags, correct, correct_group, dedup, discover, exclude_group,
     exclude_groups, exempt, export, group_file_confirm, group_file_upload, resolve_unit_format,
-    select_group_file, select_unit_file, tagger, upload, validate,
+    select_group_file, select_unit_file, tagger, unit_file_upload, upload, validate,
 };
 use super::{internal_error, ApiErrorBody, AppState};
 
@@ -312,6 +312,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/unit-file/resolve-format",
             post(resolve_unit_format::resolve_unit_format),
+        )
+        .route(
+            "/unit-file/upload",
+            post(unit_file_upload::upload_unit_file),
         )
         .route(
             "/group-file/upload",

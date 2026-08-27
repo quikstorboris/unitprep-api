@@ -34,6 +34,7 @@ mod select_group_file;
 pub(crate) mod select_unit_file;
 mod state;
 mod tagger;
+mod unit_file_upload;
 mod upload;
 pub(crate) mod validate;
 

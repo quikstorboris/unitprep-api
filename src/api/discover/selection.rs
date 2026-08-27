@@ -57,15 +57,17 @@ pub(super) fn reconcile_unit_file_selection(
     );
 
     // Preserve a previously confirmed selection, dropping any file that no
-    // longer classifies as a candidate (e.g. the underlying document
-    // changed enough to stop matching a vendor signature) rather than
-    // discarding the whole selection over one stale entry.
+    // longer exists at all (e.g. removed from the session) rather than
+    // discarding the whole selection over one stale entry. Checked against
+    // `session.data.documents`, not `candidates` -- a file forced in via
+    // `/unit-file/upload` may never independently match a vendor signature,
+    // same reasoning as the group-file equivalent below.
     let previous_selection: Vec<String> = previous
         .as_ref()
         .map(|d| d.selected_unit_file_names.clone())
         .unwrap_or_default()
         .into_iter()
-        .filter(|name| candidates.iter().any(|c| &c.file_name == name))
+        .filter(|name| session.data.documents.iter().any(|d| &d.file_name == name))
         .collect();
 
     let selected_names: Vec<String> = if !previous_selection.is_empty() {
