@@ -308,6 +308,10 @@ pub fn router(state: AppState) -> Router {
         // dropbox_browse's module doc for the root-path enforcement this
         // relies on.
         .route("/dropbox/list", get(dropbox_browse::list_folder))
+        // Same reasoning as /dropbox/list above -- see
+        // dropbox_browse::search_folders's own doc comment for why no
+        // root-boundary check is needed on this one.
+        .route("/dropbox/search", get(dropbox_browse::search_folders))
         // Admin-only, read-only -- same no-dedicated-bucket reasoning as
         // /auth/users above.
         .route("/auth/audit-logs", get(auth_audit_logs::list_audit_logs))

@@ -72,7 +72,13 @@ pub async fn list_folder(
     }
 
     match state.dropbox.list_folder(&path).await {
-        Ok(entries) => {
+        Ok(mut entries) => {
+            // Dropbox does not guarantee alphabetical order -- sort here
+            // rather than leaving the frontend to do it, so every
+            // consumer of this endpoint gets a consistently ordered list
+            // for free.
+            entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
             // User info belongs here, not inside DropboxClient itself:
             // this handler knows *who* asked, the client below only
             // knows *what* was asked -- see dropbox::client's own
@@ -105,6 +111,66 @@ pub async fn list_folder(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SearchFoldersQuery {
+    pub q: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchFoldersResponse {
+    pub entries: Vec<FolderEntry>,
+}
+
+/// Any authenticated caller, same reasoning as `list_folder` above. No
+/// root-boundary check needed here (unlike `list_folder`): the search
+/// path passed to Dropbox is always `state.dropbox`'s own configured
+/// root, never anything caller-supplied, so there is no path for a
+/// request to escape it in the first place.
+pub async fn search_folders(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Query(query): Query<SearchFoldersQuery>,
+) -> Response {
+    let q = query.q.trim();
+
+    // A one-character query gets crowded out by file-name noise before
+    // it says anything useful (see search_folders's own doc comment on
+    // why over-fetching still has a ceiling) -- same guard most search
+    // boxes apply, just enforced server-side too.
+    if q.chars().count() < 2 {
+        return Json(SearchFoldersResponse { entries: vec![] }).into_response();
+    }
+
+    match state.dropbox.search_folders(q).await {
+        Ok(mut entries) => {
+            entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+
+            tracing::info!(
+                user_id = %user.user_id,
+                query = %q,
+                result_count = entries.len(),
+                "user searched Dropbox folders"
+            );
+
+            Json(SearchFoldersResponse {
+                entries: entries
+                    .into_iter()
+                    .map(|entry| FolderEntry {
+                        is_folder: entry.is_folder(),
+                        name: entry.name,
+                        path_display: entry.path_display,
+                    })
+                    .collect(),
+            })
+            .into_response()
+        }
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, query = %q, "dropbox search_folders failed");
+            internal_error("Could not search Dropbox")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +195,26 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // Same reasoning as the test above: a query under the minimum length
+    // returns before ever reaching state.dropbox.search_folders, so this
+    // is real coverage of this handler's own logic without a network call.
+    #[tokio::test]
+    async fn rejects_a_one_character_query_without_calling_dropbox() {
+        let response = search_folders(
+            State(empty_state()),
+            test_user(),
+            Query(SearchFoldersQuery { q: "a".to_string() }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        assert_eq!(body.as_ref(), br#"{"entries":[]}"#);
     }
 }

@@ -39,6 +39,28 @@ struct ListFolderResponse {
     has_more: bool,
 }
 
+/// `files/search_v2`'s response shape is unrelated to `list_folder`'s
+/// (a `matches` array of match wrappers, not a flat `entries` array),
+/// but each match's inner `metadata.metadata` object has exactly the
+/// same `.tag`/`name`/`path_display` fields `Entry` already parses --
+/// reused as-is rather than duplicating a second near-identical struct
+/// (serde ignores the extra fields search results carry, like
+/// `match_type`/`highlight_spans`, since `Entry` never named them).
+#[derive(Deserialize)]
+struct SearchV2Response {
+    matches: Vec<SearchV2Match>,
+}
+
+#[derive(Deserialize)]
+struct SearchV2Match {
+    metadata: SearchV2MatchMetadata,
+}
+
+#[derive(Deserialize)]
+struct SearchV2MatchMetadata {
+    metadata: Entry,
+}
+
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -201,6 +223,82 @@ impl DropboxClient {
         Ok(parsed.entries)
     }
 
+    /// Searches folder names recursively under the configured root --
+    /// unlike `list_folder`, this needs no caller-supplied path to
+    /// validate against the root boundary at all, since the search is
+    /// always scoped to `self.config.root_path` by construction.
+    ///
+    /// Dropbox's search has no "folders only" option: a query matches
+    /// file names too, and there is no request parameter to exclude
+    /// them. Filtering to folders happens here, after the fact, on
+    /// whatever Dropbox returns. `max_results: 100` is deliberately
+    /// generous rather than Dropbox's own default (10) -- a facility
+    /// folder can easily be outranked by a dozen files whose names also
+    /// contain the search term (rent rolls, unit lists, templates), so
+    /// asking for too few results risks filtering down to nothing even
+    /// though a real folder match exists further down Dropbox's own
+    /// ranking. No pagination (`search/continue_v2`) -- not needed for
+    /// a facility-name-shaped query (verified against the real QMS
+    /// Onboarding folder: two- and three-word queries both returned
+    /// every match in one page), and a query broad enough to need it is
+    /// arguably not a useful facility search anyway.
+    pub async fn search_folders(&self, query: &str) -> Result<Vec<Entry>, DropboxError> {
+        let access_token = self.access_token().await?;
+
+        let response = self
+            .http
+            .post("https://api.dropboxapi.com/2/files/search_v2")
+            .bearer_auth(access_token)
+            .header("Dropbox-API-Path-Root", self.path_root_header())
+            .json(&serde_json::json!({
+                "query": query,
+                "options": {
+                    "path": self.config.root_path,
+                    "max_results": 100,
+                    "filename_only": true,
+                },
+            }))
+            .send()
+            .await?;
+
+        let status = response.status();
+        let body = response.text().await?;
+
+        if !status.is_success() {
+            tracing::error!(
+                query = %query,
+                status = status.as_u16(),
+                body = %body,
+                "Dropbox search failed"
+            );
+            return Err(DropboxError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let parsed: SearchV2Response =
+            serde_json::from_str(&body).map_err(|err| DropboxError::Api {
+                status: status.as_u16(),
+                body: format!("failed to parse search response ({err}): {body}"),
+            })?;
+
+        let folders: Vec<Entry> = parsed
+            .matches
+            .into_iter()
+            .map(|m| m.metadata.metadata)
+            .filter(Entry::is_folder)
+            .collect();
+
+        tracing::info!(
+            query = %query,
+            folder_count = folders.len(),
+            "dropbox search_folders succeeded"
+        );
+
+        Ok(folders)
+    }
+
     // Not called by anything yet -- write-back (reading a customer's
     // existing files into a tool) is planned per the Dropbox integration
     // plan but not wired into any tool yet. Kept rather than deleted:
@@ -329,6 +427,41 @@ mod tests {
         assert!(
             entries.iter().any(|e| e.is_folder() && e.name == "Papa Ducks"),
             "expected to find the known 'Papa Ducks' subfolder"
+        );
+    }
+
+    // Same real-network reasoning as the test above. Searches for a
+    // known facility ("Highway 20 Self Storage", under client "Prairie
+    // Enterprises LLC") by a facility-only term, verifying both that the
+    // folder-only filter actually drops the many file-name matches this
+    // query also hits (rent rolls, unit lists, templates) and that a
+    // generic query term still surfaces the facility folder itself
+    // despite not naming the client at all.
+    #[tokio::test]
+    #[ignore]
+    async fn search_folders_finds_a_facility_by_name_alone() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let config = DropboxConfig::from_env().expect(
+            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
+        );
+        let client = DropboxClient::new(config);
+
+        let folders = client
+            .search_folders("Highway 20")
+            .await
+            .expect("search_folders should succeed against the real QMS Onboarding folder");
+
+        assert!(
+            folders.iter().all(Entry::is_folder),
+            "every returned entry should be a folder, not a file match"
+        );
+        assert!(
+            folders
+                .iter()
+                .any(|e| e.name == "Highway 20 Self Storage"
+                    && e.path_display.contains("Prairie Enterprises LLC")),
+            "expected to find the Highway 20 Self Storage facility folder without searching by client name"
         );
     }
 }
