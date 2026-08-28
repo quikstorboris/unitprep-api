@@ -96,8 +96,8 @@ pub(crate) fn apply_group_file_upload(
 
     match result {
         Some(Ok(response)) => Json(response).into_response(),
-        Some(Err(err)) => stage_conflict(err),
-        None => session_not_found(),
+        Some(Err(err)) => stage_conflict(session_id, err),
+        None => session_not_found(session_id),
     }
 }
 

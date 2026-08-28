@@ -119,7 +119,7 @@ pub async fn select_unit_file(
 
     match result {
         Some(Ok(response)) => Json(response).into_response(),
-        Some(Err(SelectNotReady::Stage(err))) => stage_conflict(err),
+        Some(Err(SelectNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
         Some(Err(SelectNotReady::EmptySelection)) => (
             StatusCode::BAD_REQUEST,
             Json(ApiErrorBody {
@@ -138,7 +138,7 @@ pub async fn select_unit_file(
             }),
         )
             .into_response(),
-        None => session_not_found(),
+        None => session_not_found(&request.session_id),
     }
 }
 

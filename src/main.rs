@@ -64,12 +64,31 @@ async fn main() {
     // default, which is what made every discovery/upload run emit
     // hundreds of per-file DEBUG lines regardless of what the operator
     // actually wanted to see.
+    // "sqlx=warn" surfaces sqlx's own built-in slow-query events (see
+    // db.rs's log_slow_statements call) without also turning on its
+    // per-query DEBUG noise -- that instrumentation already runs on
+    // every query today, this just stops filtering the slow ones out.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("unitprep=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("unitprep=info,sqlx=warn")),
         )
         .init();
+
+    // A panic (the db_pool/dropbox_client/auth_backend/cookie-security
+    // startup ones below, or anything later) prints only to raw stderr
+    // via Rust's default panic hook, entirely bypassing the tracing
+    // subscriber just configured above -- invisible to anything that
+    // collects this process's logs by following its tracing output
+    // rather than tailing stderr directly. Wrapping the default hook
+    // (not replacing it) keeps the familiar stderr backtrace for local
+    // dev while also emitting a structured tracing event through the
+    // same pipe everything else this process logs through.
+    let default_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        tracing::error!(panic = %panic_info, "panicked");
+        default_panic_hook(panic_info);
+    }));
 
     // Overridable per deployment without a code change — defaults to
     // the same 10 minutes as before if unset or unparseable.
@@ -244,12 +263,53 @@ async fn main() {
     // `with_connect_info` rather than plain `into_make_service` -- the
     // auth rate limiter (api::router) keys by peer IP via
     // `ConnectInfo<SocketAddr>`, which only ever gets populated this way.
+    //
+    // `with_graceful_shutdown` matters beyond the log line it lets us add
+    // below: without it, Ctrl+C/SIGTERM kill the process immediately,
+    // mid-request, rather than letting axum finish in-flight requests
+    // first. Previously there was no signal handling at all -- the
+    // process simply stopped, with nothing recorded either way.
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal())
     .await
     .unwrap();
+
+    tracing::info!("UnitPrep API stopped");
+}
+
+/// Waits for Ctrl+C or (on Unix) SIGTERM -- the signal systemd/Docker/Fly
+/// send for a normal stop, as opposed to SIGKILL, which nothing can
+/// intercept or log. Logs which one fired, so a deliberate stop is
+/// distinguishable in the logs from the process just disappearing.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            tracing::info!("received Ctrl+C, shutting down gracefully");
+        }
+        _ = terminate => {
+            tracing::info!("received SIGTERM, shutting down gracefully");
+        }
+    }
 }
 
 /// Runs the `bootstrap-admin` subcommand and exits with a status the shell

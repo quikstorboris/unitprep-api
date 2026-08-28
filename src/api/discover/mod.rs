@@ -76,7 +76,7 @@ pub async fn discover(
 
     match response {
         Some(response) => Json(response).into_response(),
-        None => session_not_found(),
+        None => session_not_found(&request.session_id),
     }
 }
 

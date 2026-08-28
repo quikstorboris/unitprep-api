@@ -310,6 +310,13 @@ pub async fn try_authenticated_user(
 ) -> Option<AuthenticatedUser> {
     let raw_token = read_session_cookie(jar)?;
     let token_hash = hash_token(&raw_token);
+
+    // Unlike the mandatory extractor above, a query failure here used to
+    // collapse into the same `None` as "no session" via `.ok()`, silently
+    // discarding the error -- a DB outage on this path looked identical to
+    // an anonymous caller, with zero trace of the real cause. Logged now,
+    // matching the mandatory extractor's own pattern; the None-collapsing
+    // behavior itself (this function's own doc comment above) is unchanged.
     let (
         user_id,
         role_keys,
@@ -317,7 +324,14 @@ pub async fn try_authenticated_user(
         elevated_until,
         requires_step_up,
         passkey_reverified_until,
-    ) = query_session(&token_hash, &state.db).await.ok()??;
+    ) = match query_session(&token_hash, &state.db).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return None,
+        Err(err) => {
+            tracing::error!(error = %err, "session resolution query failed (try_authenticated_user)");
+            return None;
+        }
+    };
 
     if requires_step_up {
         return None;

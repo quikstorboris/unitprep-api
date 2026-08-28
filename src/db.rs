@@ -1,4 +1,7 @@
+use std::time::Duration;
+
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
+use sqlx::ConnectOptions;
 
 /// Builds the application database connection pool from DATABASE_URL.
 ///
@@ -41,7 +44,16 @@ pub fn connect() -> Result<PgPool, sqlx::Error> {
     // added later fails at runtime rather than compile time -- see the
     // note in scripts/setup_app_service_role.sql on the search_path the
     // migration connection uses, which differs again.
-    let connect_options: PgConnectOptions = database_url.parse()?;
+    // sqlx already emits a `sqlx::query` tracing event for every query,
+    // WARN-level for anything over this threshold (see main.rs's
+    // "sqlx=warn" filter, which is what actually surfaces it) -- nothing
+    // else in this app needs to instrument query latency by hand.
+    // Default threshold is 1s, generous for a CRUD app this size;
+    // tightened here so a genuinely slow query shows up promptly rather
+    // than only once it's already severe.
+    let connect_options: PgConnectOptions = database_url
+        .parse::<PgConnectOptions>()?
+        .log_slow_statements(log::LevelFilter::Warn, Duration::from_millis(200));
 
     Ok(PgPoolOptions::new()
         .max_connections(5)

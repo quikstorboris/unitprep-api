@@ -260,7 +260,7 @@ pub async fn report(
             (session.report.clone(), session.records.clone())
         }) {
         Some((report, records)) => Json(build_report_view(&report, &records)).into_response(),
-        None => session_not_found(),
+        None => session_not_found(&request.session_id),
     }
 }
 
@@ -281,7 +281,7 @@ pub async fn export(
         |session| (session.report.clone(), session.records.clone()),
     ) {
         Some(data) => data,
-        None => return session_not_found(),
+        None => return session_not_found(&request.session_id),
     };
 
     let (report, records) = session_data;

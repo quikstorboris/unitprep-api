@@ -57,7 +57,12 @@ pub use state::AppState;
 /// so the frontend can distinguish "nothing to report" from "there's
 /// nothing here to report on" and show an explicit expired-session screen
 /// rather than a confusing all-zeros result.
-pub(crate) fn session_not_found() -> Response {
+pub(crate) fn session_not_found(session_id: &str) -> Response {
+    // Logged here, not left to each of the ~20 call sites to remember --
+    // before this, whether a session-not-found ever left a trace depended
+    // entirely on whether that specific handler happened to log first.
+    tracing::warn!(session_id = %session_id, "session not found or expired");
+
     (
         StatusCode::NOT_FOUND,
         Json(ApiErrorBody {
@@ -90,7 +95,22 @@ pub(crate) struct ApiErrorBody {
 /// which is exactly the ambiguity `session_not_found`'s own doc comment
 /// above already identifies as the thing to avoid. This closes that same
 /// gap for stage violations.
-pub(crate) fn stage_conflict(err: crate::application::unit_group_session::StageError) -> Response {
+pub(crate) fn stage_conflict(
+    session_id: &str,
+    err: crate::application::unit_group_session::StageError,
+) -> Response {
+    // Same reasoning as session_not_found's own log line above -- some
+    // call sites already warn with richer, handler-specific context
+    // before reaching here (a file name, a unit number); this one is
+    // guaranteed regardless, so a caller that forgets to still leaves a
+    // trace.
+    tracing::warn!(
+        session_id = %session_id,
+        required = ?err.required,
+        current = ?err.current,
+        "stage conflict"
+    );
+
     (
         StatusCode::CONFLICT,
         Json(ApiErrorBody {
@@ -114,12 +134,13 @@ pub(crate) fn stage_conflict(err: crate::application::unit_group_session::StageE
 /// `correct_group`'s `UnknownGroup` variant) keep their own custom match
 /// instead of forcing an unrelated variant through this shape.
 pub(crate) fn respond<T: Serialize>(
+    session_id: &str,
     result: Option<Result<T, crate::application::unit_group_session::StageError>>,
 ) -> Response {
     match result {
         Some(Ok(body)) => Json(body).into_response(),
-        Some(Err(err)) => stage_conflict(err),
-        None => session_not_found(),
+        Some(Err(err)) => stage_conflict(session_id, err),
+        None => session_not_found(session_id),
     }
 }
 

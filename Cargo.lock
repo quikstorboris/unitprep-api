@@ -3465,6 +3465,7 @@ dependencies = [
  "tower-service",
  "tracing",
  "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3655,6 +3656,7 @@ dependencies = [
  "dotenvy",
  "getrandom 0.4.3",
  "hex",
+ "log",
  "parking_lot",
  "printpdf",
  "reqwest",

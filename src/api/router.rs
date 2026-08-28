@@ -14,6 +14,8 @@ use axum::{
 use tower_governor::{governor::GovernorConfigBuilder, GovernorError, GovernorLayer};
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer};
+use tower_http::trace::TraceLayer;
 
 use super::health::{health, health_db, whoami};
 use super::{
@@ -53,6 +55,14 @@ fn allowed_origins() -> Vec<axum::http::HeaderValue> {
         ],
     }
 }
+
+/// One id per request, threaded through every log line emitted while
+/// handling it (via the `TraceLayer` span below) and echoed back on the
+/// response so a user reporting an issue can quote the exact request --
+/// answering "what happened for this click" without cross-referencing
+/// timestamps across possibly-concurrent requests. `x-request-id` is the
+/// de facto standard header name for this.
+static REQUEST_ID_HEADER: header::HeaderName = header::HeaderName::from_static("x-request-id");
 
 pub fn router(state: AppState) -> Router {
     let cors = CorsLayer::new()
@@ -148,8 +158,31 @@ pub fn router(state: AppState) -> Router {
 
             loop {
                 interval.tick().await;
-                auth_limiter.retain_recent();
-                invite_limiter.retain_recent();
+
+                // catch_unwind, not just calling these directly: the doc
+                // comment above has always claimed this loop survives a
+                // panicking tick, but nothing enforced that -- a real
+                // panic inside retain_recent() would kill this spawned
+                // task silently and permanently, quietly resuming the
+                // exact memory leak this task exists to prevent, with no
+                // log line anywhere saying so.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    auth_limiter.retain_recent();
+                    invite_limiter.retain_recent();
+                }));
+
+                if let Err(panic) = result {
+                    let message = panic
+                        .downcast_ref::<&str>()
+                        .copied()
+                        .or_else(|| panic.downcast_ref::<String>().map(String::as_str))
+                        .unwrap_or("unknown panic payload");
+
+                    tracing::error!(
+                        panic = %message,
+                        "rate-limit cleanup tick panicked; will retry on the next tick"
+                    );
+                }
             }
         });
     }
@@ -359,11 +392,68 @@ pub fn router(state: AppState) -> Router {
         // every handler's extractor type, which would be a much larger,
         // purely mechanical change for the same outcome.
         .layer(middleware::from_fn(normalize_extraction_rejection_body))
-        // Outermost layer — catches a panic anywhere in the stack below
-        // (routes, cors, body-limit) and turns it into the project's own
-        // ApiErrorBody 500 shape instead of silently dropping the
-        // connection with no response at all.
+        // Catches a panic anywhere in the stack below (routes, cors,
+        // body-limit) and turns it into the project's own ApiErrorBody
+        // 500 shape instead of silently dropping the connection with no
+        // response at all. No longer literally the outermost layer (the
+        // three request-id/trace layers below wrap it), but still the
+        // outermost of the response-shaping ones.
         .layer(CatchPanicLayer::custom(handle_panic))
+        // Copies the id `SetRequestIdLayer` below assigned back onto the
+        // response header, once a response exists -- applied here (more
+        // inner than TraceLayer) so it runs before TraceLayer's own
+        // on_response sees the response, per tower-http's documented
+        // request-id composition.
+        .layer(PropagateRequestIdLayer::new(REQUEST_ID_HEADER.clone()))
+        // The span this creates wraps every handler/layer below it, so
+        // every `tracing::` call made while handling a request inherits
+        // `request_id`/`method`/`path` as span context automatically --
+        // no need to thread the id through each handler by hand.
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &Request| {
+                    let request_id = request
+                        .extensions()
+                        .get::<RequestId>()
+                        .and_then(|id| id.header_value().to_str().ok())
+                        .unwrap_or("unknown")
+                        .to_string();
+
+                    tracing::info_span!(
+                        "http_request",
+                        method = %request.method(),
+                        path = %request.uri().path(),
+                        request_id = %request_id,
+                    )
+                })
+                .on_response(|response: &Response, latency: Duration, _span: &tracing::Span| {
+                    // Read back off the response rather than threading
+                    // the id through separately -- PropagateRequestIdLayer
+                    // (more inner, so it runs first on the way out) has
+                    // already copied it onto this exact response by the
+                    // time this fires.
+                    let request_id = response
+                        .headers()
+                        .get(&REQUEST_ID_HEADER)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("unknown");
+
+                    tracing::info!(
+                        request_id = %request_id,
+                        status = response.status().as_u16(),
+                        latency_ms = latency.as_millis(),
+                        "request completed"
+                    );
+                }),
+        )
+        // Outermost layer overall -- assigns the id before anything else
+        // (cors, body-limit, catch-panic, every route) sees the request,
+        // so every request gets one regardless of how it's ultimately
+        // handled or rejected.
+        .layer(SetRequestIdLayer::new(
+            REQUEST_ID_HEADER.clone(),
+            MakeRequestUuid,
+        ))
 }
 
 /// `tower_governor`'s own default rejection is plain text (e.g. `"Too Many

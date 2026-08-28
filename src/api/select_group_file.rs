@@ -95,7 +95,7 @@ pub async fn select_group_file(
     match result {
         Some(Ok(response)) => Json(response).into_response(),
 
-        Some(Err(SelectNotReady::Stage(err))) => stage_conflict(err),
+        Some(Err(SelectNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
 
         Some(Err(SelectNotReady::UnknownCandidate)) => (
             StatusCode::BAD_REQUEST,
@@ -106,7 +106,7 @@ pub async fn select_group_file(
         )
             .into_response(),
 
-        None => session_not_found(),
+        None => session_not_found(&request.session_id),
     }
 }
 

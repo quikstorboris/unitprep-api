@@ -194,7 +194,7 @@ pub async fn resolve_unit_format(
     match result {
         Some(Ok(response)) => Json(response).into_response(),
 
-        Some(Err(ResolveNotReady::Stage(err))) => stage_conflict(err),
+        Some(Err(ResolveNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
 
         Some(Err(ResolveNotReady::NoFileSelected)) => (
             StatusCode::BAD_REQUEST,
@@ -260,7 +260,7 @@ pub async fn resolve_unit_format(
         )
             .into_response(),
 
-        None => session_not_found(),
+        None => session_not_found(&request.session_id),
     }
 }
 

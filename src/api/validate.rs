@@ -202,9 +202,9 @@ pub async fn validate(
     match response {
         Some(Ok(response)) => Json(response).into_response(),
 
-        Some(Err(err)) => stage_conflict(err),
+        Some(Err(err)) => stage_conflict(&request.session_id, err),
 
-        None => session_not_found(),
+        None => session_not_found(&request.session_id),
     }
 }
 

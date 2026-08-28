@@ -140,6 +140,10 @@ pub async fn create_qms_tag(
     let category = request.category.trim().to_string();
 
     if tag_key.is_empty() || label.is_empty() || category.is_empty() {
+        tracing::warn!(
+            user_id = %user.user_id,
+            "qms tag creation rejected: missing required field(s)"
+        );
         return bad_request(
             "invalid_qms_tag",
             "tag_key, label, and category are all required.".to_string(),
@@ -172,6 +176,11 @@ pub async fn create_qms_tag(
         // other constraint violation is a genuine internal error.
         if let sqlx::Error::Database(ref db_err) = err {
             if db_err.is_unique_violation() {
+                tracing::warn!(
+                    user_id = %user.user_id,
+                    tag_key = %tag_key,
+                    "qms tag creation rejected: tag_key already exists"
+                );
                 return conflict(
                     "qms_tag_already_exists",
                     format!("A tag with key {tag_key} already exists."),
@@ -253,6 +262,11 @@ pub async fn update_qms_tag(
     let category = request.category.trim().to_string();
 
     if label.is_empty() || category.is_empty() {
+        tracing::warn!(
+            user_id = %user.user_id,
+            tag_key = %tag_key,
+            "qms tag update rejected: missing required field(s)"
+        );
         return bad_request(
             "invalid_qms_tag",
             "label and category are both required.".to_string(),
@@ -273,6 +287,11 @@ pub async fn update_qms_tag(
             if let Err(err) = tx.rollback().await {
                 tracing::error!(error = %err, "failed to roll back after a missing qms tag lookup");
             }
+            tracing::warn!(
+                user_id = %user.user_id,
+                tag_key = %tag_key,
+                "qms tag update rejected: tag not found"
+            );
             return not_found(&tag_key);
         }
         Err(err) => {
@@ -366,6 +385,12 @@ async fn set_active(
             if let Err(err) = tx.rollback().await {
                 tracing::error!(error = %err, "failed to roll back after a missing qms tag lookup");
             }
+            tracing::warn!(
+                user_id = %user.user_id,
+                tag_key = %tag_key,
+                action,
+                "qms tag activation change rejected: tag not found"
+            );
             return not_found(tag_key);
         }
         Err(err) => {
@@ -378,6 +403,12 @@ async fn set_active(
         if let Err(err) = tx.rollback().await {
             tracing::error!(error = %err, "failed to roll back a no-op qms tag activation change");
         }
+        tracing::warn!(
+            user_id = %user.user_id,
+            tag_key = %tag_key,
+            active,
+            "qms tag activation change rejected: already in that state"
+        );
         return conflict(
             "qms_tag_already_in_state",
             format!(

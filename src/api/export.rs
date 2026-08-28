@@ -86,10 +86,10 @@ pub async fn export(
     ) {
         Some(Ok(data)) => data,
         Some(Err(err)) => {
-            return stage_conflict(err);
+            return stage_conflict(&request.session_id, err);
         }
         None => {
-            return session_not_found();
+            return session_not_found(&request.session_id);
         }
     };
 
@@ -210,6 +210,7 @@ pub async fn export(
 
     tracing::info!(
         session_id = %request.session_id,
+        owner_id = %user.user_id,
         facilities =
             analysis
                 .batch_run

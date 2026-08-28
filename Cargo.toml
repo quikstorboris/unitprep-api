@@ -72,8 +72,11 @@ tokio = { version = "1", features = ["full"] }
 
 # Middleware. "catch-panic" turns a handler panic into the project's own
 # ApiErrorBody 500 shape (see api::mod::handle_panic) instead of dropping
-# the connection with no response at all.
-tower-http = { version = "0.6", features = ["cors", "catch-panic"] }
+# the connection with no response at all. "trace" + "request-id" back the
+# per-request correlation id (see router::router's layer stack) -- the
+# "worth having, not yet" item from the 2026-07-30 logging roadmap,
+# revisited now that more people are about to start using Orchestrator.
+tower-http = { version = "0.6", features = ["cors", "catch-panic", "trace", "request-id"] }
 
 # Logging
 tracing = "0.1"
@@ -109,6 +112,12 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres",
 # main.rs) -- not required in a deployed environment, where real env
 # vars are injected directly instead.
 dotenvy = "0.15"
+
+# Only for log::LevelFilter, the type sqlx's own log_slow_statements API
+# takes (src/db.rs) -- sqlx's actual query-logging events go through
+# `tracing` regardless (see that call site's own comment), this crate is
+# not otherwise used or wired to anything.
+log = "0.4"
 
 # Passkey/WebAuthn registration and authentication -- see src/auth.
 #

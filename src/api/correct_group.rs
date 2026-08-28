@@ -196,7 +196,7 @@ pub async fn correct_group(
     match result {
         Some(Ok(response)) => Json(response).into_response(),
 
-        Some(Err(CorrectGroupNotReady::Stage(err))) => stage_conflict(err),
+        Some(Err(CorrectGroupNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
 
         Some(Err(CorrectGroupNotReady::UnknownGroup)) => (
             StatusCode::BAD_REQUEST,
@@ -208,7 +208,7 @@ pub async fn correct_group(
         )
             .into_response(),
 
-        None => session_not_found(),
+        None => session_not_found(&request.session_id),
     }
 }
 

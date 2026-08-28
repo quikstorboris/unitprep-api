@@ -64,7 +64,7 @@ pub async fn acknowledge_group_warnings(
         },
     );
 
-    respond(response)
+    respond(&request.session_id, response)
 }
 
 #[cfg(test)]

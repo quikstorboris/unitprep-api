@@ -107,7 +107,7 @@ pub async fn correct(
     match response {
         Some(Ok(response)) => Json(response).into_response(),
 
-        Some(Err(CorrectNotReady::Stage(err))) => stage_conflict(err),
+        Some(Err(CorrectNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
 
         Some(Err(CorrectNotReady::UnknownUnit)) => (
             StatusCode::BAD_REQUEST,
@@ -133,7 +133,7 @@ pub async fn correct(
         )
             .into_response(),
 
-        None => session_not_found(),
+        None => session_not_found(&request.session_id),
     }
 }
 

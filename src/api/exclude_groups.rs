@@ -52,7 +52,7 @@ pub async fn exclude_groups(
         },
     );
 
-    respond(response)
+    respond(&request.session_id, response)
 }
 
 #[cfg(test)]

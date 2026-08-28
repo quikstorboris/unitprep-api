@@ -113,7 +113,7 @@ pub async fn analyze(
     ) {
         Some(Ok(data)) => data,
         Some(Err(AnalyzeNotReady::Stage(err))) => {
-            return stage_conflict(err);
+            return stage_conflict(&request.session_id, err);
         }
         Some(Err(AnalyzeNotReady::GroupFileNotSelected)) => {
             return (
@@ -126,7 +126,7 @@ pub async fn analyze(
                 .into_response();
         }
         None => {
-            return session_not_found();
+            return session_not_found(&request.session_id);
         }
     };
 

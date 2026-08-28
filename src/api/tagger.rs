@@ -399,7 +399,7 @@ pub async fn report(
 
     let (original_bytes, candidates) = match session_data {
         Some(data) => data,
-        None => return session_not_found(),
+        None => return session_not_found(&request.session_id),
     };
 
     // read_docx already validated these exact bytes at /check time, so
@@ -504,7 +504,7 @@ pub async fn apply(
 
     let (original_bytes, original_file_name, candidates) = match session_data {
         Some(data) => data,
-        None => return session_not_found(),
+        None => return session_not_found(&request.session_id),
     };
 
     // read_docx already validated these exact bytes at /check time, so
