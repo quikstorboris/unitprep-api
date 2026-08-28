@@ -73,6 +73,15 @@ pub async fn list_folder(
 
     match state.dropbox.list_folder(&path).await {
         Ok(mut entries) => {
+            // Folder-picker use case only (see this module's doc comment)
+            // -- files living alongside client folders (e.g. QMS's own
+            // "Default Permissions - ..." reference images at various
+            // levels of the tree) have no business appearing in a picker
+            // meant to select a folder. A future "browse everything"
+            // view (e.g. a client's DrBx tab) is a different endpoint's
+            // job, not a flag on this one.
+            entries.retain(|entry| entry.is_folder());
+
             // Dropbox does not guarantee alphabetical order -- sort here
             // rather than leaving the frontend to do it, so every
             // consumer of this endpoint gets a consistently ordered list
