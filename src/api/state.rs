@@ -6,6 +6,7 @@ use crate::application::dedup_session_service::DedupSession;
 use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
 use crate::client_ops::vendor_format::VendorFormatCache;
+use crate::dropbox::DropboxClient;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -63,4 +64,10 @@ pub struct AppState {
     // `unit_group_sessions`/`dedup_sessions` above are already separate
     // fields per tool rather than one map.
     pub tenant_vendors: VendorFormatCache,
+
+    // Dropbox access for the QMS Onboarding folder (see src/dropbox for
+    // the full scope/namespace caveats). A concrete client, not
+    // Arc<dyn Trait> like auth_backend above -- there is one real
+    // implementation and no swap point today.
+    pub dropbox: Arc<DropboxClient>,
 }

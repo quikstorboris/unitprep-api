@@ -5,6 +5,7 @@ mod auth;
 mod bootstrap;
 mod client_ops;
 mod db;
+mod dropbox;
 mod infrastructure;
 
 use std::net::SocketAddr;
@@ -105,6 +106,14 @@ async fn main() {
         panic!("Failed to configure the database pool: {err}");
     });
 
+    // See src/dropbox for the full scope/namespace caveats (Full Dropbox
+    // access, app-level-only path enforcement, Team Space namespace).
+    let dropbox_client = Arc::new(dropbox::DropboxClient::new(
+        dropbox::DropboxConfig::from_env().unwrap_or_else(|err| {
+            panic!("Failed to configure Dropbox: {err}");
+        }),
+    ));
+
     // Group Prep's and dedup's vendor-format registries -- an in-memory
     // snapshot per content type, loaded once here (best-effort; see
     // `initial_cache`'s own doc comment for why a failure here doesn't
@@ -191,6 +200,7 @@ async fn main() {
         authentication_ceremonies,
         unit_vendors,
         tenant_vendors,
+        dropbox: dropbox_client,
     };
 
     let app = api::router(state);

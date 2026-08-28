@@ -20,6 +20,7 @@ mod correct_group;
 mod dedup;
 mod dedup_view;
 pub(crate) mod discover;
+mod dropbox_browse;
 mod exclude_group;
 mod exclude_groups;
 mod exempt;

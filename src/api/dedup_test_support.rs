@@ -47,5 +47,6 @@ pub fn dedup_state_with_report(
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: empty_vendor_cache(),
         tenant_vendors: empty_vendor_cache(),
+        dropbox: crate::api::test_support::test_dropbox_client(),
     }
 }

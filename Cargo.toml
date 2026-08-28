@@ -246,6 +246,19 @@ chrono-tz = "0.10"
 # feature chain, which would pull the whole azul tree straight back in.
 printpdf = { version = "0.12", default-features = false, features = ["png"] }
 
+# Dropbox integration (src/dropbox) -- talks to api.dropboxapi.com and
+# www.dropbox.com/oauth2 directly (no official Dropbox SDK for Rust
+# exists). Previously present only as a dev-dependency (below), used
+# solely to HTTP-test this app's own router over plain loopback HTTP
+# (src/api/http_integration_tests.rs) -- this is the first real outbound
+# use, and the first that needs HTTPS, which is why "rustls-tls" is
+# explicit here and wasn't needed on the dev-dependency entry:
+# default-features = false drops reqwest's default TLS backend
+# entirely, and rustls-tls (matching sqlx's own TLS choice above) avoids
+# pulling in a second, independent OpenSSL dependency tree alongside
+# webauthn-rs's.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
 [dev-dependencies]
 
 # Reads the xlsx exporter's own output back in its tests, so those

@@ -145,6 +145,19 @@ pub(crate) fn test_auth_backend() -> std::sync::Arc<dyn crate::auth::AuthBackend
     )
 }
 
+/// Fake, never-dialed-out Dropbox config -- nothing in the handler test
+/// suite exercises `AppState::dropbox` yet, so this only needs to exist
+/// and construct successfully, not hold credentials that work.
+pub(crate) fn test_dropbox_client() -> std::sync::Arc<crate::dropbox::DropboxClient> {
+    std::sync::Arc::new(crate::dropbox::DropboxClient::new(crate::dropbox::DropboxConfig {
+        app_key: "test".to_string(),
+        app_secret: "test".to_string(),
+        refresh_token: "test".to_string(),
+        root_namespace_id: "test".to_string(),
+        root_path: "/test".to_string(),
+    }))
+}
+
 /// Fixed, obviously-fake caller id shared by `test_user()` and every
 /// session-building fixture below (`uploaded_state`, `validated_state`,
 /// `dedup_state_with_report`, etc.) -- so a test that builds a session
@@ -265,6 +278,7 @@ pub fn empty_state() -> AppState {
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        dropbox: test_dropbox_client(),
     }
 }
 
@@ -310,6 +324,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        dropbox: test_dropbox_client(),
     }
 }
 
@@ -382,6 +397,7 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        dropbox: test_dropbox_client(),
     }
 }
 
@@ -432,6 +448,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        dropbox: test_dropbox_client(),
     }
 }
 
@@ -492,6 +509,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        dropbox: test_dropbox_client(),
     }
 }
 
@@ -576,5 +594,6 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        dropbox: test_dropbox_client(),
     }
 }
