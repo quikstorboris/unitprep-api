@@ -375,8 +375,14 @@ pub fn router(state: AppState) -> Router {
         .route("/session/cancel", post(cancel_session::cancel_session))
         .route("/dedup/check", post(dedup::check))
         .route("/dedup/detect-vendor", post(dedup::detect_vendor_format))
+        .route(
+            "/dedup/detect-vendor-dropbox",
+            post(dedup::detect_vendor_format_dropbox),
+        )
+        .route("/dedup/import-dropbox", post(dedup::import_from_dropbox))
         .route("/dedup/report", post(dedup::report))
         .route("/dedup/export", post(dedup::export))
+        .route("/dedup/export-dropbox", post(dedup::export_to_dropbox))
         .route("/tagger/report", post(tagger::report))
         .route("/tagger/apply", post(tagger::apply))
         .merge(tagger_check_route)

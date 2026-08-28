@@ -234,3 +234,54 @@ async fn export_produces_a_zip_containing_both_formats() {
     assert!(names.contains(&"duplicate_tenant_check.csv".to_string()));
     assert!(names.contains(&"duplicate_tenant_check.xlsx".to_string()));
 }
+
+// The three tests below mirror dropbox_browse's own
+// `rejects_a_path_outside_the_configured_root_without_calling_dropbox`:
+// a path outside `test_dropbox_client()`'s configured "/test" root is
+// rejected before any of these handlers would reach the real network,
+// so this is real coverage of each handler's own boundary check without
+// needing a live Dropbox credential.
+
+#[tokio::test]
+async fn import_from_dropbox_rejects_a_path_outside_the_configured_root() {
+    let response = import_from_dropbox(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(DedupDropboxPathRequest {
+            path: "/Not/Under/The/Configured/Root".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn detect_vendor_format_dropbox_rejects_a_path_outside_the_configured_root() {
+    let response = detect_vendor_format_dropbox(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(DedupDropboxPathRequest {
+            path: "/Not/Under/The/Configured/Root".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn export_to_dropbox_rejects_a_path_outside_the_configured_root() {
+    let response = export_to_dropbox(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(DedupExportToDropboxRequest {
+            session_id: "missing".to_string(),
+            format: ExportFormat::Csv,
+            dropbox_path: "/Not/Under/The/Configured/Root/out.csv".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}

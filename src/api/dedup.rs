@@ -21,6 +21,7 @@ use unitprep_core::vendor_format::detect_vendor;
 use unitprep_dedup::{DedupReport, TenantRecord};
 
 use crate::api::dedup_view::{build_report_view, DedupReportView};
+use crate::api::dropbox_browse::ensure_path_in_root;
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::application::dedup_session_service::DedupSessionService;
 use crate::auth::AuthenticatedUser;
@@ -92,6 +93,30 @@ async fn first_uploaded_file(
     }
 
     Ok(result)
+}
+
+/// Downloads `path` from Dropbox and wraps it as an `UploadedFile`, the
+/// same shape `first_uploaded_file` builds from a multipart field --
+/// lets `detect_vendor_format_dropbox`/`import_from_dropbox` reuse the
+/// exact same parse/ingest code their local-upload counterparts use,
+/// with only the acquisition step differing.
+async fn download_as_uploaded_file(
+    state: &AppState,
+    path: &str,
+) -> Result<UploadedFile, Response> {
+    let bytes = state.dropbox.download(path).await.map_err(|err| {
+        tracing::error!(error = %err, path = %path, "Dropbox download failed during dedup import");
+        internal_error("Could not download file from Dropbox")
+    })?;
+
+    let file_name = path.rsplit('/').next().unwrap_or(path).to_string();
+
+    Ok(UploadedFile {
+        file_name: file_name.clone(),
+        relative_path: file_name,
+        bytes,
+        modified_at: None,
+    })
 }
 
 /// Uploads and analyzes a QMS export file in one step, creating a new
@@ -175,6 +200,72 @@ pub async fn check(
     Json(DedupCheckResponse { session_id, report }).into_response()
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DedupDropboxPathRequest {
+    pub path: String,
+}
+
+/// Dropbox-sourced counterpart to `check()` -- same ingest/session-create
+/// logic via `download_as_uploaded_file`, called only after the
+/// frontend's confirm-vendor checkbox, exactly like `handleCheck` calls
+/// `/dedup/check` today after a local upload.
+pub async fn import_from_dropbox(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(request): Json<DedupDropboxPathRequest>,
+) -> Response {
+    let started = Instant::now();
+
+    if let Err(response) = ensure_path_in_root(&state, &request.path) {
+        return response;
+    }
+
+    let file = match download_as_uploaded_file(&state, &request.path).await {
+        Ok(file) => file,
+        Err(response) => return response,
+    };
+
+    let file_name = file.file_name.clone();
+
+    // A synchronous read of the in-memory registry snapshot -- see
+    // `client_ops::vendor_format`'s module doc comment for why this is
+    // never a per-request DB call.
+    let tenant_vendors = state.tenant_vendors.read().clone();
+
+    let (session_id, report, records) = match DedupSessionService::new(Arc::clone(
+        &state.dedup_sessions,
+    ))
+    .create_session(file, Some(user.user_id), &tenant_vendors)
+    {
+        Ok(created) => created,
+        Err(err) => {
+            tracing::warn!(file = %file_name, error = %err, "Dedup import-from-dropbox failed to ingest file");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorBody {
+                    error: "invalid_file",
+                    message: err.to_string(),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    tracing::info!(
+        session_id = %session_id,
+        owner_id = %user.user_id,
+        path = %request.path,
+        flagged_groups = report.flagged_groups.len(),
+        typo_variant_candidates = report.typo_variant_candidates.len(),
+        check_ms = started.elapsed().as_millis(),
+        "Dedup check complete (imported from Dropbox)"
+    );
+
+    let report = build_report_view(&report, &records);
+
+    Json(DedupCheckResponse { session_id, report }).into_response()
+}
+
 #[derive(Debug, Serialize)]
 pub struct DedupDetectVendorResponse {
     /// `None` when the file doesn't match any registered vendor's
@@ -247,6 +338,49 @@ pub async fn detect_vendor_format(
     Json(DedupDetectVendorResponse { vendor_name }).into_response()
 }
 
+/// Dropbox-sourced counterpart to `detect_vendor_format` -- same
+/// parse-and-report logic via `download_as_uploaded_file`, source is a
+/// Dropbox path instead of a multipart upload. Does not create a
+/// session, same as the local-upload version; `/dedup/import-dropbox`
+/// re-detects when it actually runs.
+pub async fn detect_vendor_format_dropbox(
+    State(state): State<AppState>,
+    _user: AuthenticatedUser,
+    Json(request): Json<DedupDropboxPathRequest>,
+) -> Response {
+    if let Err(response) = ensure_path_in_root(&state, &request.path) {
+        return response;
+    }
+
+    let file = match download_as_uploaded_file(&state, &request.path).await {
+        Ok(file) => file,
+        Err(response) => return response,
+    };
+
+    let document = match parse_document(&file) {
+        Ok(document) => document,
+        Err(err) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiErrorBody {
+                    error: "invalid_file",
+                    message: format!("Could not read '{}': {err}", file.file_name),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    // A synchronous read of the in-memory registry snapshot -- see
+    // `client_ops::vendor_format`'s module doc comment for why this is
+    // never a per-request DB call.
+    let tenant_vendors = state.tenant_vendors.read().clone();
+
+    let vendor_name = detect_vendor(&document, &tenant_vendors).map(|v| v.name.clone());
+
+    Json(DedupDetectVendorResponse { vendor_name }).into_response()
+}
+
 /// Re-fetches a previously computed report — e.g. after a page refresh,
 /// without re-uploading the file.
 pub async fn report(
@@ -286,10 +420,10 @@ pub async fn export(
 
     let (report, records) = session_data;
 
-    let response = match request.format {
-        ExportFormat::Csv => build_csv_response(&request.session_id, &report, &records),
-        ExportFormat::Xlsx => build_xlsx_response(&request.session_id, &report, &records),
-        ExportFormat::Both => build_zip_response(&request.session_id, &report, &records),
+    let response = match generate_export(&request.format, &request.session_id, &report, &records)
+    {
+        Ok((bytes, content_type, file_name)) => file_response(bytes, content_type, file_name),
+        Err(response) => response,
     };
 
     tracing::info!(
@@ -306,58 +440,106 @@ pub async fn export(
     response
 }
 
-fn build_csv_response(
-    session_id: &str,
-    report: &DedupReport,
-    records: &[TenantRecord],
-) -> Response {
-    match dedup_csv_export::generate_csv(report, records) {
-        Ok(bytes) => file_response(bytes, "text/csv", "duplicate_tenant_check.csv"),
-        Err(err) => {
-            tracing::error!(session_id = %session_id, error = %err, "Failed generating dedup export CSV");
-            internal_error("Failed generating export CSV")
-        }
-    }
+#[derive(Debug, Deserialize)]
+pub struct DedupExportToDropboxRequest {
+    pub session_id: String,
+    #[serde(default)]
+    pub format: ExportFormat,
+    /// Full destination path, filename included -- resolved by the
+    /// frontend's Dropbox folder picker plus a client-generated
+    /// timestamped filename, not guessed at here.
+    pub dropbox_path: String,
 }
 
-fn build_xlsx_response(
-    session_id: &str,
-    report: &DedupReport,
-    records: &[TenantRecord],
-) -> Response {
-    match dedup_xlsx_export::generate_xlsx(report, records) {
-        Ok(bytes) => file_response(
-            bytes,
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            "duplicate_tenant_check.xlsx",
-        ),
-        Err(err) => {
-            tracing::error!(session_id = %session_id, error = %err, "Failed generating dedup export xlsx");
-            internal_error("Failed generating export xlsx")
-        }
-    }
+#[derive(Debug, Serialize)]
+pub struct DedupExportToDropboxResponse {
+    pub path: String,
 }
 
-fn build_zip_response(
+/// Dropbox-sourced counterpart to `export()` -- same report lookup and
+/// byte generation via `generate_export`, destination is a Dropbox path
+/// the frontend already resolved via its folder picker instead of an
+/// HTTP response body.
+pub async fn export_to_dropbox(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(request): Json<DedupExportToDropboxRequest>,
+) -> Response {
+    let started = Instant::now();
+
+    if let Err(response) = ensure_path_in_root(&state, &request.dropbox_path) {
+        return response;
+    }
+
+    let session_data = match state.dedup_sessions.with_owned_session(
+        &request.session_id,
+        user.user_id,
+        |session| (session.report.clone(), session.records.clone()),
+    ) {
+        Some(data) => data,
+        None => return session_not_found(&request.session_id),
+    };
+
+    let (report, records) = session_data;
+
+    let (bytes, _content_type, _default_file_name) =
+        match generate_export(&request.format, &request.session_id, &report, &records) {
+            Ok(generated) => generated,
+            Err(response) => return response,
+        };
+
+    if let Err(err) = state.dropbox.upload(&request.dropbox_path, bytes).await {
+        tracing::error!(error = %err, path = %request.dropbox_path, "Dropbox upload failed during dedup export");
+        return internal_error("Could not upload export to Dropbox");
+    }
+
+    tracing::info!(
+        session_id = %request.session_id,
+        owner_id = %user.user_id,
+        format = ?request.format,
+        path = %request.dropbox_path,
+        export_ms = started.elapsed().as_millis(),
+        "Dedup export saved to Dropbox"
+    );
+
+    Json(DedupExportToDropboxResponse {
+        path: request.dropbox_path,
+    })
+    .into_response()
+}
+
+#[allow(clippy::result_large_err)]
+fn generate_csv_bytes(
     session_id: &str,
     report: &DedupReport,
     records: &[TenantRecord],
-) -> Response {
-    let csv_bytes = match dedup_csv_export::generate_csv(report, records) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            tracing::error!(session_id = %session_id, error = %err, "Failed generating dedup export CSV");
-            return internal_error("Failed generating export CSV");
-        }
-    };
+) -> Result<Vec<u8>, Response> {
+    dedup_csv_export::generate_csv(report, records).map_err(|err| {
+        tracing::error!(session_id = %session_id, error = %err, "Failed generating dedup export CSV");
+        internal_error("Failed generating export CSV")
+    })
+}
 
-    let xlsx_bytes = match dedup_xlsx_export::generate_xlsx(report, records) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            tracing::error!(session_id = %session_id, error = %err, "Failed generating dedup export xlsx");
-            return internal_error("Failed generating export xlsx");
-        }
-    };
+#[allow(clippy::result_large_err)]
+fn generate_xlsx_bytes(
+    session_id: &str,
+    report: &DedupReport,
+    records: &[TenantRecord],
+) -> Result<Vec<u8>, Response> {
+    dedup_xlsx_export::generate_xlsx(report, records).map_err(|err| {
+        tracing::error!(session_id = %session_id, error = %err, "Failed generating dedup export xlsx");
+        internal_error("Failed generating export xlsx")
+    })
+}
+
+#[allow(clippy::result_large_err)]
+fn generate_zip_bytes(
+    session_id: &str,
+    report: &DedupReport,
+    records: &[TenantRecord],
+) -> Result<Vec<u8>, Response> {
+    let csv_bytes = generate_csv_bytes(session_id, report, records)?;
+    let xlsx_bytes = generate_xlsx_bytes(session_id, report, records)?;
 
     let files = vec![
         ExportFile {
@@ -370,12 +552,36 @@ fn build_zip_response(
         },
     ];
 
-    match build_zip(files) {
-        Ok(bytes) => file_response(bytes, "application/zip", "duplicate_tenant_check.zip"),
-        Err(err) => {
-            tracing::error!(session_id = %session_id, error = %err, "Failed zipping dedup export files");
-            internal_error("Failed generating export ZIP")
-        }
+    build_zip(files).map_err(|err| {
+        tracing::error!(session_id = %session_id, error = %err, "Failed zipping dedup export files");
+        internal_error("Failed generating export ZIP")
+    })
+}
+
+/// Single format-dispatch point shared by `export()` (wraps the result in
+/// an HTTP response via `file_response`) and `export_to_dropbox()` (hands
+/// the bytes to `state.dropbox.upload` instead) -- the only place that
+/// needs to know which generator and content-type/filename go with which
+/// `ExportFormat`.
+#[allow(clippy::result_large_err)]
+fn generate_export(
+    format: &ExportFormat,
+    session_id: &str,
+    report: &DedupReport,
+    records: &[TenantRecord],
+) -> Result<(Vec<u8>, &'static str, &'static str), Response> {
+    match format {
+        ExportFormat::Csv => generate_csv_bytes(session_id, report, records)
+            .map(|bytes| (bytes, "text/csv", "duplicate_tenant_check.csv")),
+        ExportFormat::Xlsx => generate_xlsx_bytes(session_id, report, records).map(|bytes| {
+            (
+                bytes,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "duplicate_tenant_check.xlsx",
+            )
+        }),
+        ExportFormat::Both => generate_zip_bytes(session_id, report, records)
+            .map(|bytes| (bytes, "application/zip", "duplicate_tenant_check.zip")),
     }
 }
 

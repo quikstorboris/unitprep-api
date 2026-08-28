@@ -1,12 +1,15 @@
 //! Read-only Dropbox folder browsing for the client-setup flow (picking
-//! `Client.dropboxPath` in `unitprep-ui`) -- lists folder names only,
-//! nothing about file contents.
+//! `Client.dropboxPath` in `unitprep-ui`) and for the Dedup Dropbox
+//! import/export pickers -- lists folder names by default; pass
+//! `include_files=true` to also see files, which the folder-only client
+//! picker never asks for.
 //!
 //! The one thing standing between this endpoint and the entire company
-//! Dropbox is the root check below: `state.dropbox`'s token has Full
-//! Dropbox access (see `src/dropbox`'s module doc for why), and Dropbox
-//! enforces no folder boundary on it at all. Every request here must stay
-//! under `state.dropbox.root_path()`.
+//! Dropbox is the root check below (`ensure_path_in_root`): `state.dropbox`'s
+//! token has Full Dropbox access (see `src/dropbox`'s module doc for why),
+//! and Dropbox enforces no folder boundary on it at all. Every
+//! caller-supplied path anywhere in this app must be checked against it
+//! before being handed to `state.dropbox`.
 
 use axum::{
     extract::{Json, Query, State},
@@ -23,6 +26,12 @@ pub struct ListFolderQuery {
     /// Omitted (or empty) means "the configured root" -- what the
     /// frontend's folder picker asks for on first load.
     pub path: Option<String>,
+
+    /// Omitted (or false) filters the listing to folders only -- the
+    /// client-setup picker's need. `true` is for a file-picker use case
+    /// (e.g. Dedup's "Import from Dropbox"), which needs to see and
+    /// select files, not just navigate through them.
+    pub include_files: Option<bool>,
 }
 
 /// Deliberately just name/path/is_folder -- enough for a picker, not the
@@ -53,6 +62,23 @@ fn path_outside_root(path: &str) -> Response {
         .into_response()
 }
 
+/// Shared boundary check for every Dropbox-touching endpoint in the app,
+/// not just this module's own `list_folder`/`search_folders` -- Dedup's
+/// import/export handlers (`api::dedup`) call this too before handing a
+/// caller-supplied path to `state.dropbox`. See this module's doc comment
+/// for why the check has to live somewhere and be actually applied
+/// everywhere.
+#[allow(clippy::result_large_err)]
+pub fn ensure_path_in_root(state: &AppState, path: &str) -> Result<(), Response> {
+    let root = state.dropbox.root_path();
+
+    if path == root || path.starts_with(&format!("{root}/")) {
+        Ok(())
+    } else {
+        Err(path_outside_root(path))
+    }
+}
+
 /// Any authenticated caller -- folder *names* only, nothing sensitive,
 /// same reasoning as `client_ops_qms_tags::list_qms_tags`. No DB
 /// transaction: this never touches Postgres, only proxies to Dropbox.
@@ -67,20 +93,20 @@ pub async fn list_folder(
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| root.to_string());
 
-    if path != root && !path.starts_with(&format!("{root}/")) {
-        return path_outside_root(&path);
+    if let Err(response) = ensure_path_in_root(&state, &path) {
+        return response;
     }
 
     match state.dropbox.list_folder(&path).await {
         Ok(mut entries) => {
-            // Folder-picker use case only (see this module's doc comment)
-            // -- files living alongside client folders (e.g. QMS's own
-            // "Default Permissions - ..." reference images at various
-            // levels of the tree) have no business appearing in a picker
-            // meant to select a folder. A future "browse everything"
-            // view (e.g. a client's DrBx tab) is a different endpoint's
-            // job, not a flag on this one.
-            entries.retain(|entry| entry.is_folder());
+            // Folder-only is the default (see `ListFolderQuery::
+            // include_files`'s doc comment) -- files living alongside
+            // client folders (e.g. QMS's own "Default Permissions - ..."
+            // reference images at various levels of the tree) have no
+            // business appearing in a picker meant to select a folder.
+            if !query.include_files.unwrap_or(false) {
+                entries.retain(|entry| entry.is_folder());
+            }
 
             // Dropbox does not guarantee alphabetical order -- sort here
             // rather than leaving the frontend to do it, so every
@@ -199,6 +225,7 @@ mod tests {
             test_user(),
             Query(ListFolderQuery {
                 path: Some("/Not/Under/The/Configured/Root".to_string()),
+                include_files: None,
             }),
         )
         .await;

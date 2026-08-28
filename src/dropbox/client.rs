@@ -299,15 +299,12 @@ impl DropboxClient {
         Ok(folders)
     }
 
-    // Not called by anything yet -- write-back (reading a customer's
-    // existing files into a tool) is planned per the Dropbox integration
-    // plan but not wired into any tool yet. Kept rather than deleted:
-    // Phase 1 deliberately scoped in read+write support at the client
-    // level ahead of any specific caller, since all three tools will
-    // need it. See dropbox::client's own #[ignore]d test for list_folder
-    // coverage; this and upload below have no equivalent test yet
-    // because nothing calls them to have a regression against.
-    #[allow(dead_code)]
+    // Used by api::dedup's Dropbox-import handlers
+    // (download_as_uploaded_file). See dropbox::client's own #[ignore]d
+    // test for list_folder coverage; this and upload below have no
+    // equivalent test yet since the real network call isn't something a
+    // fast unit test should exercise -- see api::dedup's own no-network
+    // rejection tests for what actually is covered.
     pub async fn download(&self, path: &str) -> Result<Vec<u8>, DropboxError> {
         let access_token = self.access_token().await?;
 
@@ -349,10 +346,10 @@ impl DropboxClient {
     /// Uploads `bytes` to `path`, overwriting whatever is already there.
     /// Dropbox's other write modes (`add`, with conflict detection via
     /// `update`'s rev parameter) aren't exposed here -- overwrite is the
-    /// only policy Phase 1 needs; a caller that needs conflict-aware
-    /// writes should get that decided and added when it's actually
-    /// wired into a tool, not guessed at now.
-    #[allow(dead_code)]
+    /// only policy the one caller (api::dedup's export_to_dropbox) needs;
+    /// the frontend guards against silent clobbering itself by always
+    /// generating a timestamped filename, not by asking Dropbox to
+    /// detect a conflict.
     pub async fn upload(&self, path: &str, bytes: Vec<u8>) -> Result<(), DropboxError> {
         let access_token = self.access_token().await?;
         let byte_count = bytes.len();
