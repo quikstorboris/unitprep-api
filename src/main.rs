@@ -7,6 +7,7 @@ mod client_ops;
 mod db;
 mod dropbox;
 mod infrastructure;
+mod process_street;
 
 use std::net::SocketAddr;
 use std::sync::Arc;

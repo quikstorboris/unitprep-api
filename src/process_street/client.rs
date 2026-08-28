@@ -1,0 +1,338 @@
+// Phase 0 only (see this module's parent mod.rs doc comment) -- nothing
+// in the rest of the crate calls into this yet, so every public item
+// here is legitimately unused until Phase 1 wires up ingestion. Remove
+// this once a real caller exists.
+#![allow(dead_code)]
+
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::Value;
+
+use super::config::ProcessStreetConfig;
+
+const BASE_URL: &str = "https://public-api.process.st/api/v1.1";
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProcessStreetError {
+    #[error("Process Street request failed: {0}")]
+    Http(#[from] reqwest::Error),
+
+    #[error("Process Street API returned {status}: {body}")]
+    Api { status: u16, body: String },
+
+    #[error("failed to parse Process Street response ({0}): {1}")]
+    Parse(serde_json::Error, String),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Workflow {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorkflowRun {
+    pub id: String,
+    pub name: String,
+    pub status: String,
+    #[serde(rename = "workflowId")]
+    pub workflow_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Task {
+    pub id: String,
+    pub name: String,
+    /// PS's own status strings ("Completed"/"NotCompleted" observed so
+    /// far) -- kept as plain text, not a Rust enum, for the same reason
+    /// the `ps_task_status.status` column isn't CHECK-constrained: this
+    /// is a value PS controls, not this codebase, and it can add a new
+    /// one at any time.
+    pub status: String,
+}
+
+/// One form field value from a workflow run. `data` is PS's own wrapper
+/// object around the actual value (shape varies slightly by
+/// `field_type` -- e.g. Select adds `hasDefaultValue`, Date adds
+/// `timeHidden` -- but every shape seen so far carries a `value` key),
+/// kept as raw JSON rather than typed per field_type since Phase 1
+/// ingestion only ever needs the plain value.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FormField {
+    pub id: String,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    pub key: String,
+    pub label: String,
+    #[serde(rename = "fieldType")]
+    pub field_type: String,
+    /// `None` when the field was never answered at all (PS omits or
+    /// nulls `data` itself) -- distinct from `value_as_str()` returning
+    /// `None`, which also covers an answered-but-non-string value.
+    pub data: Option<Value>,
+}
+
+impl FormField {
+    /// The one thing Phase 1 ingestion actually needs: `data.value` as
+    /// a plain string, or `None` if unanswered or non-string.
+    pub fn value_as_str(&self) -> Option<&str> {
+        self.data.as_ref()?.get("value")?.as_str()
+    }
+}
+
+/// Read-only Process Street client -- see [[feedback_ps_readonly]] in
+/// the vault (or, if this comment outlives that note, Boris's own
+/// instruction: PS is a live ops system the onboarding team depends on
+/// daily, so nothing here may call a write endpoint). Every method is a
+/// GET; there is no `create`/`update`/`delete` here and none should be
+/// added without that constraint being explicitly lifted first.
+pub struct ProcessStreetClient {
+    http: reqwest::Client,
+    config: ProcessStreetConfig,
+}
+
+impl ProcessStreetClient {
+    pub fn new(config: ProcessStreetConfig) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            config,
+        }
+    }
+
+    async fn get_page(&self, url: &str) -> Result<Value, ProcessStreetError> {
+        let response = self
+            .http
+            .get(url)
+            .header("X-API-KEY", &self.config.api_key)
+            .send()
+            .await?;
+
+        let status = response.status();
+        let body = response.text().await?;
+
+        if !status.is_success() {
+            tracing::error!(
+                url = %url,
+                status = status.as_u16(),
+                body = %body,
+                "Process Street request failed"
+            );
+            return Err(ProcessStreetError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        serde_json::from_str(&body).map_err(|err| ProcessStreetError::Parse(err, body))
+    }
+
+    /// PS's own pagination cursor -- an entry in `links` with
+    /// `"name": "next"`, whose `href` is a complete, ready-to-call URL
+    /// (already carries the cursor query param), not a token to be
+    /// appended manually. Real PS responses have been observed carrying
+    /// a `next` link even alongside an empty items array on what turns
+    /// out to be the true last page -- `paginate` below guards against
+    /// looping forever on that by also stopping on an empty page,
+    /// mirroring the two-condition stop this session's own Python
+    /// pagination loop used against the real API.
+    fn next_link(page: &Value) -> Option<String> {
+        page.get("links")?
+            .as_array()?
+            .iter()
+            .find(|link| link.get("name").and_then(Value::as_str) == Some("next"))
+            .and_then(|link| link.get("href"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    }
+
+    /// Follows every page of a PS list endpoint and returns every item.
+    /// `items_key` is the top-level array name, which differs per
+    /// endpoint ("workflows", "workflowRuns", "tasks", "fields") -- PS
+    /// has no single consistent envelope shape across them, so this
+    /// takes the key as a parameter rather than assuming one.
+    async fn paginate<T: DeserializeOwned>(
+        &self,
+        mut url: String,
+        items_key: &str,
+    ) -> Result<Vec<T>, ProcessStreetError> {
+        let mut all = Vec::new();
+
+        loop {
+            let page = self.get_page(&url).await?;
+
+            let items_value = page.get(items_key).cloned().unwrap_or(Value::Array(vec![]));
+            let items: Vec<T> = serde_json::from_value(items_value)
+                .map_err(|err| ProcessStreetError::Parse(err, page.to_string()))?;
+
+            let is_empty = items.is_empty();
+            all.extend(items);
+
+            match (is_empty, Self::next_link(&page)) {
+                (false, Some(next)) => url = next,
+                _ => break,
+            }
+        }
+
+        Ok(all)
+    }
+
+    pub async fn list_workflows(&self) -> Result<Vec<Workflow>, ProcessStreetError> {
+        self.paginate(format!("{BASE_URL}/workflows"), "workflows")
+            .await
+    }
+
+    pub async fn list_workflow_runs(
+        &self,
+        workflow_id: &str,
+    ) -> Result<Vec<WorkflowRun>, ProcessStreetError> {
+        self.paginate(
+            format!("{BASE_URL}/workflow-runs?workflowId={workflow_id}"),
+            "workflowRuns",
+        )
+        .await
+    }
+
+    pub async fn get_run_tasks(&self, run_id: &str) -> Result<Vec<Task>, ProcessStreetError> {
+        self.paginate(format!("{BASE_URL}/workflow-runs/{run_id}/tasks"), "tasks")
+            .await
+    }
+
+    pub async fn get_run_form_fields(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<FormField>, ProcessStreetError> {
+        self.paginate(
+            format!("{BASE_URL}/workflow-runs/{run_id}/form-fields"),
+            "fields",
+        )
+        .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Real (trimmed) captures from this session's exploration against
+    // Prairie Enterprises' Highway 20 Intake/Progress run -- not
+    // synthetic data, so parsing quirks PS actually produces (a `null`
+    // `data`, a `Select` field's extra `hasDefaultValue`, a `Date`
+    // field's extra `timeHidden`) are exercised for real.
+
+    const WORKFLOWS_PAGE: &str = r#"{
+        "workflows": [
+            {"id": "tRh93HgRC5OLom3UxhJD3w", "name": "🚂 Intake / Progress"},
+            {"id": "rhUaJ-KRu0ejEOYQ-jxGMA", "name": "💳 New Merchant Account"}
+        ],
+        "links": [
+            {"name": "next", "href": "https://public-api.process.st/api/v1.1/workflows?_=cXZqVHBZMjk3TU92TXJoa3BkVk1KQQ", "rel": "Workflow", "type": "Api"}
+        ]
+    }"#;
+
+    const WORKFLOWS_LAST_PAGE_EMPTY_BUT_HAS_NEXT: &str = r#"{
+        "workflows": [],
+        "links": [
+            {"name": "next", "href": "https://public-api.process.st/api/v1.1/workflows?_=stale", "rel": "Workflow", "type": "Api"}
+        ]
+    }"#;
+
+    const FORM_FIELDS_PAGE: &str = r#"{
+        "fields": [
+            {
+                "id": "ixGqzM5UzhDd3GnIsQZK5w",
+                "workflowRunId": "iy22NyiqGjwAAytKp0NErQ",
+                "taskId": "j-5_aOg11bWhSznEkoxBnA",
+                "key": "Who_placed_the_order?",
+                "label": "Who placed the order?",
+                "data": {"value": "Dan F.", "hasDefaultValue": false},
+                "fieldType": "Select"
+            },
+            {
+                "id": "tYSXuwxkHTrDDjnkGORDiQ",
+                "workflowRunId": "iy22NyiqGjwAAytKp0NErQ",
+                "taskId": "g6R6n86CZtxIOggqPCFM3A",
+                "key": "What_is_the_Go_Live_Date_on_the_contract?",
+                "label": "What is the Go Live Date on the contract?",
+                "data": {"value": "2026-08-19T15:00:00.000Z", "timeHidden": false},
+                "fieldType": "Date"
+            },
+            {
+                "id": "unansweredExample",
+                "workflowRunId": "iy22NyiqGjwAAytKp0NErQ",
+                "taskId": "g6R6n86CZtxIOggqPCFM3A",
+                "key": "Which_3rd_Party_Software_are_they_using?",
+                "label": "Which 3rd Party Software are they using?",
+                "data": null,
+                "fieldType": "Text"
+            }
+        ],
+        "links": []
+    }"#;
+
+    const TASKS_PAGE: &str = r#"{
+        "tasks": [
+            {"id": "h1RB1lJsHThfz6vYZNpNcA", "name": "Step to Add Customer Success Team", "status": "Completed"},
+            {"id": "jW8ERmV2COCiu3feNMRFzw", "name": "🌐 Website: Update ClickUp Task", "status": "NotCompleted"}
+        ]
+    }"#;
+
+    #[test]
+    fn parses_a_real_workflows_page_including_emoji_names() {
+        let page: Value = serde_json::from_str(WORKFLOWS_PAGE).unwrap();
+        let items: Vec<Workflow> =
+            serde_json::from_value(page.get("workflows").unwrap().clone()).unwrap();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, "🚂 Intake / Progress");
+        assert_eq!(items[1].name, "💳 New Merchant Account");
+        assert_eq!(
+            ProcessStreetClient::next_link(&page).as_deref(),
+            Some("https://public-api.process.st/api/v1.1/workflows?_=cXZqVHBZMjk3TU92TXJoa3BkVk1KQQ")
+        );
+    }
+
+    #[test]
+    fn treats_an_empty_page_as_the_end_even_when_a_next_link_is_present() {
+        // Real PS behavior observed this session: a `next` link can
+        // still be present on what is actually the last page. The
+        // `paginate` loop's stop condition is (is_empty, next_link) --
+        // this test locks in the "empty wins" half of that pair
+        // directly against a real captured shape, since a regression
+        // here would silently degrade into either an infinite loop or
+        // (if the check were inverted) dropping real trailing pages.
+        let page: Value = serde_json::from_str(WORKFLOWS_LAST_PAGE_EMPTY_BUT_HAS_NEXT).unwrap();
+        let items: Vec<Workflow> =
+            serde_json::from_value(page.get("workflows").unwrap().clone()).unwrap();
+
+        assert!(items.is_empty());
+        assert!(ProcessStreetClient::next_link(&page).is_some());
+    }
+
+    #[test]
+    fn form_field_value_as_str_handles_select_date_and_unanswered_fields() {
+        let page: Value = serde_json::from_str(FORM_FIELDS_PAGE).unwrap();
+        let fields: Vec<FormField> =
+            serde_json::from_value(page.get("fields").unwrap().clone()).unwrap();
+
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].field_type, "Select");
+        assert_eq!(fields[0].value_as_str(), Some("Dan F."));
+        assert_eq!(fields[1].field_type, "Date");
+        assert_eq!(fields[1].value_as_str(), Some("2026-08-19T15:00:00.000Z"));
+        // `data: null` in real PS output -- must not panic, must yield
+        // None, not an empty string or a deserialization error.
+        assert_eq!(fields[2].data, None);
+        assert_eq!(fields[2].value_as_str(), None);
+    }
+
+    #[test]
+    fn parses_a_real_tasks_page_including_completed_and_not_completed_status() {
+        let page: Value = serde_json::from_str(TASKS_PAGE).unwrap();
+        let tasks: Vec<Task> = serde_json::from_value(page.get("tasks").unwrap().clone()).unwrap();
+
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].status, "Completed");
+        assert_eq!(tasks[1].status, "NotCompleted");
+        assert_eq!(tasks[1].name, "🌐 Website: Update ClickUp Task");
+    }
+}
