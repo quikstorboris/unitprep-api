@@ -114,6 +114,26 @@ BEGIN
 END
 $$;
 
+-- clients: the OO x Process Street client/facility data (companies,
+-- facilities, Facility Policies, people, merchant accounts, contract
+-- orders, PS task status) -- see migration
+-- 20260828120000_create_process_street_client_tables for why this is
+-- its own schema rather than folded into client_ops. Same
+-- guarded-grant shape as every schema above.
+DO
+$$
+BEGIN
+    IF EXISTS (SELECT FROM pg_catalog.pg_namespace WHERE nspname = 'clients') THEN
+        EXECUTE 'GRANT USAGE ON SCHEMA clients TO app_service';
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA clients TO app_service';
+        EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA clients '
+                'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+    ELSE
+        RAISE NOTICE 'schema "clients" not present yet -- skipping its grants. Re-run this file after `sqlx migrate run`.';
+    END IF;
+END
+$$;
+
 -- The app never needs sqlx's own migration-tracking table -- only
 -- sqlx-cli does, connecting as the owner role. Guarded for the same
 -- reason as the auth block: it does not exist until the first migration

@@ -1,0 +1,15 @@
+DROP TABLE clients.ps_task_status;
+DROP TABLE clients.facility_contract_orders;
+DROP TABLE clients.facility_merchant_accounts;
+DROP TABLE clients.facility_people;
+DROP TABLE clients.people;
+DROP TABLE clients.policy_specials;
+DROP TABLE clients.policy_commission;
+DROP TABLE clients.policy_coverage_tiers;
+DROP TABLE clients.policy_delinquency_steps;
+DROP TABLE clients.policy_taxes;
+DROP TABLE clients.policy_fees;
+DROP TABLE clients.facility_policies;
+DROP TABLE clients.facilities;
+DROP TABLE clients.companies;
+DROP SCHEMA clients;
