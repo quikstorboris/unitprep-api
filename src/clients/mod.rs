@@ -10,6 +10,7 @@
 //! naming decision recorded in the vault and in this migration's own
 //! header comment).
 
+pub mod contract_order_mapping;
 pub mod encryption;
 pub mod fields;
 pub mod ingest;
