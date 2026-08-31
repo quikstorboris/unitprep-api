@@ -4,6 +4,7 @@ mod application;
 mod auth;
 mod bootstrap;
 mod client_ops;
+mod clients;
 mod db;
 mod dropbox;
 mod infrastructure;
