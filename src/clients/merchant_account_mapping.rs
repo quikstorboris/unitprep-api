@@ -329,6 +329,19 @@ pub fn sanitize_fields_for_snapshot(fields: &[FormField]) -> Value {
 pub struct MappedMerchantAccount {
     pub rate_provided: Option<String>,
     pub application_status: Option<String>,
+    /// PS's own `Legal_Name_2` (Facility Information / Pre-App step) --
+    /// preferred over Intake's own legal-name field when this run
+    /// exists at all, per Boris's call: Elavon's own application asks
+    /// this question more carefully than Intake does.
+    pub legal_name: Option<String>,
+    /// PS's own `Business_DBA` -- the operating/facility name half of
+    /// the sole-proprietor naming rule (`clients::company_naming`).
+    pub business_dba: Option<String>,
+    /// PS's own `Ownership_Type` (e.g. "LLC", "Sole Proprietorship" --
+    /// real observed value so far is just "LLC", so this is kept as
+    /// raw text, not a Rust enum, the same Phase 1 convention as every
+    /// other Facility-Policies-adjacent field).
+    pub ownership_type: Option<String>,
     pub parties: Vec<MappedParty>,
     pub sanitized_snapshot: Value,
     secrets: FacilitySecrets,
@@ -350,6 +363,9 @@ pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccoun
     MappedMerchantAccount {
         rate_provided: value_for(fields, "What_Processing_Rates_did_you_provide_to_the_customer?"),
         application_status: value_for(fields, "What_is_their_software_onboarding_status?"),
+        legal_name: value_for(fields, "Legal_Name_2"),
+        business_dba: value_for(fields, "Business_DBA"),
+        ownership_type: value_for(fields, "Ownership_Type"),
         parties: map_parties(fields),
         sanitized_snapshot: sanitize_fields_for_snapshot(fields),
         secrets: FacilitySecrets::from_fields(fields),
@@ -403,6 +419,14 @@ mod tests {
         assert!(!snapshot_text.contains("FakeTestPassword123"));
         assert!(!snapshot_text.contains("1 Fake Test Lane"));
         assert!(!snapshot_text.contains("000000000")); // fake SSN/EIN/MID
+    }
+
+    #[test]
+    fn maps_legal_name_dba_and_ownership_type_from_the_real_pre_app_fields() {
+        let mapped = map_merchant_account_fields(&real_fields());
+        assert_eq!(mapped.legal_name.as_deref(), Some("Prairie Enterprises LLC"));
+        assert_eq!(mapped.business_dba.as_deref(), Some("Highway 20 self storage"));
+        assert_eq!(mapped.ownership_type.as_deref(), Some("LLC"));
     }
 
     #[test]
