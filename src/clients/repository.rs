@@ -393,8 +393,13 @@ mod integration_tests {
     const HIGHWAY20_NMA_FIELDS_SANITIZED: &str =
         include_str!("testdata/highway20_merchant_account_fields_sanitized.json");
     // A real Contract Order run for a different real client (Tri County
-    // Mini Storage) -- Highway 20 itself has no Contract Order run, so
-    // this is grafted onto Highway 20's facility_id purely to prove
+    // Mini Storage). Highway 20 does actually have its own real Contract
+    // Order run too (discovered 2026-08-31 while testing clients::search
+    // -- an earlier belief that it didn't was itself a casualty of the
+    // status=Active-only bug this same session found and fixed), but
+    // that data stays untouched here per Boris's explicit hold on
+    // further Contract Order work. Tri County's run is grafted onto
+    // Highway 20's facility_id purely to prove
     // ingest_contract_order_run's SQL is valid against the real,
     // migrated schema, the same reasoning
     // auth::authenticated_user's own `query_sessions_own_sql_is_valid_

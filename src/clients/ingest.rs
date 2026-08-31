@@ -207,7 +207,12 @@ mod live_tests {
             &mut tx,
             "iy22NyiqGjwAAytKp0NErQ",       // Highway 20 Intake/Progress
             Some("n1JtiN4m3mP-I0j8BChG4A"), // Highway 20 New Merchant Account
-            None,                           // Highway 20 has no Contract Order run
+            // Highway 20 does have a real Contract Order run
+            // (discovered 2026-08-31, see clients::search's own test),
+            // deliberately left out here -- Contract Order work is on
+            // hold per Boris's explicit call, not omitted because no
+            // run exists.
+            None,
         )
         .await
         .expect("ingest_facility must succeed against the live API");
