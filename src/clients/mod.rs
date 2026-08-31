@@ -18,5 +18,7 @@ pub mod intake_mapping;
 pub mod known_workflows;
 pub mod merchant_account_mapping;
 pub mod people;
+pub mod person_index;
 pub mod repository;
 pub mod search;
+pub mod sync;
