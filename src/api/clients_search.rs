@@ -3,9 +3,13 @@
 //! not built) will read from. Two genuinely different lookups running
 //! side by side in one response:
 //!
-//! - **Facility matches**: a live call to PS's own server-side
-//!   `name` filter (`clients::search::search_by_facility_name`) --
-//!   cheap, no local index needed, always current.
+//! - **Facility matches**: a live call to PS's own server-side `name`
+//!   filter over Intake runs only (`clients::search::search_by_facility_name`)
+//!   -- cheap, no local index needed, always current. Each match also
+//!   carries `already_imported`, a cheap local check against
+//!   `clients.facilities.ps_intake_run_id` so a search result can be
+//!   greyed out in the UI instead of silently inviting a duplicate
+//!   import.
 //! - **Person matches**: a local query against `clients.ps_person_index`
 //!   (`clients::sync`'s delta-synced projection) -- PS has no
 //!   server-side search over form-field values, so this is the only way
@@ -38,9 +42,11 @@ pub struct SearchClientsQuery {
 pub struct FacilityMatch {
     pub run_id: String,
     pub run_name: String,
-    /// `intake` | `merchant_account` | `contract_order`.
-    pub workflow: &'static str,
     pub status: String,
+    /// Whether `clients.facilities` already has a row for this Intake
+    /// run -- lets the UI grey this match out rather than inviting a
+    /// duplicate "Add".
+    pub already_imported: bool,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -98,16 +104,8 @@ pub async fn search_clients(
         return process_street_not_configured();
     };
 
-    let facility_matches: Vec<FacilityMatch> = match search_by_facility_name(client, q).await {
-        Ok(results) => results
-            .into_iter()
-            .map(|r| FacilityMatch {
-                run_id: r.run_id,
-                run_name: r.run_name,
-                workflow: r.workflow,
-                status: r.status,
-            })
-            .collect(),
+    let facility_results = match search_by_facility_name(client, q).await {
+        Ok(results) => results,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, query = %q, "Process Street facility-name search failed");
             return internal_error("Could not search Process Street");
@@ -117,10 +115,36 @@ pub async fn search_clients(
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for person-name search");
-            return internal_error("Could not search for a person by name");
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for search");
+            return internal_error("Could not search Process Street");
         }
     };
+
+    let candidate_run_ids: Vec<String> = facility_results.iter().map(|r| r.run_id.clone()).collect();
+    let already_imported_result: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as(
+        "SELECT ps_intake_run_id FROM clients.facilities WHERE ps_intake_run_id = ANY($1)",
+    )
+    .bind(&candidate_run_ids)
+    .fetch_all(&mut *tx)
+    .await;
+
+    let already_imported: std::collections::HashSet<String> = match already_imported_result {
+        Ok(rows) => rows.into_iter().map(|(id,)| id).collect(),
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "already-imported facility check failed");
+            return internal_error("Could not search Process Street");
+        }
+    };
+
+    let facility_matches: Vec<FacilityMatch> = facility_results
+        .into_iter()
+        .map(|r| FacilityMatch {
+            already_imported: already_imported.contains(&r.run_id),
+            run_id: r.run_id,
+            run_name: r.run_name,
+            status: r.status,
+        })
+        .collect();
 
     // A leading-wildcard ILIKE, not an indexed lookup -- see the
     // ps_person_index migration's own comment on why a full-text/trigram
