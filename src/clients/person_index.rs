@@ -79,34 +79,27 @@ pub fn extract_intake_people(fields: &[FormField]) -> Vec<ExtractedPerson> {
 /// A second real per-template variant, found while building this
 /// module: some Merchant Account runs (Highway 20's real data among
 /// them) never fill in the dedicated `Signer_-_First_Name`/`Last_Name`
-/// fields at all -- instead a separate `Signer_Name` field just names
-/// which already-listed owner is also the signer (Highway 20: "Kyle
-/// Lindley", who is also `Owner_1`). `merchant_account_mapping::map_signer`
+/// fields at all -- instead a separate, plain-text `Signer_Name` field
+/// just names which already-listed owner is also the signer (Highway
+/// 20: "Kyle Lindley", who is also `Owner_1`). `merchant_account_mapping::map_signer`
 /// correctly treats that case as "no distinct signer party" for its own
 /// PII-pipeline purposes (fabricating a phantom party with no PII would
-/// be worse than omitting it), but this search index only needs a name
-/// to index under the `signer` role, not a full party -- so it falls
-/// back to `Signer_Name` whenever the split fields are empty. This
-/// deliberately produces two index rows for the same real person (owner
-/// and signer both) when that's genuinely what the data says, matching
-/// the already-agreed "two rows, two roles" convention that
-/// `clients.facility_people` itself uses.
+/// be worse than omitting it).
+///
+/// This search index follows the same call: `Signer_Name` is only ever
+/// an ANNOTATION on an owner already listed above, not an assertion of
+/// a second, independent role -- Boris's own correction, 2026-08-31,
+/// confirmed directly against the real data (Kyle Lindley's `Signer_Name`
+/// value is byte-identical to his own `Owner_1` name). So a
+/// `Signer_Name` match against an already-extracted owner is dropped
+/// entirely, not indexed a second time under `signer`. It only produces
+/// its own `signer` entry when it names someone who ISN'T one of the
+/// owners already captured -- a genuinely distinct person with signing
+/// authority but no listed ownership stake, which the dedicated
+/// `Signer_-_*` fields (when filled in) always represent as their own
+/// party regardless.
 pub fn extract_merchant_account_people(fields: &[FormField]) -> Vec<ExtractedPerson> {
     let mut people = Vec::new();
-
-    let signer_name = display_name(
-        value_for(fields, "Signer_-_First_Name"),
-        value_for(fields, "Signer_-_Last_Name"),
-    )
-    .or_else(|| value_for(fields, "Signer_Name"));
-    if let Some(full_name) = signer_name {
-        people.push(ExtractedPerson {
-            full_name,
-            email: value_for(fields, "Signer_-_Email"),
-            phone: value_for(fields, "Signer_-_Home_or_Cell_Phone"),
-            role: "signer",
-        });
-    }
 
     for i in 1..=4 {
         let prefix = format!("Owner_{i}");
@@ -119,6 +112,25 @@ pub fn extract_merchant_account_people(fields: &[FormField]) -> Vec<ExtractedPer
                 email: value_for(fields, &format!("{prefix}_-_Email")),
                 phone: value_for(fields, &format!("{prefix}_-_Home_or_Cell_Phone")),
                 role: "owner",
+            });
+        }
+    }
+
+    let signer_name = display_name(
+        value_for(fields, "Signer_-_First_Name"),
+        value_for(fields, "Signer_-_Last_Name"),
+    )
+    .or_else(|| value_for(fields, "Signer_Name"));
+    if let Some(full_name) = signer_name {
+        let matches_an_owner = people
+            .iter()
+            .any(|p| p.full_name.eq_ignore_ascii_case(&full_name));
+        if !matches_an_owner {
+            people.push(ExtractedPerson {
+                full_name,
+                email: value_for(fields, "Signer_-_Email"),
+                phone: value_for(fields, "Signer_-_Home_or_Cell_Phone"),
+                role: "signer",
             });
         }
     }
@@ -181,22 +193,51 @@ mod tests {
         assert!(people.iter().any(|p| p.role == "owner"));
     }
 
+    fn text_field(key: &str, value: &str) -> FormField {
+        serde_json::from_value(serde_json::json!({
+            "id": "test",
+            "taskId": "test",
+            "key": key,
+            "label": key,
+            "fieldType": "Text",
+            "data": {"value": value}
+        }))
+        .unwrap()
+    }
+
     #[test]
-    fn extracts_signer_and_owners_from_a_sanitized_merchant_account_fixture() {
+    fn a_signer_name_matching_no_listed_owner_still_gets_indexed_as_signer() {
+        // Synthetic, not real fixture data: proves the other branch of
+        // the Signer_Name fallback -- a name PS records as the signer
+        // that does NOT match any Owner_1-4 name is a genuinely distinct
+        // person and must still be indexed, just under `signer`.
+        let fields = vec![
+            text_field("Owner_1_-_First_Name", "Alice"),
+            text_field("Owner_1_-_Last_Name", "Owner"),
+            text_field("Signer_Name", "Bob Signer"),
+        ];
+        let people = extract_merchant_account_people(&fields);
+
+        assert!(people.iter().any(|p| p.full_name == "Alice Owner" && p.role == "owner"));
+        assert!(people.iter().any(|p| p.full_name == "Bob Signer" && p.role == "signer"));
+    }
+
+    #[test]
+    fn kyle_lindley_is_listed_as_owner_only_since_signer_name_just_points_at_him() {
         let fields = load_fixture("highway20_merchant_account_fields_sanitized.json");
         let people = extract_merchant_account_people(&fields);
 
         // Real Highway 20 data: the dedicated Signer_-_* fields are all
-        // blank, and the signer's name only appears via the `Signer_Name`
-        // fallback field -- see this function's own doc comment. Kyle
-        // Lindley therefore appears twice here (owner + signer), which
-        // is correct, not a dedup bug: he really does hold both roles.
-        let signer = people
-            .iter()
-            .find(|p| p.role == "signer")
-            .expect("the Signer_Name fallback must surface a signer even with blank Signer_-_* fields");
-        assert_eq!(signer.full_name, "Kyle Lindley");
-        assert_eq!(signer.email, None, "no dedicated Signer_-_Email field was filled in on this run");
+        // blank, and the plain-text `Signer_Name` field's value ("Kyle
+        // Lindley") is byte-identical to Owner_1's own name -- it's an
+        // annotation on the owner already listed, not a second,
+        // independent role. Boris's own correction, 2026-08-31: this
+        // must produce exactly one entry (owner), not two.
+        assert_eq!(
+            people.iter().filter(|p| p.full_name == "Kyle Lindley").count(),
+            1,
+            "Signer_Name naming an already-listed owner must not create a duplicate signer entry"
+        );
 
         let owner = people
             .iter()
@@ -204,6 +245,11 @@ mod tests {
             .expect("the sanitized fixture has at least one owner");
         assert_eq!(owner.full_name, "Kyle Lindley");
         assert_eq!(owner.email.as_deref(), Some("kyle.lindley@outlook.com"));
+
+        assert!(
+            !people.iter().any(|p| p.role == "signer"),
+            "no genuinely distinct signer exists on this run -- Signer_Name only points at Owner_1"
+        );
 
         // Confirms this module truly never reaches into PartyPii --
         // there is no SSN/DOB field name anywhere above it could
