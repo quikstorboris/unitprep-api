@@ -217,11 +217,57 @@ impl ProcessStreetClient {
         &self,
         workflow_id: &str,
     ) -> Result<Vec<WorkflowRun>, ProcessStreetError> {
+        self.list_or_search_workflow_runs(workflow_id, None).await
+    }
+
+    /// Server-side, case-insensitive substring search over a workflow's
+    /// run names (confirmed directly: `name=highway` matches "Highway
+    /// 20 Self Storage - QMS Onboarding"; a plain unfiltered request and
+    /// nonsense params like `search=`/`q=` both silently no-op and
+    /// return the same default-ordered page, which is what first
+    /// suggested `name` might be the real one). This only searches a
+    /// run's own title -- it does NOT reach into form-field values, so
+    /// it finds "Highway 20 Self Storage" but not "Prairie Enterprises"
+    /// (the company name, which only lives inside a form field on that
+    /// facility's run). Confirmed matching consistently across all
+    /// three workflows despite their different naming conventions
+    /// (Intake's "Highway 20 Self Storage - QMS Onboarding" vs. New
+    /// Merchant Account's "Prairie Enterprises (Highway 20)" both match
+    /// `name=highway`).
+    ///
+    /// Searches across every status the same way `list_workflow_runs`
+    /// does -- confirmed `name` and `status` combine correctly in one
+    /// request.
+    ///
+    /// Called by `clients::search`, which has no HTTP handler or CLI
+    /// binary calling it yet -- remove this allow once one exists.
+    #[allow(dead_code)]
+    pub async fn search_workflow_runs_by_name(
+        &self,
+        workflow_id: &str,
+        name_query: &str,
+    ) -> Result<Vec<WorkflowRun>, ProcessStreetError> {
+        self.list_or_search_workflow_runs(workflow_id, Some(name_query))
+            .await
+    }
+
+    async fn list_or_search_workflow_runs(
+        &self,
+        workflow_id: &str,
+        name_query: Option<&str>,
+    ) -> Result<Vec<WorkflowRun>, ProcessStreetError> {
+        let name_param = name_query
+            .map(|q| {
+                let encoded: String = url::form_urlencoded::byte_serialize(q.as_bytes()).collect();
+                format!("&name={encoded}")
+            })
+            .unwrap_or_default();
+
         let mut all = Vec::new();
         for status in ["Active", "Completed", "Archived"] {
             let mut page = self
                 .paginate(
-                    format!("{BASE_URL}/workflow-runs?workflowId={workflow_id}&status={status}"),
+                    format!("{BASE_URL}/workflow-runs?workflowId={workflow_id}&status={status}{name_param}"),
                     "workflowRuns",
                 )
                 .await?;
