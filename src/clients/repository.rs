@@ -26,20 +26,27 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::clients::contract_order_mapping::MappedContractOrder;
-use crate::clients::intake_mapping::MappedIntakeRun;
+use crate::clients::intake_mapping::{MappedCompany, MappedFacility, MappedIntakeRun};
 use crate::clients::merchant_account_mapping::{MappedMerchantAccount, MappedParty};
 use crate::clients::people::ParsedPerson;
 use crate::process_street::Task;
 
-/// Inserts a company, facility, and every Facility Policies row a
-/// `MappedIntakeRun` carries, plus the owner/district-manager/manager
-/// people it parsed. Returns `(company_id, facility_id)`.
-pub async fn ingest_intake_run(
+/// Inserts just the company row -- `legal_name` is passed explicitly
+/// rather than read off `MappedIntakeRun` directly so the caller
+/// decides the final name (see `clients::company_naming::resolve_company_name`,
+/// which needs Merchant Account data this module never sees) rather
+/// than baking name resolution into the write layer. Used both by
+/// `ingest_intake_run` below (one run, always creates its own company)
+/// and by the "Add to OO" split-creation flow, where exactly one
+/// selected run is designated the company source and the rest attach
+/// to it as facilities -- see `clients::create`.
+pub async fn insert_company(
     tx: &mut Transaction<'_, Postgres>,
-    mapped: &MappedIntakeRun,
+    legal_name: &str,
+    company: &MappedCompany,
     ps_intake_run_id: &str,
     raw_ps_snapshot: &Value,
-) -> Result<(Uuid, Uuid), sqlx::Error> {
+) -> Result<Uuid, sqlx::Error> {
     let (company_id,): (Uuid,) = sqlx::query_as(
         "INSERT INTO clients.companies
             (legal_name, corporate_email, corporate_phone, corporate_address_street,
@@ -48,19 +55,35 @@ pub async fn ingest_intake_run(
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'process_street', $9, $10, now())
          RETURNING id",
     )
-    .bind(mapped.company.legal_name.as_deref().unwrap_or("(unnamed company)"))
-    .bind(&mapped.company.corporate_email)
-    .bind(&mapped.company.corporate_phone)
-    .bind(&mapped.company.corporate_address_street)
-    .bind(&mapped.company.corporate_address_city)
-    .bind(&mapped.company.corporate_address_state)
-    .bind(&mapped.company.corporate_address_zip)
-    .bind(&mapped.company.subdomain)
+    .bind(legal_name)
+    .bind(&company.corporate_email)
+    .bind(&company.corporate_phone)
+    .bind(&company.corporate_address_street)
+    .bind(&company.corporate_address_city)
+    .bind(&company.corporate_address_state)
+    .bind(&company.corporate_address_zip)
+    .bind(&company.subdomain)
     .bind(ps_intake_run_id)
     .bind(raw_ps_snapshot)
     .fetch_one(&mut **tx)
     .await?;
 
+    Ok(company_id)
+}
+
+/// Inserts a facility attached to an already-existing `company_id` --
+/// never creates a company itself. Shared by `ingest_intake_run` (the
+/// company it attaches to was just created by `insert_company` above,
+/// same call) and the split-creation flow (attaches to a company
+/// created from a *different* run entirely, or one that already
+/// existed before this batch).
+pub async fn insert_facility(
+    tx: &mut Transaction<'_, Postgres>,
+    company_id: Uuid,
+    facility: &MappedFacility,
+    ps_intake_run_id: &str,
+    raw_ps_snapshot: &Value,
+) -> Result<Uuid, sqlx::Error> {
     let (facility_id,): (Uuid,) = sqlx::query_as(
         "INSERT INTO clients.facilities
             (company_id, name, street_address, city, state, zip, phone, email,
@@ -72,27 +95,42 @@ pub async fn ingest_intake_run(
          RETURNING id",
     )
     .bind(company_id)
-    .bind(mapped.facility.name.as_deref().unwrap_or("(unnamed facility)"))
-    .bind(&mapped.facility.street_address)
-    .bind(&mapped.facility.city)
-    .bind(&mapped.facility.state)
-    .bind(&mapped.facility.zip)
-    .bind(&mapped.facility.phone)
-    .bind(&mapped.facility.email)
-    .bind(mapped.facility.units_count)
-    .bind(&mapped.facility.primary_storage_offering)
-    .bind(&mapped.facility.previous_pms)
-    .bind(&mapped.facility.access_control_system)
-    .bind(mapped.facility.go_live_date)
-    .bind(&mapped.facility.dropbox_folder_url)
-    .bind(&mapped.facility.subdomain)
-    .bind(&mapped.facility.subdomain_exists_in_qms_raw)
-    .bind(&mapped.facility.system_email)
+    .bind(facility.name.as_deref().unwrap_or("(unnamed facility)"))
+    .bind(&facility.street_address)
+    .bind(&facility.city)
+    .bind(&facility.state)
+    .bind(&facility.zip)
+    .bind(&facility.phone)
+    .bind(&facility.email)
+    .bind(facility.units_count)
+    .bind(&facility.primary_storage_offering)
+    .bind(&facility.previous_pms)
+    .bind(&facility.access_control_system)
+    .bind(facility.go_live_date)
+    .bind(&facility.dropbox_folder_url)
+    .bind(&facility.subdomain)
+    .bind(&facility.subdomain_exists_in_qms_raw)
+    .bind(&facility.system_email)
     .bind(ps_intake_run_id)
     .bind(raw_ps_snapshot)
     .fetch_one(&mut **tx)
     .await?;
 
+    Ok(facility_id)
+}
+
+/// Inserts every Facility Policies row a `MappedIntakeRun` carries
+/// (Fees/Taxes/Delinquency/Coverage/Commission/Specials) plus the
+/// owner/district-manager/manager people it parsed, against an
+/// already-created `facility_id`. Split out of `ingest_intake_run` so
+/// the split-creation flow can apply the same policy/people population
+/// to a facility that didn't just create its own company.
+pub async fn insert_facility_policies_and_people(
+    tx: &mut Transaction<'_, Postgres>,
+    facility_id: Uuid,
+    mapped: &MappedIntakeRun,
+    raw_ps_snapshot: &Value,
+) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO clients.facility_policies (facility_id, raw_ps_snapshot) VALUES ($1, $2)")
         .bind(facility_id)
         .bind(raw_ps_snapshot)
@@ -192,6 +230,33 @@ pub async fn ingest_intake_run(
         link_person_to_facility(tx, facility_id, person, role).await?;
     }
 
+    Ok(())
+}
+
+/// Inserts a company, its own facility, and every Facility Policies row
+/// a `MappedIntakeRun` carries, plus the owner/district-manager/manager
+/// people it parsed. Returns `(company_id, facility_id)`. A thin
+/// wrapper over `insert_company`/`insert_facility`/
+/// `insert_facility_policies_and_people` above -- the "one run, one
+/// company, one facility" shape `clients::ingest::ingest_facility`
+/// already uses and has proven live; the split-creation flow
+/// (`clients::create`) calls the three building blocks directly instead,
+/// since it needs a company created from a *different* run than some of
+/// its facilities.
+pub async fn ingest_intake_run(
+    tx: &mut Transaction<'_, Postgres>,
+    mapped: &MappedIntakeRun,
+    ps_intake_run_id: &str,
+    raw_ps_snapshot: &Value,
+) -> Result<(Uuid, Uuid), sqlx::Error> {
+    let legal_name = mapped
+        .company
+        .legal_name
+        .as_deref()
+        .unwrap_or("(unnamed company)");
+    let company_id = insert_company(tx, legal_name, &mapped.company, ps_intake_run_id, raw_ps_snapshot).await?;
+    let facility_id = insert_facility(tx, company_id, &mapped.facility, ps_intake_run_id, raw_ps_snapshot).await?;
+    insert_facility_policies_and_people(tx, facility_id, mapped, raw_ps_snapshot).await?;
     Ok((company_id, facility_id))
 }
 
