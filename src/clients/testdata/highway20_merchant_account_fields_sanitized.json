@@ -1,0 +1,1717 @@
+[
+  {
+    "id": "ji17ZLXi88FgqO_krDtLVQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Sales_Rep_Email_Address",
+    "label": "Sales Rep Email Address",
+    "data": {
+      "value": "dfoote@quikstor.com",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Email"
+  },
+  {
+    "id": "jahRGpUjGPb2KluqQ1NN9Q",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Conductor_Email_Address",
+    "label": "Conductor Email Address",
+    "data": {
+      "value": "bmaksimov@quikstor.com",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Email"
+  },
+  {
+    "id": "rT7y56V46e1ZJxmAUVNFBw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Business_DBA",
+    "label": "Business DBA",
+    "data": {
+      "value": "Highway 20 self storage"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "ntgaB7VGgDyIOxnMYwtMNA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Legal_Name?",
+    "label": "Legal Name?",
+    "data": {
+      "value": "Different than Business DBA"
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "jncft0DeCYNKxNigF0FAnQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Legal_Name_2",
+    "label": "Legal Name",
+    "data": {
+      "value": "Prairie Enterprises LLC "
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "igSPkgrNaa_IGQOHOs5JqQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Business_Contact_-_First_Name",
+    "label": "Business Contact - First Name",
+    "data": {
+      "value": "Kyle"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "vH7ziPr83VfllqAeHE9FAA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Business_Contact_-_Last_Name",
+    "label": "Business Contact - Last Name",
+    "data": {
+      "value": "Lindley"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "mlPVU7CQoZe1T3_BgptEAg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Business_Address",
+    "label": "Business Address",
+    "data": {
+      "value": "1030 East Grant Highway"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "uwGdV78JZQZkTVNpEQZE9A",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "City",
+    "label": "City",
+    "data": {
+      "value": "Marengo "
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "uD3WwL0ES3TFSahGt9JHuw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "State",
+    "label": "State",
+    "data": {
+      "value": "Il"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "kmZuJVgOc04IuoaRNrtCUg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Zip",
+    "label": "Zip",
+    "data": {
+      "value": "60152"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "gQpB7JhRWOkv6qC-riBDdw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Legal_Address?",
+    "label": "Legal Address?",
+    "data": {
+      "value": "Same as Business Address"
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "sPdmW6vRDC5RAtt6tvhOTg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Legal_Address_Line_1",
+    "label": "Legal Address Line 1",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "gbuPkGSc31NEByOvfiNDBQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Legal_Address_City",
+    "label": "Legal Address City",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "uLIJKQb3XdtDRWBBTydPxg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Legal_Address_State",
+    "label": "Legal Address State",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "m9qdGQrrEctnsKmydgxNbA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Legal_Address_Zip_Code",
+    "label": "Legal Address Zip Code",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "pNC8xAuoauspgevKOG1M8Q",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Ownership_Type",
+    "label": "Ownership Type",
+    "data": {
+      "value": "LLC"
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "r8s5i-TZwBnzE7i-Le1MYw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Other_ownership_type",
+    "label": "Other ownership type",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "hI3oT44IdZL4B-BkRWhE9g",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Year_Business_Established",
+    "label": "Year Business Established",
+    "data": {
+      "value": "2000"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "tdbxMBRVqgq4JbRteQRKTw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "#_of_Months_Business_Established",
+    "label": "# of Months Business Established",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "ooscCxrOqzFYHEYlcKtCdw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Evidence_of_Legal_Status",
+    "label": "Evidence of Legal Status",
+    "data": null,
+    "fieldType": "File"
+  },
+  {
+    "id": "pOV4AgSoXtIw94m-Q6FNOQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Additional_Evidence_of_Legal_Status",
+    "label": "Additional Evidence of Legal Status",
+    "data": null,
+    "fieldType": "File"
+  },
+  {
+    "id": "skpF7nKCH7hMYa9Jx3pGpQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Current_Ownership_Length",
+    "label": "Current Ownership Length",
+    "data": {
+      "value": "26"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "mMI40NjcRo_-Ob0A211P-w",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "EIN",
+    "label": "EIN",
+    "data": {
+      "value": "111111111"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "vpVPpnBDxlyU0j2Cg1ZAPQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Where_should_Statements_and_Other_Correspondence_Go?",
+    "label": "Where should Statements and Other Correspondence Go?",
+    "data": {
+      "value": "Facility Address"
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "hUbHK44xHxBnw1HHJKtJxg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Other_Address_-_Line_1",
+    "label": "Other Address - Line 1",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "uQE7fAlB_TNlbxI8ak9FkA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Other_Address_-_City",
+    "label": "Other Address - City",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "q7yjPTTpEgy5XtENyW5NaQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Other_Address_-_State",
+    "label": "Other Address - State",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "i3SPzere6irfakXaycJECQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Other_Address_-_Zip",
+    "label": "Other Address - Zip",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "q67VbMakOz1uzwm_pmdMQQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Do_you_want_to_offer_ACH",
+    "label": "Do you want to offer ACH",
+    "data": {
+      "value": "Yes"
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "lqtAcJKK2838_MKZ2YlEgg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Annual_Electronic_Check_Volume",
+    "label": "Annual Electronic Check Volume",
+    "data": {
+      "value": "20000"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "olBrENicgrOVB0DSQipPAg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Average_Electronic_Check_Amount",
+    "label": "Average Electronic Check Amount",
+    "data": {
+      "value": "150"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "r7GfbnbimFxD4eAOC75PjQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Maximum_Electronic_Check_Amount",
+    "label": "Maximum Electronic Check Amount",
+    "data": {
+      "value": "1500"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "vM4UjEW5jTk3nmzgSTFJ9g",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Your_Facility_Website",
+    "label": "Your Facility Website",
+    "data": {
+      "value": "Https://www.highway20selfstorage.com"
+    },
+    "fieldType": "Url"
+  },
+  {
+    "id": "j98NECtAMYiCdvssb7dLGQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Contact_Us_Email",
+    "label": "Contact Us Email",
+    "data": {
+      "value": "office@prairie-enterprises.com"
+    },
+    "fieldType": "Email"
+  },
+  {
+    "id": "pqRBZGtXRRhCwZT63X5MCQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Contact_Us_Phone_Number",
+    "label": "Contact Us Phone Number",
+    "data": {
+      "value": "8155681307"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "uONDxRHKueVjClctaF9Cig",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Total_Annual_Business_Revenue",
+    "label": "Total Annual Business Revenue",
+    "data": {
+      "value": "840000"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "gJNhXL4H_slUter0nWxEzg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Total_Monthly_Sales",
+    "label": "Total Monthly Sales",
+    "data": {
+      "value": "70000"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "s_65yXO6DoQA0Y7EEGBMOw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Average_credit_card_payment_amount",
+    "label": "Average credit card payment amount",
+    "data": {
+      "value": "150"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "me4kPQuaezE284dVtipE7A",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Highest_credit_card_payment_amount",
+    "label": "Highest credit card payment amount",
+    "data": {
+      "value": "2000"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "pHTjE5OTYebg_ghfNMxBlw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "#_times_per_year_for_the_high_CC_Payment",
+    "label": "# times per year for the high CC Payment",
+    "data": {
+      "value": "25"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "uiG5WQBMXtxUK-_4lX1BFg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Bank_Routing_Number",
+    "label": "Bank Routing Number",
+    "data": {
+      "value": "011000015"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "nbsRhnuoIrAb9u3oHnJHCQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Bank_Account_Number",
+    "label": "Bank Account Number",
+    "data": {
+      "value": "999999999"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "lJswHTaR7otaPkniG_RNBQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Funding_Options",
+    "label": "Funding Options",
+    "data": {
+      "value": "Standard - No Additional Charge"
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "vULro2PwU7GO0SkjhsBL0g",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Does_the_signer_of_the_application_own_25%_or_more_of_the_Legal_Entity?",
+    "label": "Does the signer of the application own 25% or more of the Legal Entity?",
+    "data": {
+      "value": "Yes"
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "jRUZpBU1CPK5_nyJH3VEng",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "How_many_personal_owners_with_25%_or_more_ownership_(incl._the_signer_if_applicable)?",
+    "label": "How many personal owners with 25% or more ownership (incl. the signer if applicable)?",
+    "data": {
+      "value": "1"
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "vQHwGEtCEfjR4jRXEIxDSg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "How_many_intermediary_business_owners_with_25%_or_more_ownership?",
+    "label": "How many intermediary business owners with 25% or more ownership?",
+    "data": {
+      "value": "1"
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "sLnBnU6IO_UyuCD0vOxA9w",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_First_Name",
+    "label": "Signer - First Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "qskS2rSc1DClKYQp9jhAQg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_Last_Name",
+    "label": "Signer - Last Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "hw2a3l8-9sBJmWgBjDlGKA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_Title",
+    "label": "Signer - Title",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "oWHxJfB8YbSb0SNdNyNNHg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_%_Ownership_in_Buisness",
+    "label": "Signer - % Ownership in Buisness",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "qlUqpurDsN7J0Cmp8gNMFg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_DOB",
+    "label": "Signer - DOB",
+    "data": null,
+    "fieldType": "Date"
+  },
+  {
+    "id": "gDCko5-yZQIUEbfUj-1HBw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_SSN",
+    "label": "Signer - SSN",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "qvPCDrpWMJ8sRnT4ZQFA_A",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_HOME_Address",
+    "label": "Signer - HOME Address",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "tGAWavpdMZuNPgSht9JKBg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_City",
+    "label": "Signer - City",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "ufqFhcQHO-1Lwf3LhPJM9w",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_State_or_Province",
+    "label": "Signer - State or Province",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "kAUC3lLxdd6rhksAg1BFsQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_Postal_Code",
+    "label": "Signer - Postal Code",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "rZy1IMk-GTZ38a9vVF1LIA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_Country",
+    "label": "Signer - Country",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "tUoCzJ6WY3suaUUUPTNFOQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_Home_or_Cell_Phone",
+    "label": "Signer - Home or Cell Phone",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "s1gxGc0daAGnuHoh1O1Klg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_Country_of_Citizenship",
+    "label": "Signer - Country of Citizenship",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "oidqnRu_1HxtwGqHky9MyQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Signer_-_Email",
+    "label": "Signer - Email",
+    "data": null,
+    "fieldType": "Email"
+  },
+  {
+    "id": "vCStWzYgcKjgvtLquBRLjA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_First_Name",
+    "label": "Owner 1 - First Name",
+    "data": {
+      "value": "Kyle"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "n8WGXh4E7NqEQEozxI5BHA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_Last_Name",
+    "label": "Owner 1 - Last Name",
+    "data": {
+      "value": "Lindley"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "tz_rKOwzK70s37MRFy5Csg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_Title",
+    "label": "Owner 1 - Title",
+    "data": {
+      "value": "Owner"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "oEsQWs4Qu791HZqoINtI1A",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_%_Ownership_in_Business",
+    "label": "Owner 1 - % Ownership in Business",
+    "data": {
+      "value": "30.00"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "iEoIIcCm2SOoTTtf0vdIWQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_DOB",
+    "label": "Owner 1 - DOB",
+    "data": {
+      "value": "1970-01-01T00:00:00.000Z",
+      "timeHidden": false
+    },
+    "fieldType": "Date"
+  },
+  {
+    "id": "opf_QvToFaz5huL3jNBMsw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_SSN",
+    "label": "Owner 1 - SSN",
+    "data": {
+      "value": "000000000"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "vgWhvvwg98e8Pw4NdZlD_Q",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_HOME_Address",
+    "label": "Owner 1 - HOME Address",
+    "data": {
+      "value": "1 Fake Test Lane"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "rdpc2_UkmWiQLnl4d1VHkg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_City",
+    "label": "Owner 1 - City",
+    "data": {
+      "value": "Faketown"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "rany99sysPYfg4ZfAvBKUQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_State_or_Province",
+    "label": "Owner 1 - State or Province",
+    "data": {
+      "value": "IL"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "uRj2xEMSf-MthXmCeR9O4Q",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_Postal_Code",
+    "label": "Owner 1 - Postal Code",
+    "data": {
+      "value": "00000"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "rqn-19RfwuAbPB1QGMFGnA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_Country",
+    "label": "Owner 1 - Country",
+    "data": {
+      "value": "United States"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "vrFwwfUuk65Uiu1BTlxLTg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_Home_or_Cell_Phone",
+    "label": "Owner 1 - Home or Cell Phone",
+    "data": {
+      "value": "5555550100"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "i1aYjBSo5Nz9yNK0s9BFrQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_Country_of_Citizenship",
+    "label": "Owner 1 - Country of Citizenship",
+    "data": {
+      "value": "United States"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "oQJqTT1PpwfXbqX_cfhDfw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_1_-_Email",
+    "label": "Owner 1 - Email",
+    "data": {
+      "value": "kyle.lindley@outlook.com"
+    },
+    "fieldType": "Email"
+  },
+  {
+    "id": "vXBSj8U_XjFgSXpkSCRGLg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_First_Name",
+    "label": "Owner 2 - First Name",
+    "data": {
+      "value": "Denise",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "tULPzZ37JFYm4PiuYfxESw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_Last_Name",
+    "label": "Owner 2 - Last Name",
+    "data": {
+      "value": "Lindley",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "i0ziy0LqlnnJSOkYlZlNKw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_Title",
+    "label": "Owner 2 - Title",
+    "data": {
+      "value": "Owner"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "sY3KYfLOlDQoRk7-iqZPGw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_%_Ownership_in_Buisness",
+    "label": "Owner 2 - % Ownership in Buisness",
+    "data": {
+      "value": "30.00"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "v0dKJoOXkyAu5meYUG9JEA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_DOB",
+    "label": "Owner 2 - DOB",
+    "data": {
+      "value": "1970-01-01T00:00:00.000Z",
+      "timeHidden": false
+    },
+    "fieldType": "Date"
+  },
+  {
+    "id": "iLSWDXuqc0trC48trWFItA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_SSN",
+    "label": "Owner 2 - SSN",
+    "data": {
+      "value": "000000000",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "twJBpmA9yuGbUeiyUjFKbg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_HOME_Address",
+    "label": "Owner 2 - HOME Address",
+    "data": {
+      "value": "1 Fake Test Lane",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "trf0ckkOz2KOQd7OJ-RJvA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_City",
+    "label": "Owner 2 - City",
+    "data": {
+      "value": "Faketown",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "k-4iO-Q8ispymhcMAQ9ABQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_State_or_Province",
+    "label": "Owner 2 - State or Province",
+    "data": {
+      "value": "IL"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "un-g6YSndPWOsG1wzgpB0g",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_Postal_Code",
+    "label": "Owner 2 - Postal Code",
+    "data": {
+      "value": "00000",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "jrgACra-LLzxkXx59TNGLg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_Country",
+    "label": "Owner 2 - Country",
+    "data": {
+      "value": "United States"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "rBe787BuB4UUw0oqj8JGPQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_Home_or_Cell_Phone",
+    "label": "Owner 2 - Home or Cell Phone",
+    "data": {
+      "value": "5555550100"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "kCqEOXHQKJUuxQSuKEtP9Q",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_Country_of_Citizenship",
+    "label": "Owner 2 - Country of Citizenship",
+    "data": {
+      "value": "United States"
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "rNYs-6hSHjn3h-tGVSxOvQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_2_-_Email",
+    "label": "Owner 2 - Email",
+    "data": {
+      "value": "dmlindley13@gmail.com",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Email"
+  },
+  {
+    "id": "iMHgsbm9Ov8aP3AOTN9NeA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_First_Name",
+    "label": "Owner 3 - First Name",
+    "data": {
+      "value": "Nadine",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "mYBl4yD-RlPFjpbQcy1O5g",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_Last_Name",
+    "label": "Owner 3 - Last Name",
+    "data": {
+      "value": "Lindley",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "typN9rwWqAdQVUKAIQ5K7g",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_Title",
+    "label": "Owner 3 - Title",
+    "data": {
+      "value": "Owner",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "jh3SwM5P1JU6xiTC0oVPSQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_DOB",
+    "label": "Owner 3 - DOB",
+    "data": {
+      "value": "1970-01-01T00:00:00.000Z",
+      "timeHidden": false
+    },
+    "fieldType": "Date"
+  },
+  {
+    "id": "nLcQpTlA7Wcknm9WhPRFLw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_SSN",
+    "label": "Owner 3 - SSN",
+    "data": {
+      "value": "000000000",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "lxbNYs9ujB83wJiVFBFEfw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_HOME_Address",
+    "label": "Owner 3 - HOME Address",
+    "data": {
+      "value": "1 Fake Test Lane",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "kiZHR1lW6UoAYmXSDvNDGA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_City",
+    "label": "Owner 3 - City",
+    "data": {
+      "value": "Faketown",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "nC1iV17k2U9L9oxX8mRJSg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_State_or_Province",
+    "label": "Owner 3 - State or Province",
+    "data": {
+      "value": "IL",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "hp5oGoYM1VWddtxoBWBPig",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_Postal_Code",
+    "label": "Owner 3 - Postal Code",
+    "data": {
+      "value": "00000",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "gd7Gl8Q5ENaaafvWjkdMjA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_Country",
+    "label": "Owner 3 - Country",
+    "data": {
+      "value": "United States",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "rrArqFnGy9G14mM81StHTA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_Home_or_Cell_Phone",
+    "label": "Owner 3 - Home or Cell Phone",
+    "data": {
+      "value": "5555550100"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "rjfV905ayQVYi95T4BpHog",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_%_Ownership_in_Business",
+    "label": "Owner 3 - % Ownership in Business",
+    "data": {
+      "value": "30.00"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "pbuSGmPAAIZXtKegrdxCBw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_Country_of_Citizenship",
+    "label": "Owner 3 - Country of Citizenship",
+    "data": {
+      "value": "United States",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "oZLAr5uAhL-aY3tI07pK6w",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_3_-_Email",
+    "label": "Owner 3 - Email",
+    "data": {
+      "value": "n.lindley@sbcglobal.net",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Email"
+  },
+  {
+    "id": "r7_RzhPsNHLKXOtGjO9E1A",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_First_Name",
+    "label": "Owner 4 - First Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "u5FhBG4_HsoJccjFoORO6w",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_Last_Name",
+    "label": "Owner 4 - Last Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "o7wODK6x2sjmNjmMpWtPbQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_Title",
+    "label": "Owner 4 - Title",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "iXXK-lO1PPfClbPisM5AVA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_%_Ownership_in_Buisness",
+    "label": "Owner 4 - % Ownership in Buisness",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "sgoQSdY9H6SqJ8pe7HRACg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_DOB",
+    "label": "Owner 4 - DOB",
+    "data": null,
+    "fieldType": "Date"
+  },
+  {
+    "id": "mg6osqMTWZ_iFWew74lFTg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_SSN",
+    "label": "Owner 4 - SSN",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "i5n4QSC9zv9jm3JfcqNORQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_HOME_Address",
+    "label": "Owner 4 - HOME Address",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "r7v0Jxq5cmrMR7p7rdlMBg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_City",
+    "label": "Owner 4 - City",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "vQNHrdiPm3dg6jBjEQBI9g",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_State_or_Province",
+    "label": "Owner 4 - State or Province",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "g7Y3siamuXLIQZkuj4xHfw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_Postal_Code",
+    "label": "Owner 4 - Postal Code",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "vnnqfaz-w51Duu1hLVVAWA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_Country",
+    "label": "Owner 4 - Country",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "uBty-mRG-kzX3MrPX_1MZw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_Home_or_Cell_Phone",
+    "label": "Owner 4 - Home or Cell Phone",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "pQcUiuSNrEjW1zl3f3pLtA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_Country_of_Citizenship",
+    "label": "Owner 4 - Country of Citizenship",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "qFpKWZqYWJlcdozFIxRPxQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Owner_4_-_Email",
+    "label": "Owner 4 - Email",
+    "data": null,
+    "fieldType": "Email"
+  },
+  {
+    "id": "p2ed4p31K1KRIiMEiRxNMQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_1_-_Name",
+    "label": "Intermediary Business 1 - Name",
+    "data": {
+      "value": "Prairie Enterprises "
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "tQVdSoOXGSAOboDBNsNFGQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_1_-_Contact_First_Name",
+    "label": "Intermediary Business 1 - Contact First Name",
+    "data": {
+      "value": "Kyle "
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "jK7zxIVTz8xt5SswGW9HCA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_1_-_Contact_Last_Name",
+    "label": "Intermediary Business 1 - Contact Last Name",
+    "data": {
+      "value": "Lindley "
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "lAjoryG_GQizIRBo7wJOmw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_1_-_Contact_Phone",
+    "label": "Intermediary Business 1 - Contact Phone",
+    "data": {
+      "value": "8155681307"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "taqFUKc8ba_xFF0z3IhFmQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_1_-_Email_Address",
+    "label": "Intermediary Business 1 - Email Address",
+    "data": {
+      "value": "office@prairie-enterprises.com"
+    },
+    "fieldType": "Email"
+  },
+  {
+    "id": "kmgYLc1Lohl1pTYMo3RJYA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_1_-_Ownership_%",
+    "label": "Intermediary Business 1 - Ownership %",
+    "data": {
+      "value": "33"
+    },
+    "fieldType": "Number"
+  },
+  {
+    "id": "i5TW1jJ4lXTMmij2ITBIPw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_2_-_Name",
+    "label": "Intermediary Business 2 - Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "pC_dF8T0iBQ4sQylx4ZKMg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_2_-_Contact_First_Name",
+    "label": "Intermediary Business 2 - Contact First Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "l25hj-jGz87JKd0lw7lABg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_2_-_Contact_Last_Name",
+    "label": "Intermediary Business 2 - Contact Last Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "px-HZ_j5PO_aJh7TqMdCQQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_2_-_Contact_Phone",
+    "label": "Intermediary Business 2 - Contact Phone",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "vj3OEMvRQDgvF1IAjP9G4A",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_2_-_Email_Address",
+    "label": "Intermediary Business 2 - Email Address",
+    "data": null,
+    "fieldType": "Email"
+  },
+  {
+    "id": "orUNBFaFO3WcRJrdLr1AQQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_2_-_Ownership_%",
+    "label": "Intermediary Business 2 - Ownership %",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "hO3qHfDfglNwQ78YKOJK_w",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_3_-_Name",
+    "label": "Intermediary Business 3 - Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "kFGJY2TiSzJZ9McLwXNLBg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_3_-_Contact_First_Name",
+    "label": "Intermediary Business 3 - Contact First Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "irKlwaWQk1LwUMAOhLNB6Q",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_3_-_Contact_Last_Name",
+    "label": "Intermediary Business 3 - Contact Last Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "oCNoWLOTrtcki_EefE5CeQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_3_-_Contact_Phone",
+    "label": "Intermediary Business 3 - Contact Phone",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "gBc6SI1s0qJZfM_j4OdNGg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_3_-_Email_Address",
+    "label": "Intermediary Business 3 - Email Address",
+    "data": null,
+    "fieldType": "Email"
+  },
+  {
+    "id": "tF90ibEVc14OIwKgT3RNvg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_3_-_Ownership_%",
+    "label": "Intermediary Business 3 - Ownership %",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "sPeUr3CKhoFMOQ9maBZB7A",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_4_-_Name",
+    "label": "Intermediary Business 4 - Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "nxj3XVsMORH-HWn9RxdOeQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_4_-_Contact_First_Name",
+    "label": "Intermediary Business 4 - Contact First Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "i426i8wWCVqfsO52e29LCQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_4_-_Contact_Last_Name",
+    "label": "Intermediary Business 4 - Contact Last Name",
+    "data": null,
+    "fieldType": "Text"
+  },
+  {
+    "id": "h9BmyYtyNjdNzB_mqtFGAg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_4_-_Contact_Phone",
+    "label": "Intermediary Business 4 - Contact Phone",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "rtfGJTi87W0jOrEqJQJNbQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_4_-_Email_Address",
+    "label": "Intermediary Business 4 - Email Address",
+    "data": null,
+    "fieldType": "Email"
+  },
+  {
+    "id": "kS3SloT34iCnpc4oGPFEEw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "Intermediary_Business_4_-_Ownership_%",
+    "label": "Intermediary Business 4 - Ownership %",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "h-eXYzNk6LCX7CFsw5VFfA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hFsOUQBxkp9AhbpcqlZIbg",
+    "key": "%_Ownership_in_Business",
+    "label": "% Ownership in Business",
+    "data": null,
+    "fieldType": "Number"
+  },
+  {
+    "id": "vLUEeuw8-4EEA9SvnrVGmg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "nqNvguZv2dCUO32YxeZDJA",
+    "key": "What_Application_Type_Did_the_Client_Submit",
+    "label": "What Application Type Did the Client Submit",
+    "data": {
+      "value": "The client filled out the online form",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "rysprjtzZ01RMhBN9h1HLQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "nqNvguZv2dCUO32YxeZDJA",
+    "key": "Facility_Name_in_CRM",
+    "label": "Facility Name in CRM",
+    "data": {
+      "value": "Highway 20 Self Storage",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "v1hlwX0qDA2PzAjC84NOxA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "nqNvguZv2dCUO32YxeZDJA",
+    "key": "Facility_CRM_Link",
+    "label": "Facility CRM Link",
+    "data": {
+      "value": "https://app-na2.hubspot.com/contacts/245023094/record/0-2/326367545078",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Url"
+  },
+  {
+    "id": "vGjN321sq0CY6K9B_IdO5Q",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "nqNvguZv2dCUO32YxeZDJA",
+    "key": "Is_this_an_Absolute_Management_Property",
+    "label": "Is this an Absolute Management Property",
+    "data": {
+      "value": "No",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "jxSIBpRb2jyfhhrgj1hHDA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "nqNvguZv2dCUO32YxeZDJA",
+    "key": "Is_the_new_processor_account_for_QMS,_Cloud,_or_QSX?",
+    "label": "Is the new processor account for QMS, Cloud, or QSX?",
+    "data": {
+      "value": "QMS",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "o0l2rhFspHi8zfRS94xKeg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "nqNvguZv2dCUO32YxeZDJA",
+    "key": "Who_is_the_Processor?",
+    "label": "Who is the Processor?",
+    "data": {
+      "value": "Elavon",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "uXt_Si23zNKQT8mDjlFC-A",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "nqNvguZv2dCUO32YxeZDJA",
+    "key": "What_is_their_software_onboarding_status?",
+    "label": "What is their software onboarding status?",
+    "data": null,
+    "fieldType": "Select"
+  },
+  {
+    "id": "u4RskvWb2Cf660O5-ahPLw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "nqNvguZv2dCUO32YxeZDJA",
+    "key": "Scheduled_Conversion_Date",
+    "label": "Scheduled Conversion Date",
+    "data": null,
+    "fieldType": "Date"
+  },
+  {
+    "id": "jvzXny8UH-neGRL2XnxIqA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "iANzzIs9FPSCeXEDJIZORA",
+    "key": "What_Processing_Rates_did_you_provide_to_the_customer?",
+    "label": "What Processing Rates did you provide to the customer?",
+    "data": {
+      "value": "2.22% + $.15/transaction, $29.99/month, $1/ACH",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Textarea"
+  },
+  {
+    "id": "qIgcBa92exofoRlA0fZPRQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "qUSwdClnTd1_I5j9LtZLBg",
+    "key": "Did_they_get_ACH_Processing?",
+    "label": "Did they get ACH Processing?",
+    "data": {
+      "value": "Yes",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Select"
+  },
+  {
+    "id": "pWWmCjOeDaczX5N0iVlFJw",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "qUSwdClnTd1_I5j9LtZLBg",
+    "key": "Signer_Name",
+    "label": "Signer Name",
+    "data": {
+      "value": "Kyle Lindley",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "oIbNevYECvAr-G21NqRInQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "qUSwdClnTd1_I5j9LtZLBg",
+    "key": "Email_Address",
+    "label": "Email Address",
+    "data": {
+      "value": "kyle.lindley@outlook.com",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Email"
+  },
+  {
+    "id": "qbS3Xt3WCzR9XWNJb7ND5g",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "jlUOo0r5kXIwYEAgPBdHeA",
+    "key": "send_email_3",
+    "label": "Send Email",
+    "data": {
+      "lastSentByEmail": "tgardner@quikstor.com",
+      "lastSentDate": "2026-08-18T22:13:02.558Z"
+    },
+    "fieldType": "SendRichEmail"
+  },
+  {
+    "id": "oBbtjzOrPxQIeW0AjYtApQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "j_HZsn9ZGftvfXaiQBxBSw",
+    "key": "MID",
+    "label": "MID",
+    "data": {
+      "value": "000000000",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "kP8nPUWtFNfzWOFGMo5N4A",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "j_HZsn9ZGftvfXaiQBxBSw",
+    "key": "ACCOUNT_ID",
+    "label": "ACCOUNT ID",
+    "data": {
+      "value": "0000000",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "ieL4pg2SwLfYj7Mon99OWQ",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "j_HZsn9ZGftvfXaiQBxBSw",
+    "key": "QUIKSTOR_Password",
+    "label": "QUIKSTOR Password",
+    "data": {
+      "value": "FakeTestPassword123!",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "rpi86iU7sGqoF4_afFRAAg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "j_HZsn9ZGftvfXaiQBxBSw",
+    "key": "QSS_WEB_PIN",
+    "label": "QSS WEB PIN",
+    "data": {
+      "value": "FAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPIN00",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "jM8ut8tebV0qYTMVNyBBEg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "j_HZsn9ZGftvfXaiQBxBSw",
+    "key": "Pinpad_User_ID",
+    "label": "Pinpad User ID",
+    "data": {
+      "value": "FAKEPINPADID",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "nLBVYfz3SbpW7FRagVpH1g",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "j_HZsn9ZGftvfXaiQBxBSw",
+    "key": "QSS_API_Pin",
+    "label": "QSS API Pin",
+    "data": {
+      "value": "FAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPIN000",
+      "hasDefaultValue": false
+    },
+    "fieldType": "Text"
+  },
+  {
+    "id": "nHVrLvpk-p_IShWPBxVBUA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hcZD7XC-Rb2VI1ESMthJdg",
+    "key": "send_email_2",
+    "label": "Send Email",
+    "data": null,
+    "fieldType": "SendRichEmail"
+  },
+  {
+    "id": "o7avBSiQZFx2lcVxbqJOXg",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "hsOVEpqSrmER0ADJ_MdGBQ",
+    "key": "send_email_2_copy(14b7e0f0-6812-4efa-b95e-a40d39a6a7b7)",
+    "label": "Send Email",
+    "data": null,
+    "fieldType": "SendRichEmail"
+  },
+  {
+    "id": "p2iXMSOs5DW3zMxB55NAqA",
+    "workflowRunId": "n1JtiN4m3mP-I0j8BChG4A",
+    "taskId": "gaR7LvHfJJF0MTOeuddO4Q",
+    "key": "send_email",
+    "data": null,
+    "fieldType": "SendRichEmail"
+  }
+]

@@ -13,4 +13,5 @@
 pub mod encryption;
 pub mod fields;
 pub mod intake_mapping;
+pub mod merchant_account_mapping;
 pub mod people;
