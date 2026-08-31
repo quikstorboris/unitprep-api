@@ -1,11 +1,5 @@
-// Phase 0 only (see this module's parent mod.rs doc comment) -- nothing
-// in the rest of the crate calls into this yet, so every public item
-// here is legitimately unused until Phase 1 wires up ingestion. Remove
-// this once a real caller exists.
-#![allow(dead_code)]
-
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::config::ProcessStreetConfig;
@@ -24,12 +18,19 @@ pub enum ProcessStreetError {
     Parse(serde_json::Error, String),
 }
 
+// Workflow/WorkflowRun and list_workflows/list_workflow_runs below have
+// no caller yet -- they're for the future search/discovery flow
+// (Phase 2+: finding a company/facility by name before importing it),
+// distinct from get_run_form_fields/get_run_tasks, which `clients::ingest`
+// already calls for real. Remove these allows once that flow exists.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct Workflow {
     pub id: String,
     pub name: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkflowRun {
     pub id: String,
@@ -57,13 +58,19 @@ pub struct Task {
 /// `timeHidden` -- but every shape seen so far carries a `value` key),
 /// kept as raw JSON rather than typed per field_type since Phase 1
 /// ingestion only ever needs the plain value.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormField {
     pub id: String,
     #[serde(rename = "taskId")]
     pub task_id: String,
     pub key: String,
-    pub label: String,
+    /// Observed missing entirely on at least one real field (a
+    /// `SendRichEmail` type field on Prairie Enterprises' New Merchant
+    /// Account run) -- not just an empty string, the whole key absent
+    /// from PS's response. `#[serde(default)]` so that field doesn't
+    /// fail deserialization of everything after it.
+    #[serde(default)]
+    pub label: Option<String>,
     #[serde(rename = "fieldType")]
     pub field_type: String,
     /// `None` when the field was never answered at all (PS omits or
@@ -92,6 +99,11 @@ pub struct ProcessStreetClient {
 }
 
 impl ProcessStreetClient {
+    // No bootstrap wiring calls this yet -- `clients::ingest` takes an
+    // already-constructed `&ProcessStreetClient` as a parameter, since
+    // nothing in main.rs constructs a real one until PROCESS_STREET_API_KEY
+    // is actually set. Remove once that wiring exists.
+    #[allow(dead_code)]
     pub fn new(config: ProcessStreetConfig) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -176,11 +188,15 @@ impl ProcessStreetClient {
         Ok(all)
     }
 
+    // No caller yet -- for the future search/discovery flow (Phase 2+).
+    // See the doc comment on `Workflow` above.
+    #[allow(dead_code)]
     pub async fn list_workflows(&self) -> Result<Vec<Workflow>, ProcessStreetError> {
         self.paginate(format!("{BASE_URL}/workflows"), "workflows")
             .await
     }
 
+    #[allow(dead_code)]
     pub async fn list_workflow_runs(
         &self,
         workflow_id: &str,
