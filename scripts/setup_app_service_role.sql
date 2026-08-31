@@ -128,6 +128,22 @@ BEGIN
         EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA clients TO app_service';
         EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA clients '
                 'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+        -- Several tables here (policy_fees, policy_delinquency_steps,
+        -- policy_coverage_tiers, facility_merchant_account_parties,
+        -- ps_task_status) use BIGSERIAL primary keys. A table grant
+        -- alone does not cover its underlying sequence -- Postgres
+        -- treats a sequence as its own grantable object, and an INSERT
+        -- that calls nextval() on it fails with "permission denied for
+        -- sequence" without this, even though the table grant looks
+        -- complete. Caught live via this migration's own integration
+        -- test (clients::repository::integration_tests) before this
+        -- schema had any real caller -- worth checking client_ops.
+        -- vendor_format (also BIGSERIAL) for the same latent gap
+        -- separately, since this script never granted sequence access
+        -- anywhere before now.
+        EXECUTE 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA clients TO app_service';
+        EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA clients '
+                'GRANT USAGE, SELECT ON SEQUENCES TO app_service';
     ELSE
         RAISE NOTICE 'schema "clients" not present yet -- skipping its grants. Re-run this file after `sqlx migrate run`.';
     END IF;
