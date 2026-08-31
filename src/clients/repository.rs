@@ -25,6 +25,7 @@ use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
+use crate::clients::contract_order_mapping::MappedContractOrder;
 use crate::clients::intake_mapping::MappedIntakeRun;
 use crate::clients::merchant_account_mapping::{MappedMerchantAccount, MappedParty};
 use crate::clients::people::ParsedPerson;
@@ -311,6 +312,32 @@ async fn insert_party(
     Ok(())
 }
 
+/// Inserts a Contract Order run's data for an already-existing
+/// facility. Nothing here is encrypted -- this workflow has no
+/// sensitive fields, unlike New Merchant Account.
+pub async fn ingest_contract_order_run(
+    tx: &mut Transaction<'_, Postgres>,
+    facility_id: Uuid,
+    mapped: &MappedContractOrder,
+    ps_contract_order_run_id: &str,
+    raw_ps_snapshot: &Value,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO clients.facility_contract_orders
+            (facility_id, migrating_from_system, source, ps_contract_order_run_id,
+             raw_ps_snapshot, last_synced_at)
+         VALUES ($1, $2, 'process_street', $3, $4, now())",
+    )
+    .bind(facility_id)
+    .bind(&mapped.migrating_from_system)
+    .bind(ps_contract_order_run_id)
+    .bind(raw_ps_snapshot)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
 /// Upserts step-completion status for one workflow's tasks against an
 /// already-existing facility. `workflow` is `intake` | `merchant_account`
 /// | `contract_order`, matching `ps_task_status.workflow`'s CHECK
@@ -348,6 +375,7 @@ mod integration_tests {
     use serial_test::serial;
     use uuid::Uuid;
 
+    use crate::clients::contract_order_mapping::map_contract_order_fields;
     use crate::clients::intake_mapping::map_intake_fields;
     use crate::clients::merchant_account_mapping::map_merchant_account_fields;
     use crate::process_street::{FormField, Task};
@@ -364,6 +392,15 @@ mod integration_tests {
     const HIGHWAY20_INTAKE_TASKS: &str = include_str!("testdata/highway20_intake_tasks.json");
     const HIGHWAY20_NMA_FIELDS_SANITIZED: &str =
         include_str!("testdata/highway20_merchant_account_fields_sanitized.json");
+    // A real Contract Order run for a different real client (Tri County
+    // Mini Storage) -- Highway 20 itself has no Contract Order run, so
+    // this is grafted onto Highway 20's facility_id purely to prove
+    // ingest_contract_order_run's SQL is valid against the real,
+    // migrated schema, the same reasoning
+    // auth::authenticated_user's own `query_sessions_own_sql_is_valid_
+    // against_the_real_schema` test uses.
+    const TRI_COUNTY_CONTRACT_ORDER_FIELDS: &str =
+        include_str!("testdata/tri_county_contract_order_fields.json");
 
     fn set_test_key() {
         std::env::set_var(
@@ -519,6 +556,32 @@ mod integration_tests {
         .await
         .unwrap();
         assert!(!raw_snapshot.to_string().contains("111111111")); // the fake EIN must not leak into the plaintext snapshot
+
+        // --- Verify ingest_contract_order_run's SQL is valid against the real schema ---
+        let tri_county_fields: Vec<FormField> = serde_json::from_str(TRI_COUNTY_CONTRACT_ORDER_FIELDS)
+            .expect("Tri County contract order fixture must parse");
+        let mapped_contract_order = map_contract_order_fields(&tri_county_fields);
+        let contract_order_snapshot: Value =
+            serde_json::to_value(&tri_county_fields).unwrap_or(Value::Null);
+
+        ingest_contract_order_run(
+            &mut tx,
+            facility_id,
+            &mapped_contract_order,
+            "iz7Jz_awRApa68WuMjtKHw",
+            &contract_order_snapshot,
+        )
+        .await
+        .expect("ingesting a real Contract Order run must succeed");
+
+        let (stored_run_id,): (String,) = sqlx::query_as(
+            "SELECT ps_contract_order_run_id FROM clients.facility_contract_orders WHERE facility_id = $1",
+        )
+        .bind(facility_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(stored_run_id, "iz7Jz_awRApa68WuMjtKHw");
 
         tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
         clear_test_key();

@@ -6,6 +6,15 @@
 //! been run against the live API. `clients::repository`'s own
 //! `#[ignore]`d integration test proves the mapping -> DB half of this
 //! path against real Postgres using captured fixture data instead.
+//!
+//! **Any caller resolving run ids for this function must search across
+//! Active + Completed + Archived status, not just the API's default
+//! (Active only)** -- Contract Order runs in particular are marked
+//! Completed once the order is processed, so an Active-only search
+//! finds essentially none of them. Confirmed directly against two real
+//! clients (Tri County Mini Storage, Dubuqueland Mini Storage) while
+//! building `contract_order_mapping`. This isn't specific to Contract
+//! Order -- it's how `GET /workflow-runs` behaves for every workflow.
 
 // Phase 1 only -- no HTTP handler or CLI binary calls into this yet.
 // Remove once a real caller exists.
@@ -16,9 +25,12 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::begin_rls_transaction;
+use crate::clients::contract_order_mapping::map_contract_order_fields;
 use crate::clients::intake_mapping::map_intake_fields;
 use crate::clients::merchant_account_mapping::map_merchant_account_fields;
-use crate::clients::repository::{ingest_intake_run, ingest_merchant_account_run, upsert_task_status};
+use crate::clients::repository::{
+    ingest_contract_order_run, ingest_intake_run, ingest_merchant_account_run, upsert_task_status,
+};
 use crate::process_street::{ProcessStreetClient, ProcessStreetError};
 
 #[derive(Debug, thiserror::Error)]
@@ -36,33 +48,26 @@ pub struct IngestedFacility {
     pub company_id: Uuid,
     pub facility_id: Uuid,
     pub had_merchant_account: bool,
+    pub had_contract_order: bool,
 }
 
 /// Imports one facility from its known PS run ids. `merchant_account_run_id`
-/// is optional -- not every facility has reached that stage (see
-/// [[Process Street Integration — Kickoff & Findings]] on Contract Order's
-/// same absence being normal, not a gap; New Merchant Account is
-/// similarly allowed to not exist yet for a brand-new facility).
+/// and `contract_order_run_id` are both optional -- not every facility
+/// has reached either stage, and that's expected, not a gap (see
+/// [[Process Street Integration — Kickoff & Findings]]).
 ///
 /// Runs everything in one RLS transaction and commits only if every
-/// step succeeds -- a partial import (a company/facility with no
-/// Merchant Account data because the second API call failed partway)
-/// is worse than no import at all, since it would look like a
-/// completed, verified client record.
-///
-/// Contract Order import is deliberately not included here yet -- its
-/// real PS field keys were never captured this session (the one
-/// facility this pipeline was validated against, Prairie Enterprises /
-/// Highway 20, has no Contract Order run to examine), and guessing at
-/// field keys blind is exactly the mistake this whole integration has
-/// been built by avoiding. Add `ingest_contract_order_run` here once a
-/// real run's fields have actually been pulled and checked.
+/// step succeeds -- a partial import (a company/facility missing one
+/// workflow's data because that API call failed partway) is worse than
+/// no import at all, since it would look like a completed, verified
+/// client record.
 pub async fn ingest_facility(
     client: &ProcessStreetClient,
     db: &PgPool,
     actor_user_id: Uuid,
     intake_run_id: &str,
     merchant_account_run_id: Option<&str>,
+    contract_order_run_id: Option<&str>,
 ) -> Result<IngestedFacility, IngestError> {
     let intake_fields = client.get_run_form_fields(intake_run_id).await?;
     let intake_tasks = client.get_run_tasks(intake_run_id).await?;
@@ -73,6 +78,16 @@ pub async fn ingest_facility(
             let nma_fields = client.get_run_form_fields(run_id).await?;
             let nma_tasks = client.get_run_tasks(run_id).await?;
             Some((map_merchant_account_fields(&nma_fields), nma_tasks))
+        }
+        None => None,
+    };
+
+    let contract_order = match contract_order_run_id {
+        Some(run_id) => {
+            let co_fields = client.get_run_form_fields(run_id).await?;
+            let co_tasks = client.get_run_tasks(run_id).await?;
+            let co_snapshot: Value = serde_json::to_value(&co_fields).unwrap_or(Value::Null);
+            Some((map_contract_order_fields(&co_fields), co_tasks, co_snapshot))
         }
         None => None,
     };
@@ -98,11 +113,27 @@ pub async fn ingest_facility(
         false
     };
 
+    let had_contract_order = if let Some((mapped_co, co_tasks, co_snapshot)) = contract_order {
+        ingest_contract_order_run(
+            &mut tx,
+            facility_id,
+            &mapped_co,
+            contract_order_run_id.unwrap(),
+            &co_snapshot,
+        )
+        .await?;
+        upsert_task_status(&mut tx, facility_id, "contract_order", &co_tasks).await?;
+        true
+    } else {
+        false
+    };
+
     tx.commit().await?;
 
     Ok(IngestedFacility {
         company_id,
         facility_id,
         had_merchant_account,
+        had_contract_order,
     })
 }
