@@ -22,7 +22,8 @@ use super::{
     acknowledge_group_warnings, analyze, auth_audit_logs, auth_audit_logs_export,
     auth_configuration, auth_invites, auth_login, auth_logout, auth_passkey_reverify,
     auth_register, auth_roles, auth_totp, auth_user_role, auth_user_status, auth_users,
-    cancel_session, client_ops_qms_tags, clients_search, clients_sync, correct, correct_group, dedup, discover, dropbox_browse,
+    cancel_session, client_ops_qms_tags, clients_create, clients_search, clients_sync, correct,
+    correct_group, dedup, discover, dropbox_browse,
     exclude_group, exclude_groups, exempt, export, group_file_confirm, group_file_upload,
     process_street_settings, resolve_unit_format, select_group_file, select_unit_file, tagger,
     unit_file_upload, upload, validate,
@@ -307,6 +308,8 @@ pub fn router(state: AppState) -> Router {
         // person names), same reasoning as the qms-tags read above. See
         // clients_search's own module doc for the two searches this runs.
         .route("/clients/search", get(clients_search::search_clients))
+        // Requires client_ops.perform -- see clients_create's own module doc.
+        .route("/clients", post(clients_create::create_client))
         // Requires client_ops.perform to start; status read is any
         // authenticated caller -- see clients_sync's own module doc.
         .route("/clients/sync", post(clients_sync::start_sync))

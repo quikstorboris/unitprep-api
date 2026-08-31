@@ -15,6 +15,7 @@ mod auth_user_status;
 mod auth_users;
 mod cancel_session;
 mod client_ops_qms_tags;
+mod clients_create;
 mod clients_search;
 mod clients_sync;
 mod correct;
