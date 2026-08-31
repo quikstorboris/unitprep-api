@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,6 +31,12 @@ pub struct Workflow {
     pub name: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct RunAudit {
+    #[serde(rename = "updatedDate")]
+    updated_date: DateTime<Utc>,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkflowRun {
@@ -38,6 +45,20 @@ pub struct WorkflowRun {
     pub status: String,
     #[serde(rename = "workflowId")]
     pub workflow_id: String,
+    audit: RunAudit,
+}
+
+impl WorkflowRun {
+    /// PS's own `audit.updatedDate` -- the signal `clients::sync`'s
+    /// delta check compares against `ps_sync_state.ps_updated_at` to
+    /// decide whether this run's fields actually need re-fetching.
+    /// Confirmed present on every real run returned by `GET
+    /// /workflow-runs` (verified directly against the live API,
+    /// 2026-08-31) -- not optional the way `FormField.label` turned out
+    /// to be.
+    pub fn updated_at(&self) -> DateTime<Utc> {
+        self.audit.updated_date
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
