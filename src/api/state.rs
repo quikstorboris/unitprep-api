@@ -7,6 +7,7 @@ use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
 use crate::client_ops::vendor_format::VendorFormatCache;
 use crate::dropbox::DropboxClient;
+use crate::process_street::ProcessStreetClient;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -70,4 +71,11 @@ pub struct AppState {
     // Arc<dyn Trait> like auth_backend above -- there is one real
     // implementation and no swap point today.
     pub dropbox: Arc<DropboxClient>,
+
+    // `None` when PROCESS_STREET_API_KEY isn't configured -- unlike
+    // dropbox/auth above, this integration is still partial (Contract
+    // Order on hold, no frontend yet) and must not block startup the
+    // way a missing WebAuthn/Dropbox config does. Handlers that need it
+    // return a clear error rather than panicking or silently no-op-ing.
+    pub process_street: Option<Arc<ProcessStreetClient>>,
 }

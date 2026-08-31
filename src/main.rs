@@ -135,6 +135,32 @@ async fn main() {
         }),
     ));
 
+    // Unlike Dropbox/WebAuthn above, a missing PROCESS_STREET_API_KEY
+    // must not block startup -- this integration is still partial
+    // (Contract Order on hold, no frontend yet), and every environment
+    // that doesn't need it (most tests, a fresh dev checkout) shouldn't
+    // have to configure a real key just to run the server. Endpoints
+    // that need it return a clear error instead of silently no-op-ing;
+    // see `api::clients_search`.
+    let process_street_client = match process_street::ProcessStreetConfig::from_env() {
+        Ok(config) => Some(Arc::new(process_street::ProcessStreetClient::new(config))),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "Process Street not configured -- PS-backed search/import endpoints will return an error until PROCESS_STREET_API_KEY is set"
+            );
+            None
+        }
+    };
+
+    // The background sync that keeps clients.ps_person_index fresh --
+    // only runs when PS is actually configured (see above). See
+    // `clients::sync`'s own module doc for the delta-sync mechanism and
+    // the RLS reasoning behind SYSTEM_USER_ID.
+    if let Some(client) = &process_street_client {
+        clients::sync::start_background_sync_task(client.clone(), db_pool.clone());
+    }
+
     // Group Prep's and dedup's vendor-format registries -- an in-memory
     // snapshot per content type, loaded once here (best-effort; see
     // `initial_cache`'s own doc comment for why a failure here doesn't
@@ -222,6 +248,7 @@ async fn main() {
         unit_vendors,
         tenant_vendors,
         dropbox: dropbox_client,
+        process_street: process_street_client,
     };
 
     let app = api::router(state);

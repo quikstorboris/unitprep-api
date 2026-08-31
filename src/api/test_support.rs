@@ -279,6 +279,7 @@ pub fn empty_state() -> AppState {
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
+        process_street: None,
     }
 }
 
@@ -325,6 +326,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
+        process_street: None,
     }
 }
 
@@ -398,6 +400,7 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
+        process_street: None,
     }
 }
 
@@ -449,6 +452,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
+        process_street: None,
     }
 }
 
@@ -510,6 +514,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
+        process_street: None,
     }
 }
 
@@ -595,5 +600,6 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
+        process_street: None,
     }
 }
