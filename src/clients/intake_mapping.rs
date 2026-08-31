@@ -44,6 +44,10 @@ pub struct MappedCompany {
     pub corporate_address_city: Option<String>,
     pub corporate_address_state: Option<String>,
     pub corporate_address_zip: Option<String>,
+    /// PS's own `Company_Subdomain:` -- captured on the "first time"
+    /// facility's run, same sister-site pattern as the other corporate
+    /// fields above (see the vault's sister-site finding).
+    pub subdomain: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -61,6 +65,19 @@ pub struct MappedFacility {
     pub access_control_system: Option<String>,
     pub go_live_date: Option<NaiveDate>,
     pub dropbox_folder_url: Option<String>,
+    /// PS's own per-facility `Facility_Subdomain:` -- distinct from
+    /// `MappedCompany::subdomain`, which is the company-level one. Real
+    /// Highway 20 data has both, with different values.
+    pub subdomain: Option<String>,
+    /// PS's own `Does_the_Facility_Subdomain_already_exist_in_QMS?` --
+    /// kept as raw text (not boolean), same convention as every other
+    /// yes/no field in Facility Policies (`sales_tax_applies_raw` etc.).
+    pub subdomain_exists_in_qms_raw: Option<String>,
+    /// PS's own `Facility_Email_Address:` -- the QMS-associated system
+    /// email, distinct from `email` above (the general facility contact
+    /// address, PS's `What_is_the_facility_email_address?`). Real
+    /// Highway 20 data has both, with different values.
+    pub system_email: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -334,6 +351,7 @@ pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
         corporate_address_city: value_for(fields, "Corporate_City:"),
         corporate_address_state: value_for(fields, "Corporate_State:"),
         corporate_address_zip: value_for(fields, "Corporate_Zip:"),
+        subdomain: value_for(fields, "Company_Subdomain:"),
     };
 
     let facility = MappedFacility {
@@ -353,6 +371,9 @@ pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
         access_control_system: value_for(fields, "What_Access_Control_system_are_they_using?"),
         go_live_date: parse_ps_date(fields, "What_is_the_Go_Live_Date_on_the_contract?"),
         dropbox_folder_url: value_for(fields, "Facility_Onboarding_folder_URL:"),
+        subdomain: value_for(fields, "Facility_Subdomain:"),
+        subdomain_exists_in_qms_raw: value_for(fields, "Does_the_Facility_Subdomain_already_exist_in_QMS?"),
+        system_email: value_for(fields, "Facility_Email_Address:"),
     };
 
     MappedIntakeRun {
@@ -398,6 +419,28 @@ mod tests {
         // Real value has trailing whitespace in PS's own export -- must come back trimmed.
         assert_eq!(mapped.facility.city.as_deref(), Some("Marengo"));
         assert_eq!(mapped.facility.units_count, Some(788));
+    }
+
+    #[test]
+    fn maps_the_qms_subdomain_and_system_email_setup_fields() {
+        let mapped = map_intake_fields(&real_fields());
+
+        assert_eq!(
+            mapped.company.subdomain.as_deref(),
+            Some("prairie-enterprises.qms-email.com")
+        );
+        assert_eq!(
+            mapped.facility.subdomain.as_deref(),
+            Some("tenant.highway20selfstorage.com")
+        );
+        assert_eq!(mapped.facility.subdomain_exists_in_qms_raw.as_deref(), Some("No"));
+        assert_eq!(
+            mapped.facility.system_email.as_deref(),
+            Some("info@tenant.highway20selfstorage.com")
+        );
+        // Distinct from the general facility contact email -- both must
+        // survive independently, not collapse into one field.
+        assert_ne!(mapped.facility.system_email, mapped.facility.email);
     }
 
     #[test]

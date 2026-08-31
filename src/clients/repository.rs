@@ -44,8 +44,8 @@ pub async fn ingest_intake_run(
         "INSERT INTO clients.companies
             (legal_name, corporate_email, corporate_phone, corporate_address_street,
              corporate_address_city, corporate_address_state, corporate_address_zip,
-             source, ps_intake_run_id, raw_ps_snapshot, last_synced_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'process_street', $8, $9, now())
+             subdomain, source, ps_intake_run_id, raw_ps_snapshot, last_synced_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'process_street', $9, $10, now())
          RETURNING id",
     )
     .bind(mapped.company.legal_name.as_deref().unwrap_or("(unnamed company)"))
@@ -55,6 +55,7 @@ pub async fn ingest_intake_run(
     .bind(&mapped.company.corporate_address_city)
     .bind(&mapped.company.corporate_address_state)
     .bind(&mapped.company.corporate_address_zip)
+    .bind(&mapped.company.subdomain)
     .bind(ps_intake_run_id)
     .bind(raw_ps_snapshot)
     .fetch_one(&mut **tx)
@@ -64,10 +65,10 @@ pub async fn ingest_intake_run(
         "INSERT INTO clients.facilities
             (company_id, name, street_address, city, state, zip, phone, email,
              units_count, primary_storage_offering, previous_pms, access_control_system,
-             go_live_date, dropbox_folder_url, source, ps_intake_run_id, raw_ps_snapshot,
-             last_synced_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                 'process_street', $15, $16, now())
+             go_live_date, dropbox_folder_url, subdomain, subdomain_exists_in_qms_raw,
+             system_email, source, ps_intake_run_id, raw_ps_snapshot, last_synced_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                 $17, 'process_street', $18, $19, now())
          RETURNING id",
     )
     .bind(company_id)
@@ -84,6 +85,9 @@ pub async fn ingest_intake_run(
     .bind(&mapped.facility.access_control_system)
     .bind(mapped.facility.go_live_date)
     .bind(&mapped.facility.dropbox_folder_url)
+    .bind(&mapped.facility.subdomain)
+    .bind(&mapped.facility.subdomain_exists_in_qms_raw)
+    .bind(&mapped.facility.system_email)
     .bind(ps_intake_run_id)
     .bind(raw_ps_snapshot)
     .fetch_one(&mut **tx)
@@ -495,6 +499,30 @@ mod integration_tests {
         .unwrap();
         assert_eq!(facility_name, "Highway 20 Self Storage");
         assert_eq!(units_count, Some(788));
+
+        let (company_subdomain,): (Option<String>,) =
+            sqlx::query_as("SELECT subdomain FROM clients.companies WHERE id = $1")
+                .bind(company_id)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+        assert_eq!(company_subdomain.as_deref(), Some("prairie-enterprises.qms-email.com"));
+
+        let (facility_subdomain, subdomain_exists_raw, system_email): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = sqlx::query_as(
+            "SELECT subdomain, subdomain_exists_in_qms_raw, system_email
+               FROM clients.facilities WHERE id = $1",
+        )
+        .bind(facility_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(facility_subdomain.as_deref(), Some("tenant.highway20selfstorage.com"));
+        assert_eq!(subdomain_exists_raw.as_deref(), Some("No"));
+        assert_eq!(system_email.as_deref(), Some("info@tenant.highway20selfstorage.com"));
 
         let (fee_count,): (i64,) = sqlx::query_as(
             "SELECT count(*) FROM clients.policy_fees WHERE facility_policies_id = $1",
