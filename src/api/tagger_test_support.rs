@@ -51,5 +51,6 @@ pub fn tagger_state_with_session(
         tenant_vendors: empty_vendor_cache(),
         dropbox: crate::api::test_support::test_dropbox_client(),
         process_street: None,
+        sync_progress: crate::api::test_support::test_sync_progress(),
     }
 }

@@ -158,6 +158,15 @@ pub(crate) fn test_dropbox_client() -> std::sync::Arc<crate::dropbox::DropboxCli
     }))
 }
 
+/// A fresh, `Idle` sync-progress handle -- nothing in the handler test
+/// suite exercises a real sync run, so this only needs to exist, not
+/// hold any particular state.
+pub(crate) fn test_sync_progress() -> crate::clients::sync::SyncProgressHandle {
+    std::sync::Arc::new(parking_lot::RwLock::new(
+        crate::clients::sync::SyncProgress::default(),
+    ))
+}
+
 /// Fixed, obviously-fake caller id shared by `test_user()` and every
 /// session-building fixture below (`uploaded_state`, `validated_state`,
 /// `dedup_state_with_report`, etc.) -- so a test that builds a session
@@ -280,6 +289,7 @@ pub fn empty_state() -> AppState {
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
+        sync_progress: test_sync_progress(),
     }
 }
 
@@ -327,6 +337,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
+        sync_progress: test_sync_progress(),
     }
 }
 
@@ -401,6 +412,7 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
+        sync_progress: test_sync_progress(),
     }
 }
 
@@ -453,6 +465,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
+        sync_progress: test_sync_progress(),
     }
 }
 
@@ -515,6 +528,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
+        sync_progress: test_sync_progress(),
     }
 }
 
@@ -601,5 +615,6 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         tenant_vendors: empty_vendor_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
+        sync_progress: test_sync_progress(),
     }
 }

@@ -156,9 +156,18 @@ async fn main() {
     // The background sync that keeps clients.ps_person_index fresh --
     // only runs when PS is actually configured (see above). See
     // `clients::sync`'s own module doc for the delta-sync mechanism and
-    // the RLS reasoning behind SYSTEM_USER_ID.
+    // the RLS reasoning behind SYSTEM_USER_ID. Constructed unconditionally
+    // (starts as a harmless Idle value) so `api::clients_sync`'s manual
+    // "Sync Now" endpoint always has something to read even when PS
+    // isn't configured -- it checks `process_street` separately before
+    // acting on it.
+    let sync_progress = Arc::new(parking_lot::RwLock::new(clients::sync::SyncProgress::default()));
     if let Some(client) = &process_street_client {
-        clients::sync::start_background_sync_task(client.clone(), db_pool.clone());
+        clients::sync::start_background_sync_task(
+            client.clone(),
+            db_pool.clone(),
+            sync_progress.clone(),
+        );
     }
 
     // Group Prep's and dedup's vendor-format registries -- an in-memory
@@ -249,6 +258,7 @@ async fn main() {
         tenant_vendors,
         dropbox: dropbox_client,
         process_street: process_street_client,
+        sync_progress,
     };
 
     let app = api::router(state);

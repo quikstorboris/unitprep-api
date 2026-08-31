@@ -6,6 +6,7 @@ use crate::application::dedup_session_service::DedupSession;
 use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
 use crate::client_ops::vendor_format::VendorFormatCache;
+use crate::clients::sync::SyncProgressHandle;
 use crate::dropbox::DropboxClient;
 use crate::process_street::ProcessStreetClient;
 
@@ -78,4 +79,13 @@ pub struct AppState {
     // way a missing WebAuthn/Dropbox config does. Handlers that need it
     // return a clear error rather than panicking or silently no-op-ing.
     pub process_street: Option<Arc<ProcessStreetClient>>,
+
+    // Shared between the nightly background sync and the manual "Sync
+    // Now" endpoint (`api::clients_sync`) -- see `SyncProgressHandle`'s
+    // own doc comment for why one shared handle is the mutual-exclusion
+    // guard, not just a progress readout. Constructed unconditionally
+    // (unlike `process_street` above) since it starts as a harmless
+    // `Idle` value even when PS isn't configured -- only the endpoints
+    // that read/act on it need to also check `process_street`.
+    pub sync_progress: SyncProgressHandle,
 }
