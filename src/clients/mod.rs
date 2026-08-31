@@ -11,3 +11,6 @@
 //! header comment).
 
 pub mod encryption;
+pub mod fields;
+pub mod intake_mapping;
+pub mod people;
