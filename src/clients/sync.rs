@@ -1,12 +1,11 @@
 //! Delta-aware background sync feeding `clients.ps_person_index` --
-//! Phase 2's harder half (person-name search), continued. Not yet
-//! wired to anything (no `main.rs` call to `start_background_sync_task`
-//! yet, since there's no bootstrap constructing a real
-//! `ProcessStreetClient` at startup today -- see
-//! `ProcessStreetClient::new`'s own doc comment); proven instead by
-//! `live_tests::sync_workflow_indexes_a_real_run_and_records_delta_state`,
-//! the same "prove it against the real API and real Postgres, then roll
-//! back" discipline `clients::ingest`'s own live test uses.
+//! Phase 2's harder half (person-name search). Wired into `main.rs`:
+//! `start_background_sync_task` runs whenever `PROCESS_STREET_API_KEY`
+//! is configured, alongside `api::clients_search`, which reads what this
+//! writes. Also proven directly against the real API and real Postgres
+//! by `live_tests::sync_one_run_indexes_a_real_run_and_skips_an_unchanged_one`,
+//! the same "prove it, then roll back" discipline `clients::ingest`'s
+//! own live test uses.
 //!
 //! **The delta mechanism**: `list_workflow_runs` is cheap (one paginated
 //! list call, no per-run fetch) and every run PS returns carries its own
@@ -33,8 +32,6 @@
 //! "system" role in this app's RBAC, so reusing the same client-ops
 //! write gate every human write already goes through is the pragmatic
 //! choice over inventing a new one for this one caller.
-
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -250,7 +247,7 @@ pub async fn sync_all_workflows(client: &ProcessStreetClient, db: &PgPool) -> Ve
 /// than ending the task. Unlike that task, `tokio::time::interval`'s
 /// first tick fires immediately, so the first real sync happens right
 /// at startup, not a full day later.
-pub fn start_background_sync_task(client: ProcessStreetClient, db: PgPool) {
+pub fn start_background_sync_task(client: std::sync::Arc<ProcessStreetClient>, db: PgPool) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(SYNC_INTERVAL);
 

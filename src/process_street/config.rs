@@ -1,7 +1,3 @@
-// Phase 0 only -- see process_street::mod's doc comment. Remove once
-// Phase 1 gives this a real caller.
-#![allow(dead_code)]
-
 /// Everything `ProcessStreetClient` needs. A single org-wide API key --
 /// unlike a per-client QMS credential, this is one secret shared across
 /// every call, same shape as `dropbox::DropboxConfig`'s app-wide

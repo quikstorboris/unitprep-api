@@ -10,20 +10,19 @@
 //! exactly this reason.
 //!
 //! The `clients` module (mapping/ingestion layer, `src/clients/`) is
-//! this module's real caller -- `clients::ingest` calls
-//! `get_run_form_fields`/`get_run_tasks` for both the Intake/Progress
-//! and New Merchant Account workflows. `list_workflows`/
-//! `list_workflow_runs` have no caller yet (they're for the future
-//! search/discovery flow, Phase 2+), so those two specifically stay
-//! legitimately unused for now -- see their own `#[allow(dead_code)]`.
+//! this module's real caller: `clients::ingest` calls
+//! `get_run_form_fields`/`get_run_tasks`, and `clients::search`/
+//! `clients::sync` call `list_workflow_runs`/`search_workflow_runs_by_name`
+//! for the two search paths `api::clients_search` exposes.
+//! `list_workflows`/`Workflow` (listing workflow *templates*, distinct
+//! from workflow *runs*) still have no caller -- see their own
+//! `#[allow(dead_code)]` in client.rs.
 
 mod client;
 mod config;
 
-pub use client::{FormField, ProcessStreetClient, ProcessStreetError, Task};
-// No caller yet -- see the doc comments on `Workflow`/`ProcessStreetClient::new`
-// in client.rs and on `ProcessStreetConfig::from_env` in config.rs.
+pub use client::{FormField, ProcessStreetClient, ProcessStreetError, Task, WorkflowRun};
+// No caller yet -- see the doc comment on `Workflow` in client.rs.
 #[allow(unused_imports)]
-pub use client::{Workflow, WorkflowRun};
-#[allow(unused_imports)]
+pub use client::Workflow;
 pub use config::ProcessStreetConfig;

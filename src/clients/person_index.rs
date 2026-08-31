@@ -12,10 +12,6 @@
 //! deliberately keep their sensitive fields private to their own
 //! module.
 
-// No caller yet outside `clients::sync`, which itself has no HTTP
-// handler wired up yet. Remove once one exists.
-#![allow(dead_code)]
-
 use crate::clients::fields::value_for;
 use crate::clients::people::parse_people_block;
 use crate::process_street::FormField;

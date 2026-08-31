@@ -1,17 +1,10 @@
 //! Company/facility-name search across the three Process Street
 //! workflows -- Phase 2's cheap half. Uses PS's own server-side `name`
 //! filter directly (see `ProcessStreetClient::search_workflow_runs_by_name`),
-//! no local index/cache needed. Person-name search (finding a facility
-//! by an owner/DM/manager's name) is a separate, harder problem, still
-//! deferred -- PS has no equivalent server-side search over form-field
-//! values, so that needs its own lightweight background sync. See the
-//! vault Implementation Plan for the full reasoning; Boris's own call,
-//! 2026-08-31, was to sequence facility-name search first since it's
-//! the cheap one.
-
-// No HTTP handler or CLI binary calls into this yet. Remove once one
-// exists.
-#![allow(dead_code)]
+//! no local index/cache needed. Called by `api::clients_search` alongside
+//! `clients::sync`'s locally-indexed person-name search (the harder
+//! half -- PS has no server-side search over form-field values, so that
+//! one reads `clients.ps_person_index` instead of calling PS live).
 
 use crate::clients::known_workflows::{
     CONTRACT_ORDER_WORKFLOW_ID, INTAKE_WORKFLOW_ID, MERCHANT_ACCOUNT_WORKFLOW_ID,

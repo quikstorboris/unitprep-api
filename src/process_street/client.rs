@@ -37,12 +37,15 @@ struct RunAudit {
     updated_date: DateTime<Utc>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorkflowRun {
     pub id: String,
     pub name: String,
     pub status: String,
+    // Every real caller already knows which workflow a run belongs to
+    // (it's the query param that scoped the request), so this is kept
+    // only because it's part of PS's real response shape.
+    #[allow(dead_code)]
     #[serde(rename = "workflowId")]
     pub workflow_id: String,
     audit: RunAudit,
@@ -120,11 +123,6 @@ pub struct ProcessStreetClient {
 }
 
 impl ProcessStreetClient {
-    // No bootstrap wiring calls this yet -- `clients::ingest` takes an
-    // already-constructed `&ProcessStreetClient` as a parameter, since
-    // nothing in main.rs constructs a real one until PROCESS_STREET_API_KEY
-    // is actually set. Remove once that wiring exists.
-    #[allow(dead_code)]
     pub fn new(config: ProcessStreetConfig) -> Self {
         Self {
             http: reqwest::Client::new(),
@@ -233,7 +231,6 @@ impl ProcessStreetClient {
     /// them. This isn't specific to Contract Order; it's how this
     /// endpoint behaves for every workflow, which is why the fix lives
     /// here rather than being worked around per-caller.
-    #[allow(dead_code)]
     pub async fn list_workflow_runs(
         &self,
         workflow_id: &str,
@@ -260,9 +257,7 @@ impl ProcessStreetClient {
     /// does -- confirmed `name` and `status` combine correctly in one
     /// request.
     ///
-    /// Called by `clients::search`, which has no HTTP handler or CLI
-    /// binary calling it yet -- remove this allow once one exists.
-    #[allow(dead_code)]
+    /// Called by `clients::search`, in turn called by `api::clients_search`.
     pub async fn search_workflow_runs_by_name(
         &self,
         workflow_id: &str,
