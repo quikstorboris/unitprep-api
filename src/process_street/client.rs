@@ -196,16 +196,38 @@ impl ProcessStreetClient {
             .await
     }
 
+    /// Every run for a workflow, across every status PS actually uses
+    /// for a run (`Active`, `Completed`, `Archived` -- confirmed by
+    /// probing the API directly; `Deleted` is also a valid value but
+    /// deliberately excluded here, and `Stopped`/`Paused`/`Cancelled`
+    /// are not valid values at all, PS rejects them with 400).
+    ///
+    /// **This is the fix for a real bug found while building Contract
+    /// Order ingestion**: `GET /workflow-runs` with no `status` query
+    /// param returns `Active` only. Two real, known clients (Tri County
+    /// Mini Storage, Dubuqueland Mini Storage) were invisible to a
+    /// by-name search until `status=Completed` was queried explicitly --
+    /// Contract Order runs are marked `Completed` once the order is
+    /// processed, so an Active-only search finds essentially none of
+    /// them. This isn't specific to Contract Order; it's how this
+    /// endpoint behaves for every workflow, which is why the fix lives
+    /// here rather than being worked around per-caller.
     #[allow(dead_code)]
     pub async fn list_workflow_runs(
         &self,
         workflow_id: &str,
     ) -> Result<Vec<WorkflowRun>, ProcessStreetError> {
-        self.paginate(
-            format!("{BASE_URL}/workflow-runs?workflowId={workflow_id}"),
-            "workflowRuns",
-        )
-        .await
+        let mut all = Vec::new();
+        for status in ["Active", "Completed", "Archived"] {
+            let mut page = self
+                .paginate(
+                    format!("{BASE_URL}/workflow-runs?workflowId={workflow_id}&status={status}"),
+                    "workflowRuns",
+                )
+                .await?;
+            all.append(&mut page);
+        }
+        Ok(all)
     }
 
     pub async fn get_run_tasks(&self, run_id: &str) -> Result<Vec<Task>, ProcessStreetError> {
