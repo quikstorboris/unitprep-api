@@ -40,3 +40,7 @@ REFACTOR.md
 # vault to read its markdown docs.
 .obsidian/
 .mcp.json
+
+# Claude Code local session config -- machine-local permissions/MCP
+# toggles, not shared project config.
+.claude/settings.local.json
