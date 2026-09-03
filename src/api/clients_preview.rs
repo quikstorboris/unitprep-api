@@ -90,6 +90,16 @@ pub struct PreviewClientsRequest {
 #[derive(Debug, Serialize)]
 pub struct PreviewedRun {
     pub run_id: String,
+    /// PS's own `Is_this_their_first_time_filling_out_this_form?` for
+    /// this specific run -- `None` when unanswered. Purely a signal for
+    /// `pickCompanySourceRun` (`unitprep-ui`) to prefer the run PS
+    /// itself marks authoritative for company data over one that merely
+    /// resolved *a* legal name (e.g. via a stray `Company_Name:` answer
+    /// or a Merchant Account correlation) while its own Corporate Info
+    /// section stayed blank. See `clients::intake_mapping::
+    /// MappedIntakeRun::is_first_time`'s own doc comment for why this
+    /// isn't folded into `company` itself.
+    pub is_first_time: Option<bool>,
     /// This run's data read as a company -- relevant only if this row
     /// ends up designated Company on the confirmation screen.
     /// `legal_name` may already reflect a correlated Merchant Account
@@ -315,6 +325,7 @@ pub async fn preview_clients(
 
         runs.push(PreviewedRun {
             run_id: r.run_id.clone(),
+            is_first_time: mapped.is_first_time,
             company,
             facility: mapped.facility,
             merchant_account_run_id: merchant_account_run_ids.get(&r.run_id).cloned(),

@@ -36,6 +36,20 @@ fn parse_units_count(fields: &[FormField], key: &str) -> Option<i32> {
     value_for(fields, key)?.parse::<i32>().ok()
 }
 
+/// `Some(true)`/`Some(false)` for a real "Yes"/"No" answer (matched
+/// case-insensitively -- real PS values seen so far are exactly "Yes"/
+/// "No", but this is a free-text-backed Select field, not a strict
+/// enum), `None` when unanswered. See `MappedIntakeRun::is_first_time`'s
+/// own doc comment for why this isn't just a `bool`.
+fn parse_is_first_time(fields: &[FormField]) -> Option<bool> {
+    let raw = value_for(fields, "Is_this_their_first_time_filling_out_this_form?")?;
+    match raw.to_lowercase().as_str() {
+        "yes" => Some(true),
+        "no" => Some(false),
+        _ => None,
+    }
+}
+
 /// Also the wire shape for the confirmation-screen preview/create round
 /// trip (`api::clients_preview`/`api::clients_create`) -- every field
 /// here is editable on that screen, so no separate DTO is worth having.
@@ -170,6 +184,18 @@ impl MappedCommission {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MappedIntakeRun {
+    /// PS's own `Is_this_their_first_time_filling_out_this_form?` --
+    /// `None` when the field itself is unanswered/absent, distinct from
+    /// `Some(false)` (a real "No" answer). Deliberately kept off
+    /// `MappedCompany` itself, even though it gates that whole struct's
+    /// real answers -- `MappedCompany` is the wire shape a manager edits
+    /// and resubmits on Create (see that struct's own doc comment), and
+    /// this flag isn't an editable company field, just a signal for
+    /// picking which selected run should seed the Company section on
+    /// the confirmation screen (`pickCompanySourceRun` in
+    /// `unitprep-ui`). See the vault's sister-site writeup for why this
+    /// gate exists at all.
+    pub is_first_time: Option<bool>,
     pub company: MappedCompany,
     pub facility: MappedFacility,
     pub fees: Vec<MappedFee>,
@@ -411,6 +437,7 @@ pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
     };
 
     MappedIntakeRun {
+        is_first_time: parse_is_first_time(fields),
         company,
         facility,
         fees: map_fees(fields),
@@ -453,6 +480,21 @@ mod tests {
         // Real value has trailing whitespace in PS's own export -- must come back trimmed.
         assert_eq!(mapped.facility.city.as_deref(), Some("Marengo"));
         assert_eq!(mapped.facility.units_count, Some(788));
+    }
+
+    #[test]
+    fn maps_is_first_time_from_the_real_highway20_run() {
+        // Highway 20 answered "Yes" -- see the vault's sister-site
+        // writeup; it's the one real facility with a fully-answered
+        // Corporate Info section in this fixture.
+        let mapped = map_intake_fields(&real_fields());
+        assert_eq!(mapped.is_first_time, Some(true));
+    }
+
+    #[test]
+    fn is_first_time_is_none_when_the_field_is_unanswered() {
+        let mapped = map_intake_fields(&[]);
+        assert_eq!(mapped.is_first_time, None);
     }
 
     #[test]
