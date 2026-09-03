@@ -14,6 +14,8 @@
 //! Elavon." Facility identity (and the eventual "Add to OO" trigger)
 //! only ever needs the Intake run's id regardless.
 
+use chrono::{DateTime, Utc};
+
 use crate::clients::known_workflows::INTAKE_WORKFLOW_ID;
 use crate::process_street::{ProcessStreetClient, ProcessStreetError};
 
@@ -22,6 +24,10 @@ pub struct SearchResult {
     pub run_id: String,
     pub run_name: String,
     pub status: String,
+    /// PS's own `audit.updatedDate` -- live, not the possibly-stale
+    /// locally-synced value, since this comes straight from the same
+    /// live call that found this match in the first place.
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Searches Intake run names for `query` (case-insensitive substring,
@@ -36,6 +42,7 @@ pub async fn search_by_facility_name(
     Ok(runs
         .into_iter()
         .map(|r| SearchResult {
+            updated_at: r.updated_at(),
             run_id: r.id,
             run_name: r.name,
             status: r.status,

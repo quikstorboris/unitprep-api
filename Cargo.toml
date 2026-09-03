@@ -62,13 +62,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Date/time support
-chrono = { version = "0.4", features = ["clock"] }
+chrono = { version = "0.4", features = ["clock", "serde"] }
 
 # Web framework
 axum = { version = "0.8", features = ["multipart"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
+# join_all -- concurrent (not sequential) live Process Street calls in
+# clients_preview/clients_search, where each fetch is independent I/O.
+futures = "0.3"
 
 # Middleware. "catch-panic" turns a handler panic into the project's own
 # ApiErrorBody 500 shape (see api::mod::handle_panic) instead of dropping
