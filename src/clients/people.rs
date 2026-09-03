@@ -1,8 +1,8 @@
 //! Parses Process Street's free-text "Owner/District Manager/Manager
 //! Level Users" blocks into individual records.
 //!
-//! Real production data uses at least two genuinely different formats,
-//! both confirmed this session:
+//! Real production data uses at least three genuinely different
+//! formats, all confirmed this session:
 //! - **Comma-separated, one line per person** (Beau Ryan's facilities):
 //!   `"Beau Ryan, beau@rockspring.com, 832-978-3228"`, one such line per
 //!   person, no blank lines between them.
@@ -10,10 +10,27 @@
 //!   Enterprises' Highway 20): a name on its own line, then an email
 //!   and/or phone each on their own line (sometimes prefixed
 //!   `"Primary: "`), a blank line, then the next person.
+//! - **Dash-separated name, comma-separated contact info** (a real
+//!   single-facility business, run rZFNRpmLIxuOrb_8K9hICw):
+//!   `"Irene Chen - (301) 787-9221, irene@chenlawgroup.com"` -- and,
+//!   critically, the *next* person on the very same field reverses the
+//!   order: `"Amanda Ibarra - chchenpropertymgmtteam1@gmail.com,
+//!   (423) 314-2096"` (email before phone this time). A naive
+//!   assume-the-second-comma-slot-is-phone parser silently glues the
+//!   dash-separated contact value onto the name and mis-files whichever
+//!   value happens to land in the wrong slot -- confirmed as the actual
+//!   cause of this facility's people never turning up in person search
+//!   (`clients.ps_person_index` held "Irene Chen - (301) 787-9221" as a
+//!   literal name with no phone, and a phone number sitting in the
+//!   *email* column for Amanda). `parse_comma_line` below content-sniffs
+//!   every candidate value (does it contain `@`? does it have enough
+//!   digits?) rather than assuming a fixed position, specifically so
+//!   this kind of per-person order flip within the same field doesn't
+//!   need a fourth special case.
 //!
 //! Boris's own framing: "I would comb through a healthy sample of PS's
 //! various clients' forms to establish a pattern" -- this is that
-//! comb-through's first real finding, not a hypothetical. This parser
+//! comb-through's third real finding, not a hypothetical. This parser
 //! detects which format a given chunk of text uses (by whether its
 //! lines contain commas) rather than assuming one universally.
 
@@ -51,19 +68,46 @@ fn split_into_chunks(raw: &str) -> Vec<Vec<&str>> {
     chunks
 }
 
-/// One line of `"Name, email, phone"` -- best-effort, a line with fewer
-/// than 3 comma-separated parts still yields a person with whatever it
-/// has.
+/// One line of `"Name, email, phone"` -- or `"Name - phone, email"` /
+/// `"Name - email, phone"`, the real dash-separated variant documented
+/// in this module's own doc comment. Content-sniffed rather than
+/// positional past the name: whichever candidate value contains `@` is
+/// the email, whichever has at least 7 digits and no `@` is the phone,
+/// regardless of which comma slot either landed in -- real data has
+/// been seen alternating that order within the very same field.
+/// Best-effort throughout: a line with fewer parts, or a dash-prefixed
+/// name with no real contact info after it, still yields a person with
+/// whatever it has.
 fn parse_comma_line(line: &str) -> Option<ParsedPerson> {
-    let mut parts = line.split(',').map(str::trim);
-    let full_name = parts.next().unwrap_or_default().to_string();
+    let mut parts: Vec<&str> = line.split(',').map(str::trim).collect();
+    if parts.is_empty() {
+        return None;
+    }
+
+    let mut full_name = parts.remove(0);
+    // A dash-separated name ("Name - contact1") glues its first contact
+    // value onto the name token instead of a comma -- split it back out
+    // so every candidate value below gets sniffed the same way no
+    // matter which format produced it.
+    if let Some((name, extra)) = full_name.split_once(" - ") {
+        full_name = name.trim();
+        let extra = extra.trim();
+        if !extra.is_empty() {
+            parts.insert(0, extra);
+        }
+    }
     if full_name.is_empty() {
         return None;
     }
-    let email = parts.next().filter(|s| !s.is_empty()).map(str::to_string);
-    let phone = parts.next().filter(|s| !s.is_empty()).map(str::to_string);
+
+    let email = parts.iter().find(|p| p.contains('@')).map(|s| s.to_string());
+    let phone = parts
+        .iter()
+        .find(|p| !p.is_empty() && !p.contains('@') && p.chars().filter(char::is_ascii_digit).count() >= 7)
+        .map(|s| s.to_string());
+
     Some(ParsedPerson {
-        full_name,
+        full_name: full_name.to_string(),
         email,
         phone,
     })
@@ -149,6 +193,25 @@ mod tests {
         assert_eq!(people[0].phone.as_deref(), Some("630-650-0137"));
         assert_eq!(people[1].full_name, "Juanita Fleener");
         assert_eq!(people[2].full_name, "Judy Armstrong");
+    }
+
+    #[test]
+    fn parses_a_real_dash_separated_two_person_block_with_reversed_contact_order() {
+        // Sand-Sto Climate Controlled Storage (run rZFNRpmLIxuOrb_8K9hICw): a
+        // third real format, name-dash-phone on one comma segment, and the
+        // two people list phone/email in opposite order from each other --
+        // this is what broke the old positional parser.
+        let raw = "Irene Chen - (301) 787-9221, irene@chenlawgroup.com\n\
+                   \n\
+                   Amanda Ibarra - chchenpropertymgmtteam1@gmail.com,  (423) 314-2096";
+        let people = parse_people_block(raw);
+        assert_eq!(people.len(), 2);
+        assert_eq!(people[0].full_name, "Irene Chen");
+        assert_eq!(people[0].email.as_deref(), Some("irene@chenlawgroup.com"));
+        assert_eq!(people[0].phone.as_deref(), Some("(301) 787-9221"));
+        assert_eq!(people[1].full_name, "Amanda Ibarra");
+        assert_eq!(people[1].email.as_deref(), Some("chchenpropertymgmtteam1@gmail.com"));
+        assert_eq!(people[1].phone.as_deref(), Some("(423) 314-2096"));
     }
 
     #[test]
