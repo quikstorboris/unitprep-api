@@ -34,7 +34,8 @@ use crate::clients::merchant_account_correlation::{
     correlate_by_title, merchant_account_run_titles, Correlation, IntakeRunTitle, MerchantAccountRunInfo,
 };
 use crate::clients::merchant_account_mapping::{
-    credentials_added_to_qms_from_tasks, decrypt_party_pii, map_merchant_account_fields,
+    credentials_added_to_qms_from_tasks, decrypt_facility_secrets, decrypt_party_pii, map_merchant_account_fields,
+    mask_bank_number,
 };
 use crate::clients::repository::{ingest_merchant_account_run, upsert_task_status, IngestMerchantAccountError};
 
@@ -93,12 +94,41 @@ pub struct ElavonPartyInfo {
     pub ownership_percent: Option<f64>,
     pub email: Option<String>,
     pub phone: Option<String>,
+    /// The real decrypted SSN -- masking (fully, with a Show/Hide reveal
+    /// toggle) is deliberately a frontend concern (`PartyCard`), not done
+    /// here, since Boris wants the real value revealable on demand.
     pub ssn: Option<String>,
     pub dob: Option<String>,
     pub home_address_line1: Option<String>,
     pub home_city: Option<String>,
     pub home_state_or_province: Option<String>,
     pub home_postal_code: Option<String>,
+}
+
+/// Facility-level financial data shown on the Elavon tab (2026-09-03) --
+/// EIN and the bank routing/account numbers (decrypted from
+/// `encrypted_secrets`, masked to their last 4 digits before leaving the
+/// backend -- see `mask_bank_number`'s own doc comment), plus the
+/// revenue/volume fields New Merchant Account's Facility Information
+/// (Pre-App) step captures. `None` throughout when this facility has no
+/// `encrypted_secrets` blob at all (a Merchant Account run ingested
+/// before this field existed) or its decryption fails -- degrades this
+/// one section rather than the whole tab, same pattern `ElavonPartyInfo`
+/// already uses for a party's PII.
+#[derive(Debug, Serialize, Default)]
+pub struct ElavonFinancials {
+    pub ein: Option<String>,
+    pub bank_routing_number_masked: Option<String>,
+    pub bank_account_number_masked: Option<String>,
+    pub total_annual_business_revenue_raw: Option<String>,
+    pub total_monthly_sales_raw: Option<String>,
+    pub average_credit_card_payment_amount_raw: Option<String>,
+    pub highest_credit_card_payment_amount_raw: Option<String>,
+    pub high_cc_payment_times_per_year_raw: Option<String>,
+    pub offers_ach_raw: Option<String>,
+    pub annual_electronic_check_volume_raw: Option<String>,
+    pub average_electronic_check_amount_raw: Option<String>,
+    pub maximum_electronic_check_amount_raw: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,6 +148,12 @@ pub enum ElavonStatusResponse {
         ps_new_merchant_run_id: Option<String>,
         last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
         parties: Vec<ElavonPartyInfo>,
+        // Boxed -- clippy::large_enum_variant. `ElavonFinancials` is 9
+        // Option<String> fields plus 3 more, which otherwise makes this
+        // variant nearly 4.5x the size of `Unlinked`, forcing every
+        // `ElavonStatusResponse` (including the far more common Unlinked
+        // case) to be sized for the largest variant.
+        financials: Box<ElavonFinancials>,
     },
     Unlinked {
         /// Present when title correlation found exactly one candidate
@@ -149,6 +185,60 @@ struct ExistingMerchantAccountRow {
     credentials_added_to_qms: bool,
     ps_new_merchant_run_id: Option<String>,
     last_synced_at: Option<chrono::DateTime<chrono::Utc>>,
+    encrypted_secrets: Option<Vec<u8>>,
+    total_annual_business_revenue_raw: Option<String>,
+    total_monthly_sales_raw: Option<String>,
+    average_credit_card_payment_amount_raw: Option<String>,
+    highest_credit_card_payment_amount_raw: Option<String>,
+    high_cc_payment_times_per_year_raw: Option<String>,
+    offers_ach_raw: Option<String>,
+    annual_electronic_check_volume_raw: Option<String>,
+    average_electronic_check_amount_raw: Option<String>,
+    maximum_electronic_check_amount_raw: Option<String>,
+}
+
+/// Decrypts `existing.encrypted_secrets` (when present) into the
+/// financials shown on the Elavon tab -- EIN unmasked (not asked to be
+/// masked, and less sensitive than a personal SSN/bank account), bank
+/// routing/account numbers masked to their last 4 digits. A decrypt
+/// failure degrades to `None` for just the EIN/bank fields (logged, not
+/// surfaced to the caller) -- the revenue/volume fields below don't
+/// depend on `encrypted_secrets` at all and are unaffected either way.
+fn build_financials(facility_id: Uuid, existing: &ExistingMerchantAccountRow) -> ElavonFinancials {
+    let secrets = existing.encrypted_secrets.as_deref().and_then(|blob| {
+        match decrypt_facility_secrets(facility_id, blob) {
+            Ok(secrets) => Some(secrets),
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    facility_id = %facility_id,
+                    "failed to decrypt facility secrets for the Elavon tab"
+                );
+                None
+            }
+        }
+    });
+
+    ElavonFinancials {
+        ein: secrets.as_ref().and_then(|s| s.ein.clone()),
+        bank_routing_number_masked: secrets
+            .as_ref()
+            .and_then(|s| s.bank_routing_number.as_deref())
+            .map(mask_bank_number),
+        bank_account_number_masked: secrets
+            .as_ref()
+            .and_then(|s| s.bank_account_number.as_deref())
+            .map(mask_bank_number),
+        total_annual_business_revenue_raw: existing.total_annual_business_revenue_raw.clone(),
+        total_monthly_sales_raw: existing.total_monthly_sales_raw.clone(),
+        average_credit_card_payment_amount_raw: existing.average_credit_card_payment_amount_raw.clone(),
+        highest_credit_card_payment_amount_raw: existing.highest_credit_card_payment_amount_raw.clone(),
+        high_cc_payment_times_per_year_raw: existing.high_cc_payment_times_per_year_raw.clone(),
+        offers_ach_raw: existing.offers_ach_raw.clone(),
+        annual_electronic_check_volume_raw: existing.annual_electronic_check_volume_raw.clone(),
+        average_electronic_check_amount_raw: existing.average_electronic_check_amount_raw.clone(),
+        maximum_electronic_check_amount_raw: existing.maximum_electronic_check_amount_raw.clone(),
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -237,7 +327,11 @@ pub async fn get_facility_elavon(
     };
 
     let existing: Option<ExistingMerchantAccountRow> = match sqlx::query_as(
-        "SELECT rate_provided, application_status, credentials_added_to_qms, ps_new_merchant_run_id, last_synced_at \
+        "SELECT rate_provided, application_status, credentials_added_to_qms, ps_new_merchant_run_id, last_synced_at, \
+         encrypted_secrets, total_annual_business_revenue_raw, total_monthly_sales_raw, \
+         average_credit_card_payment_amount_raw, highest_credit_card_payment_amount_raw, \
+         high_cc_payment_times_per_year_raw, offers_ach_raw, annual_electronic_check_volume_raw, \
+         average_electronic_check_amount_raw, maximum_electronic_check_amount_raw \
          FROM clients.facility_merchant_accounts WHERE facility_id = $1",
     )
     .bind(facility_id)
@@ -276,6 +370,8 @@ pub async fn get_facility_elavon(
             return internal_error("Could not load this facility's Elavon status");
         }
 
+        let financials = Box::new(build_financials(facility_id, &existing));
+
         return Json(ElavonStatusResponse::Linked {
             rate_provided: existing.rate_provided,
             application_status: existing.application_status,
@@ -283,6 +379,7 @@ pub async fn get_facility_elavon(
             ps_new_merchant_run_id: existing.ps_new_merchant_run_id,
             last_synced_at: existing.last_synced_at,
             parties: decrypt_parties(facility_id, party_rows),
+            financials,
         })
         .into_response();
     }

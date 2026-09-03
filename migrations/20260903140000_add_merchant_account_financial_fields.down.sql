@@ -1,0 +1,10 @@
+ALTER TABLE clients.facility_merchant_accounts
+    DROP COLUMN total_annual_business_revenue_raw,
+    DROP COLUMN total_monthly_sales_raw,
+    DROP COLUMN average_credit_card_payment_amount_raw,
+    DROP COLUMN highest_credit_card_payment_amount_raw,
+    DROP COLUMN high_cc_payment_times_per_year_raw,
+    DROP COLUMN offers_ach_raw,
+    DROP COLUMN annual_electronic_check_volume_raw,
+    DROP COLUMN average_electronic_check_amount_raw,
+    DROP COLUMN maximum_electronic_check_amount_raw;

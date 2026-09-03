@@ -365,8 +365,13 @@ pub async fn ingest_merchant_account_run(
     sqlx::query(
         "INSERT INTO clients.facility_merchant_accounts
             (facility_id, rate_provided, application_status, credentials_added_to_qms, source,
-             ps_new_merchant_run_id, raw_ps_snapshot, encrypted_secrets, last_synced_at)
-         VALUES ($1, $2, $3, $4, 'process_street', $5, $6, $7, now())",
+             ps_new_merchant_run_id, raw_ps_snapshot, encrypted_secrets,
+             total_annual_business_revenue_raw, total_monthly_sales_raw,
+             average_credit_card_payment_amount_raw, highest_credit_card_payment_amount_raw,
+             high_cc_payment_times_per_year_raw, offers_ach_raw,
+             annual_electronic_check_volume_raw, average_electronic_check_amount_raw,
+             maximum_electronic_check_amount_raw, last_synced_at)
+         VALUES ($1, $2, $3, $4, 'process_street', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now())",
     )
     .bind(facility_id)
     .bind(&mapped.rate_provided)
@@ -375,6 +380,15 @@ pub async fn ingest_merchant_account_run(
     .bind(ps_new_merchant_run_id)
     .bind(&mapped.sanitized_snapshot)
     .bind(encrypted_secrets)
+    .bind(&mapped.total_annual_business_revenue_raw)
+    .bind(&mapped.total_monthly_sales_raw)
+    .bind(&mapped.average_credit_card_payment_amount_raw)
+    .bind(&mapped.highest_credit_card_payment_amount_raw)
+    .bind(&mapped.high_cc_payment_times_per_year_raw)
+    .bind(&mapped.offers_ach_raw)
+    .bind(&mapped.annual_electronic_check_volume_raw)
+    .bind(&mapped.average_electronic_check_amount_raw)
+    .bind(&mapped.maximum_electronic_check_amount_raw)
     .execute(&mut **tx)
     .await?;
 
@@ -713,6 +727,21 @@ mod integration_tests {
         .await
         .unwrap();
         assert!(credentials_added_to_qms);
+
+        // Revenue/volume fields (2026-09-03) -- regression coverage for
+        // the bug where these were already in raw_ps_snapshot (never
+        // sensitive, so never denylisted) but never had a named column
+        // to land in, so the Elavon tab never showed them.
+        let (revenue, ach_volume): (Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT total_annual_business_revenue_raw, annual_electronic_check_volume_raw
+               FROM clients.facility_merchant_accounts WHERE facility_id = $1",
+        )
+        .bind(facility_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(revenue.as_deref(), Some("840000"));
+        assert_eq!(ach_volume.as_deref(), Some("20000"));
 
         // --- Verify raw_ps_snapshot on the Merchant Account row never carries a sensitive key ---
         let (raw_snapshot,): (Value,) = sqlx::query_as(

@@ -345,6 +345,24 @@ pub struct MappedMerchantAccount {
     /// raw text, not a Rust enum, the same Phase 1 convention as every
     /// other Facility-Policies-adjacent field).
     pub ownership_type: Option<String>,
+    /// The revenue/volume fields Facility Information (Pre-App) asks for
+    /// underwriting purposes -- confirmed genuinely per-facility (Prairie
+    /// Enterprises' 3 real facilities each answered these differently on
+    /// their own separate runs), so these live on the facility, not the
+    /// company. Never in `SENSITIVE_FACILITY_KEYS` -- these already sat
+    /// in plaintext in `sanitized_snapshot`/`raw_ps_snapshot`, just never
+    /// promoted to a named column or shown in any UI before 2026-09-03.
+    /// Raw text, not decimals -- same Phase 1 convention as every other
+    /// PS-sourced financial field in this schema.
+    pub total_annual_business_revenue_raw: Option<String>,
+    pub total_monthly_sales_raw: Option<String>,
+    pub average_credit_card_payment_amount_raw: Option<String>,
+    pub highest_credit_card_payment_amount_raw: Option<String>,
+    pub high_cc_payment_times_per_year_raw: Option<String>,
+    pub offers_ach_raw: Option<String>,
+    pub annual_electronic_check_volume_raw: Option<String>,
+    pub average_electronic_check_amount_raw: Option<String>,
+    pub maximum_electronic_check_amount_raw: Option<String>,
     pub parties: Vec<MappedParty>,
     pub sanitized_snapshot: Value,
     secrets: FacilitySecrets,
@@ -395,6 +413,53 @@ pub fn decrypt_party_pii(
     serde_json::from_slice(&plaintext).map_err(|_| EncryptionError::Undecryptable("malformed PartyPii plaintext"))
 }
 
+/// Decrypted view of the 3 `FacilitySecrets` fields the Elavon tab is
+/// allowed to surface (2026-09-03) -- EIN and the bank routing/account
+/// numbers, masked by `mask_bank_number` before ever reaching a caller
+/// outside this module. Deliberately NOT a `pub use` of the private
+/// write-time `FacilitySecrets` (same reasoning as `DecryptedPartyPii`'s
+/// own doc comment): this type omits the QMS/processor system
+/// credentials (`quikstor_password`, `qss_web_pin`, `pinpad_user_id`,
+/// `qss_api_pin`, `mid`, `account_id`) entirely -- serde silently drops
+/// unknown JSON keys on deserialize (no `deny_unknown_fields` on either
+/// struct), so those fields never get assigned to anything callable code
+/// could accidentally serialize back out. No display path exists for
+/// them; add a similarly-scoped type here if one is ever needed.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DecryptedFacilitySecrets {
+    pub ein: Option<String>,
+    pub bank_routing_number: Option<String>,
+    pub bank_account_number: Option<String>,
+}
+
+/// Decrypts a facility's `encrypted_secrets` blob -- `facility_id` must
+/// be the same value `MappedMerchantAccount::encrypted_secrets` bound it
+/// to at write time (the AAD there is just the facility id, unlike a
+/// party's `facility_id:role:index`, since `FacilitySecrets` is already
+/// 1:1 with the facility).
+pub fn decrypt_facility_secrets(
+    facility_id: Uuid,
+    blob: &[u8],
+) -> Result<DecryptedFacilitySecrets, EncryptionError> {
+    let plaintext = encryption::decrypt(facility_id.as_bytes(), blob)?;
+    serde_json::from_slice(&plaintext)
+        .map_err(|_| EncryptionError::Undecryptable("malformed FacilitySecrets plaintext"))
+}
+
+/// Masks a bank routing/account number to its last 4 digits, e.g.
+/// `104000016` -> `•••••0016`. Non-digit characters (spaces, dashes) are
+/// dropped first -- PS stores these as free-typed values, so a real one
+/// could in principle carry either. A value with 4 or fewer digits masks
+/// entirely rather than showing every digit.
+pub fn mask_bank_number(value: &str) -> String {
+    let digits: String = value.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() <= 4 {
+        return "•".repeat(digits.len().max(4));
+    }
+    let (masked, visible) = digits.split_at(digits.len() - 4);
+    format!("{}{}", "•".repeat(masked.len()), visible)
+}
+
 pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccount {
     MappedMerchantAccount {
         rate_provided: value_for(fields, "What_Processing_Rates_did_you_provide_to_the_customer?"),
@@ -402,6 +467,15 @@ pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccoun
         legal_name: value_for(fields, "Legal_Name_2"),
         business_dba: value_for(fields, "Business_DBA"),
         ownership_type: value_for(fields, "Ownership_Type"),
+        total_annual_business_revenue_raw: value_for(fields, "Total_Annual_Business_Revenue"),
+        total_monthly_sales_raw: value_for(fields, "Total_Monthly_Sales"),
+        average_credit_card_payment_amount_raw: value_for(fields, "Average_credit_card_payment_amount"),
+        highest_credit_card_payment_amount_raw: value_for(fields, "Highest_credit_card_payment_amount"),
+        high_cc_payment_times_per_year_raw: value_for(fields, "#_times_per_year_for_the_high_CC_Payment"),
+        offers_ach_raw: value_for(fields, "Do_you_want_to_offer_ACH"),
+        annual_electronic_check_volume_raw: value_for(fields, "Annual_Electronic_Check_Volume"),
+        average_electronic_check_amount_raw: value_for(fields, "Average_Electronic_Check_Amount"),
+        maximum_electronic_check_amount_raw: value_for(fields, "Maximum_Electronic_Check_Amount"),
         parties: map_parties(fields),
         sanitized_snapshot: sanitize_fields_for_snapshot(fields),
         secrets: FacilitySecrets::from_fields(fields),
@@ -601,5 +675,42 @@ mod tests {
         assert_eq!(secrets.ein.as_deref(), Some("111111111"));
         assert_eq!(secrets.quikstor_password.as_deref(), Some("FakeTestPassword123!"));
         clear_test_key();
+    }
+
+    #[test]
+    fn maps_revenue_and_volume_fields_from_the_real_pre_app_fields() {
+        let mapped = map_merchant_account_fields(&real_fields());
+        assert_eq!(mapped.total_annual_business_revenue_raw.as_deref(), Some("840000"));
+        assert_eq!(mapped.total_monthly_sales_raw.as_deref(), Some("70000"));
+        assert_eq!(mapped.average_credit_card_payment_amount_raw.as_deref(), Some("150"));
+        assert_eq!(mapped.highest_credit_card_payment_amount_raw.as_deref(), Some("2000"));
+        assert_eq!(mapped.high_cc_payment_times_per_year_raw.as_deref(), Some("25"));
+        assert_eq!(mapped.offers_ach_raw.as_deref(), Some("Yes"));
+        assert_eq!(mapped.annual_electronic_check_volume_raw.as_deref(), Some("20000"));
+        assert_eq!(mapped.average_electronic_check_amount_raw.as_deref(), Some("150"));
+        assert_eq!(mapped.maximum_electronic_check_amount_raw.as_deref(), Some("1500"));
+    }
+
+    #[test]
+    #[serial(client_pii_encryption_key_env)]
+    fn decrypts_facility_secrets_to_ein_and_bank_numbers_only() {
+        set_test_key();
+        let mapped = map_merchant_account_fields(&real_fields());
+        let facility_id = Uuid::new_v4();
+        let blob = mapped.encrypted_secrets(facility_id).unwrap().unwrap();
+
+        let secrets = decrypt_facility_secrets(facility_id, &blob).expect("decryption must succeed");
+        assert_eq!(secrets.ein.as_deref(), Some("111111111"));
+        assert_eq!(secrets.bank_routing_number.as_deref(), Some("011000015"));
+        assert_eq!(secrets.bank_account_number.as_deref(), Some("999999999"));
+        clear_test_key();
+    }
+
+    #[test]
+    fn mask_bank_number_shows_only_the_last_4_digits() {
+        assert_eq!(mask_bank_number("104000016"), "•••••0016");
+        assert_eq!(mask_bank_number("515612"), "••5612");
+        assert_eq!(mask_bank_number("12"), "••••");
+        assert_eq!(mask_bank_number("104-000-016"), "•••••0016");
     }
 }
