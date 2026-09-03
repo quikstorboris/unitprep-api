@@ -22,7 +22,9 @@ use super::{
     acknowledge_group_warnings, analyze, auth_audit_logs, auth_audit_logs_export,
     auth_configuration, auth_invites, auth_login, auth_logout, auth_passkey_reverify,
     auth_register, auth_roles, auth_totp, auth_user_role, auth_user_status, auth_users,
-    cancel_session, client_ops_qms_tags, clients_create, clients_search, clients_sync, correct,
+    cancel_session, client_ops_activity_logs, client_ops_activity_logs_export,
+    client_ops_qms_tags, clients_companies, clients_create, clients_detail, clients_elavon,
+    clients_preview, clients_resync, clients_search, clients_sync, correct,
     correct_group, dedup, discover, dropbox_browse,
     exclude_group, exclude_groups, exempt, export, group_file_confirm, group_file_upload,
     process_street_settings, resolve_unit_format, select_group_file, select_unit_file, tagger,
@@ -304,12 +306,71 @@ pub fn router(state: AppState) -> Router {
             "/client-ops/qms-tags/{tag_key}/reactivate",
             patch(client_ops_qms_tags::reactivate_qms_tag),
         )
+        // Activity Logs -- gated on activity_logs.read inside each handler
+        // (admin, onboarding_manager, department_manager all hold it),
+        // same shape as /auth/audit-logs above but backed by
+        // client_ops.audit_log instead of the security audit trail.
+        .route(
+            "/client-ops/activity-logs",
+            get(client_ops_activity_logs::list_activity_logs),
+        )
+        .route(
+            "/client-ops/activity-logs/event-types",
+            get(client_ops_activity_logs::list_event_types),
+        )
+        .route(
+            "/client-ops/activity-logs/export",
+            post(client_ops_activity_logs_export::export_activity_logs),
+        )
+        .route(
+            "/client-ops/activity-logs/export/preview",
+            post(client_ops_activity_logs_export::preview_activity_logs),
+        )
         // Any authenticated caller -- read-only discovery data (facility/
         // person names), same reasoning as the qms-tags read above. See
         // clients_search's own module doc for the two searches this runs.
         .route("/clients/search", get(clients_search::search_clients))
-        // Requires client_ops.perform -- see clients_create's own module doc.
-        .route("/clients", post(clients_create::create_client))
+        // Read-only, no live PS write -- see clients_preview's own module doc.
+        .route("/clients/preview", post(clients_preview::preview_clients))
+        // GET: any authenticated caller (every client-scoped tool needs
+        // this list to navigate). POST: requires client_ops.perform --
+        // see clients_companies's and clients_create's own module docs.
+        .route(
+            "/clients",
+            get(clients_companies::list_companies).post(clients_create::create_client),
+        )
+        // Requires client_ops.perform -- see clients_companies's own module doc.
+        .route("/clients/{company_id}/archive", post(clients_companies::archive_company))
+        .route("/clients/{company_id}/unarchive", post(clients_companies::unarchive_company))
+        // Requires client_ops.perform -- see clients_resync's own module doc.
+        .route(
+            "/clients/{company_id}/resync/preview",
+            post(clients_resync::preview_resync),
+        )
+        .route(
+            "/clients/{company_id}/resync/apply",
+            post(clients_resync::apply_resync),
+        )
+        // Any authenticated caller -- see clients_detail's own module doc.
+        .route("/clients/{company_id}", get(clients_detail::get_company_detail))
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}",
+            get(clients_detail::get_facility_detail),
+        )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/policies",
+            get(clients_detail::get_facility_policies),
+        )
+        // Read: any authenticated caller. Link: client_ops.perform --
+        // see clients_elavon's own module doc.
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/elavon",
+            get(clients_elavon::get_facility_elavon),
+        )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/elavon/link",
+            post(clients_elavon::link_facility_elavon),
+        )
         // Requires client_ops.perform to start; status read is any
         // authenticated caller -- see clients_sync's own module doc.
         .route("/clients/sync", post(clients_sync::start_sync))

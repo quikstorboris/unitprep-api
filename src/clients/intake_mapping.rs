@@ -16,8 +16,9 @@
 #![allow(dead_code)]
 
 use chrono::NaiveDate;
+use serde::{Deserialize, Serialize};
 
-use crate::clients::fields::value_for;
+use crate::clients::fields::{value_for, values_for};
 use crate::clients::people::{parse_people_block, ParsedPerson};
 use crate::process_street::FormField;
 
@@ -35,7 +36,10 @@ fn parse_units_count(fields: &[FormField], key: &str) -> Option<i32> {
     value_for(fields, key)?.parse::<i32>().ok()
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Also the wire shape for the confirmation-screen preview/create round
+/// trip (`api::clients_preview`/`api::clients_create`) -- every field
+/// here is editable on that screen, so no separate DTO is worth having.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MappedCompany {
     pub legal_name: Option<String>,
     pub corporate_email: Option<String>,
@@ -48,9 +52,29 @@ pub struct MappedCompany {
     /// facility's run, same sister-site pattern as the other corporate
     /// fields above (see the vault's sister-site finding).
     pub subdomain: Option<String>,
+    /// The Company page's "Financial Information" section (Phase 4) --
+    /// confirmed 2026-09-03 to live on Intake, not New Merchant Account
+    /// as originally assumed in the vault's own design note. Same
+    /// "first-time facility" convention as every other field in this
+    /// struct: PS asks these once per company, not per facility.
+    pub accepted_payment_methods: Option<String>,
+    pub accounting_basis: Option<String>,
+    pub payment_scheme: Option<String>,
+    /// PS's own `Are_they_currently_offering_insurance/protection_to_
+    /// their_tenants?` -- raw text, not boolean, same convention as
+    /// every other yes/no PS field in this schema.
+    pub offers_tenant_insurance_raw: Option<String>,
+    pub insurance_provider: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+/// Also the wire shape for the confirmation-screen preview response
+/// (`api::clients_preview`) -- `Serialize` only, deliberately no
+/// `Deserialize`: `go_live_date` is shown on that screen (labeled
+/// "Original Go Live Date") but never editable there, so the create
+/// request carries a narrower `api::clients_create::EditableFacilityFields`
+/// instead of this whole struct -- making it structurally impossible to
+/// submit an edited go_live_date, not just a convention to follow.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct MappedFacility {
     pub name: Option<String>,
     pub street_address: Option<String>,
@@ -352,6 +376,16 @@ pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
         corporate_address_state: value_for(fields, "Corporate_State:"),
         corporate_address_zip: value_for(fields, "Corporate_Zip:"),
         subdomain: value_for(fields, "Company_Subdomain:"),
+        // MultiChoice field -- data.values (a JSON array), not
+        // data.value, hence values_for rather than value_for.
+        accepted_payment_methods: values_for(fields, "Accepted_Payment_Methods:"),
+        accounting_basis: value_for(fields, "Accounting_Basis:"),
+        payment_scheme: value_for(fields, "Payment_Scheme:"),
+        offers_tenant_insurance_raw: value_for(
+            fields,
+            "Are_they_currently_offering_insurance/protection_to_their_tenants?",
+        ),
+        insurance_provider: value_for(fields, "Who_is_their_insurance_provider?"),
     };
 
     let facility = MappedFacility {
@@ -419,6 +453,16 @@ mod tests {
         // Real value has trailing whitespace in PS's own export -- must come back trimmed.
         assert_eq!(mapped.facility.city.as_deref(), Some("Marengo"));
         assert_eq!(mapped.facility.units_count, Some(788));
+    }
+
+    #[test]
+    fn maps_the_company_page_financial_information_fields() {
+        let mapped = map_intake_fields(&real_fields());
+
+        assert!(mapped.company.accepted_payment_methods.is_some());
+        assert!(mapped.company.accounting_basis.is_some());
+        assert!(mapped.company.payment_scheme.is_some());
+        assert!(mapped.company.offers_tenant_insurance_raw.is_some());
     }
 
     #[test]

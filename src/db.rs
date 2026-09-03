@@ -55,7 +55,17 @@ pub fn connect() -> Result<PgPool, sqlx::Error> {
         .parse::<PgConnectOptions>()?
         .log_slow_statements(log::LevelFilter::Warn, Duration::from_millis(200));
 
+    // 20, not 5 (2026-09-03): `clients_detail`'s Company/Facility Policies
+    // endpoints deliberately open several short-lived RLS transactions
+    // concurrently (`tokio::join!`, one connection each) to cut real
+    // network round trips to Neon rather than serialize them -- 5 was too
+    // small a pool for that, so with up to 7 concurrent transactions from
+    // one request, 2 of them queued for a free connection and the fix
+    // barely helped (measured: facility_policies stayed ~630ms, no better
+    // than the pre-fix serial version). This is Neon's own pooled
+    // (`-pooler`) endpoint, itself a PgBouncer in front of Postgres, so
+    // the app holding 20 connections against it is unremarkable.
     Ok(PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(20)
         .connect_lazy_with(connect_options))
 }

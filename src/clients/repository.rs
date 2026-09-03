@@ -17,8 +17,10 @@
 //! only ever binds the `Vec<u8>` ciphertext `encrypted_pii`/
 //! `encrypted_secrets` already produced by that module.
 
-// Phase 1 only -- no HTTP handler calls into `clients::*` yet. Remove
-// once a real caller exists.
+// Contract Order ingestion has no real caller yet (on hold per Boris,
+// 2026-08-31 -- see the vault's own Implementation Plan) -- everything
+// else here is called for real by `clients::create` and
+// `api::clients_elavon`.
 #![allow(dead_code)]
 
 use serde_json::Value;
@@ -26,6 +28,7 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::clients::contract_order_mapping::MappedContractOrder;
+use crate::clients::encryption::EncryptionError;
 use crate::clients::intake_mapping::{MappedCompany, MappedFacility, MappedIntakeRun};
 use crate::clients::merchant_account_mapping::{MappedMerchantAccount, MappedParty};
 use crate::clients::people::ParsedPerson;
@@ -46,13 +49,16 @@ pub async fn insert_company(
     company: &MappedCompany,
     ps_intake_run_id: &str,
     raw_ps_snapshot: &Value,
+    manually_edited_fields: &[&str],
 ) -> Result<Uuid, sqlx::Error> {
     let (company_id,): (Uuid,) = sqlx::query_as(
         "INSERT INTO clients.companies
             (legal_name, corporate_email, corporate_phone, corporate_address_street,
              corporate_address_city, corporate_address_state, corporate_address_zip,
-             subdomain, source, ps_intake_run_id, raw_ps_snapshot, last_synced_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'process_street', $9, $10, now())
+             subdomain, accepted_payment_methods, accounting_basis, payment_scheme,
+             offers_tenant_insurance_raw, insurance_provider,
+             source, ps_intake_run_id, raw_ps_snapshot, manually_edited_fields, last_synced_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'process_street', $14, $15, $16, now())
          RETURNING id",
     )
     .bind(legal_name)
@@ -63,8 +69,14 @@ pub async fn insert_company(
     .bind(&company.corporate_address_state)
     .bind(&company.corporate_address_zip)
     .bind(&company.subdomain)
+    .bind(&company.accepted_payment_methods)
+    .bind(&company.accounting_basis)
+    .bind(&company.payment_scheme)
+    .bind(&company.offers_tenant_insurance_raw)
+    .bind(&company.insurance_provider)
     .bind(ps_intake_run_id)
     .bind(raw_ps_snapshot)
+    .bind(manually_edited_fields)
     .fetch_one(&mut **tx)
     .await?;
 
@@ -83,15 +95,16 @@ pub async fn insert_facility(
     facility: &MappedFacility,
     ps_intake_run_id: &str,
     raw_ps_snapshot: &Value,
+    manually_edited_fields: &[&str],
 ) -> Result<Uuid, sqlx::Error> {
     let (facility_id,): (Uuid,) = sqlx::query_as(
         "INSERT INTO clients.facilities
             (company_id, name, street_address, city, state, zip, phone, email,
              units_count, primary_storage_offering, previous_pms, access_control_system,
              go_live_date, dropbox_folder_url, subdomain, subdomain_exists_in_qms_raw,
-             system_email, source, ps_intake_run_id, raw_ps_snapshot, last_synced_at)
+             system_email, source, ps_intake_run_id, raw_ps_snapshot, manually_edited_fields, last_synced_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                 $17, 'process_street', $18, $19, now())
+                 $17, 'process_street', $18, $19, $20, now())
          RETURNING id",
     )
     .bind(company_id)
@@ -113,6 +126,7 @@ pub async fn insert_facility(
     .bind(&facility.system_email)
     .bind(ps_intake_run_id)
     .bind(raw_ps_snapshot)
+    .bind(manually_edited_fields)
     .fetch_one(&mut **tx)
     .await?;
 
@@ -254,8 +268,10 @@ pub async fn ingest_intake_run(
         .legal_name
         .as_deref()
         .unwrap_or("(unnamed company)");
-    let company_id = insert_company(tx, legal_name, &mapped.company, ps_intake_run_id, raw_ps_snapshot).await?;
-    let facility_id = insert_facility(tx, company_id, &mapped.facility, ps_intake_run_id, raw_ps_snapshot).await?;
+    let company_id =
+        insert_company(tx, legal_name, &mapped.company, ps_intake_run_id, raw_ps_snapshot, &[]).await?;
+    let facility_id =
+        insert_facility(tx, company_id, &mapped.facility, ps_intake_run_id, raw_ps_snapshot, &[]).await?;
     insert_facility_policies_and_people(tx, facility_id, mapped, raw_ps_snapshot).await?;
     Ok((company_id, facility_id))
 }
@@ -311,28 +327,51 @@ async fn link_person_to_facility(
     Ok(())
 }
 
+/// Either half of what can go wrong writing a Merchant Account run: the
+/// database, or `CLIENT_PII_ENCRYPTION_KEY` not being configured
+/// (`clients::encryption`'s own concern -- see that module's own doc).
+/// Was two separate `.expect()` panics until 2026-09-03, when the new
+/// Elavon-tab "link" action became the first caller to actually hit the
+/// missing-key case live (`clients::create`'s own callers had never
+/// exercised it) -- a config problem should surface as a normal error
+/// response, not a request-handler panic.
+#[derive(Debug, thiserror::Error)]
+pub enum IngestMerchantAccountError {
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+    #[error("encryption error: {0}")]
+    Encryption(#[from] EncryptionError),
+}
+
 /// Inserts the Elavon tab's facility-level data (rate/status/encrypted
 /// secrets) and every party row (signer, owners, intermediary
 /// businesses) for an already-existing facility.
+///
+/// `credentials_added_to_qms` is not part of `mapped` -- it's not a
+/// form field at all, it's whether PS's own "Add Credentials to QMS"
+/// checklist task is completed (see
+/// `merchant_account_mapping::credentials_added_to_qms_from_tasks`,
+/// which every real caller derives this from off a `get_run_tasks`
+/// call the caller already needed to make for `ps_task_status` anyway).
 pub async fn ingest_merchant_account_run(
     tx: &mut Transaction<'_, Postgres>,
     facility_id: Uuid,
     mapped: &MappedMerchantAccount,
     ps_new_merchant_run_id: &str,
-) -> Result<(), sqlx::Error> {
-    let encrypted_secrets = mapped
-        .encrypted_secrets(facility_id)
-        .expect("CLIENT_PII_ENCRYPTION_KEY must be configured before ingesting a Merchant Account run");
+    credentials_added_to_qms: bool,
+) -> Result<(), IngestMerchantAccountError> {
+    let encrypted_secrets = mapped.encrypted_secrets(facility_id)?;
 
     sqlx::query(
         "INSERT INTO clients.facility_merchant_accounts
-            (facility_id, rate_provided, application_status, source, ps_new_merchant_run_id,
-             raw_ps_snapshot, encrypted_secrets, last_synced_at)
-         VALUES ($1, $2, $3, 'process_street', $4, $5, $6, now())",
+            (facility_id, rate_provided, application_status, credentials_added_to_qms, source,
+             ps_new_merchant_run_id, raw_ps_snapshot, encrypted_secrets, last_synced_at)
+         VALUES ($1, $2, $3, $4, 'process_street', $5, $6, $7, now())",
     )
     .bind(facility_id)
     .bind(&mapped.rate_provided)
     .bind(&mapped.application_status)
+    .bind(credentials_added_to_qms)
     .bind(ps_new_merchant_run_id)
     .bind(&mapped.sanitized_snapshot)
     .bind(encrypted_secrets)
@@ -351,10 +390,8 @@ async fn insert_party(
     facility_id: Uuid,
     party: &MappedParty,
     ps_new_merchant_run_id: &str,
-) -> Result<(), sqlx::Error> {
-    let encrypted_pii = party
-        .encrypted_pii(facility_id)
-        .expect("CLIENT_PII_ENCRYPTION_KEY must be configured before ingesting a Merchant Account run");
+) -> Result<(), IngestMerchantAccountError> {
+    let encrypted_pii = party.encrypted_pii(facility_id)?;
 
     sqlx::query(
         "INSERT INTO clients.facility_merchant_account_parties
@@ -538,7 +575,7 @@ mod integration_tests {
         .await
         .expect("ingesting the real Intake run must succeed");
 
-        ingest_merchant_account_run(&mut tx, facility_id, &mapped_nma, "n1JtiN4m3mP-I0j8BChG4A")
+        ingest_merchant_account_run(&mut tx, facility_id, &mapped_nma, "n1JtiN4m3mP-I0j8BChG4A", true)
             .await
             .expect("ingesting the sanitized Merchant Account run must succeed");
 
@@ -644,6 +681,38 @@ mod integration_tests {
                 .expect("owner 1's PII stored in real Postgres must decrypt under its own AAD");
         let pii_json: Value = serde_json::from_slice(&decrypted_pii).unwrap();
         assert_eq!(pii_json["ssn"], "000000000"); // the fixture's fake SSN
+
+        // ownership_percent is NUMERIC in Postgres -- sqlx has no
+        // built-in decode from NUMERIC into plain f64, so every real
+        // reader (api::clients_detail, api::clients_elavon) casts to
+        // float8 in SQL. Regression coverage for the 2026-09-03 bug
+        // where this decode error only ever surfaced once a facility
+        // had a real party row for the first time (Boris's own live
+        // Elavon-tab link, not caught by this test until now since it
+        // never previously selected this column back out at all).
+        let (owner1_ownership_percent,): (Option<f64>,) = sqlx::query_as(
+            "SELECT ownership_percent::float8 FROM clients.facility_merchant_account_parties
+             WHERE facility_id = $1 AND party_role = 'owner' AND party_index = 1",
+        )
+        .bind(facility_id)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("selecting ownership_percent::float8 back out of real Postgres must not error");
+        assert_eq!(owner1_ownership_percent, Some(30.0));
+
+        // credentials_added_to_qms passed in as `true` above must
+        // actually land in the row, not silently default to the
+        // schema's own `false` -- regression coverage for the
+        // 2026-09-03 bug where this column was never in the INSERT's
+        // column list at all.
+        let (credentials_added_to_qms,): (bool,) = sqlx::query_as(
+            "SELECT credentials_added_to_qms FROM clients.facility_merchant_accounts WHERE facility_id = $1",
+        )
+        .bind(facility_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert!(credentials_added_to_qms);
 
         // --- Verify raw_ps_snapshot on the Merchant Account row never carries a sensitive key ---
         let (raw_snapshot,): (Value,) = sqlx::query_as(

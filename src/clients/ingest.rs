@@ -29,7 +29,7 @@ use uuid::Uuid;
 
 use crate::clients::contract_order_mapping::map_contract_order_fields;
 use crate::clients::intake_mapping::map_intake_fields;
-use crate::clients::merchant_account_mapping::map_merchant_account_fields;
+use crate::clients::merchant_account_mapping::{credentials_added_to_qms_from_tasks, map_merchant_account_fields};
 use crate::clients::repository::{
     ingest_contract_order_run, ingest_intake_run, ingest_merchant_account_run, upsert_task_status,
 };
@@ -41,6 +41,8 @@ pub enum IngestError {
     ProcessStreet(#[from] ProcessStreetError),
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+    #[error(transparent)]
+    IngestMerchantAccount(#[from] crate::clients::repository::IngestMerchantAccountError),
 }
 
 /// Result of a full facility import -- enough for a caller to redirect
@@ -109,8 +111,15 @@ pub async fn ingest_facility(
     upsert_task_status(tx, facility_id, "intake", &intake_tasks).await?;
 
     let had_merchant_account = if let Some((mapped_nma, nma_tasks)) = merchant_account {
-        ingest_merchant_account_run(tx, facility_id, &mapped_nma, merchant_account_run_id.unwrap())
-            .await?;
+        let credentials_added_to_qms = credentials_added_to_qms_from_tasks(&nma_tasks);
+        ingest_merchant_account_run(
+            tx,
+            facility_id,
+            &mapped_nma,
+            merchant_account_run_id.unwrap(),
+            credentials_added_to_qms,
+        )
+        .await?;
         upsert_task_status(tx, facility_id, "merchant_account", &nma_tasks).await?;
         true
     } else {

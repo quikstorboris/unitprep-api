@@ -1,9 +1,15 @@
 //! "Add to OO" -- the real create trigger behind Phase 3's confirmation
-//! screen (still not built on the frontend). Wraps
-//! `clients::create::create_company_and_facilities`: given one Intake
-//! run designated the company source and zero or more designated
-//! facilities, creates the real `clients.companies`/`clients.facilities`
-//! rows.
+//! screen. Wraps `clients::create::create_company_and_facilities`: given
+//! one Intake run designated the company source (with its reviewed
+//! `MappedCompany` fields) and zero or more designated facilities (each
+//! with its own reviewed `EditableFacilityFields`), creates the real
+//! `clients.companies`/`clients.facilities` rows. The reviewed values
+//! come from `api::clients_preview`'s response, normally hand-edited by
+//! whoever ran the import on the confirmation screen first.
+//!
+//! `company_intake_run_id` is free to also appear as one of
+//! `facilities`' own `run_id`s -- see `clients::create`'s own doc
+//! comment for why that's the normal case now, not an error.
 
 use axum::{
     extract::{Json, State},
@@ -15,7 +21,9 @@ use uuid::Uuid;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
-use crate::clients::create::{create_company_and_facilities, CreateError};
+use crate::client_ops::audit_log;
+use crate::clients::create::{check_not_already_imported, fetch_create_data, write_create_data, CreateError, EditableFacilityFields};
+use crate::clients::intake_mapping::MappedCompany;
 
 const PERMISSION: &str = "client_ops.perform";
 
@@ -51,10 +59,23 @@ fn already_imported(run_ids: Vec<String>) -> Response {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct CreateFacilitySelection {
+    pub run_id: String,
+    pub fields: EditableFacilityFields,
+    /// Carried straight through from `api::clients_preview`'s own
+    /// `PreviewedRun::merchant_account_run_id` -- when present, Elavon
+    /// data for this facility is ingested too. See `clients::create`'s
+    /// own doc comment for why this exists.
+    #[serde(default)]
+    pub merchant_account_run_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateClientRequest {
     pub company_intake_run_id: String,
+    pub company: MappedCompany,
     #[serde(default)]
-    pub facility_intake_run_ids: Vec<String>,
+    pub facilities: Vec<CreateFacilitySelection>,
 }
 
 #[derive(Debug, Serialize)]
@@ -98,21 +119,82 @@ pub async fn create_client(
         return process_street_not_configured();
     };
 
+    let facility_selections: Vec<(String, EditableFacilityFields, Option<String>)> = request
+        .facilities
+        .into_iter()
+        .map(|selection| (selection.run_id, selection.fields, selection.merchant_account_run_id))
+        .collect();
+
+    let mut all_run_ids: Vec<&str> = vec![company_intake_run_id];
+    all_run_ids.extend(facility_selections.iter().map(|(run_id, _, _)| run_id.as_str()));
+
+    // --- Phase 1: fail fast on an already-imported run before ever
+    // talking to Process Street, in its own short transaction. ---
+    {
+        let mut precheck_tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
+            Ok(tx) => tx,
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for client creation pre-check");
+                return internal_error("Could not create this client");
+            }
+        };
+        match check_not_already_imported(&mut precheck_tx, &all_run_ids).await {
+            Ok(()) => {
+                if let Err(err) = precheck_tx.commit().await {
+                    tracing::error!(error = %err, user_id = %user.user_id, "failed to commit client creation pre-check");
+                    return internal_error("Could not create this client");
+                }
+            }
+            Err(CreateError::AlreadyImported(run_ids)) => {
+                let _ = precheck_tx.rollback().await;
+                tracing::warn!(
+                    user_id = %user.user_id,
+                    run_ids = ?run_ids,
+                    "client creation rejected: one or more selected runs are already in OO"
+                );
+                return already_imported(run_ids);
+            }
+            Err(err) => {
+                let _ = precheck_tx.rollback().await;
+                tracing::error!(error = %err, user_id = %user.user_id, "client creation pre-check failed");
+                return internal_error("Could not create this client");
+            }
+        }
+    }
+
+    // --- Phase 2: the live Process Street round trip, deliberately with
+    // no database transaction open (2026-09-03 fix -- this used to run
+    // inside the same transaction Phase 3 below uses, holding a
+    // database connection and its lock for however long PS took to
+    // answer across every selected run; a slow response or a cancelled
+    // request left the connection stuck `idle in transaction`, blocking
+    // unrelated queries elsewhere in the app. Same root cause and fix as
+    // `api::clients_elavon`'s own "link" action.) ---
+    let fetched = match fetch_create_data(&client, company_intake_run_id, &facility_selections).await {
+        Ok(fetched) => fetched,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to fetch runs from Process Street for client creation");
+            return internal_error("Could not fetch these runs from Process Street");
+        }
+    };
+
+    // --- Phase 3: the actual write, in a fresh transaction opened only
+    // now that nothing left to do is network-bound. Re-checks
+    // already-imported atomically with the write (see
+    // `check_not_already_imported`'s own doc comment) -- Phase 1's own
+    // check only protects against wasting a Process Street round trip
+    // on an already-rejected request, not against a second request
+    // racing in between. ---
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for client creation");
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for client creation write");
             return internal_error("Could not create this client");
         }
     };
 
-    let result = create_company_and_facilities(
-        &client,
-        &mut tx,
-        company_intake_run_id,
-        &request.facility_intake_run_ids,
-    )
-    .await;
+    let result =
+        write_create_data(&mut tx, company_intake_run_id, &request.company, &facility_selections, &fetched).await;
 
     let created = match result {
         Ok(created) => created,
@@ -140,6 +222,23 @@ pub async fn create_client(
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit client creation");
         return internal_error("Could not create this client");
     }
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::CLIENT_CREATED,
+        user.user_id,
+        "company",
+        Some(&created.company_id.to_string()),
+        audit_log::Change::none(),
+        user_agent,
+        None,
+        serde_json::json!({
+            "company_intake_run_id": company_intake_run_id,
+            "facility_count": created.facility_ids.len(),
+            "facility_ids": created.facility_ids,
+        }),
+    )
+    .await;
 
     tracing::info!(
         user_id = %user.user_id,
@@ -171,7 +270,8 @@ mod tests {
             HeaderMap::new(),
             Json(CreateClientRequest {
                 company_intake_run_id: "abc123".to_string(),
-                facility_intake_run_ids: vec![],
+                company: MappedCompany::default(),
+                facilities: vec![],
             }),
         )
         .await;
@@ -187,7 +287,8 @@ mod tests {
             HeaderMap::new(),
             Json(CreateClientRequest {
                 company_intake_run_id: "   ".to_string(),
-                facility_intake_run_ids: vec![],
+                company: MappedCompany::default(),
+                facilities: vec![],
             }),
         )
         .await;
@@ -203,7 +304,8 @@ mod tests {
             HeaderMap::new(),
             Json(CreateClientRequest {
                 company_intake_run_id: "abc123".to_string(),
-                facility_intake_run_ids: vec![],
+                company: MappedCompany::default(),
+                facilities: vec![],
             }),
         )
         .await;

@@ -15,8 +15,11 @@
 //! sensitive key already stripped out. `clients::repository` never
 //! imports `FacilitySecrets`/`PartyPii` and never sees a plaintext SSN.
 
-// Phase 1 only -- no HTTP handler calls into `clients::*` yet. Remove
-// once a real caller exists.
+// `clients::create::create_company_and_facilities` is a real caller as
+// of 2026-09-03 (Elavon ingestion at Create time), but several helpers
+// here (e.g. `sanitize_fields_for_snapshot` outside a specific call
+// path) are still only exercised by this module's own tests -- kept
+// broad rather than narrowed item-by-item for now.
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
@@ -359,6 +362,39 @@ impl MappedMerchantAccount {
     }
 }
 
+/// Decrypted view of a party's PII, for the Company page's "Owner(s)
+/// Information" section (Phase 4) -- the read counterpart to
+/// `MappedParty::encrypted_pii`. A public, standalone mirror of the
+/// private write-time `PartyPii` shape (same JSON field names, since
+/// they're the same bytes) rather than a `pub use` of it, so the
+/// write-time struct's own serde attributes can keep evolving
+/// independently of what this read path promises callers.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DecryptedPartyPii {
+    pub ssn: Option<String>,
+    pub dob: Option<String>,
+    pub home_address_line1: Option<String>,
+    pub home_city: Option<String>,
+    pub home_state_or_province: Option<String>,
+    pub home_postal_code: Option<String>,
+}
+
+/// Decrypts one party's `encrypted_pii` blob -- `aad` must be built the
+/// exact same way `MappedParty::encrypted_pii` built it at write time
+/// (`"{facility_id}:{party_role}:{party_index}"`), or decryption fails
+/// by design (see that method's own doc comment on why the AAD is bound
+/// this granularly).
+pub fn decrypt_party_pii(
+    facility_id: Uuid,
+    party_role: &str,
+    party_index: i32,
+    blob: &[u8],
+) -> Result<DecryptedPartyPii, EncryptionError> {
+    let aad = format!("{facility_id}:{party_role}:{party_index}");
+    let plaintext = encryption::decrypt(aad.as_bytes(), blob)?;
+    serde_json::from_slice(&plaintext).map_err(|_| EncryptionError::Undecryptable("malformed PartyPii plaintext"))
+}
+
 pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccount {
     MappedMerchantAccount {
         rate_provided: value_for(fields, "What_Processing_Rates_did_you_provide_to_the_customer?"),
@@ -370,6 +406,19 @@ pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccoun
         sanitized_snapshot: sanitize_fields_for_snapshot(fields),
         secrets: FacilitySecrets::from_fields(fields),
     }
+}
+
+/// `credentials_added_to_qms` isn't a form field anywhere on New
+/// Merchant Account -- confirmed 2026-09-03, live against the real API
+/// (`GET /workflow-runs/{id}/tasks`), after Boris flagged the Elavon
+/// tab showing "No" for a facility whose "Add Credentials to QMS" step
+/// he'd already completed in PS. It's a checklist *task*, same
+/// `/tasks` shape `ps_task_status` already tracks for Intake -- this
+/// facility never had it checked at all (`ingest_merchant_account_run`
+/// never took a value for the column, so every real row defaulted to
+/// the schema's own `false`), not a mismapped field.
+pub fn credentials_added_to_qms_from_tasks(tasks: &[crate::process_street::Task]) -> bool {
+    tasks.iter().any(|task| task.name.trim().eq_ignore_ascii_case("Add Credentials to QMS") && task.status == "Completed")
 }
 
 #[cfg(test)]
@@ -390,6 +439,34 @@ mod tests {
     fn real_fields() -> Vec<FormField> {
         serde_json::from_str(HIGHWAY20_NMA_FIELDS_SANITIZED)
             .expect("fixture must parse as Vec<FormField>")
+    }
+
+    fn task(name: &str, status: &str) -> crate::process_street::Task {
+        crate::process_street::Task { id: "t1".to_string(), name: name.to_string(), status: status.to_string() }
+    }
+
+    #[test]
+    fn credentials_added_to_qms_from_tasks_is_true_when_that_task_is_completed() {
+        let tasks = vec![task("Facility Information (Pre-App)", "Completed"), task("Add Credentials to QMS", "Completed")];
+        assert!(credentials_added_to_qms_from_tasks(&tasks));
+    }
+
+    #[test]
+    fn credentials_added_to_qms_from_tasks_is_false_when_that_task_is_not_completed() {
+        let tasks = vec![task("Add Credentials to QMS", "NotCompleted")];
+        assert!(!credentials_added_to_qms_from_tasks(&tasks));
+    }
+
+    #[test]
+    fn credentials_added_to_qms_from_tasks_is_false_when_the_task_is_absent() {
+        let tasks = vec![task("Facility Information (Pre-App)", "Completed")];
+        assert!(!credentials_added_to_qms_from_tasks(&tasks));
+    }
+
+    #[test]
+    fn credentials_added_to_qms_from_tasks_matches_case_insensitively() {
+        let tasks = vec![task("add credentials to qms", "Completed")];
+        assert!(credentials_added_to_qms_from_tasks(&tasks));
     }
 
     fn set_test_key() {
