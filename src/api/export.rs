@@ -35,12 +35,19 @@ use crate::{
     api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
     application::unit_group_session::WorkflowStage,
     auth::AuthenticatedUser,
+    client_ops::audit_log,
     infrastructure::csv_export,
 };
 
 #[derive(Debug, Deserialize)]
 pub struct ExportRequest {
     pub session_id: String,
+    /// The client this Unit Group run was for, when the session was
+    /// opened from a client's own Unit Groups tab
+    /// (`/clients/{clientId}/unit-groups`) -- `None` for a standalone
+    /// run. Same reasoning as `dedup::DedupExportRequest::client_id`.
+    #[serde(default)]
+    pub client_id: Option<uuid::Uuid>,
 }
 
 pub async fn export(
@@ -241,6 +248,24 @@ pub async fn export(
             %filename,
         "Export generated successfully"
     );
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::UNIT_GROUP_COMPLETED,
+        user.user_id,
+        "client",
+        request.client_id.as_ref().map(ToString::to_string).as_deref(),
+        audit_log::Change::none(),
+        None,
+        None,
+        serde_json::json!({
+            "session_id": request.session_id,
+            "facilities": analysis.batch_run.facilities.len(),
+            "net_new_groups": analysis.net_new_groups.len(),
+            "similar_groups": analysis.similar_groups.len(),
+        }),
+    )
+    .await;
 
     let mut headers = HeaderMap::new();
 

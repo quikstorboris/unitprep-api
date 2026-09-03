@@ -1,18 +1,24 @@
 //! Settings for the future "Integrations" nav family -- Process Street
 //! today, Dropbox/ClickUp/Claude etc. are follow-ups per the vault's own
-//! design note. Only one setting exists yet, per Boris's explicit scope
-//! (2026-08-31): when the nightly person-index sync runs
-//! (`client_ops.process_street_settings.sync_time`, a plain UTC
-//! time-of-day). `clients::sync::start_background_sync_task` reads this
-//! same row on a system role to decide how long to sleep before its
-//! next run -- see that module's own doc comment.
+//! design note. Only one setting exists yet: how often the background
+//! sync runs (`client_ops.process_street_settings.sync_interval_hours`).
+//! `clients::sync::start_background_sync_task` reads this same row on a
+//! system role to decide how long to sleep before its next run -- see
+//! that module's own doc comment.
+//!
+//! **Was a fixed daily clock time (`sync_time`) until 2026-09-02** --
+//! replaced with a plain hourly interval once it was clear the sync's
+//! own delta mechanism makes a much tighter cadence realistic (an
+//! unchanged run costs almost nothing beyond one shared list call), not
+//! just a once-a-day compromise. See the migration's own comment
+//! (`activity_logs_and_configurable_sync`) for the full reasoning.
 
 use axum::{
     extract::{Json, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use chrono::{DateTime, NaiveTime, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -20,6 +26,13 @@ use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 
 const PERMISSION: &str = "client_ops.perform";
+
+/// Matches the `CHECK (sync_interval_hours BETWEEN 1 AND 168)` constraint
+/// on `client_ops.process_street_settings` -- validated here too so a bad
+/// value gets a clear 400 instead of surfacing as an opaque database
+/// constraint-violation error.
+const MIN_INTERVAL_HOURS: i16 = 1;
+const MAX_INTERVAL_HOURS: i16 = 168;
 
 fn request_context(headers: &HeaderMap) -> Option<&str> {
     headers
@@ -31,7 +44,7 @@ fn bad_request(message: String) -> Response {
     (
         StatusCode::BAD_REQUEST,
         Json(ApiErrorBody {
-            error: "invalid_sync_time",
+            error: "invalid_sync_interval_hours",
             message,
         }),
     )
@@ -40,16 +53,14 @@ fn bad_request(message: String) -> Response {
 
 #[derive(Debug, Serialize)]
 pub struct ProcessStreetSettingsResponse {
-    /// `"HH:MM:SS"`, UTC -- see this module's own doc comment on why no
-    /// timezone conversion happens here.
-    pub sync_time: NaiveTime,
+    pub sync_interval_hours: i16,
     pub updated_at: DateTime<Utc>,
     pub updated_by: Option<Uuid>,
 }
 
 #[derive(sqlx::FromRow)]
 struct SettingsRow {
-    sync_time: NaiveTime,
+    sync_interval_hours: i16,
     updated_at: DateTime<Utc>,
     updated_by: Option<Uuid>,
 }
@@ -57,7 +68,7 @@ struct SettingsRow {
 impl From<SettingsRow> for ProcessStreetSettingsResponse {
     fn from(row: SettingsRow) -> Self {
         Self {
-            sync_time: row.sync_time,
+            sync_interval_hours: row.sync_interval_hours,
             updated_at: row.updated_at,
             updated_by: row.updated_by,
         }
@@ -76,7 +87,7 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
     };
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
-        "SELECT sync_time, updated_at, updated_by FROM client_ops.process_street_settings WHERE id = 1",
+        "SELECT sync_interval_hours, updated_at, updated_by FROM client_ops.process_street_settings WHERE id = 1",
     )
     .fetch_one(&mut *tx)
     .await;
@@ -99,11 +110,7 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateProcessStreetSettingsRequest {
-    /// `"HH:MM"` or `"HH:MM:SS"` -- validated below rather than relying
-    /// on `NaiveTime`'s own `Deserialize` (which accepts formats a plain
-    /// `<input type="time">` never sends and would surface as an
-    /// unhelpful generic parse error).
-    pub sync_time: String,
+    pub sync_interval_hours: i16,
 }
 
 pub async fn update_settings(
@@ -121,19 +128,16 @@ pub async fn update_settings(
         return response;
     }
 
-    let sync_time = match NaiveTime::parse_from_str(&request.sync_time, "%H:%M:%S")
-        .or_else(|_| NaiveTime::parse_from_str(&request.sync_time, "%H:%M"))
-    {
-        Ok(time) => time,
-        Err(_) => {
-            tracing::warn!(
-                user_id = %user.user_id,
-                sync_time = %request.sync_time,
-                "Process Street settings update rejected: unparseable sync_time"
-            );
-            return bad_request(format!("{:?} is not a valid HH:MM time.", request.sync_time));
-        }
-    };
+    if !(MIN_INTERVAL_HOURS..=MAX_INTERVAL_HOURS).contains(&request.sync_interval_hours) {
+        tracing::warn!(
+            user_id = %user.user_id,
+            sync_interval_hours = request.sync_interval_hours,
+            "Process Street settings update rejected: interval out of range"
+        );
+        return bad_request(format!(
+            "sync_interval_hours must be between {MIN_INTERVAL_HOURS} and {MAX_INTERVAL_HOURS}."
+        ));
+    }
 
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,
@@ -145,11 +149,11 @@ pub async fn update_settings(
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
         "UPDATE client_ops.process_street_settings
-            SET sync_time = $1, updated_by = $2
+            SET sync_interval_hours = $1, updated_by = $2
           WHERE id = 1
-      RETURNING sync_time, updated_at, updated_by",
+      RETURNING sync_interval_hours, updated_at, updated_by",
     )
-    .bind(sync_time)
+    .bind(request.sync_interval_hours)
     .bind(user.user_id)
     .fetch_one(&mut *tx)
     .await;
@@ -170,7 +174,11 @@ pub async fn update_settings(
         return internal_error("Could not update Process Street settings");
     }
 
-    tracing::info!(user_id = %user.user_id, sync_time = %sync_time, "Process Street sync time updated");
+    tracing::info!(
+        user_id = %user.user_id,
+        sync_interval_hours = request.sync_interval_hours,
+        "Process Street sync interval updated"
+    );
 
     Json(ProcessStreetSettingsResponse::from(row)).into_response()
 }
@@ -186,9 +194,7 @@ mod tests {
             State(crate::api::test_support::empty_state()),
             test_user(),
             HeaderMap::new(),
-            Json(UpdateProcessStreetSettingsRequest {
-                sync_time: "00:00".to_string(),
-            }),
+            Json(UpdateProcessStreetSettingsRequest { sync_interval_hours: 24 }),
         )
         .await;
 
@@ -196,14 +202,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_rejects_an_unparseable_sync_time_without_touching_the_database() {
+    async fn update_rejects_an_interval_below_the_minimum_without_touching_the_database() {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             crate::api::test_support::onboarding_manager_user(),
             HeaderMap::new(),
-            Json(UpdateProcessStreetSettingsRequest {
-                sync_time: "not a time".to_string(),
-            }),
+            Json(UpdateProcessStreetSettingsRequest { sync_interval_hours: 0 }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_rejects_an_interval_above_the_maximum_without_touching_the_database() {
+        let response = update_settings(
+            State(crate::api::test_support::empty_state()),
+            crate::api::test_support::onboarding_manager_user(),
+            HeaderMap::new(),
+            Json(UpdateProcessStreetSettingsRequest { sync_interval_hours: 200 }),
         )
         .await;
 

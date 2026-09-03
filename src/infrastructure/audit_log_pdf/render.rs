@@ -110,7 +110,7 @@ fn data_row_ops(row: &AuditLogPdfRow, top_y_mm: f32) -> Vec<Op> {
 /// Renders the full report to PDF bytes, paginating the row list across
 /// as many pages as needed.
 pub fn render_audit_log_pdf(report: &AuditLogPdfReport) -> Vec<u8> {
-    let mut doc = PdfDocument::new("UnitPrep Audit Log Report");
+    let mut doc = PdfDocument::new(&report.report_title);
 
     let logo_image = RawImage::decode_from_bytes(LOGO_PNG_BYTES, &mut Vec::new())
         .expect("bundled logo PNG must decode -- it's compiled into the binary, not user input");
@@ -137,7 +137,7 @@ pub fn render_audit_log_pdf(report: &AuditLogPdfReport) -> Vec<u8> {
     first_page_ops.extend(show_text_at(
         LEFT_MARGIN_MM,
         TITLE_Y_MM,
-        "UnitPrep Audit Log Report".to_string(),
+        report.report_title.clone(),
     ));
 
     first_page_ops.extend(set_font(BuiltinFont::Helvetica, META_FONT_SIZE, gray()));
@@ -296,6 +296,7 @@ mod tests {
     #[test]
     fn renders_a_small_report_to_nonempty_pdf_bytes() {
         let report = AuditLogPdfReport {
+            report_title: "UnitPrep Security Log Report".to_string(),
             generated_by: "Admin Admin (admin@example.com)".to_string(),
             generated_at: "2026-08-05T21:00:00Z".to_string(),
             filter_lines: vec![
@@ -316,6 +317,7 @@ mod tests {
     #[test]
     fn renders_a_truncation_note_when_capped() {
         let report = AuditLogPdfReport {
+            report_title: "UnitPrep Security Log Report".to_string(),
             generated_by: "Admin Admin (admin@example.com)".to_string(),
             generated_at: "2026-08-05T21:00:00Z".to_string(),
             filter_lines: vec![],
@@ -334,6 +336,7 @@ mod tests {
         // Comfortably more rows than fit on one page at ROW_HEIGHT_MM
         // spacing -- forces the multi-page path to actually run.
         let report = AuditLogPdfReport {
+            report_title: "UnitPrep Security Log Report".to_string(),
             generated_by: "Admin Admin (admin@example.com)".to_string(),
             generated_at: "2026-08-05T21:00:00Z".to_string(),
             filter_lines: vec![],
@@ -351,6 +354,7 @@ mod tests {
     #[ignore = "manual visual inspection only -- writes to /tmp"]
     fn write_sample_pdf_to_disk_for_manual_inspection() {
         let report = AuditLogPdfReport {
+            report_title: "UnitPrep Security Log Report".to_string(),
             generated_by: "Boris Maksimov (bmaksimov@quikstor.com)".to_string(),
             generated_at: "2026-08-05T22:00:00Z".to_string(),
             filter_lines: vec![
@@ -388,6 +392,7 @@ mod tests {
     #[test]
     fn renders_with_zero_rows() {
         let report = AuditLogPdfReport {
+            report_title: "UnitPrep Security Log Report".to_string(),
             generated_by: "Admin Admin (admin@example.com)".to_string(),
             generated_at: "2026-08-05T21:00:00Z".to_string(),
             filter_lines: vec!["No matching events.".to_string()],

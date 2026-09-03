@@ -398,6 +398,7 @@ pub async fn export_audit_logs(
         .collect();
 
     let report = AuditLogPdfReport {
+        report_title: "UnitPrep Security Log Report".to_string(),
         generated_by: generated_by.clone(),
         generated_at: format_generated_at(Utc::now()),
         filter_lines: filter_summary_lines(&request),

@@ -25,6 +25,7 @@ use crate::api::dropbox_browse::ensure_path_in_root;
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::application::dedup_session_service::DedupSessionService;
 use crate::auth::AuthenticatedUser;
+use crate::client_ops::audit_log;
 use crate::infrastructure::csv_export::{build_zip, ExportFile};
 use crate::infrastructure::{dedup_csv_export, dedup_xlsx_export};
 
@@ -59,6 +60,13 @@ pub struct DedupExportRequest {
     pub session_id: String,
     #[serde(default)]
     pub format: ExportFormat,
+    /// The client this check was run for, when the session was opened
+    /// from a client's own Dedup tab (`/clients/{clientId}/dedup`) --
+    /// `None` for a standalone run with no client context. Recorded on
+    /// the Activity Log entry below so "who ran dedup for which client"
+    /// is answerable without cross-referencing session ids by hand.
+    #[serde(default)]
+    pub client_id: Option<uuid::Uuid>,
 }
 
 /// Reads the first file field from `multipart` — a duplicate-tenant
@@ -422,7 +430,27 @@ pub async fn export(
 
     let response = match generate_export(&request.format, &request.session_id, &report, &records)
     {
-        Ok((bytes, content_type, file_name)) => file_response(bytes, content_type, file_name),
+        Ok((bytes, content_type, file_name)) => {
+            audit_log::record(
+                &state.db,
+                audit_log::event::DEDUP_COMPLETED,
+                user.user_id,
+                "client",
+                request.client_id.as_ref().map(ToString::to_string).as_deref(),
+                audit_log::Change::none(),
+                None,
+                None,
+                serde_json::json!({
+                    "session_id": request.session_id,
+                    "format": format!("{:?}", request.format),
+                    "flagged_groups": report.flagged_groups.len(),
+                    "typo_variant_candidates": report.typo_variant_candidates.len(),
+                    "related_tenant_candidates": report.related_tenant_candidates.len(),
+                }),
+            )
+            .await;
+            file_response(bytes, content_type, file_name)
+        }
         Err(response) => response,
     };
 
@@ -449,6 +477,9 @@ pub struct DedupExportToDropboxRequest {
     /// frontend's Dropbox folder picker plus a client-generated
     /// timestamped filename, not guessed at here.
     pub dropbox_path: String,
+    /// Same reasoning as `DedupExportRequest::client_id`.
+    #[serde(default)]
+    pub client_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -492,6 +523,23 @@ pub async fn export_to_dropbox(
         tracing::error!(error = %err, path = %request.dropbox_path, "Dropbox upload failed during dedup export");
         return internal_error("Could not upload export to Dropbox");
     }
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::DEDUP_COMPLETED,
+        user.user_id,
+        "client",
+        request.client_id.as_ref().map(ToString::to_string).as_deref(),
+        audit_log::Change::none(),
+        None,
+        None,
+        serde_json::json!({
+            "session_id": request.session_id,
+            "format": format!("{:?}", request.format),
+            "dropbox_path": request.dropbox_path,
+        }),
+    )
+    .await;
 
     tracing::info!(
         session_id = %request.session_id,

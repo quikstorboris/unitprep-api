@@ -15,6 +15,7 @@ async fn export_returns_404_for_missing_session() {
         crate::api::test_support::test_user(),
         Json(ExportRequest {
             session_id: "missing".to_string(),
+            client_id: None,
         }),
     )
     .await;
@@ -42,6 +43,7 @@ async fn export_returns_409_when_called_before_analysis() {
         crate::api::test_support::test_user(),
         Json(ExportRequest {
             session_id: "s1".to_string(),
+            client_id: None,
         }),
     )
     .await;
@@ -68,6 +70,7 @@ async fn export_blocked_when_errors_present() {
         crate::api::test_support::test_user(),
         Json(ExportRequest {
             session_id: "s1".to_string(),
+            client_id: None,
         }),
     )
     .await;
@@ -96,6 +99,7 @@ async fn export_succeeds_with_clean_validation() {
         crate::api::test_support::test_user(),
         Json(ExportRequest {
             session_id: "s1".to_string(),
+            client_id: None,
         }),
     )
     .await;

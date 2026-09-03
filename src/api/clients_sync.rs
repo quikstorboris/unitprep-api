@@ -88,8 +88,9 @@ pub async fn start_sync(
 
     let db = state.db.clone();
     let progress = state.sync_progress.clone();
+    let actor_user_id = user.user_id;
     tokio::spawn(async move {
-        run_all_workflows_with_progress(&client, &db, &progress).await;
+        run_all_workflows_with_progress(&client, &db, &progress, actor_user_id).await;
     });
 
     (StatusCode::ACCEPTED, Json(StartSyncResponse { started: true })).into_response()

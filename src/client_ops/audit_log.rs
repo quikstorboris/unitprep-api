@@ -38,6 +38,45 @@ pub mod event {
     pub const QMS_TAG_UPDATED: &str = "qms_tag_updated";
     pub const QMS_TAG_DEACTIVATED: &str = "qms_tag_deactivated";
     pub const QMS_TAG_REACTIVATED: &str = "qms_tag_reactivated";
+
+    /// A client + its facilities were imported from Process Street via
+    /// the "Add to OO" confirmation screen (`api::clients_create`).
+    pub const CLIENT_CREATED: &str = "client_created";
+    /// A dedup-tool run was exported (`api::dedup::export`/`export_to_dropbox`).
+    pub const DEDUP_COMPLETED: &str = "dedup_completed";
+    /// A Unit Group run was exported (`api::export::export`).
+    pub const UNIT_GROUP_COMPLETED: &str = "unit_group_completed";
+    /// A Process Street sync (scheduled or the manual "Sync Now"/scoped
+    /// Re-sync trigger) finished successfully -- see `clients::sync`.
+    pub const SYNC_COMPLETED: &str = "sync_completed";
+    /// A Process Street sync failed partway through -- e.g. the PS API
+    /// was unreachable or returned an error. Recorded so an unresponsive
+    /// PS incident shows up in the same trail as every other activity,
+    /// not just in server logs.
+    pub const SYNC_FAILED: &str = "sync_failed";
+    /// A facility's Merchant Account run was manually linked via the
+    /// Elavon tab's "link" action (`api::clients_elavon`) -- distinct
+    /// from `CLIENT_CREATED`'s own automatic correlation, since this is
+    /// a deliberate, one-at-a-time human action confirming a specific
+    /// run id.
+    pub const MERCHANT_ACCOUNT_LINKED: &str = "merchant_account_linked";
+
+    /// Every event type this module writes, for the Activity Logs admin
+    /// filter dropdown -- mirrors `auth::audit_log::event::ALL`'s own
+    /// reasoning: straight from this list, so the frontend can never
+    /// drift from what this backend actually writes.
+    pub const ALL: &[&str] = &[
+        QMS_TAG_CREATED,
+        QMS_TAG_UPDATED,
+        QMS_TAG_DEACTIVATED,
+        QMS_TAG_REACTIVATED,
+        CLIENT_CREATED,
+        DEDUP_COMPLETED,
+        UNIT_GROUP_COMPLETED,
+        SYNC_COMPLETED,
+        SYNC_FAILED,
+        MERCHANT_ACCOUNT_LINKED,
+    ];
 }
 
 /// Records one client-ops audit event. Infallible from the caller's point
@@ -90,5 +129,21 @@ pub async fn record(
             entity_id,
             "failed to write client-ops audit log event"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::event::ALL;
+    use std::collections::HashSet;
+
+    // Same test, same reasoning, as `auth::audit_log::event`'s own copy
+    // -- this list had no coverage at all before 2026-09-02 added five
+    // more constants to it in one pass, exactly the kind of change where
+    // a copy-paste duplicate is easy to introduce unnoticed.
+    #[test]
+    fn event_types_has_no_duplicates() {
+        let unique: HashSet<&str> = ALL.iter().copied().collect();
+        assert_eq!(unique.len(), ALL.len(), "ALL contains a duplicate entry");
     }
 }

@@ -115,6 +115,7 @@ async fn export_returns_404_for_missing_session() {
         Json(DedupExportRequest {
             session_id: "missing".to_string(),
             format: ExportFormat::Csv,
+            client_id: None,
         }),
     )
     .await;
@@ -146,6 +147,7 @@ async fn export_produces_csv_containing_the_flagged_group() {
         Json(DedupExportRequest {
             session_id: "s1".to_string(),
             format: ExportFormat::Csv,
+            client_id: None,
         }),
     )
     .await;
@@ -180,6 +182,7 @@ async fn export_produces_xlsx_with_the_right_content_type() {
         Json(DedupExportRequest {
             session_id: "s1".to_string(),
             format: ExportFormat::Xlsx,
+            client_id: None,
         }),
     )
     .await;
@@ -213,6 +216,7 @@ async fn export_produces_a_zip_containing_both_formats() {
         Json(DedupExportRequest {
             session_id: "s1".to_string(),
             format: ExportFormat::Both,
+            client_id: None,
         }),
     )
     .await;
@@ -278,6 +282,7 @@ async fn export_to_dropbox_rejects_a_path_outside_the_configured_root() {
         Json(DedupExportToDropboxRequest {
             session_id: "missing".to_string(),
             format: ExportFormat::Csv,
+            client_id: None,
             dropbox_path: "/Not/Under/The/Configured/Root/out.csv".to_string(),
         }),
     )

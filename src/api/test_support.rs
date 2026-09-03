@@ -219,6 +219,13 @@ pub fn admin_user() -> AuthenticatedUser {
             // client-ops-adjacent roles. See
             // add_qms_tag_manage_permission_and_widen_rls.
             "client_ops.manage_tags",
+            // Same reasoning as client_ops.manage_tags above -- Activity
+            // Logs is an operations trail for the people doing the
+            // operations, shared across the three client-ops-adjacent
+            // roles (see activity_logs_and_configurable_sync's own
+            // migration comment), not an admin-only oversight tool the
+            // way audit_logs.read is.
+            "activity_logs.read",
         ]
         .into_iter()
         .map(String::from)
@@ -241,6 +248,7 @@ pub fn onboarding_manager_user() -> AuthenticatedUser {
             "client_credentials.add",
             "client_credentials.revoke",
             "client_ops.manage_tags",
+            "activity_logs.read",
         ]
         .into_iter()
         .map(String::from)
@@ -265,6 +273,7 @@ pub fn department_manager_user() -> AuthenticatedUser {
             "client_credentials.revoke",
             "client_credentials.approve",
             "client_ops.manage_tags",
+            "activity_logs.read",
         ]
         .into_iter()
         .map(String::from)

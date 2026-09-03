@@ -46,6 +46,10 @@ impl AuditLogPdfRow {
 }
 
 pub struct AuditLogPdfReport {
+    /// e.g. "UnitPrep Security Log Report" / "UnitPrep Activity Log
+    /// Report" -- the only thing that differs between the security and
+    /// activity exports, which otherwise share this entire renderer.
+    pub report_title: String,
     pub generated_by: String,
     pub generated_at: String,
     /// Pre-formatted lines, one per filter -- kept as plain strings rather
