@@ -261,6 +261,16 @@ pub(crate) fn apply_company_refresh(current: &MappedCompany, fresh: &MappedCompa
             &fresh.insurance_provider,
             is_protected("insurance_provider"),
         ),
+        // `map_intake_fields` never sets `MappedCompany::website_url`
+        // (no PS field of its own -- see that field's own doc comment),
+        // so `fresh.website_url` is always `None` here and
+        // `refreshed_field`'s own "a fresh null never blanks a good
+        // value" rule means this always just preserves whatever the
+        // confirmation-screen fallback already copied in. Included
+        // anyway for the same reason `is_protected` still gates it: the
+        // day this ever gains a real PS source, this line already does
+        // the right thing.
+        website_url: refreshed_field(&current.website_url, &fresh.website_url, is_protected("website_url")),
     }
 }
 
@@ -302,6 +312,7 @@ pub(crate) fn apply_facility_refresh(current: &MappedFacility, fresh: &MappedFac
             is_protected("subdomain_exists_in_qms_raw"),
         ),
         system_email: refreshed_field(&current.system_email, &fresh.system_email, is_protected("system_email")),
+        website_url: refreshed_field(&current.website_url, &fresh.website_url, is_protected("website_url")),
         go_live_date: current.go_live_date,
     }
 }
@@ -362,6 +373,9 @@ pub(crate) fn facility_fields_that_differ(a: &MappedFacility, b: &MappedFacility
     if a.system_email != b.system_email {
         changed.push("system_email");
     }
+    if a.website_url != b.website_url {
+        changed.push("website_url");
+    }
     changed
 }
 
@@ -386,6 +400,7 @@ pub(crate) fn company_field_value(company: &MappedCompany, field: &str) -> Optio
         "payment_scheme" => company.payment_scheme.clone(),
         "offers_tenant_insurance_raw" => company.offers_tenant_insurance_raw.clone(),
         "insurance_provider" => company.insurance_provider.clone(),
+        "website_url" => company.website_url.clone(),
         _ => None,
     }
 }
@@ -408,6 +423,7 @@ pub(crate) fn facility_field_value(facility: &MappedFacility, field: &str) -> Op
         "subdomain" => facility.subdomain.clone(),
         "subdomain_exists_in_qms_raw" => facility.subdomain_exists_in_qms_raw.clone(),
         "system_email" => facility.system_email.clone(),
+        "website_url" => facility.website_url.clone(),
         _ => None,
     }
 }
@@ -438,6 +454,7 @@ struct ExistingCompanyRow {
     payment_scheme: Option<String>,
     offers_tenant_insurance_raw: Option<String>,
     insurance_provider: Option<String>,
+    website_url: Option<String>,
     manually_edited_fields: Vec<String>,
 }
 
@@ -450,7 +467,7 @@ async fn refresh_matching_company(
         "SELECT id, legal_name, corporate_email, corporate_phone, corporate_address_street, \
          corporate_address_city, corporate_address_state, corporate_address_zip, subdomain, \
          accepted_payment_methods, accounting_basis, payment_scheme, offers_tenant_insurance_raw, \
-         insurance_provider, manually_edited_fields \
+         insurance_provider, website_url, manually_edited_fields \
          FROM clients.companies WHERE ps_intake_run_id = $1",
     )
     .bind(run_id)
@@ -472,6 +489,7 @@ async fn refresh_matching_company(
         payment_scheme,
         offers_tenant_insurance_raw,
         insurance_provider,
+        website_url,
         manually_edited_fields,
     }) = existing
     else {
@@ -492,6 +510,7 @@ async fn refresh_matching_company(
         payment_scheme,
         offers_tenant_insurance_raw,
         insurance_provider,
+        website_url,
     };
 
     let refreshed = apply_company_refresh(&current, fresh, &manually_edited_fields);
@@ -510,7 +529,7 @@ async fn refresh_matching_company(
          corporate_address_street = $4, corporate_address_city = $5, corporate_address_state = $6, \
          corporate_address_zip = $7, subdomain = $8, accepted_payment_methods = $9, \
          accounting_basis = $10, payment_scheme = $11, offers_tenant_insurance_raw = $12, \
-         insurance_provider = $13, last_synced_at = now() WHERE id = $14",
+         insurance_provider = $13, website_url = $14, last_synced_at = now() WHERE id = $15",
     )
     .bind(refreshed_legal_name)
     .bind(&refreshed.corporate_email)
@@ -525,6 +544,7 @@ async fn refresh_matching_company(
     .bind(&refreshed.payment_scheme)
     .bind(&refreshed.offers_tenant_insurance_raw)
     .bind(&refreshed.insurance_provider)
+    .bind(&refreshed.website_url)
     .bind(id)
     .execute(&mut **tx)
     .await?;
@@ -555,6 +575,7 @@ struct ExistingFacilityRow {
     subdomain: Option<String>,
     subdomain_exists_in_qms_raw: Option<String>,
     system_email: Option<String>,
+    website_url: Option<String>,
     manually_edited_fields: Vec<String>,
 }
 
@@ -567,7 +588,7 @@ async fn refresh_matching_facility(
     let existing: Option<ExistingFacilityRow> = sqlx::query_as(
         "SELECT id, name, street_address, city, state, zip, phone, email, units_count, \
          primary_storage_offering, previous_pms, access_control_system, go_live_date, \
-         dropbox_folder_url, subdomain, subdomain_exists_in_qms_raw, system_email, \
+         dropbox_folder_url, subdomain, subdomain_exists_in_qms_raw, system_email, website_url, \
          manually_edited_fields \
          FROM clients.facilities WHERE ps_intake_run_id = $1",
     )
@@ -593,6 +614,7 @@ async fn refresh_matching_facility(
         subdomain,
         subdomain_exists_in_qms_raw,
         system_email,
+        website_url,
         manually_edited_fields,
     }) = existing
     else {
@@ -616,6 +638,7 @@ async fn refresh_matching_facility(
         subdomain,
         subdomain_exists_in_qms_raw,
         system_email,
+        website_url,
     };
 
     let refreshed = apply_facility_refresh(&current, fresh, &manually_edited_fields);
@@ -627,8 +650,8 @@ async fn refresh_matching_facility(
         "UPDATE clients.facilities SET name = $1, street_address = $2, city = $3, state = $4, \
          zip = $5, phone = $6, email = $7, units_count = $8, primary_storage_offering = $9, \
          previous_pms = $10, access_control_system = $11, dropbox_folder_url = $12, \
-         subdomain = $13, subdomain_exists_in_qms_raw = $14, system_email = $15, last_synced_at = now() \
-         WHERE id = $16",
+         subdomain = $13, subdomain_exists_in_qms_raw = $14, system_email = $15, website_url = $16, \
+         last_synced_at = now() WHERE id = $17",
     )
     .bind(refreshed.name.as_deref().unwrap_or("(unnamed facility)"))
     .bind(&refreshed.street_address)
@@ -645,6 +668,7 @@ async fn refresh_matching_facility(
     .bind(&refreshed.subdomain)
     .bind(&refreshed.subdomain_exists_in_qms_raw)
     .bind(&refreshed.system_email)
+    .bind(&refreshed.website_url)
     .bind(id)
     .execute(&mut **tx)
     .await?;
@@ -1096,6 +1120,7 @@ mod tests {
             payment_scheme: Some("Advance".to_string()),
             offers_tenant_insurance_raw: Some("Yes".to_string()),
             insurance_provider: Some("Example Insurance Co".to_string()),
+            website_url: Some("https://example.com".to_string()),
         }
     }
 
@@ -1205,6 +1230,7 @@ mod tests {
             subdomain: Some("example".to_string()),
             subdomain_exists_in_qms_raw: Some("No".to_string()),
             system_email: Some("system@example.com".to_string()),
+            website_url: Some("https://example.com".to_string()),
         }
     }
 

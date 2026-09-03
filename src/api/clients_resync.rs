@@ -84,6 +84,7 @@ struct CompanyRow {
     payment_scheme: Option<String>,
     offers_tenant_insurance_raw: Option<String>,
     insurance_provider: Option<String>,
+    website_url: Option<String>,
     manually_edited_fields: Vec<String>,
 }
 
@@ -103,6 +104,7 @@ impl CompanyRow {
             payment_scheme: self.payment_scheme.clone(),
             offers_tenant_insurance_raw: self.offers_tenant_insurance_raw.clone(),
             insurance_provider: self.insurance_provider.clone(),
+            website_url: self.website_url.clone(),
         }
     }
 }
@@ -127,6 +129,7 @@ struct FacilityRow {
     subdomain: Option<String>,
     subdomain_exists_in_qms_raw: Option<String>,
     system_email: Option<String>,
+    website_url: Option<String>,
     manually_edited_fields: Vec<String>,
 }
 
@@ -149,6 +152,7 @@ impl FacilityRow {
             subdomain: self.subdomain.clone(),
             subdomain_exists_in_qms_raw: self.subdomain_exists_in_qms_raw.clone(),
             system_email: self.system_email.clone(),
+            website_url: self.website_url.clone(),
         }
     }
 }
@@ -161,7 +165,8 @@ async fn fetch_company_and_facilities(
         "SELECT id, ps_intake_run_id, legal_name, corporate_email, corporate_phone, \
          corporate_address_street, corporate_address_city, corporate_address_state, \
          corporate_address_zip, subdomain, accepted_payment_methods, accounting_basis, \
-         payment_scheme, offers_tenant_insurance_raw, insurance_provider, manually_edited_fields \
+         payment_scheme, offers_tenant_insurance_raw, insurance_provider, website_url, \
+         manually_edited_fields \
          FROM clients.companies WHERE id = $1",
     )
     .bind(company_id)
@@ -176,7 +181,7 @@ async fn fetch_company_and_facilities(
         "SELECT id, ps_intake_run_id, name, street_address, city, state, zip, phone, email, \
          units_count, primary_storage_offering, previous_pms, access_control_system, \
          go_live_date, dropbox_folder_url, subdomain, subdomain_exists_in_qms_raw, \
-         system_email, manually_edited_fields \
+         system_email, website_url, manually_edited_fields \
          FROM clients.facilities WHERE company_id = $1",
     )
     .bind(company_id)
@@ -507,8 +512,9 @@ pub async fn apply_resync(
                  corporate_address_street = $4, corporate_address_city = $5, corporate_address_state = $6, \
                  corporate_address_zip = $7, subdomain = $8, accepted_payment_methods = $9, \
                  accounting_basis = $10, payment_scheme = $11, offers_tenant_insurance_raw = $12, \
-                 insurance_provider = $13, manually_edited_fields = $14, last_synced_at = now() \
-                 WHERE id = $15",
+                 insurance_provider = $13, website_url = $14, manually_edited_fields = $15, \
+                 last_synced_at = now() \
+                 WHERE id = $16",
             )
             .bind(legal_name)
             .bind(&refreshed.corporate_email)
@@ -523,6 +529,7 @@ pub async fn apply_resync(
             .bind(&refreshed.payment_scheme)
             .bind(&refreshed.offers_tenant_insurance_raw)
             .bind(&refreshed.insurance_provider)
+            .bind(&refreshed.website_url)
             .bind(&effective_protected)
             .bind(company.row.id)
             .execute(&mut *tx)
@@ -554,7 +561,7 @@ pub async fn apply_resync(
                  zip = $5, phone = $6, email = $7, units_count = $8, primary_storage_offering = $9, \
                  previous_pms = $10, access_control_system = $11, dropbox_folder_url = $12, \
                  subdomain = $13, subdomain_exists_in_qms_raw = $14, system_email = $15, \
-                 manually_edited_fields = $16, last_synced_at = now() WHERE id = $17",
+                 website_url = $16, manually_edited_fields = $17, last_synced_at = now() WHERE id = $18",
             )
             .bind(refreshed.name.as_deref().unwrap_or("(unnamed facility)"))
             .bind(&refreshed.street_address)
@@ -571,6 +578,7 @@ pub async fn apply_resync(
             .bind(&refreshed.subdomain)
             .bind(&refreshed.subdomain_exists_in_qms_raw)
             .bind(&refreshed.system_email)
+            .bind(&refreshed.website_url)
             .bind(&effective_protected)
             .bind(facility.row.id)
             .execute(&mut *tx)
@@ -632,6 +640,7 @@ mod tests {
             payment_scheme: Some("Advance".to_string()),
             offers_tenant_insurance_raw: Some("Yes".to_string()),
             insurance_provider: Some("Example Insurance Co".to_string()),
+            website_url: Some("https://example.com".to_string()),
             manually_edited_fields: manually_edited_fields.into_iter().map(String::from).collect(),
         }
     }
@@ -656,6 +665,7 @@ mod tests {
             subdomain: Some("example".to_string()),
             subdomain_exists_in_qms_raw: Some("No".to_string()),
             system_email: Some("system@example.com".to_string()),
+            website_url: Some("https://facility.example.com".to_string()),
             manually_edited_fields: manually_edited_fields.into_iter().map(String::from).collect(),
         }
     }

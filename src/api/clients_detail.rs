@@ -86,6 +86,7 @@ pub struct CompanyDetailResponse {
     pub payment_scheme: Option<String>,
     pub offers_tenant_insurance_raw: Option<String>,
     pub insurance_provider: Option<String>,
+    pub website_url: Option<String>,
     pub archived_at: Option<DateTime<Utc>>,
     /// Whether any of this company's facilities has a Merchant Account
     /// record at all -- computed at read time, not stored (see the
@@ -116,6 +117,7 @@ struct CompanyDetailRow {
     payment_scheme: Option<String>,
     offers_tenant_insurance_raw: Option<String>,
     insurance_provider: Option<String>,
+    website_url: Option<String>,
     archived_at: Option<DateTime<Utc>>,
 }
 
@@ -144,7 +146,7 @@ async fn fetch_company_row(
         "SELECT id, legal_name, corporate_email, corporate_phone, corporate_address_street, \
          corporate_address_city, corporate_address_state, corporate_address_zip, subdomain, \
          accepted_payment_methods, accounting_basis, payment_scheme, offers_tenant_insurance_raw, \
-         insurance_provider, archived_at \
+         insurance_provider, website_url, archived_at \
          FROM clients.companies WHERE id = $1",
     )
     .bind(company_id)
@@ -336,6 +338,7 @@ pub async fn get_company_detail(
         payment_scheme: company.payment_scheme,
         offers_tenant_insurance_raw: company.offers_tenant_insurance_raw,
         insurance_provider: company.insurance_provider,
+        website_url: company.website_url,
         archived_at: company.archived_at,
         elavon_active,
         facilities,
@@ -364,6 +367,7 @@ pub struct FacilityDetailResponse {
     pub subdomain: Option<String>,
     pub subdomain_exists_in_qms_raw: Option<String>,
     pub system_email: Option<String>,
+    pub website_url: Option<String>,
 }
 
 /// Any authenticated caller -- General tab is plain facility contact
@@ -384,7 +388,8 @@ pub async fn get_facility_detail(
     let facility: Option<FacilityDetailResponse> = match sqlx::query_as(
         "SELECT id, company_id, name, street_address, city, state, zip, phone, email, \
          units_count, primary_storage_offering, previous_pms, access_control_system, \
-         go_live_date, dropbox_folder_url, subdomain, subdomain_exists_in_qms_raw, system_email \
+         go_live_date, dropbox_folder_url, subdomain, subdomain_exists_in_qms_raw, system_email, \
+         website_url \
          FROM clients.facilities WHERE id = $1 AND company_id = $2",
     )
     .bind(facility_id)

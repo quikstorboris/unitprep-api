@@ -56,9 +56,9 @@ pub async fn insert_company(
             (legal_name, corporate_email, corporate_phone, corporate_address_street,
              corporate_address_city, corporate_address_state, corporate_address_zip,
              subdomain, accepted_payment_methods, accounting_basis, payment_scheme,
-             offers_tenant_insurance_raw, insurance_provider,
+             offers_tenant_insurance_raw, insurance_provider, website_url,
              source, ps_intake_run_id, raw_ps_snapshot, manually_edited_fields, last_synced_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'process_street', $14, $15, $16, now())
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'process_street', $15, $16, $17, now())
          RETURNING id",
     )
     .bind(legal_name)
@@ -74,6 +74,7 @@ pub async fn insert_company(
     .bind(&company.payment_scheme)
     .bind(&company.offers_tenant_insurance_raw)
     .bind(&company.insurance_provider)
+    .bind(&company.website_url)
     .bind(ps_intake_run_id)
     .bind(raw_ps_snapshot)
     .bind(manually_edited_fields)
@@ -102,9 +103,10 @@ pub async fn insert_facility(
             (company_id, name, street_address, city, state, zip, phone, email,
              units_count, primary_storage_offering, previous_pms, access_control_system,
              go_live_date, dropbox_folder_url, subdomain, subdomain_exists_in_qms_raw,
-             system_email, source, ps_intake_run_id, raw_ps_snapshot, manually_edited_fields, last_synced_at)
+             system_email, website_url, source, ps_intake_run_id, raw_ps_snapshot,
+             manually_edited_fields, last_synced_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                 $17, 'process_street', $18, $19, $20, now())
+                 $17, $18, 'process_street', $19, $20, $21, now())
          RETURNING id",
     )
     .bind(company_id)
@@ -124,6 +126,7 @@ pub async fn insert_facility(
     .bind(&facility.subdomain)
     .bind(&facility.subdomain_exists_in_qms_raw)
     .bind(&facility.system_email)
+    .bind(&facility.website_url)
     .bind(ps_intake_run_id)
     .bind(raw_ps_snapshot)
     .bind(manually_edited_fields)

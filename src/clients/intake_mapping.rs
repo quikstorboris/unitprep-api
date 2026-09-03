@@ -79,6 +79,17 @@ pub struct MappedCompany {
     /// every other yes/no PS field in this schema.
     pub offers_tenant_insurance_raw: Option<String>,
     pub insurance_provider: Option<String>,
+    /// No PS field of its own -- a single-facility business often
+    /// answers "Yes" to "Is your Corporate Name, Address, Phone Number
+    /// & Email the same as this Facility?", which means PS never asks
+    /// the dedicated Corporate questions at all (confirmed: run
+    /// rZFNRpmLIxuOrb_8K9hICw has every `Corporate_*`/`What_is_your_
+    /// Corporate_*` field genuinely absent, not just blank). This field
+    /// exists so the confirmation screen's "use this facility's own
+    /// info as the company's" fallback has somewhere to put
+    /// `MappedFacility::website_url` when accepted -- never populated
+    /// by `map_intake_fields` itself.
+    pub website_url: Option<String>,
 }
 
 /// Also the wire shape for the confirmation-screen preview response
@@ -116,6 +127,12 @@ pub struct MappedFacility {
     /// address, PS's `What_is_the_facility_email_address?`). Real
     /// Highway 20 data has both, with different values.
     pub system_email: Option<String>,
+    /// PS's own `What_is_the_URL_for_this_facility?` -- the facility's
+    /// real business website, confirmed distinct from `subdomain` (the
+    /// QMS-hosted tenant portal). Not previously mapped; surfaced by a
+    /// real single-facility business (run rZFNRpmLIxuOrb_8K9hICw:
+    /// `https://sand-stostorage.com/`).
+    pub website_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -412,6 +429,7 @@ pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
             "Are_they_currently_offering_insurance/protection_to_their_tenants?",
         ),
         insurance_provider: value_for(fields, "Who_is_their_insurance_provider?"),
+        website_url: None,
     };
 
     let facility = MappedFacility {
@@ -434,6 +452,7 @@ pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
         subdomain: value_for(fields, "Facility_Subdomain:"),
         subdomain_exists_in_qms_raw: value_for(fields, "Does_the_Facility_Subdomain_already_exist_in_QMS?"),
         system_email: value_for(fields, "Facility_Email_Address:"),
+        website_url: value_for(fields, "What_is_the_URL_for_this_facility?"),
     };
 
     MappedIntakeRun {
@@ -480,6 +499,21 @@ mod tests {
         // Real value has trailing whitespace in PS's own export -- must come back trimmed.
         assert_eq!(mapped.facility.city.as_deref(), Some("Marengo"));
         assert_eq!(mapped.facility.units_count, Some(788));
+    }
+
+    #[test]
+    fn maps_the_facilitys_own_website_url_but_never_the_companys() {
+        // PS's own `What_is_the_URL_for_this_facility?` -- confirmed by a
+        // real single-facility business (run rZFNRpmLIxuOrb_8K9hICw)
+        // whose whole Corporate Info section came back blank, surfacing
+        // this as a genuinely useful fallback value. `MappedCompany`'s
+        // own website_url has no PS source at all -- see that field's
+        // own doc comment -- so it must always be None straight out of
+        // `map_intake_fields`, only ever set by the confirmation
+        // screen's fallback-accept action.
+        let mapped = map_intake_fields(&real_fields());
+        assert_eq!(mapped.facility.website_url.as_deref(), Some("https://www.highway20selfstorage.com"));
+        assert_eq!(mapped.company.website_url, None);
     }
 
     #[test]

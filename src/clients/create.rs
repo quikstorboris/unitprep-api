@@ -91,6 +91,7 @@ pub struct EditableFacilityFields {
     pub subdomain: Option<String>,
     pub subdomain_exists_in_qms_raw: Option<String>,
     pub system_email: Option<String>,
+    pub website_url: Option<String>,
 }
 
 /// Field names in `MappedCompany` that differ between a fresh Intake
@@ -139,6 +140,9 @@ pub(crate) fn diff_company_fields(fresh: &MappedCompany, reviewed: &MappedCompan
     }
     if fresh.insurance_provider != reviewed.insurance_provider {
         changed.push("insurance_provider");
+    }
+    if fresh.website_url != reviewed.website_url {
+        changed.push("website_url");
     }
     changed
 }
@@ -194,6 +198,9 @@ fn diff_facility_fields(fresh: &MappedFacility, reviewed: &EditableFacilityField
     if fresh.system_email != reviewed.system_email {
         changed.push("system_email");
     }
+    if fresh.website_url != reviewed.website_url {
+        changed.push("website_url");
+    }
     changed
 }
 
@@ -218,6 +225,7 @@ fn apply_facility_overrides(mapped: MappedFacility, overrides: EditableFacilityF
         subdomain: overrides.subdomain,
         subdomain_exists_in_qms_raw: overrides.subdomain_exists_in_qms_raw,
         system_email: overrides.system_email,
+        website_url: overrides.website_url,
         go_live_date: mapped.go_live_date,
     }
 }
@@ -496,6 +504,7 @@ mod override_tests {
             subdomain: Some("original".to_string()),
             subdomain_exists_in_qms_raw: Some("No".to_string()),
             system_email: Some("system-original@example.com".to_string()),
+            website_url: Some("https://original.example.com".to_string()),
         }
     }
 
@@ -558,6 +567,7 @@ mod diff_tests {
             payment_scheme: Some("Advance".to_string()),
             offers_tenant_insurance_raw: Some("Yes".to_string()),
             insurance_provider: Some("Example Insurance Co".to_string()),
+            website_url: Some("https://prairie-enterprises.com".to_string()),
         }
     }
 
@@ -579,6 +589,7 @@ mod diff_tests {
             subdomain: mapped.subdomain,
             subdomain_exists_in_qms_raw: mapped.subdomain_exists_in_qms_raw,
             system_email: mapped.system_email,
+            website_url: mapped.website_url,
         }
     }
 
