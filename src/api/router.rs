@@ -361,15 +361,15 @@ pub fn router(state: AppState) -> Router {
             "/clients/{company_id}/facilities/{facility_id}/policies",
             get(clients_detail::get_facility_policies),
         )
-        // Read: any authenticated caller. Link: client_ops.perform --
-        // see clients_elavon's own module doc.
+        // Read: any authenticated caller. Link/unlink: client_ops.perform
+        // -- see clients_elavon's own module doc.
         .route(
             "/clients/{company_id}/facilities/{facility_id}/elavon",
             get(clients_elavon::get_facility_elavon),
         )
         .route(
             "/clients/{company_id}/facilities/{facility_id}/elavon/link",
-            post(clients_elavon::link_facility_elavon),
+            post(clients_elavon::link_facility_elavon).delete(clients_elavon::unlink_facility_elavon),
         )
         // Requires client_ops.perform to start; status read is any
         // authenticated caller -- see clients_sync's own module doc.

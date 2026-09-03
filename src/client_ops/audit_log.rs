@@ -60,6 +60,14 @@ pub mod event {
     /// a deliberate, one-at-a-time human action confirming a specific
     /// run id.
     pub const MERCHANT_ACCOUNT_LINKED: &str = "merchant_account_linked";
+    /// A facility's Merchant Account link was manually removed via the
+    /// Elavon tab's "Unlink" action (`api::clients_elavon`) -- e.g. a
+    /// wrong run got linked (manually, or by automatic correlation at
+    /// Create time) and the manager wants to link the correct one
+    /// instead. Deletes `facility_merchant_accounts`, its parties, and
+    /// its `ps_task_status` rows for this facility; does not touch
+    /// anything else about the facility or company.
+    pub const MERCHANT_ACCOUNT_UNLINKED: &str = "merchant_account_unlinked";
 
     /// Every event type this module writes, for the Activity Logs admin
     /// filter dropdown -- mirrors `auth::audit_log::event::ALL`'s own
@@ -76,6 +84,7 @@ pub mod event {
         SYNC_COMPLETED,
         SYNC_FAILED,
         MERCHANT_ACCOUNT_LINKED,
+        MERCHANT_ACCOUNT_UNLINKED,
     ];
 }
 
