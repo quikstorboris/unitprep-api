@@ -99,6 +99,19 @@ pub mod event {
 /// reach this code path at all), but because there is no benefit to
 /// reading the row back, and matching the established no-`RETURNING`
 /// convention costs nothing.
+///
+/// `actor_user_id` is nearly always a real, authenticated caller -- but
+/// `clients::sync`'s nightly timer writes `SYNC_COMPLETED`/`SYNC_FAILED`
+/// with its own `SYSTEM_USER_ID` (`Uuid::nil()`) placeholder, which is
+/// fine for that module's RLS purposes (its own doc comment: the policy
+/// only checks the GUC is set, not that it names a real row) but is not
+/// a real `auth.users` row -- binding it here as-is violated this
+/// table's `actor_user_id` FK (confirmed live 2026-09-04, the nightly
+/// sync's own `SYNC_COMPLETED` write). The column is already nullable
+/// (`ON DELETE SET NULL`), so a nil UUID is translated to `NULL` here,
+/// centrally, rather than asking every caller to remember to do it --
+/// the FK now records "no real actor" the way it was always able to,
+/// instead of silently failing and only ever reaching server logs.
 #[allow(clippy::too_many_arguments)]
 pub async fn record(
     db: &PgPool,
@@ -111,6 +124,8 @@ pub async fn record(
     ip_address: Option<IpNetwork>,
     metadata: Value,
 ) {
+    let actor_user_id = if actor_user_id.is_nil() { None } else { Some(actor_user_id) };
+
     let result = sqlx::query(
         "INSERT INTO client_ops.audit_log
              (event_type, actor_user_id, entity_type, entity_id,
@@ -133,7 +148,7 @@ pub async fn record(
         tracing::error!(
             error = %err,
             event_type,
-            actor_user_id = %actor_user_id,
+            actor_user_id = ?actor_user_id,
             entity_type,
             entity_id,
             "failed to write client-ops audit log event"
