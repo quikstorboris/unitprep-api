@@ -391,6 +391,14 @@ pub fn router(state: AppState) -> Router {
         // dropbox_browse::search_folders's own doc comment for why no
         // root-boundary check is needed on this one.
         .route("/dropbox/search", get(dropbox_browse::search_folders))
+        // Any authenticated caller -- read-only discovery, same reasoning
+        // as the two routes above. See dropbox_browse::facility_dropbox_folder's
+        // own doc comment for why this takes a facility name (query
+        // param), not a facility id path segment.
+        .route(
+            "/clients/{company_id}/dropbox-folder",
+            get(dropbox_browse::facility_dropbox_folder),
+        )
         // Admin-only, read-only -- same no-dedicated-bucket reasoning as
         // /auth/users above.
         .route("/auth/audit-logs", get(auth_audit_logs::list_audit_logs))
@@ -460,6 +468,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/dedup/import-dropbox", post(dedup::import_from_dropbox))
         .route("/dedup/report", post(dedup::report))
+        .route("/dedup/save-location", post(dedup::save_location))
         .route("/dedup/export", post(dedup::export))
         .route("/dedup/export-dropbox", post(dedup::export_to_dropbox))
         .route("/tagger/report", post(tagger::report))

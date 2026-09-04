@@ -39,6 +39,18 @@ pub struct DedupSession {
     pub records: Vec<TenantRecord>,
     pub report: DedupReport,
 
+    /// The Dropbox folder the source file was imported from (its parent
+    /// directory) -- `None` for a locally-uploaded file, which has no
+    /// Dropbox origin to anchor a save-location default to. Lets
+    /// `api::dedup`'s save-to-Dropbox flow default to a `Duplicate Check`
+    /// subfolder next to wherever the analyzed file actually came from,
+    /// instead of always asking the user to browse from scratch (Boris,
+    /// 2026-09-04: two possible source folders in practice -- "Prelim
+    /// Check"/"Final Check" or whatever a given facility happens to call
+    /// them -- so this remembers the real folder rather than trying to
+    /// pattern-match a name).
+    pub source_dropbox_folder_path: Option<String>,
+
     /// Not read anywhere yet — there's only one stage, and nothing
     /// currently gates on it. Kept (not deleted) as a placeholder for
     /// a real second stage, same rationale as `UploadedFile.relative_path`.
@@ -62,11 +74,13 @@ impl DedupSession {
         owner_id: Option<Uuid>,
         records: Vec<TenantRecord>,
         report: DedupReport,
+        source_dropbox_folder_path: Option<String>,
     ) -> Self {
         Self {
             metadata: SessionMetadata::new(id, owner_id),
             records,
             report,
+            source_dropbox_folder_path,
             stage: DedupStage::Analyzed,
         }
     }
@@ -95,6 +109,7 @@ impl DedupSessionService {
         file: UploadedFile,
         owner_id: Option<Uuid>,
         tenant_vendors: &[VendorFormat],
+        source_dropbox_folder_path: Option<String>,
     ) -> anyhow::Result<(String, DedupReport, Vec<TenantRecord>)> {
         let document = parse_document(&file)?;
         let records = records_from_csv_document(&document, tenant_vendors)?;
@@ -106,6 +121,7 @@ impl DedupSessionService {
             owner_id,
             records.clone(),
             dedup_report.clone(),
+            source_dropbox_folder_path,
         );
 
         tracing::info!(

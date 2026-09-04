@@ -108,6 +108,97 @@ async fn report_returns_404_for_a_session_belonging_to_a_different_user() {
 }
 
 #[tokio::test]
+async fn save_location_returns_404_for_missing_session() {
+    let response = save_location(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(DedupSessionRequest {
+            session_id: "missing".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn save_location_is_none_for_a_locally_uploaded_session() {
+    let records = vec![sample_record("101", "a@example.com")];
+    let dedup_report = unitprep_dedup::run(records.clone());
+    let state = crate::api::dedup_test_support::dedup_state_with_source_folder(
+        "s1",
+        records,
+        dedup_report,
+        None,
+    );
+
+    let response = save_location(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(DedupSessionRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["default_folder_path"], serde_json::Value::Null);
+}
+
+/// The real behavior this feature exists for: a session imported from
+/// Dropbox must default to a `Duplicate Check` subfolder next to
+/// wherever the source file actually came from -- not a folder named
+/// after whatever that source folder happened to be called (see
+/// `DUPLICATE_CHECK_FOLDER_NAME`'s own doc comment).
+#[tokio::test]
+async fn save_location_defaults_to_a_duplicate_check_subfolder_of_the_source_folder() {
+    let records = vec![sample_record("101", "a@example.com")];
+    let dedup_report = unitprep_dedup::run(records.clone());
+    let state = crate::api::dedup_test_support::dedup_state_with_source_folder(
+        "s1",
+        records,
+        dedup_report,
+        Some("/qms onboarding/prairie enterprises llc/highway 20/preliminary data".to_string()),
+    );
+
+    let response = save_location(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(DedupSessionRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["default_folder_path"],
+        "/qms onboarding/prairie enterprises llc/highway 20/preliminary data/Duplicate Check"
+    );
+}
+
+#[test]
+fn parent_folder_strips_the_last_path_segment() {
+    assert_eq!(
+        parent_folder("/qms onboarding/prairie enterprises llc/highway 20/file.csv"),
+        Some("/qms onboarding/prairie enterprises llc/highway 20".to_string())
+    );
+}
+
+#[test]
+fn parent_folder_is_none_for_a_bare_name_with_no_slash() {
+    assert_eq!(parent_folder("file.csv"), None);
+}
+
+#[tokio::test]
 async fn export_returns_404_for_missing_session() {
     let response = export(
         State(empty_state()),

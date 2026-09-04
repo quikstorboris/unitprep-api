@@ -12,14 +12,15 @@
 //! before being handed to `state.dropbox`.
 
 use axum::{
-    extract::{Json, Query, State},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
-use crate::auth::AuthenticatedUser;
+use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 
 #[derive(Debug, Deserialize)]
 pub struct ListFolderQuery {
@@ -202,6 +203,113 @@ pub async fn search_folders(
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, query = %q, "dropbox search_folders failed");
             internal_error("Could not search Dropbox")
+        }
+    }
+}
+
+fn not_found(entity: &'static str) -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ApiErrorBody {
+            error: "not_found",
+            message: format!("{entity} not found"),
+        }),
+    )
+        .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FacilityDropboxFolderQuery {
+    /// A facility name already known to the caller (e.g. `Client.
+    /// facilityNames` in `unitprep-ui`, which carries names only, no
+    /// ids -- see `api::clients_companies::CompanySummary`) -- taken by
+    /// name rather than requiring a facility id specifically *because*
+    /// the underlying lookup (`DropboxClient::find_facility_folder`) is
+    /// itself name-based; requiring an id would only mean looking its
+    /// name back up here for no real benefit.
+    pub facility_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FacilityDropboxFolderResponse {
+    /// `null` when this facility has no folder findable by exact name
+    /// under the connected Dropbox root -- not an error, just "nothing to
+    /// default to" (a brand-new facility whose folder hasn't been created
+    /// yet, or one named differently there than in OO). The frontend
+    /// falls back to today's behavior (no seeded `initialPath`) in that
+    /// case.
+    pub path: Option<String>,
+}
+
+/// A facility's own Dropbox folder, found by exact name match under this
+/// app's connected root -- **not** resolved from `clients.facilities.
+/// dropbox_folder_url` itself. See `DropboxClient::find_facility_folder`'s
+/// own doc comment for why that stored link (a shared link, captured by
+/// hand into PS's own intake form) can't be resolved to a writable path
+/// directly, and why searching by name under the shared root reaches the
+/// same real folder anyway.
+///
+/// Any authenticated caller -- same reasoning as `list_folder`/
+/// `search_folders` above (read-only discovery, nothing sensitive). The
+/// `company_id`/name check below exists so this can't be used to probe
+/// for facility names outside the caller's own knowledge, not as a
+/// permission gate on the Dropbox call itself.
+pub async fn facility_dropbox_folder(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(company_id): Path<Uuid>,
+    Query(query): Query<FacilityDropboxFolderQuery>,
+) -> Response {
+    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for facility dropbox folder lookup");
+            return internal_error("Could not look up this facility's Dropbox folder");
+        }
+    };
+
+    let facility_exists: Option<(i32,)> = match sqlx::query_as(
+        "SELECT 1 FROM clients.facilities WHERE company_id = $1 AND name = $2",
+    )
+    .bind(company_id)
+    .bind(&query.facility_name)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "facility lookup for dropbox folder failed");
+            return internal_error("Could not look up this facility's Dropbox folder");
+        }
+    };
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit facility dropbox folder transaction");
+        return internal_error("Could not look up this facility's Dropbox folder");
+    }
+
+    if facility_exists.is_none() {
+        return not_found("facility");
+    }
+    let name = query.facility_name;
+
+    match state.dropbox.find_facility_folder(&name).await {
+        Ok(found) => {
+            tracing::info!(
+                user_id = %user.user_id,
+                company_id = %company_id,
+                facility_name = %name,
+                found = found.is_some(),
+                "resolved a facility's default Dropbox folder"
+            );
+            Json(FacilityDropboxFolderResponse {
+                path: found.map(|entry| entry.path_display),
+            })
+            .into_response()
+        }
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, facility_name = %name, "dropbox find_facility_folder failed");
+            internal_error("Could not look up this facility's Dropbox folder")
         }
     }
 }

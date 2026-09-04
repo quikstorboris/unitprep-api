@@ -103,6 +103,13 @@ async fn first_uploaded_file(
     Ok(result)
 }
 
+/// The directory portion of a Dropbox path -- `None` for a bare
+/// root-level name with no `/` at all (never actually seen in practice:
+/// every real file lives at least one level under the configured root).
+fn parent_folder(path: &str) -> Option<String> {
+    path.rfind('/').map(|i| path[..i].to_string())
+}
+
 /// Downloads `path` from Dropbox and wraps it as an `UploadedFile`, the
 /// same shape `first_uploaded_file` builds from a multipart field --
 /// lets `detect_vendor_format_dropbox`/`import_from_dropbox` reuse the
@@ -173,7 +180,7 @@ pub async fn check(
     let (session_id, report, records) = match DedupSessionService::new(Arc::clone(
         &state.dedup_sessions,
     ))
-    .create_session(file, Some(user.user_id), &tenant_vendors)
+    .create_session(file, Some(user.user_id), &tenant_vendors, None)
     {
         Ok(created) => created,
         Err(err) => {
@@ -234,6 +241,7 @@ pub async fn import_from_dropbox(
     };
 
     let file_name = file.file_name.clone();
+    let source_dropbox_folder_path = parent_folder(&request.path);
 
     // A synchronous read of the in-memory registry snapshot -- see
     // `client_ops::vendor_format`'s module doc comment for why this is
@@ -243,7 +251,7 @@ pub async fn import_from_dropbox(
     let (session_id, report, records) = match DedupSessionService::new(Arc::clone(
         &state.dedup_sessions,
     ))
-    .create_session(file, Some(user.user_id), &tenant_vendors)
+    .create_session(file, Some(user.user_id), &tenant_vendors, source_dropbox_folder_path)
     {
         Ok(created) => created,
         Err(err) => {
@@ -406,6 +414,51 @@ pub async fn report(
     }
 }
 
+/// The literal name of the auto-created subfolder every Dropbox-sourced
+/// export defaults into -- deliberately not derived from the source
+/// folder's own name (real facilities call it "Prelim Check", "Final
+/// Check", or something else entirely with no consistent convention
+/// across clients -- see `DedupSession::source_dropbox_folder_path`'s
+/// own doc comment). This name is the one thing OO actually controls.
+const DUPLICATE_CHECK_FOLDER_NAME: &str = "Duplicate Check";
+
+#[derive(Debug, Serialize)]
+pub struct DedupSaveLocationResponse {
+    /// `Some(path)` when this session's source file was imported from
+    /// Dropbox -- the `Duplicate Check` subfolder next to wherever that
+    /// file actually came from, which the frontend's save-to-Dropbox
+    /// picker should default `initialPath` to. `None` for a
+    /// locally-uploaded session, which has no Dropbox origin to anchor a
+    /// default to; the picker falls back to its own existing behavior.
+    pub default_folder_path: Option<String>,
+}
+
+/// Computes (but does not yet create -- `export_to_dropbox` creates it
+/// at the moment it's actually needed, not speculatively here) this
+/// session's default save-to-Dropbox location. Called when the
+/// save-to-Dropbox picker opens, so it can seed `initialPath` without
+/// the frontend needing to know anything about how that default is
+/// derived.
+pub async fn save_location(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(request): Json<DedupSessionRequest>,
+) -> Response {
+    let source_folder = match state
+        .dedup_sessions
+        .with_owned_session(&request.session_id, user.user_id, |session| {
+            session.source_dropbox_folder_path.clone()
+        }) {
+        Some(source_folder) => source_folder,
+        None => return session_not_found(&request.session_id),
+    };
+
+    let default_folder_path =
+        source_folder.map(|folder| format!("{folder}/{DUPLICATE_CHECK_FOLDER_NAME}"));
+
+    Json(DedupSaveLocationResponse { default_folder_path }).into_response()
+}
+
 /// Exports the full report as CSV, xlsx, or both (as a ZIP) — flagged
 /// groups first, then typo/name-variant candidates, then related-tenant
 /// candidates. See `dedup_export_plan` for the shape both file formats
@@ -518,6 +571,19 @@ pub async fn export_to_dropbox(
             Ok(generated) => generated,
             Err(response) => return response,
         };
+
+    // Ensures the destination folder exists before writing to it --
+    // covers the `Duplicate Check` subfolder specifically (never created
+    // ahead of time, only computed as a suggested path by `save_location`
+    // above), but is deliberately unconditional: any destination folder
+    // this call is ever pointed at should exist by the time the upload
+    // itself is attempted, not just the one this feature was built for.
+    if let Some(folder) = parent_folder(&request.dropbox_path) {
+        if let Err(err) = state.dropbox.create_folder_if_missing(&folder).await {
+            tracing::error!(error = %err, path = %folder, "Dropbox create_folder_if_missing failed during dedup export");
+            return internal_error("Could not create the destination folder in Dropbox");
+        }
+    }
 
     if let Err(err) = state.dropbox.upload(&request.dropbox_path, bytes).await {
         tracing::error!(error = %err, path = %request.dropbox_path, "Dropbox upload failed during dedup export");

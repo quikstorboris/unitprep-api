@@ -299,6 +299,85 @@ impl DropboxClient {
         Ok(folders)
     }
 
+    /// Finds a facility's own Dropbox folder by name under this app's
+    /// connected root, and returns its real, writable path.
+    ///
+    /// **Not** resolved from `clients.facilities.dropbox_folder_url`
+    /// itself -- confirmed live against the real API (2026-09-04) that
+    /// these `https://www.dropbox.com/scl/fo/...` links are shared by an
+    /// individual staff member's own Dropbox account (PS's
+    /// `Facility_Onboarding_folder_URL:` field is filled in by hand),
+    /// which is not necessarily the same Dropbox Business team this app's
+    /// own token belongs to. `sharing/get_shared_link_metadata` on such a
+    /// link comes back with real name/type metadata but no `path_lower`
+    /// (no filesystem-level view) and only `link_access_level: viewer` --
+    /// enough to prove the link resolves to *something*, not enough to
+    /// list, create a folder in, or upload to it via this account.
+    ///
+    /// The same physical facility folder is reachable anyway: it lives
+    /// under this app's own connected root (the same "QMS Onboarding"
+    /// tree `search_folders` already searches for the client-search
+    /// page's facility lookup), fully writable there. So this reuses
+    /// `search_folders` -- proven working in production already -- rather
+    /// than the URL at all, and returns the first folder result whose
+    /// name matches exactly (a facility name search can otherwise surface
+    /// files that merely mention it, e.g. "Highway 20 Self Storage Unit
+    /// Coverages.csv", which `search_folders`'s own folder-only filter
+    /// already drops, but a same-named sub-item one level down could
+    /// still slip through a substring match -- exact-name equality is
+    /// the one signal that reliably means "this IS the facility folder,"
+    /// not just A a folder somewhere under it).
+    pub async fn find_facility_folder(&self, facility_name: &str) -> Result<Option<Entry>, DropboxError> {
+        let folders = self.search_folders(facility_name).await?;
+        Ok(folders.into_iter().find(|f| f.name == facility_name))
+    }
+
+    /// Creates `path` as a folder if it doesn't already exist -- the
+    /// `Duplicate Check` subfolder this app auto-creates next to wherever
+    /// a source file was imported from is the one real caller. A
+    /// `path/conflict/folder` error (the folder is already there) is
+    /// treated as success, since the caller's actual goal -- "this folder
+    /// exists" -- is already satisfied; every other error propagates.
+    pub async fn create_folder_if_missing(&self, path: &str) -> Result<(), DropboxError> {
+        let access_token = self.access_token().await?;
+
+        let response = self
+            .http
+            .post("https://api.dropboxapi.com/2/files/create_folder_v2")
+            .bearer_auth(access_token)
+            .header("Dropbox-API-Path-Root", self.path_root_header())
+            .json(&serde_json::json!({ "path": path }))
+            .send()
+            .await?;
+
+        let status = response.status();
+
+        if status.is_success() {
+            tracing::info!(path = %path, "dropbox create_folder_v2 succeeded");
+            return Ok(());
+        }
+
+        let body = response.text().await?;
+
+        // Dropbox reports "folder already exists" as a 409 carrying a
+        // structured error tag in the body, not a distinct HTTP status.
+        if status.as_u16() == 409 && body.contains("path/conflict/folder") {
+            tracing::info!(path = %path, "dropbox create_folder_v2: folder already exists");
+            return Ok(());
+        }
+
+        tracing::error!(
+            path = %path,
+            status = status.as_u16(),
+            body = %body,
+            "Dropbox create_folder_v2 failed"
+        );
+        Err(DropboxError::Api {
+            status: status.as_u16(),
+            body,
+        })
+    }
+
     // Used by api::dedup's Dropbox-import handlers
     // (download_as_uploaded_file). See dropbox::client's own #[ignore]d
     // test for list_folder coverage; this and upload below have no
@@ -460,5 +539,80 @@ mod tests {
                     && e.path_display.contains("Prairie Enterprises LLC")),
             "expected to find the Highway 20 Self Storage facility folder without searching by client name"
         );
+    }
+
+    // Real-network, read-only: proves `find_facility_folder` locates the
+    // real, writable path -- confirmed live 2026-09-04 to be the same
+    // physical folder `dropbox_folder_url`'s own shared link points at
+    // (same subfolders: Final Data, Preliminary Data, Tenants & Leases
+    // Migration, Units Migration, Validation), reached by name search
+    // under this app's own root instead, since the URL itself resolves
+    // to no usable path (see this method's own doc comment).
+    #[tokio::test]
+    #[ignore]
+    async fn finds_a_real_facilitys_own_folder_by_exact_name() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let config = DropboxConfig::from_env().expect(
+            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
+        );
+        let client = DropboxClient::new(config);
+
+        let found = client
+            .find_facility_folder("Highway 20 Self Storage")
+            .await
+            .expect("searching for a real facility's folder must succeed")
+            .expect("Highway 20 Self Storage's own folder must be found");
+
+        assert!(found.is_folder());
+        assert!(found.path_display.to_lowercase().contains("prairie enterprises llc"));
+    }
+
+    // A name that matches files but no exact-named folder (every real
+    // Highway 20 CSV export mentions the facility name) must not
+    // false-positive on one of those files' own containing folder.
+    #[tokio::test]
+    #[ignore]
+    async fn returns_none_when_no_folder_matches_the_name_exactly() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let config = DropboxConfig::from_env().expect(
+            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
+        );
+        let client = DropboxClient::new(config);
+
+        let found = client
+            .find_facility_folder("Highway 20 Self Storage Unit Coverages")
+            .await
+            .expect("the search itself must still succeed even with no exact match");
+
+        assert!(found.is_none());
+    }
+
+    // Real-network, and genuinely mutating: creates a folder in the real
+    // QMS Onboarding tree. Deliberately targets a path nested under the
+    // real Highway 20 folder used by the test above (not a throwaway
+    // top-level folder), named so it's unambiguous as a test artifact if
+    // ever seen by a human. Run manually and clean up in Dropbox after --
+    // not something to fire automatically.
+    #[tokio::test]
+    #[ignore]
+    async fn create_folder_if_missing_is_idempotent_against_the_real_account() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let config = DropboxConfig::from_env().expect(
+            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
+        );
+        let client = DropboxClient::new(config);
+        let path = format!("{}/_unitprep_dropbox_client_test_scratch", client.root_path());
+
+        client
+            .create_folder_if_missing(&path)
+            .await
+            .expect("creating a genuinely new folder must succeed");
+        client
+            .create_folder_if_missing(&path)
+            .await
+            .expect("creating the same folder again must be treated as success, not an error");
     }
 }

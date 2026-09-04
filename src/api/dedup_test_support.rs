@@ -29,12 +29,26 @@ pub fn dedup_state_with_report(
     records: Vec<unitprep_dedup::TenantRecord>,
     report: unitprep_dedup::DedupReport,
 ) -> AppState {
+    dedup_state_with_source_folder(session_id, records, report, None)
+}
+
+/// Same as `dedup_state_with_report`, but lets a test control
+/// `source_dropbox_folder_path` directly -- what `api::dedup::
+/// save_location`'s own tests need to prove the Dropbox-imported vs.
+/// locally-uploaded cases separately.
+pub fn dedup_state_with_source_folder(
+    session_id: &str,
+    records: Vec<unitprep_dedup::TenantRecord>,
+    report: unitprep_dedup::DedupReport,
+    source_dropbox_folder_path: Option<String>,
+) -> AppState {
     let store = empty_dedup_store();
     store.save(DedupSession::new(
         session_id.to_string(),
         Some(test_user_id()),
         records,
         report,
+        source_dropbox_folder_path,
     ));
 
     AppState {
