@@ -15,7 +15,13 @@
 //!   server-side search over form-field values, so this is the only way
 //!   to find a facility by an owner/DM/manager/signer/POC's name. Only
 //!   as fresh as the last sync (`clients.ps_sync_state.last_synced_at`
-//!   per run), not live.
+//!   per run), not live. **Not query-text-only**: once a facility is
+//!   matched (by title, or by a person hit -- see below), every OTHER
+//!   person already indexed on that same Intake run is folded in too,
+//!   so finding a facility surfaces its full known contact list, not
+//!   just whichever one person's name happened to contain the query.
+//!   (Boris, 2026-09-03: searching a facility by name, or by only one
+//!   of its several owners, must not leave its other owners "behind".)
 //!
 //! **A company name (e.g. "Prairie Enterprises") doesn't literally
 //! appear in a facility's own Intake run title** (real title:
@@ -326,6 +332,49 @@ pub async fn search_clients(
 
     let mut candidate_run_ids: Vec<String> = facility_results.iter().map(|r| r.run_id.clone()).collect();
     candidate_run_ids.extend(person_derived.iter().map(|(run_id, ..)| run_id.clone()));
+
+    // Every person already indexed under a facility that matched (by
+    // title or via a person hit) -- not just the ones whose own name/
+    // email happened to contain the query text. Without this, finding
+    // a facility by its own name (or by ONE of its several owners) only
+    // ever surfaces that one person, and every other real contact on
+    // the same facility silently "falls behind" -- Boris, 2026-09-03,
+    // after Sand-Sto's second owner never showed up next to the first.
+    // `workflow = 'intake'` only: that's the same scoping
+    // `derive_facilities_from_person_matches` already applies (a
+    // Merchant Account/Contract Order run id isn't a facility identity
+    // of its own), and it's the workflow this index actually keys
+    // facility ownership on.
+    let facility_person_matches: Result<Vec<PersonMatch>, sqlx::Error> = sqlx::query_as(
+        "SELECT workflow, ps_run_id, run_name, full_name, email, phone, role
+           FROM clients.ps_person_index
+          WHERE workflow = 'intake' AND ps_run_id = ANY($1)
+          ORDER BY full_name",
+    )
+    .bind(&candidate_run_ids)
+    .fetch_all(&mut *tx)
+    .await;
+
+    let mut person_matches = person_matches;
+    match facility_person_matches {
+        Ok(rows) => {
+            let mut seen: HashSet<(String, String, String)> = person_matches
+                .iter()
+                .map(|p| (p.ps_run_id.clone(), p.full_name.clone(), p.role.clone()))
+                .collect();
+            for row in rows {
+                let key = (row.ps_run_id.clone(), row.full_name.clone(), row.role.clone());
+                if seen.insert(key) {
+                    person_matches.push(row);
+                }
+            }
+            person_matches.sort_by(|a, b| a.full_name.cmp(&b.full_name));
+        }
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "facility person-index fetch failed");
+            return internal_error("Could not search for a person by name");
+        }
+    }
 
     let already_imported_result: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as(
         "SELECT ps_intake_run_id FROM clients.facilities WHERE ps_intake_run_id = ANY($1)",
