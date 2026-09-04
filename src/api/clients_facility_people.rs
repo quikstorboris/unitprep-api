@@ -1,22 +1,31 @@
 //! Facility page's Users tab. `GET` returns two things: the facility's
 //! actual saved roster (`clients.facility_people`/`clients.people`,
-//! written once at ingest and never touched again automatically) and
-//! "Add User" candidates -- rows already sitting in
+//! written once at ingest and never touched again automatically otherwise)
+//! and "Add User" candidates -- rows already sitting in
 //! `clients.ps_person_index` for this facility's own `ps_intake_run_id`,
 //! kept fresh by the nightly background sync independent of when the
 //! facility was created or last touched. No live Process Street call and
 //! no search box: the candidates are exactly what PS currently says for
 //! this facility's own Intake run, already indexed.
 //!
-//! `POST` is a chip click -- the request body is one candidate row (or
-//! any equivalent hand-typed values) verbatim, and always upserts via
-//! `repository::upsert_person_and_link_to_facility`: a person already
-//! linked from an old ingest gets their stored name/phone overwritten
-//! with the given values rather than left alone. Boris's own call
-//! (2026-09-04): the saved roster should self-heal to whatever the fresh
-//! index currently says on next use, not need a separate one-off
-//! data-repair pass -- see that function's own doc comment for the real
-//! example (Sand-Sto's "Irene Chen - (301) 787-9221") this fixes.
+//! `GET` also silently self-heals: any roster person whose stored
+//! name/phone disagrees with a same-email, same-role candidate gets
+//! upserted to the fresh values before the response goes out (see
+//! `repository::upsert_person_and_link_to_facility`'s own doc comment for
+//! the real example, Sand-Sto's "Irene Chen - (301) 787-9221"). No click
+//! needed -- viewing the tab is enough. This replaced an earlier design
+//! (Boris, 2026-09-04) where a click on an already-linked chip did the
+//! refresh; that click now means unlink instead (see `DELETE` below), so
+//! the fix had to stop needing a click at all.
+//!
+//! `POST` is an "Add User" chip click for a candidate not yet on the
+//! roster -- the request body is one candidate row verbatim, upserted via
+//! `repository::upsert_person_and_link_to_facility` the same way the
+//! auto-heal pass above does.
+//!
+//! `DELETE .../people/{person_id}?role=...` unlinks one roster entry --
+//! the same chip, now rendered red for an already-linked candidate,
+//! rather than a separate control.
 
 use axum::{
     extract::{Json, Path, State},
@@ -29,7 +38,7 @@ use uuid::Uuid;
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::people::PersonAssignment;
-use crate::clients::repository::upsert_person_and_link_to_facility;
+use crate::clients::repository::{unlink_person_from_facility, upsert_person_and_link_to_facility};
 
 fn not_found(entity: &'static str) -> Response {
     (
@@ -139,6 +148,39 @@ pub async fn get_facility_people(
         },
     };
 
+    // Self-heal: a roster row whose stored name/phone disagrees with a
+    // same-email, same-role candidate gets corrected in place before the
+    // transaction commits -- see this module's own doc comment. Matched
+    // case-insensitively on email since `clients.people.email` is CITEXT
+    // but `ps_person_index.email` is plain TEXT.
+    let mut roster = roster;
+    for person in &mut roster {
+        let Some(email) = person.email.as_deref() else { continue };
+        let Some(candidate) = candidates
+            .iter()
+            .find(|c| c.role == person.role && c.email.as_deref().is_some_and(|e| e.eq_ignore_ascii_case(email)))
+        else {
+            continue;
+        };
+
+        if candidate.full_name == person.full_name && candidate.phone == person.phone {
+            continue;
+        }
+
+        if let Err(err) = upsert_person_and_link_to_facility(&mut tx, facility_id, candidate).await {
+            tracing::error!(
+                error = %err,
+                user_id = %user.user_id,
+                person_id = %person.person_id,
+                "failed to self-heal a stale facility person"
+            );
+            continue;
+        }
+
+        person.full_name = candidate.full_name.clone();
+        person.phone = candidate.phone.clone();
+    }
+
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit facility people transaction");
         return internal_error("Could not load this facility's Users tab");
@@ -207,6 +249,64 @@ pub async fn add_facility_person(
     StatusCode::NO_CONTENT.into_response()
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct UnlinkFacilityPersonQuery {
+    pub role: String,
+}
+
+/// Same no-extra-permission reasoning as `add_facility_person` above --
+/// removing one link row is the same "this facility's own roster"
+/// concern as adding one, not a `client_ops.perform`-gated action. No
+/// live PS call, same restraint as `clients_elavon::unlink_facility_elavon`:
+/// this only ever deletes `clients.facility_people`'s own link row (see
+/// `repository::unlink_person_from_facility`'s own doc comment on why
+/// `clients.people` itself is never touched).
+pub async fn unlink_facility_person(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path((company_id, facility_id, person_id)): Path<(Uuid, Uuid, Uuid)>,
+    axum::extract::Query(query): axum::extract::Query<UnlinkFacilityPersonQuery>,
+) -> Response {
+    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for unlink facility person");
+            return internal_error("Could not remove this person");
+        }
+    };
+
+    let facility_exists: Option<(Uuid,)> =
+        match sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
+            .bind(facility_id)
+            .bind(company_id)
+            .fetch_optional(&mut *tx)
+            .await
+        {
+            Ok(row) => row,
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for unlink person failed");
+                return internal_error("Could not remove this person");
+            }
+        };
+    if facility_exists.is_none() {
+        let _ = tx.rollback().await;
+        return not_found("facility");
+    }
+
+    if let Err(err) = unlink_person_from_facility(&mut tx, facility_id, person_id, &query.role).await {
+        let _ = tx.rollback().await;
+        tracing::error!(error = %err, user_id = %user.user_id, facility_id = %facility_id, person_id = %person_id, "failed to unlink facility person");
+        return internal_error("Could not remove this person");
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit unlink facility person transaction");
+        return internal_error("Could not remove this person");
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,6 +349,19 @@ mod tests {
                 phone: Some("(301) 787-9221".to_string()),
                 role: "owner".to_string(),
             }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn unlink_facility_person_reaches_the_database() {
+        let response = unlink_facility_person(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
+            axum::extract::Query(UnlinkFacilityPersonQuery { role: "owner".to_string() }),
         )
         .await;
 

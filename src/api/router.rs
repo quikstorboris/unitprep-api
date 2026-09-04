@@ -377,6 +377,10 @@ pub fn router(state: AppState) -> Router {
             "/clients/{company_id}/facilities/{facility_id}/people",
             get(clients_facility_people::get_facility_people).post(clients_facility_people::add_facility_person),
         )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/people/{person_id}",
+            delete(clients_facility_people::unlink_facility_person),
+        )
         // Requires client_ops.perform to start; status read is any
         // authenticated caller -- see clients_sync's own module doc.
         .route("/clients/sync", post(clients_sync::start_sync))

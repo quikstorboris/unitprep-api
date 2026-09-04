@@ -338,19 +338,23 @@ async fn link_person_to_facility(
 }
 
 /// Same find-by-email-or-create-then-link shape as `link_person_to_facility`
-/// above, but for `api::clients_facility_people`'s "Add User" chips rather
-/// than one-time ingest: when a matching `clients.people` row already
-/// exists, its `full_name`/`phone` are overwritten with the caller's
-/// values instead of left alone. `link_person_to_facility` deliberately
-/// never does this (ingest only ever runs once per facility, so there's
-/// nothing stale yet to correct at that point) -- this function exists
-/// specifically for the case that same restraint can't cover: a person
-/// already linked from an old ingest, whose stored name/phone drifted
-/// from what `clients.ps_person_index` -- refreshed nightly, independent
-/// of ingest -- currently says, e.g. Sand-Sto's own "Irene Chen -
-/// (301) 787-9221" (a pre-fix dash-format parse glued onto her name;
-/// confirmed live 2026-09-04, Boris's own call: the tab should self-heal
-/// this on next use rather than needing a one-off backfill). Email is the
+/// above, but for `api::clients_facility_people` rather than one-time
+/// ingest: when a matching `clients.people` row already exists, its
+/// `full_name`/`phone` are overwritten with the caller's values instead
+/// of left alone. `link_person_to_facility` deliberately never does this
+/// (ingest only ever runs once per facility, so there's nothing stale yet
+/// to correct at that point) -- this function exists specifically for the
+/// case that same restraint can't cover: a person already linked from an
+/// old ingest, whose stored name/phone drifted from what
+/// `clients.ps_person_index` -- refreshed nightly, independent of ingest
+/// -- currently says, e.g. Sand-Sto's own "Irene Chen - (301) 787-9221"
+/// (a pre-fix dash-format parse glued onto her name). Called two ways:
+/// an "Add User" chip click for a not-yet-linked candidate, and
+/// `get_facility_people`'s own silent auto-heal pass for an
+/// already-linked one whose stored values disagree with the index --
+/// Boris's own call, 2026-09-04: fixing this should need no explicit
+/// click at all, just viewing the tab, once "click an already-linked
+/// chip" was repurposed to mean unlink instead of refresh. Email is the
 /// only identity key, same reasoning as `link_person_to_facility`'s own
 /// doc comment -- name+phone fuzzy matching is dedup's problem, not this
 /// function's.
@@ -402,6 +406,30 @@ pub async fn upsert_person_and_link_to_facility(
     .bind(&assignment.role)
     .execute(&mut **tx)
     .await?;
+
+    Ok(())
+}
+
+/// Removes one (facility_id, person_id, role) link -- the Users tab's
+/// "unlink" action. Only ever deletes the link row, never
+/// `clients.people` itself: the same person can legitimately be linked to
+/// several of a company's facilities (a shared owner), so deleting their
+/// identity row here would silently break those other links too. Mirrors
+/// `api::clients_elavon::unlink_facility_elavon`'s own restraint (that
+/// one deletes `facility_merchant_accounts` rows, never touches
+/// `clients.people`-equivalent identity data either).
+pub async fn unlink_person_from_facility(
+    tx: &mut Transaction<'_, Postgres>,
+    facility_id: Uuid,
+    person_id: Uuid,
+    role: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("DELETE FROM clients.facility_people WHERE facility_id = $1 AND person_id = $2 AND role = $3")
+        .bind(facility_id)
+        .bind(person_id)
+        .bind(role)
+        .execute(&mut **tx)
+        .await?;
 
     Ok(())
 }
