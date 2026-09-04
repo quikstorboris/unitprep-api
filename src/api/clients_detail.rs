@@ -462,6 +462,26 @@ pub struct FacilityPoliciesResponse {
     pub coverage_tiers: Vec<CoverageTierRow>,
     pub commission: Option<CommissionRow>,
     pub specials_raw_text: Option<String>,
+    /// Whether this facility's own `previous_pms` names QSX -- see
+    /// `clients::policy_exemption`'s own module doc. Tells the frontend
+    /// whether to offer manual entry at all for a category that's
+    /// currently empty (only a QSX-legacy facility gets that permanent
+    /// exemption once it's used).
+    pub is_qsx_legacy: bool,
+    pub fees_manually_exempt: bool,
+    pub taxes_manually_exempt: bool,
+    pub delinquency_manually_exempt: bool,
+    pub coverage_manually_exempt: bool,
+    pub specials_manually_exempt: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct FacilityPolicyFlags {
+    fees_manually_exempt: bool,
+    taxes_manually_exempt: bool,
+    delinquency_manually_exempt: bool,
+    coverage_manually_exempt: bool,
+    specials_manually_exempt: bool,
 }
 
 async fn fetch_facility_exists(
@@ -588,6 +608,50 @@ async fn fetch_specials_raw_text(
     Ok(row.and_then(|(text,)| text))
 }
 
+/// A facility with no `facility_policies` row at all yet (never
+/// ingested, or a manual facility whose first category edit hasn't
+/// happened) has every exempt flag false -- there's nothing to exempt
+/// until a write handler creates that row.
+async fn fetch_policy_flags_and_qsx_status(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    role_keys: &[String],
+    facility_id: Uuid,
+) -> Result<(FacilityPolicyFlags, bool), sqlx::Error> {
+    let mut tx = begin_rls_transaction(db, user_id, role_keys).await?;
+
+    let flags: Option<FacilityPolicyFlags> = sqlx::query_as(
+        "SELECT fees_manually_exempt, taxes_manually_exempt, delinquency_manually_exempt, \
+         coverage_manually_exempt, specials_manually_exempt \
+         FROM clients.facility_policies WHERE facility_id = $1",
+    )
+    .bind(facility_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let previous_pms: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT previous_pms FROM clients.facilities WHERE id = $1")
+            .bind(facility_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+    tx.commit().await?;
+
+    let flags = flags.unwrap_or(FacilityPolicyFlags {
+        fees_manually_exempt: false,
+        taxes_manually_exempt: false,
+        delinquency_manually_exempt: false,
+        coverage_manually_exempt: false,
+        specials_manually_exempt: false,
+    });
+
+    let is_qsx = previous_pms
+        .and_then(|(pms,)| pms)
+        .is_some_and(|pms| crate::clients::policy_exemption::is_qsx_legacy(Some(&pms)));
+
+    Ok((flags, is_qsx))
+}
+
 /// Any authenticated caller -- Facility Policies carries no PII (fees,
 /// taxes, delinquency steps, coverage, commission, specials are all
 /// business terms, not personal data).
@@ -603,7 +667,16 @@ pub async fn get_facility_policies(
     user: AuthenticatedUser,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
-    let (exists_result, fees_result, taxes_result, steps_result, tiers_result, commission_result, specials_result) = tokio::join!(
+    let (
+        exists_result,
+        fees_result,
+        taxes_result,
+        steps_result,
+        tiers_result,
+        commission_result,
+        specials_result,
+        flags_result,
+    ) = tokio::join!(
         fetch_facility_exists(&state.db, user.user_id, &user.role_keys, company_id, facility_id),
         fetch_policy_fees(&state.db, user.user_id, &user.role_keys, facility_id),
         fetch_policy_taxes(&state.db, user.user_id, &user.role_keys, facility_id),
@@ -611,6 +684,7 @@ pub async fn get_facility_policies(
         fetch_coverage_tiers(&state.db, user.user_id, &user.role_keys, facility_id),
         fetch_commission(&state.db, user.user_id, &user.role_keys, facility_id),
         fetch_specials_raw_text(&state.db, user.user_id, &user.role_keys, facility_id),
+        fetch_policy_flags_and_qsx_status(&state.db, user.user_id, &user.role_keys, facility_id),
     );
 
     // Confirms the facility exists and belongs to this company. A
@@ -677,8 +751,29 @@ pub async fn get_facility_policies(
         }
     };
 
-    Json(FacilityPoliciesResponse { fees, taxes, delinquency_steps, coverage_tiers, commission, specials_raw_text })
-        .into_response()
+    let (flags, is_qsx_legacy) = match flags_result {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "facility_policies flags query failed");
+            return internal_error("Could not load this facility's policies");
+        }
+    };
+
+    Json(FacilityPoliciesResponse {
+        fees,
+        taxes,
+        delinquency_steps,
+        coverage_tiers,
+        commission,
+        specials_raw_text,
+        is_qsx_legacy,
+        fees_manually_exempt: flags.fees_manually_exempt,
+        taxes_manually_exempt: flags.taxes_manually_exempt,
+        delinquency_manually_exempt: flags.delinquency_manually_exempt,
+        coverage_manually_exempt: flags.coverage_manually_exempt,
+        specials_manually_exempt: flags.specials_manually_exempt,
+    })
+    .into_response()
 }
 
 #[cfg(test)]

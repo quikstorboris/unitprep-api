@@ -24,7 +24,8 @@ use super::{
     auth_register, auth_roles, auth_totp, auth_user_role, auth_user_status, auth_users,
     cancel_session, client_ops_activity_logs, client_ops_activity_logs_export,
     client_ops_qms_tags, clients_companies, clients_create, clients_detail, clients_elavon,
-    clients_facility_people, clients_preview, clients_resync, clients_search, clients_sync, correct,
+    clients_facility_people, clients_facility_policies_edit, clients_preview, clients_resync, clients_search,
+    clients_sync, correct,
     correct_group, dedup, discover, dropbox_browse,
     exclude_group, exclude_groups, exempt, export, group_file_confirm, group_file_upload,
     process_street_settings, resolve_unit_format, select_group_file, select_unit_file, tagger,
@@ -360,6 +361,30 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/clients/{company_id}/facilities/{facility_id}/policies",
             get(clients_detail::get_facility_policies),
+        )
+        // Manual edit for each split Facility Policies tab -- no extra
+        // permission check, RLS already gates these tables to
+        // onboarding_manager/department_manager (see
+        // clients_facility_policies_edit's own module doc).
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/policies/fees",
+            put(clients_facility_policies_edit::update_fees),
+        )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/policies/taxes",
+            put(clients_facility_policies_edit::update_taxes),
+        )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/policies/delinquency",
+            put(clients_facility_policies_edit::update_delinquency),
+        )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/policies/coverage",
+            put(clients_facility_policies_edit::update_coverage),
+        )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/policies/specials",
+            put(clients_facility_policies_edit::update_specials),
         )
         // Read: any authenticated caller. Link/unlink: client_ops.perform
         // -- see clients_elavon's own module doc.
