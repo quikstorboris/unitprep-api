@@ -3,10 +3,104 @@ use unitprep_unit_group::{CorrectionKey, ValidationResult};
 
 use super::*;
 use crate::api::test_support::{
-    analyzed_state_ready_for_export, analyzed_state_with_errors, empty_state, unit_document,
-    validated_state,
+    analyzed_state_ready_for_export, analyzed_state_with_errors, empty_state, uploaded_state,
+    unit_document, validated_state,
 };
 use crate::application::unit_group_session::WorkflowStage;
+
+#[tokio::test]
+async fn save_location_returns_404_for_missing_session() {
+    let response = save_location(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(ExportRequest {
+            session_id: "missing".to_string(),
+            client_id: None,
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn save_location_is_none_for_a_locally_uploaded_session() {
+    let state = uploaded_state(
+        "s1",
+        vec![unit_document(
+            "units.csv",
+            vec![["A01", "10x10 Inside Climate", "10", "10"]],
+        )],
+    );
+
+    let response = save_location(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(ExportRequest {
+            session_id: "s1".to_string(),
+            client_id: None,
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["default_folder_path"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn save_location_defaults_to_a_group_prep_output_subfolder_of_the_source_folder() {
+    let state = uploaded_state(
+        "s1",
+        vec![unit_document(
+            "units.csv",
+            vec![["A01", "10x10 Inside Climate", "10", "10"]],
+        )],
+    );
+    state.unit_group_sessions.with_session_mut("s1", |session| {
+        session.data.source_dropbox_folder_path =
+            Some("/qms onboarding/prairie enterprises llc/highway 20".to_string());
+    });
+
+    let response = save_location(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(ExportRequest {
+            session_id: "s1".to_string(),
+            client_id: None,
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["default_folder_path"],
+        "/qms onboarding/prairie enterprises llc/highway 20/Group Prep Output"
+    );
+}
+
+#[tokio::test]
+async fn export_to_dropbox_rejects_a_path_outside_the_configured_root() {
+    let response = export_to_dropbox(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(ExportToDropboxRequest {
+            session_id: "s1".to_string(),
+            client_id: None,
+            dropbox_path: "/Not/Under/The/Configured/Root/output.zip".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
 
 #[tokio::test]
 async fn export_returns_404_for_missing_session() {

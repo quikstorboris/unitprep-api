@@ -422,6 +422,7 @@ pub fn router(state: AppState) -> Router {
         .merge(auth_routes)
         .merge(invite_routes)
         .route("/upload", post(upload::upload))
+        .route("/upload-dropbox", post(upload::import_from_dropbox))
         .route("/discover", post(discover::discover))
         .route("/validate", post(validate::validate))
         .route("/correct", post(correct::correct))
@@ -435,6 +436,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/analyze", post(analyze::analyze))
         .route("/export", post(export::export))
+        .route("/export/save-location", post(export::save_location))
+        .route("/export/export-dropbox", post(export::export_to_dropbox))
         .route(
             "/unit-file/select",
             post(select_unit_file::select_unit_file),

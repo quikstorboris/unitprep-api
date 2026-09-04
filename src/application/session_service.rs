@@ -22,12 +22,14 @@ impl SessionService {
         &self,
         uploaded_files: Vec<UploadedFile>,
         owner_id: Option<Uuid>,
+        source_dropbox_folder_path: Option<String>,
     ) -> String {
         tracing::info!(uploaded_files = uploaded_files.len(), "Creating session");
 
         let session_id = Uuid::new_v4().to_string();
 
         let mut session = Session::new(session_id.clone(), owner_id);
+        session.data.source_dropbox_folder_path = source_dropbox_folder_path;
 
         let mut documents: Vec<CsvDocument> = Vec::new();
 

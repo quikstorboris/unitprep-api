@@ -97,6 +97,17 @@ pub struct SessionData {
     /// safety-net stage downgrade silently re-promoted by a slower
     /// analyze/export using data from before the correction.
     pub data_generation: u64,
+
+    /// The Dropbox folder this session's files were imported from --
+    /// `None` for a local (`webkitdirectory`) upload. Unlike dedup's/
+    /// tagger's single-file equivalent (that folder's own parent), this
+    /// is the one folder the user actually picked in the Dropbox picker
+    /// itself: a session's files are a whole folder's worth, not one
+    /// file with an obvious single parent, and nothing here enforces
+    /// every file came from the same place anyway -- this records the
+    /// one folder the import was scoped to, not a per-file provenance
+    /// model.
+    pub source_dropbox_folder_path: Option<String>,
 }
 
 #[derive(Debug, Clone)]

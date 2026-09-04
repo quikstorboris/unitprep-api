@@ -3,14 +3,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
-    extract::{Multipart, State},
+    extract::{Json, Multipart, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::api::{ApiErrorBody, AppState};
+use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root};
+use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::application::session_service::SessionService;
 use crate::auth::AuthenticatedUser;
 use unitprep_core::uploaded_file::UploadedFile;
@@ -193,7 +193,7 @@ pub async fn upload(
     }
 
     let session_id = SessionService::new(Arc::clone(&state.unit_group_sessions))
-        .create_session(uploaded_files, Some(user.user_id));
+        .create_session(uploaded_files, Some(user.user_id), None);
 
     tracing::info!(
         session_id = %session_id,
@@ -213,6 +213,102 @@ pub async fn upload(
         files_uploaded,
         files_failed,
         multipart_errors,
+    })
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UploadDropboxPathRequest {
+    /// A FOLDER path (not a file) -- unlike dedup's/tagger's single-file
+    /// Dropbox import, a Group Prep session's source is a whole folder's
+    /// worth of files, matching what local upload's own `webkitdirectory`
+    /// picker already captures.
+    pub path: String,
+}
+
+/// Dropbox-sourced counterpart to `upload` -- lists `request.path`
+/// non-recursively (`DropboxClient::list_folder`'s own documented
+/// limitation: real facility folders organized into further
+/// subfolders, e.g. a dedicated "Unit Files" folder, would only have
+/// their top-level files seen here), downloads every file entry, and
+/// feeds the result through the exact same `SessionService::
+/// create_session` local upload already calls -- no new ingestion path
+/// needed, only a different acquisition step.
+pub async fn import_from_dropbox(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(request): Json<UploadDropboxPathRequest>,
+) -> Response {
+    let started = Instant::now();
+
+    if let Err(response) = ensure_path_in_root(&state, &request.path) {
+        return response;
+    }
+
+    let entries = match state.dropbox.list_folder(&request.path).await {
+        Ok(entries) => entries,
+        Err(err) => {
+            tracing::error!(error = %err, path = %request.path, "Dropbox list_folder failed during unit-group import");
+            return internal_error("Could not list this Dropbox folder");
+        }
+    };
+
+    let file_entries: Vec<_> = entries.into_iter().filter(|entry| !entry.is_folder()).collect();
+
+    if file_entries.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorBody {
+                error: "no_file_uploaded",
+                message: "This Dropbox folder has no files.".to_string(),
+            }),
+        )
+            .into_response();
+    }
+
+    let mut uploaded_files = Vec::with_capacity(file_entries.len());
+    let mut files_failed = 0usize;
+    for entry in &file_entries {
+        match download_as_uploaded_file(&state, &entry.path_display).await {
+            Ok(file) => uploaded_files.push(file),
+            Err(_) => {
+                files_failed += 1;
+                tracing::warn!(
+                    path = %entry.path_display,
+                    "Failed downloading a file during unit-group Dropbox import"
+                );
+            }
+        }
+    }
+
+    let files_uploaded = uploaded_files.len();
+
+    if files_uploaded == 0 {
+        tracing::warn!(path = %request.path, files_failed, "Unit-group Dropbox import rejected -- no files could be downloaded");
+        return internal_error("Could not download any files from this Dropbox folder");
+    }
+
+    let session_id = SessionService::new(Arc::clone(&state.unit_group_sessions)).create_session(
+        uploaded_files,
+        Some(user.user_id),
+        Some(request.path.clone()),
+    );
+
+    tracing::info!(
+        session_id = %session_id,
+        owner_id = %user.user_id,
+        path = %request.path,
+        files_uploaded,
+        files_failed,
+        import_ms = started.elapsed().as_millis(),
+        "Unit-group Dropbox import complete"
+    );
+
+    Json(UploadResponse {
+        session_id,
+        files_uploaded,
+        files_failed,
+        multipart_errors: 0,
     })
     .into_response()
 }

@@ -167,3 +167,17 @@ async fn multiple_real_files_are_all_counted() {
     assert_eq!(body["files_uploaded"], 2);
     assert_eq!(body["files_failed"], 0);
 }
+
+#[tokio::test]
+async fn import_from_dropbox_rejects_a_path_outside_the_configured_root() {
+    let response = import_from_dropbox(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(UploadDropboxPathRequest {
+            path: "/Not/Under/The/Configured/Root".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
