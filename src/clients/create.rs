@@ -62,6 +62,7 @@ use uuid::Uuid;
 
 use crate::clients::intake_mapping::{map_intake_fields, MappedCompany, MappedFacility};
 use crate::clients::merchant_account_mapping::{credentials_added_to_qms_from_tasks, map_merchant_account_fields};
+use crate::clients::people::PersonAssignment;
 use crate::clients::repository::{
     ingest_merchant_account_run, insert_company, insert_facility, insert_facility_policies_and_people,
 };
@@ -92,6 +93,16 @@ pub struct EditableFacilityFields {
     pub subdomain_exists_in_qms_raw: Option<String>,
     pub system_email: Option<String>,
     pub website_url: Option<String>,
+    /// This facility's own reviewed People roster from the confirmation
+    /// screen -- who actually gets linked via `link_person_to_facility`,
+    /// **not** whatever `map_intake_fields` re-derives from this run's
+    /// own raw owner/DM/manager text. See `PersonAssignment`'s own doc
+    /// comment for why facility-level attribution has to be a human
+    /// call. Defaults to empty, not "keep whatever was there" -- same
+    /// full-resubmit convention every other field on this struct already
+    /// follows (see `apply_facility_overrides`'s own doc comment).
+    #[serde(default)]
+    pub people: Vec<PersonAssignment>,
 }
 
 /// Field names in `MappedCompany` that differ between a fresh Intake
@@ -460,7 +471,7 @@ pub async fn write_create_data(
             &facility_manually_edited_fields,
         )
         .await?;
-        insert_facility_policies_and_people(tx, facility_id, &mapped, &snapshot).await?;
+        insert_facility_policies_and_people(tx, facility_id, &mapped, &snapshot, &overrides.people).await?;
 
         if let Some(ma_run_id) = merchant_account_run_id {
             let ma_fields = fetched
@@ -590,6 +601,7 @@ mod diff_tests {
             subdomain_exists_in_qms_raw: mapped.subdomain_exists_in_qms_raw,
             system_email: mapped.system_email,
             website_url: mapped.website_url,
+            people: Vec::new(),
         }
     }
 

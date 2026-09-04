@@ -38,11 +38,33 @@
 // once a real caller exists.
 #![allow(dead_code)]
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ParsedPerson {
     pub full_name: String,
     pub email: Option<String>,
     pub phone: Option<String>,
+}
+
+/// A reviewed, facility-scoped person + role -- the wire shape for the
+/// confirmation screen's People chips (`api::clients_preview`'s output,
+/// echoed back, possibly edited, on `api::clients_create`'s request).
+/// PS's own free-text owner/DM/manager fields carry no facility-level
+/// attribution at all (the same raw text is copy-pasted onto every
+/// sister facility's own run -- see the vault's sister-site finding),
+/// so which facility a real person actually belongs to is a call only
+/// a human reviewing the batch can make; this is that call, recorded.
+/// `role` is one of `clients.facility_people.role`'s Intake-sourced
+/// values -- `"owner"` | `"district_manager"` | `"manager"` -- the only
+/// three this screen ever assigns (Merchant Account's `"signer"` and
+/// Contract Order's POC roles aren't part of this review at all).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonAssignment {
+    pub full_name: String,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub role: String,
 }
 
 /// Groups lines into "chunks" separated by one or more blank lines.

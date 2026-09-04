@@ -19,7 +19,7 @@ use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
 use crate::clients::fields::{value_for, values_for};
-use crate::clients::people::{parse_people_block, ParsedPerson};
+use crate::clients::people::{parse_people_block, ParsedPerson, PersonAssignment};
 use crate::process_street::FormField;
 
 /// PS sends dates as full ISO-8601 timestamps ("2026-08-19T15:00:00.000Z")
@@ -224,6 +224,29 @@ pub struct MappedIntakeRun {
     pub owners: Vec<ParsedPerson>,
     pub district_managers: Vec<ParsedPerson>,
     pub managers: Vec<ParsedPerson>,
+}
+
+impl MappedIntakeRun {
+    /// This run's own owners/DMs/managers as `PersonAssignment`s -- the
+    /// naive, un-reviewed default `api::clients_preview` hands the
+    /// confirmation screen as each facility's starting chip selection,
+    /// and the same default `clients::repository::ingest_intake_run`
+    /// (Phase 1's still-unwired direct path) falls back to when nothing
+    /// reviewed exists to override it with.
+    pub fn people(&self) -> Vec<PersonAssignment> {
+        self.owners
+            .iter()
+            .map(|p| (p, "owner"))
+            .chain(self.district_managers.iter().map(|p| (p, "district_manager")))
+            .chain(self.managers.iter().map(|p| (p, "manager")))
+            .map(|(p, role)| PersonAssignment {
+                full_name: p.full_name.clone(),
+                email: p.email.clone(),
+                phone: p.phone.clone(),
+                role: role.to_string(),
+            })
+            .collect()
+    }
 }
 
 /// One named fee -> `(fee_type, PS field key)`. "Any Other Fees" is
@@ -613,6 +636,37 @@ mod tests {
         assert_eq!(mapped.owners.len(), 3);
         assert_eq!(mapped.owners[0].full_name, "Kyle Lindley");
         assert!(!mapped.managers.is_empty() || !mapped.district_managers.is_empty());
+    }
+
+    #[test]
+    fn people_flattens_owners_district_managers_and_managers_with_their_roles() {
+        let mapped = map_intake_fields(&real_fields());
+        let people = mapped.people();
+
+        // Every person from all three blocks must come through, each
+        // tagged with the role its own block implies, owners first (the
+        // flattening order `link_person_to_facility`'s old inline loop
+        // used, now reproduced here so nothing about write order changed).
+        assert_eq!(
+            people.len(),
+            mapped.owners.len() + mapped.district_managers.len() + mapped.managers.len()
+        );
+        assert_eq!(
+            people.iter().filter(|p| p.role == "owner").count(),
+            mapped.owners.len()
+        );
+        assert_eq!(
+            people.iter().filter(|p| p.role == "district_manager").count(),
+            mapped.district_managers.len()
+        );
+        assert_eq!(
+            people.iter().filter(|p| p.role == "manager").count(),
+            mapped.managers.len()
+        );
+        assert_eq!(people[0].full_name, "Kyle Lindley");
+        assert_eq!(people[0].role, "owner");
+        assert_eq!(people[0].email, mapped.owners[0].email);
+        assert_eq!(people[0].phone, mapped.owners[0].phone);
     }
 
     #[test]

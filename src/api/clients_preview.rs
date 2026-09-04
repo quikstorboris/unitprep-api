@@ -63,6 +63,7 @@ use crate::clients::merchant_account_correlation::{
     correlate_by_title, merchant_account_run_titles, Correlation, IntakeRunTitle,
 };
 use crate::clients::merchant_account_mapping::map_merchant_account_fields;
+use crate::clients::people::PersonAssignment;
 
 #[derive(Debug, Deserialize)]
 pub struct PreviewRunRequest {
@@ -112,6 +113,13 @@ pub struct PreviewedRun {
     /// data at the field level, the confirmation screen's own toggle is
     /// what decides which view is actually used.
     pub facility: MappedFacility,
+    /// This run's own naively-parsed owners/DMs/managers -- the
+    /// confirmation screen's starting chip selection for this facility's
+    /// People section, before any human decides which of them (and which
+    /// of every OTHER selected run's people) actually belong here. See
+    /// `PersonAssignment`'s own doc comment for why this can't be fully
+    /// resolved server-side.
+    pub people: Vec<PersonAssignment>,
     /// The Merchant Account run this facility/company correlates to, if
     /// any -- auto-correlated or the caller's own explicit choice, same
     /// resolution `apply_suggested_legal_name` already used for
@@ -315,6 +323,7 @@ pub async fn preview_clients(
     let mut runs = Vec::with_capacity(request.runs.len());
     for r in &request.runs {
         let mapped = mapped_runs.remove(&r.run_id).expect("every run_id was mapped above");
+        let people = mapped.people();
 
         let company = apply_suggested_legal_name(
             mapped.company,
@@ -328,6 +337,7 @@ pub async fn preview_clients(
             is_first_time: mapped.is_first_time,
             company,
             facility: mapped.facility,
+            people,
             merchant_account_run_id: merchant_account_run_ids.get(&r.run_id).cloned(),
         });
     }

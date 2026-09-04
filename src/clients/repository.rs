@@ -31,7 +31,7 @@ use crate::clients::contract_order_mapping::MappedContractOrder;
 use crate::clients::encryption::EncryptionError;
 use crate::clients::intake_mapping::{MappedCompany, MappedFacility, MappedIntakeRun};
 use crate::clients::merchant_account_mapping::{MappedMerchantAccount, MappedParty};
-use crate::clients::people::ParsedPerson;
+use crate::clients::people::{ParsedPerson, PersonAssignment};
 use crate::process_street::Task;
 
 /// Inserts just the company row -- `legal_name` is passed explicitly
@@ -137,16 +137,24 @@ pub async fn insert_facility(
 }
 
 /// Inserts every Facility Policies row a `MappedIntakeRun` carries
-/// (Fees/Taxes/Delinquency/Coverage/Commission/Specials) plus the
-/// owner/district-manager/manager people it parsed, against an
-/// already-created `facility_id`. Split out of `ingest_intake_run` so
-/// the split-creation flow can apply the same policy/people population
-/// to a facility that didn't just create its own company.
+/// (Fees/Taxes/Delinquency/Coverage/Commission/Specials), against an
+/// already-created `facility_id`, plus `people` -- **not** derived from
+/// `mapped` here. PS's own owner/DM/manager fields carry no real
+/// facility-level attribution (the same raw text is copy-pasted onto
+/// every sister facility's own run), so which facility a person
+/// actually belongs to is a call the confirmation screen's own People
+/// chips make, not something this function should silently re-derive.
+/// Callers with no reviewed selection at all (`ingest_intake_run`,
+/// Phase 1's still-unwired direct path) pass `mapped.people()` as their
+/// own fallback. Split out of `ingest_intake_run` so the split-creation
+/// flow can apply the same policy/people population to a facility that
+/// didn't just create its own company.
 pub async fn insert_facility_policies_and_people(
     tx: &mut Transaction<'_, Postgres>,
     facility_id: Uuid,
     mapped: &MappedIntakeRun,
     raw_ps_snapshot: &Value,
+    people: &[PersonAssignment],
 ) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO clients.facility_policies (facility_id, raw_ps_snapshot) VALUES ($1, $2)")
         .bind(facility_id)
@@ -237,14 +245,13 @@ pub async fn insert_facility_policies_and_people(
             .await?;
     }
 
-    for (person, role) in mapped
-        .owners
-        .iter()
-        .map(|p| (p, "owner"))
-        .chain(mapped.district_managers.iter().map(|p| (p, "district_manager")))
-        .chain(mapped.managers.iter().map(|p| (p, "manager")))
-    {
-        link_person_to_facility(tx, facility_id, person, role).await?;
+    for assignment in people {
+        let person = ParsedPerson {
+            full_name: assignment.full_name.clone(),
+            email: assignment.email.clone(),
+            phone: assignment.phone.clone(),
+        };
+        link_person_to_facility(tx, facility_id, &person, &assignment.role).await?;
     }
 
     Ok(())
@@ -275,7 +282,7 @@ pub async fn ingest_intake_run(
         insert_company(tx, legal_name, &mapped.company, ps_intake_run_id, raw_ps_snapshot, &[]).await?;
     let facility_id =
         insert_facility(tx, company_id, &mapped.facility, ps_intake_run_id, raw_ps_snapshot, &[]).await?;
-    insert_facility_policies_and_people(tx, facility_id, mapped, raw_ps_snapshot).await?;
+    insert_facility_policies_and_people(tx, facility_id, mapped, raw_ps_snapshot, &mapped.people()).await?;
     Ok((company_id, facility_id))
 }
 
