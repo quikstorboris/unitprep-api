@@ -59,7 +59,13 @@ pub struct ParsedPerson {
 /// values -- `"owner"` | `"district_manager"` | `"manager"` -- the only
 /// three this screen ever assigns (Merchant Account's `"signer"` and
 /// Contract Order's POC roles aren't part of this review at all).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Also doubles as `api::clients_facility_people`'s wire shape for an
+/// "Add User" candidate straight off `clients.ps_person_index` (that
+/// table's own `full_name`/`email`/`phone`/`role` columns match this
+/// struct's fields by name) -- the `sqlx::FromRow` derive is for that
+/// query, not for anything Intake-mapping related.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow)]
 pub struct PersonAssignment {
     pub full_name: String,
     pub email: Option<String>,

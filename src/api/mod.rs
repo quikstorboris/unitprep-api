@@ -21,6 +21,7 @@ mod clients_companies;
 mod clients_create;
 mod clients_detail;
 mod clients_elavon;
+mod clients_facility_people;
 mod clients_preview;
 mod clients_resync;
 mod clients_search;
