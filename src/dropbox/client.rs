@@ -29,6 +29,15 @@ impl Entry {
     pub fn is_folder(&self) -> bool {
         self.tag == "folder"
     }
+
+    #[cfg(test)]
+    fn test_folder(name: &str, path_display: &str) -> Self {
+        Self {
+            tag: "folder".to_string(),
+            name: name.to_string(),
+            path_display: path_display.to_string(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -75,6 +84,25 @@ struct CachedToken {
 /// How much time-left-on-the-clock triggers a proactive refresh rather
 /// than risking a request racing the token's real expiry mid-flight.
 const REFRESH_SAFETY_MARGIN: Duration = Duration::from_secs(60);
+
+/// `DropboxClient::find_facility_folder`'s own picking logic, pulled out
+/// as a pure function so it's testable without a real network call --
+/// see that method's own doc comment for why this is exact-match-only.
+///
+/// **A "there's only one candidate, it must be it" fallback was tried
+/// and reverted the same day** (2026-09-04): searching Dropbox for
+/// Sand-Sto's own real facility name ("Sand-Sto Climate Controlled
+/// Storage") returned exactly one folder candidate -- and it was
+/// `sand_sto_climate_control_storage_decrypt`, an unrelated folder
+/// nowhere near the real one ("Sand-Sto Storage", found only by manual
+/// browsing). Dropbox's own search ranking is not reliable enough to
+/// assume "the only result" means "the right result" -- a wrong guess
+/// here silently points a user at an unrelated (and, going by that
+/// name, possibly sensitive) folder, which is a worse outcome than
+/// finding nothing and falling back to browsing from the root.
+fn pick_facility_folder(folders: Vec<Entry>, facility_name: &str) -> Option<Entry> {
+    folders.into_iter().find(|f| f.name == facility_name)
+}
 
 pub struct DropboxClient {
     http: reqwest::Client,
@@ -319,17 +347,23 @@ impl DropboxClient {
     /// tree `search_folders` already searches for the client-search
     /// page's facility lookup), fully writable there. So this reuses
     /// `search_folders` -- proven working in production already -- rather
-    /// than the URL at all, and returns the first folder result whose
-    /// name matches exactly (a facility name search can otherwise surface
-    /// files that merely mention it, e.g. "Highway 20 Self Storage Unit
-    /// Coverages.csv", which `search_folders`'s own folder-only filter
-    /// already drops, but a same-named sub-item one level down could
-    /// still slip through a substring match -- exact-name equality is
-    /// the one signal that reliably means "this IS the facility folder,"
-    /// not just A a folder somewhere under it).
+    /// than the URL at all.
+    ///
+    /// Exact name match only (a facility name search can otherwise
+    /// surface files that merely mention it, e.g. "Highway 20 Self
+    /// Storage Unit Coverages.csv", which `search_folders`'s own
+    /// folder-only filter already drops, but a same-named sub-item one
+    /// level down could still slip through). `None` when nothing matches
+    /// exactly -- including the real case where a facility's name in OO
+    /// doesn't match its own Dropbox folder's real name verbatim (Sand-Sto
+    /// Climate Controlled Storage in OO, "Sand-Sto Storage" in Dropbox --
+    /// whoever created the folder shortened it). See `pick_facility_folder`'s
+    /// own doc comment for why a same-day "just take the only candidate"
+    /// fallback was tried and reverted: it isn't safe to assume Dropbox's
+    /// search ranking narrowing to one result means that result is right.
     pub async fn find_facility_folder(&self, facility_name: &str) -> Result<Option<Entry>, DropboxError> {
         let folders = self.search_folders(facility_name).await?;
-        Ok(folders.into_iter().find(|f| f.name == facility_name))
+        Ok(pick_facility_folder(folders, facility_name))
     }
 
     /// Creates `path` as a folder if it doesn't already exist -- the
@@ -473,6 +507,55 @@ impl DropboxClient {
 mod tests {
     use super::*;
 
+    #[test]
+    fn picks_the_exact_name_match_over_any_other_candidate() {
+        let folders = vec![
+            Entry::test_folder("Sand-Sto Storage", "/qms onboarding/sand-sto storage"),
+            Entry::test_folder(
+                "Sand-Sto Climate Controlled Storage",
+                "/qms onboarding/sand-sto climate controlled storage",
+            ),
+        ];
+
+        let picked = pick_facility_folder(folders, "Sand-Sto Climate Controlled Storage")
+            .expect("an exact match exists and must be picked");
+
+        assert_eq!(picked.name, "Sand-Sto Climate Controlled Storage");
+    }
+
+    // The real Sand-Sto case (2026-09-04): OO's own facility name
+    // ("Sand-Sto Climate Controlled Storage") doesn't match the real
+    // Dropbox folder someone actually created for it ("Sand-Sto
+    // Storage") -- a single non-exact candidate must NOT be silently
+    // picked (see `pick_facility_folder`'s own doc comment for why a
+    // same-day fallback attempt here was reverted: Dropbox's search
+    // returned exactly one result for this exact real query and it was
+    // an unrelated folder, not this one).
+    #[test]
+    fn picks_nothing_when_a_single_candidate_does_not_match_exactly() {
+        let folders = vec![Entry::test_folder(
+            "Sand-Sto Storage",
+            "/qms onboarding/sand-sto storage",
+        )];
+
+        assert!(pick_facility_folder(folders, "Sand-Sto Climate Controlled Storage").is_none());
+    }
+
+    #[test]
+    fn picks_nothing_when_multiple_candidates_have_no_exact_match() {
+        let folders = vec![
+            Entry::test_folder("Sand-Sto Storage", "/qms onboarding/sand-sto storage"),
+            Entry::test_folder("Sand-Sto Self Storage", "/qms onboarding/sand-sto self storage"),
+        ];
+
+        assert!(pick_facility_folder(folders, "Sand-Sto Climate Controlled Storage").is_none());
+    }
+
+    #[test]
+    fn picks_nothing_when_search_returns_no_candidates_at_all() {
+        assert!(pick_facility_folder(vec![], "Nonexistent Facility").is_none());
+    }
+
     // Real-network test against the actual Dropbox account and QMS
     // Onboarding folder -- no mocking, matching this codebase's existing
     // #[ignore]d real-credential tests (see
@@ -566,6 +649,37 @@ mod tests {
 
         assert!(found.is_folder());
         assert!(found.path_display.to_lowercase().contains("prairie enterprises llc"));
+    }
+
+    // Real-network confirmation of the actual case found live 2026-09-04:
+    // OO's own facility name ("Sand-Sto Climate Controlled Storage")
+    // doesn't match its real Dropbox folder name ("Sand-Sto Storage") --
+    // and searching for OO's own name doesn't even reliably surface the
+    // real folder as a candidate at all (Dropbox's own search returned
+    // exactly one result, and it was an unrelated folder,
+    // `sand_sto_climate_control_storage_decrypt`). This must resolve to
+    // nothing, not a wrong guess -- see `pick_facility_folder`'s own doc
+    // comment for the full story of why a same-day fallback attempt here
+    // was reverted.
+    #[tokio::test]
+    #[ignore]
+    async fn resolves_to_nothing_for_a_facility_whose_dropbox_folder_name_differs_from_oos_name() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let config = DropboxConfig::from_env().expect(
+            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
+        );
+        let client = DropboxClient::new(config);
+
+        let found = client
+            .find_facility_folder("Sand-Sto Climate Controlled Storage")
+            .await
+            .expect("the search call itself must still succeed");
+
+        assert!(
+            found.is_none(),
+            "must not guess at an unrelated folder when nothing matches exactly"
+        );
     }
 
     // A name that matches files but no exact-named folder (every real
