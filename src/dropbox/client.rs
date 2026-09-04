@@ -76,6 +76,20 @@ struct TokenResponse {
     expires_in: u64,
 }
 
+/// `sharing/get_shared_link_metadata`'s response -- deliberately just
+/// `.tag`/`id`, not the fuller shape (name, link_permissions,
+/// team_member_info, ...) `resolve_shared_link` doesn't need. `id` is
+/// the one field worth anything here: a Dropbox-wide object identifier
+/// that resolves to a real path under THIS account's own namespace via
+/// `files/get_metadata`, even when this response's own path_lower would
+/// be absent (see `resolve_shared_link`'s own doc comment).
+#[derive(Deserialize)]
+struct SharedLinkMetadataResponse {
+    #[serde(rename = ".tag")]
+    tag: String,
+    id: String,
+}
+
 struct CachedToken {
     access_token: String,
     expires_at: Instant,
@@ -327,40 +341,120 @@ impl DropboxClient {
         Ok(folders)
     }
 
+    /// Resolves a Process-Street-captured Dropbox shared-link URL (the
+    /// `https://www.dropbox.com/scl/fo/...` links `clients.facilities.
+    /// dropbox_folder_url` stores, filled in by hand into PS's own
+    /// `Facility_Onboarding_folder_URL:` field) to the real, writable
+    /// path it corresponds to in THIS account's own namespace -- the
+    /// reliable, primary way to find a facility's own folder.
+    /// `find_facility_folder` below is the fallback for when this
+    /// returns `None` (no link at all, or the link itself is stale).
+    ///
+    /// **The two-step bridge this needs, confirmed live 2026-09-04**:
+    /// such a link is typically shared by an individual staff member's
+    /// own Dropbox account (Highway 20's real link: team "KoBre", member
+    /// "Kyle Murakami") -- not necessarily the same Dropbox Business
+    /// team this app's own token belongs to ("QS Fileserver"). Calling
+    /// `sharing/get_shared_link_metadata` alone on such a link comes back
+    /// with real name/type metadata but no `path_lower` (no filesystem-
+    /// level view from this account's own perspective) -- not enough to
+    /// list, create a folder in, or upload to it directly. But its `id`
+    /// field is a Dropbox-wide, account-independent object identifier;
+    /// calling `files/get_metadata` on that same id, under THIS account's
+    /// own `Dropbox-API-Path-Root`, resolves to a real `path_display` in
+    /// THIS account's own namespace whenever this account also has
+    /// access to the same underlying folder -- which it does for every
+    /// real facility folder in the shared "QMS Onboarding" tree, proven
+    /// against both Highway 20's own link and, critically, Sand-Sto's
+    /// (the real case where the facility's OO name -- "Sand-Sto Climate
+    /// Controlled Storage" -- doesn't match its actual Dropbox folder
+    /// name, "Sand-Sto Storage" -- this still resolves correctly, unlike
+    /// a name search, since it never depends on the name matching at
+    /// all).
+    ///
+    /// Degrades to `Ok(None)` (not an error) for any failure along the
+    /// way -- a revoked/expired link, a link this account genuinely
+    /// can't reach, or a link that resolves to a file rather than a
+    /// folder -- since a broken link is a normal real-world occurrence
+    /// here, not a system fault; the caller falls back to
+    /// `find_facility_folder`. A transport-level failure (`?` on
+    /// `access_token()`) still propagates as a real error.
+    pub async fn resolve_shared_link(&self, url: &str) -> Result<Option<Entry>, DropboxError> {
+        let access_token = self.access_token().await?;
+
+        let link_response = self
+            .http
+            .post("https://api.dropboxapi.com/2/sharing/get_shared_link_metadata")
+            .bearer_auth(&access_token)
+            .json(&serde_json::json!({ "url": url }))
+            .send()
+            .await?;
+
+        let status = link_response.status();
+        let body = link_response.text().await?;
+
+        if !status.is_success() {
+            tracing::warn!(url = %url, status = status.as_u16(), body = %body, "Dropbox shared-link resolution failed, falling back to name search");
+            return Ok(None);
+        }
+
+        let link_metadata: SharedLinkMetadataResponse = match serde_json::from_str(&body) {
+            Ok(parsed) => parsed,
+            Err(err) => {
+                tracing::warn!(url = %url, error = %err, body = %body, "failed to parse shared-link metadata response, falling back to name search");
+                return Ok(None);
+            }
+        };
+
+        if link_metadata.tag != "folder" {
+            tracing::warn!(url = %url, tag = %link_metadata.tag, "shared link does not point at a folder, falling back to name search");
+            return Ok(None);
+        }
+
+        let metadata_response = self
+            .http
+            .post("https://api.dropboxapi.com/2/files/get_metadata")
+            .bearer_auth(&access_token)
+            .header("Dropbox-API-Path-Root", self.path_root_header())
+            .json(&serde_json::json!({ "path": link_metadata.id }))
+            .send()
+            .await?;
+
+        let status = metadata_response.status();
+        let body = metadata_response.text().await?;
+
+        if !status.is_success() {
+            tracing::warn!(url = %url, id = %link_metadata.id, status = status.as_u16(), body = %body, "Dropbox get_metadata by shared-link id failed, falling back to name search");
+            return Ok(None);
+        }
+
+        match serde_json::from_str::<Entry>(&body) {
+            Ok(entry) => {
+                tracing::info!(url = %url, path = %entry.path_display, "dropbox shared link resolved to a real path via its object id");
+                Ok(Some(entry))
+            }
+            Err(err) => {
+                tracing::warn!(url = %url, error = %err, body = %body, "failed to parse get_metadata response, falling back to name search");
+                Ok(None)
+            }
+        }
+    }
+
     /// Finds a facility's own Dropbox folder by name under this app's
-    /// connected root, and returns its real, writable path.
-    ///
-    /// **Not** resolved from `clients.facilities.dropbox_folder_url`
-    /// itself -- confirmed live against the real API (2026-09-04) that
-    /// these `https://www.dropbox.com/scl/fo/...` links are shared by an
-    /// individual staff member's own Dropbox account (PS's
-    /// `Facility_Onboarding_folder_URL:` field is filled in by hand),
-    /// which is not necessarily the same Dropbox Business team this app's
-    /// own token belongs to. `sharing/get_shared_link_metadata` on such a
-    /// link comes back with real name/type metadata but no `path_lower`
-    /// (no filesystem-level view) and only `link_access_level: viewer` --
-    /// enough to prove the link resolves to *something*, not enough to
-    /// list, create a folder in, or upload to it via this account.
-    ///
-    /// The same physical facility folder is reachable anyway: it lives
-    /// under this app's own connected root (the same "QMS Onboarding"
-    /// tree `search_folders` already searches for the client-search
-    /// page's facility lookup), fully writable there. So this reuses
-    /// `search_folders` -- proven working in production already -- rather
-    /// than the URL at all.
-    ///
-    /// Exact name match only (a facility name search can otherwise
-    /// surface files that merely mention it, e.g. "Highway 20 Self
-    /// Storage Unit Coverages.csv", which `search_folders`'s own
+    /// connected root -- the fallback `resolve_shared_link` above uses
+    /// when a facility has no captured link at all, or that link fails
+    /// to resolve. Exact name match only (a facility name search can
+    /// otherwise surface files that merely mention it, e.g. "Highway 20
+    /// Self Storage Unit Coverages.csv", which `search_folders`'s own
     /// folder-only filter already drops, but a same-named sub-item one
     /// level down could still slip through). `None` when nothing matches
-    /// exactly -- including the real case where a facility's name in OO
-    /// doesn't match its own Dropbox folder's real name verbatim (Sand-Sto
-    /// Climate Controlled Storage in OO, "Sand-Sto Storage" in Dropbox --
-    /// whoever created the folder shortened it). See `pick_facility_folder`'s
-    /// own doc comment for why a same-day "just take the only candidate"
-    /// fallback was tried and reverted: it isn't safe to assume Dropbox's
-    /// search ranking narrowing to one result means that result is right.
+    /// exactly -- this fallback path has no reliable way to handle a
+    /// facility whose OO name doesn't match its real Dropbox folder name
+    /// (that's exactly what `resolve_shared_link` is for); see
+    /// `pick_facility_folder`'s own doc comment for why a same-day "just
+    /// take the only candidate" fallback was tried and reverted here --
+    /// it isn't safe to assume Dropbox's search ranking narrowing to one
+    /// result means that result is right.
     pub async fn find_facility_folder(&self, facility_name: &str) -> Result<Option<Entry>, DropboxError> {
         let folders = self.search_folders(facility_name).await?;
         Ok(pick_facility_folder(folders, facility_name))
@@ -624,13 +718,66 @@ mod tests {
         );
     }
 
+    // Real-network, read-only: resolve_shared_link is the primary,
+    // reliable path -- Highway 20's own real dropbox_folder_url, whose
+    // name matches OO's facility name.
+    #[tokio::test]
+    #[ignore]
+    async fn resolves_highway_20s_real_shared_link_to_its_actual_path() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let config = DropboxConfig::from_env().expect(
+            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
+        );
+        let client = DropboxClient::new(config);
+
+        let found = client
+            .resolve_shared_link(
+                "https://www.dropbox.com/scl/fo/iptn5zwsl0c4tr74r4jfi/AH4kjB7xiOg16DHFgVJ7J1M?rlkey=ahi804fhw7d141w3gj2e45ltx&st=cinc446y&dl=0",
+            )
+            .await
+            .expect("resolving a real facility's own shared link must succeed")
+            .expect("Highway 20's own real link must resolve to a real path");
+
+        assert!(found.is_folder());
+        assert!(found.path_display.to_lowercase().contains("highway 20"));
+    }
+
+    // Real-network, read-only: the case that actually matters --
+    // Sand-Sto's own real dropbox_folder_url resolves to its real
+    // folder ("Sand-Sto Storage") even though OO's own facility name
+    // ("Sand-Sto Climate Controlled Storage") doesn't match it at all.
+    // Confirms this mechanism never depends on the name matching, unlike
+    // find_facility_folder's own name-search fallback.
+    #[tokio::test]
+    #[ignore]
+    async fn resolves_sand_stos_real_shared_link_despite_the_oo_name_mismatch() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let config = DropboxConfig::from_env().expect(
+            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
+        );
+        let client = DropboxClient::new(config);
+
+        let found = client
+            .resolve_shared_link(
+                "https://www.dropbox.com/scl/fo/8yhn4pue198c2gzcqwyxt/AI6hvEdb_Mepxjumow8fAig?rlkey=5sn69x7ouu3kduvf9my112lww&st=bvd1b2gc&dl=0",
+            )
+            .await
+            .expect("resolving a real facility's own shared link must succeed")
+            .expect("Sand-Sto's own real link must resolve to a real path");
+
+        assert!(found.is_folder());
+        assert_eq!(found.name, "Sand-Sto Storage");
+    }
+
     // Real-network, read-only: proves `find_facility_folder` locates the
     // real, writable path -- confirmed live 2026-09-04 to be the same
     // physical folder `dropbox_folder_url`'s own shared link points at
     // (same subfolders: Final Data, Preliminary Data, Tenants & Leases
     // Migration, Units Migration, Validation), reached by name search
-    // under this app's own root instead, since the URL itself resolves
-    // to no usable path (see this method's own doc comment).
+    // under this app's own root as a fallback when `resolve_shared_link`
+    // isn't available.
     #[tokio::test]
     #[ignore]
     async fn finds_a_real_facilitys_own_folder_by_exact_name() {

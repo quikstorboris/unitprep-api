@@ -241,13 +241,13 @@ pub struct FacilityDropboxFolderResponse {
     pub path: Option<String>,
 }
 
-/// A facility's own Dropbox folder, found by exact name match under this
-/// app's connected root -- **not** resolved from `clients.facilities.
-/// dropbox_folder_url` itself. See `DropboxClient::find_facility_folder`'s
-/// own doc comment for why that stored link (a shared link, captured by
-/// hand into PS's own intake form) can't be resolved to a writable path
-/// directly, and why searching by name under the shared root reaches the
-/// same real folder anyway.
+/// A facility's own Dropbox folder -- tries its own captured
+/// `dropbox_folder_url` first (`DropboxClient::resolve_shared_link`,
+/// the reliable path since it's the real link PS captured, not a name
+/// guess), falling back to an exact-name search under this app's own
+/// root (`DropboxClient::find_facility_folder`) when there's no link at
+/// all or it fails to resolve. See both of those methods' own doc
+/// comments for the full reasoning.
 ///
 /// Any authenticated caller -- same reasoning as `list_folder`/
 /// `search_folders` above (read-only discovery, nothing sensitive). The
@@ -268,8 +268,8 @@ pub async fn facility_dropbox_folder(
         }
     };
 
-    let facility_exists: Option<(i32,)> = match sqlx::query_as(
-        "SELECT 1 FROM clients.facilities WHERE company_id = $1 AND name = $2",
+    let facility: Option<(Option<String>,)> = match sqlx::query_as(
+        "SELECT dropbox_folder_url FROM clients.facilities WHERE company_id = $1 AND name = $2",
     )
     .bind(company_id)
     .bind(&query.facility_name)
@@ -288,10 +288,30 @@ pub async fn facility_dropbox_folder(
         return internal_error("Could not look up this facility's Dropbox folder");
     }
 
-    if facility_exists.is_none() {
+    let Some((dropbox_folder_url,)) = facility else {
         return not_found("facility");
-    }
+    };
     let name = query.facility_name;
+
+    if let Some(url) = &dropbox_folder_url {
+        match state.dropbox.resolve_shared_link(url).await {
+            Ok(Some(entry)) => {
+                tracing::info!(
+                    user_id = %user.user_id,
+                    company_id = %company_id,
+                    facility_name = %name,
+                    via = "shared_link",
+                    "resolved a facility's default Dropbox folder"
+                );
+                return Json(FacilityDropboxFolderResponse { path: Some(entry.path_display) }).into_response();
+            }
+            Ok(None) => {} // falls through to the name-search fallback below
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, facility_name = %name, "dropbox resolve_shared_link failed");
+                return internal_error("Could not look up this facility's Dropbox folder");
+            }
+        }
+    }
 
     match state.dropbox.find_facility_folder(&name).await {
         Ok(found) => {
@@ -299,6 +319,7 @@ pub async fn facility_dropbox_folder(
                 user_id = %user.user_id,
                 company_id = %company_id,
                 facility_name = %name,
+                via = "name_search",
                 found = found.is_some(),
                 "resolved a facility's default Dropbox folder"
             );
