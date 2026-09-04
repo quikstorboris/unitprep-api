@@ -123,6 +123,110 @@ async fn report_returns_404_for_a_session_belonging_to_a_different_user() {
 }
 
 #[tokio::test]
+async fn save_location_returns_404_for_missing_session() {
+    let response = save_location(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(TaggerSessionRequest {
+            session_id: "missing".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn save_location_is_none_for_a_locally_uploaded_session() {
+    let original_bytes = std::fs::read(FIXTURE).unwrap();
+    let state = crate::api::tagger_test_support::tagger_state_with_source_folder(
+        "s1",
+        original_bytes,
+        "atherton.docx",
+        vec![],
+        None,
+    );
+
+    let response = save_location(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(TaggerSessionRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(body["default_folder_path"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn save_location_defaults_to_a_tagged_templates_subfolder_of_the_source_folder() {
+    let original_bytes = std::fs::read(FIXTURE).unwrap();
+    let state = crate::api::tagger_test_support::tagger_state_with_source_folder(
+        "s1",
+        original_bytes,
+        "atherton.docx",
+        vec![],
+        Some("/qms onboarding/prairie enterprises llc/highway 20/templates".to_string()),
+    );
+
+    let response = save_location(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(TaggerSessionRequest {
+            session_id: "s1".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        body["default_folder_path"],
+        "/qms onboarding/prairie enterprises llc/highway 20/templates/Tagged Templates"
+    );
+}
+
+#[tokio::test]
+async fn import_from_dropbox_rejects_a_path_outside_the_configured_root() {
+    let response = import_from_dropbox(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(TaggerDropboxPathRequest {
+            path: "/Not/Under/The/Configured/Root/file.docx".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn apply_to_dropbox_rejects_a_path_outside_the_configured_root() {
+    let response = apply_to_dropbox(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(TaggerApplyToDropboxRequest {
+            session_id: "s1".to_string(),
+            confirmed: vec![],
+            preserve_blanks: false,
+            dropbox_path: "/Not/Under/The/Configured/Root/file.docx".to_string(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn apply_returns_404_for_missing_session() {
     let response = apply(
         State(empty_state()),

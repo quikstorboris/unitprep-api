@@ -21,7 +21,7 @@ use unitprep_core::vendor_format::detect_vendor;
 use unitprep_dedup::{DedupReport, TenantRecord};
 
 use crate::api::dedup_view::{build_report_view, DedupReportView};
-use crate::api::dropbox_browse::ensure_path_in_root;
+use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root, parent_folder};
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::application::dedup_session_service::DedupSessionService;
 use crate::auth::AuthenticatedUser;
@@ -101,37 +101,6 @@ async fn first_uploaded_file(
     }
 
     Ok(result)
-}
-
-/// The directory portion of a Dropbox path -- `None` for a bare
-/// root-level name with no `/` at all (never actually seen in practice:
-/// every real file lives at least one level under the configured root).
-fn parent_folder(path: &str) -> Option<String> {
-    path.rfind('/').map(|i| path[..i].to_string())
-}
-
-/// Downloads `path` from Dropbox and wraps it as an `UploadedFile`, the
-/// same shape `first_uploaded_file` builds from a multipart field --
-/// lets `detect_vendor_format_dropbox`/`import_from_dropbox` reuse the
-/// exact same parse/ingest code their local-upload counterparts use,
-/// with only the acquisition step differing.
-async fn download_as_uploaded_file(
-    state: &AppState,
-    path: &str,
-) -> Result<UploadedFile, Response> {
-    let bytes = state.dropbox.download(path).await.map_err(|err| {
-        tracing::error!(error = %err, path = %path, "Dropbox download failed during dedup import");
-        internal_error("Could not download file from Dropbox")
-    })?;
-
-    let file_name = path.rsplit('/').next().unwrap_or(path).to_string();
-
-    Ok(UploadedFile {
-        file_name: file_name.clone(),
-        relative_path: file_name,
-        bytes,
-        modified_at: None,
-    })
 }
 
 /// Uploads and analyzes a QMS export file in one step, creating a new

@@ -1,8 +1,14 @@
 //! Read-only Dropbox folder browsing for the client-setup flow (picking
-//! `Client.dropboxPath` in `unitprep-ui`) and for the Dedup Dropbox
-//! import/export pickers -- lists folder names by default; pass
+//! `Client.dropboxPath` in `unitprep-ui`) and for every tool's own
+//! Dropbox import/export pickers -- lists folder names by default; pass
 //! `include_files=true` to also see files, which the folder-only client
 //! picker never asks for.
+//!
+//! Also the shared home for `parent_folder`/`download_as_uploaded_file`
+//! -- every tool's Dropbox-import handler downloads a file the same way
+//! and needs the same "what folder did this come from" logic (dedup's
+//! `save_location`, and now tagger's/UnitGroup's own equivalents), so
+//! this lives here once rather than as a third or fourth private copy.
 //!
 //! The one thing standing between this endpoint and the entire company
 //! Dropbox is the root check below (`ensure_path_in_root`): `state.dropbox`'s
@@ -19,8 +25,41 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use unitprep_core::uploaded_file::UploadedFile;
+
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+
+/// The directory portion of a Dropbox path -- `None` for a bare
+/// root-level name with no `/` at all (never actually seen in practice:
+/// every real file lives at least one level under the configured root).
+pub fn parent_folder(path: &str) -> Option<String> {
+    path.rfind('/').map(|i| path[..i].to_string())
+}
+
+/// Downloads `path` from Dropbox and wraps it as an `UploadedFile`, the
+/// same shape a tool's own local-upload multipart reader builds --
+/// lets a Dropbox-sourced import reuse the exact same parse/ingest code
+/// its local-upload counterpart uses, with only the acquisition step
+/// differing.
+pub async fn download_as_uploaded_file(
+    state: &AppState,
+    path: &str,
+) -> Result<UploadedFile, Response> {
+    let bytes = state.dropbox.download(path).await.map_err(|err| {
+        tracing::error!(error = %err, path = %path, "Dropbox download failed during import");
+        internal_error("Could not download file from Dropbox")
+    })?;
+
+    let file_name = path.rsplit('/').next().unwrap_or(path).to_string();
+
+    Ok(UploadedFile {
+        file_name: file_name.clone(),
+        relative_path: file_name,
+        bytes,
+        modified_at: None,
+    })
+}
 
 #[derive(Debug, Deserialize)]
 pub struct ListFolderQuery {

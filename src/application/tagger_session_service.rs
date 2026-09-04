@@ -25,6 +25,12 @@ pub struct TaggerSession {
     pub original_bytes: Vec<u8>,
     pub original_file_name: String,
     pub candidates: Vec<RegionCandidate>,
+    /// The Dropbox folder the original file was imported from (its
+    /// parent directory) -- `None` for a locally-uploaded file. Mirrors
+    /// `DedupSession::source_dropbox_folder_path`; see that field's own
+    /// doc comment for why this exists (a "Duplicate Check"-equivalent
+    /// default save location next to wherever the source came from).
+    pub source_dropbox_folder_path: Option<String>,
 }
 
 impl HasSessionMetadata for TaggerSession {
@@ -44,12 +50,14 @@ impl TaggerSession {
         original_bytes: Vec<u8>,
         original_file_name: String,
         candidates: Vec<RegionCandidate>,
+        source_dropbox_folder_path: Option<String>,
     ) -> Self {
         Self {
             metadata: SessionMetadata::new(id, owner_id),
             original_bytes,
             original_file_name,
             candidates,
+            source_dropbox_folder_path,
         }
     }
 }
@@ -73,6 +81,7 @@ impl TaggerSessionService {
         original_file_name: String,
         candidates: Vec<RegionCandidate>,
         owner_id: Option<Uuid>,
+        source_dropbox_folder_path: Option<String>,
     ) -> String {
         let session_id = Uuid::new_v4().to_string();
         let session = TaggerSession::new(
@@ -81,6 +90,7 @@ impl TaggerSessionService {
             original_bytes,
             original_file_name,
             candidates,
+            source_dropbox_folder_path,
         );
 
         tracing::info!(

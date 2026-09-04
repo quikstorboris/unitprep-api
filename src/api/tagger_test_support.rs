@@ -30,6 +30,21 @@ pub fn tagger_state_with_session(
     original_file_name: &str,
     candidates: Vec<RegionCandidate>,
 ) -> AppState {
+    tagger_state_with_source_folder(session_id, original_bytes, original_file_name, candidates, None)
+}
+
+/// Same as `tagger_state_with_session`, but lets a test control
+/// `source_dropbox_folder_path` directly -- what `tagger::save_location`'s
+/// own tests need to prove the Dropbox-imported vs. locally-uploaded
+/// cases separately. Mirrors `dedup_test_support::
+/// dedup_state_with_source_folder`.
+pub fn tagger_state_with_source_folder(
+    session_id: &str,
+    original_bytes: Vec<u8>,
+    original_file_name: &str,
+    candidates: Vec<RegionCandidate>,
+    source_dropbox_folder_path: Option<String>,
+) -> AppState {
     let store = empty_tagger_store();
     store.save(TaggerSession::new(
         session_id.to_string(),
@@ -37,6 +52,7 @@ pub fn tagger_state_with_session(
         original_bytes,
         original_file_name.to_string(),
         candidates,
+        source_dropbox_folder_path,
     ));
 
     AppState {

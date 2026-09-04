@@ -23,6 +23,7 @@ use unitprep_tagger_pipeline::{
 };
 use unitprep_template_tagger::{LabelPosition, LabelProximityPattern};
 
+use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root, parent_folder};
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::application::tagger_session_service::TaggerSessionService;
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
@@ -271,8 +272,6 @@ pub async fn check(
     user: AuthenticatedUser,
     mut multipart: Multipart,
 ) -> Response {
-    let started = Instant::now();
-
     let file = match first_uploaded_file(&mut multipart).await {
         Ok(Some(file)) => file,
         Ok(None) => {
@@ -297,6 +296,51 @@ pub async fn check(
                 .into_response();
         }
     };
+
+    recognize_and_create_session(&state, &user, file, None).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaggerDropboxPathRequest {
+    pub path: String,
+}
+
+/// Dropbox-sourced counterpart to `check` -- same recognize/session-create
+/// logic via `recognize_and_create_session`, source is a Dropbox path
+/// instead of a multipart upload. Mirrors `dedup::import_from_dropbox`.
+pub async fn import_from_dropbox(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(request): Json<TaggerDropboxPathRequest>,
+) -> Response {
+    if let Err(response) = ensure_path_in_root(&state, &request.path) {
+        return response;
+    }
+
+    let file = match download_as_uploaded_file(&state, &request.path).await {
+        Ok(file) => file,
+        Err(response) => return response,
+    };
+
+    let source_dropbox_folder_path = parent_folder(&request.path);
+    recognize_and_create_session(&state, &user, file, source_dropbox_folder_path).await
+}
+
+/// The actual "upload+recognize" logic shared by `check` and
+/// `import_from_dropbox` -- unlike dedup's much smaller equivalent (a
+/// 3-line parse/ingest/report call), this involves a DB round trip for
+/// the pattern library plus the `MAX_CANDIDATES` guard, substantial
+/// enough that keeping two copies in sync would be a real risk, so this
+/// one is shared rather than duplicated per acquisition method (contrast
+/// `first_uploaded_file`'s own doc comment, which deliberately chose the
+/// opposite tradeoff for a much smaller function).
+async fn recognize_and_create_session(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    file: UploadedFile,
+    source_dropbox_folder_path: Option<String>,
+) -> Response {
+    let started = Instant::now();
 
     let doc = match read_docx(&file.bytes) {
         Ok(doc) => doc,
@@ -364,6 +408,7 @@ pub async fn check(
         file.file_name.clone(),
         candidates,
         Some(user.user_id),
+        source_dropbox_folder_path,
     );
 
     tracing::info!(
@@ -489,6 +534,27 @@ pub async fn apply(
     user: AuthenticatedUser,
     Json(request): Json<TaggerApplyRequest>,
 ) -> Response {
+    let (edited_bytes, file_name) = match build_edited_docx(&state, &user, &request).await {
+        Ok(built) => built,
+        Err(response) => return response,
+    };
+
+    file_response(edited_bytes, &file_name)
+}
+
+/// The shared "re-read the stored document, build and validate every
+/// confirmed edit, splice them in" logic behind both `apply` (returns
+/// the result as a download) and `apply_to_dropbox` (uploads it
+/// instead) -- substantial enough (a whole per-candidate validation
+/// loop with its own structured failure reporting) that, like
+/// `recognize_and_create_session` above, it's shared rather than kept
+/// as two copies.
+#[allow(clippy::result_large_err)]
+async fn build_edited_docx(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    request: &TaggerApplyRequest,
+) -> Result<(Vec<u8>, String), Response> {
     let started = Instant::now();
 
     let session_data =
@@ -504,7 +570,7 @@ pub async fn apply(
 
     let (original_bytes, original_file_name, candidates) = match session_data {
         Some(data) => data,
-        None => return session_not_found(&request.session_id),
+        None => return Err(session_not_found(&request.session_id)),
     };
 
     // read_docx already validated these exact bytes at /check time, so
@@ -514,7 +580,7 @@ pub async fn apply(
         Ok(doc) => doc,
         Err(err) => {
             tracing::error!(session_id = %request.session_id, error = ?err, "Tagger apply failed to re-read the stored document");
-            return internal_error("Could not rebuild this session's document");
+            return Err(internal_error("Could not rebuild this session's document"));
         }
     };
 
@@ -529,7 +595,7 @@ pub async fn apply(
     let mut failed = Vec::new();
     for confirmed in &request.confirmed {
         let Some(candidate) = candidates.get(confirmed.candidate_index) else {
-            return (
+            return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ApiErrorBody {
                     error: "invalid_candidate_index",
@@ -539,7 +605,7 @@ pub async fn apply(
                     ),
                 }),
             )
-                .into_response();
+                .into_response());
         };
 
         let applied = to_edit(candidate, format!("{{{{{}}}}}", confirmed.tag_key), style);
@@ -579,7 +645,7 @@ pub async fn apply(
             .map(|f| f.tag_key.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        return (
+        return Err((
             StatusCode::BAD_REQUEST,
             Json(TaggerApplyErrorBody {
                 error: "unappliable_substitutions",
@@ -591,21 +657,21 @@ pub async fn apply(
                 failed,
             }),
         )
-            .into_response();
+            .into_response());
     }
 
     let edited_bytes = match edit_docx_all(&original_bytes, &edits, &underline_edits) {
         Ok(bytes) => bytes,
         Err(err) => {
             tracing::warn!(session_id = %request.session_id, error = ?err, "Tagger apply failed");
-            return (
+            return Err((
                 StatusCode::BAD_REQUEST,
                 Json(ApiErrorBody {
                     error: "apply_failed",
                     message: "Could not apply the confirmed substitutions".to_string(),
                 }),
             )
-                .into_response();
+                .into_response());
         }
     };
 
@@ -617,7 +683,104 @@ pub async fn apply(
         "Tagger apply complete"
     );
 
-    file_response(edited_bytes, &tagged_file_name(&original_file_name))
+    Ok((edited_bytes, tagged_file_name(&original_file_name)))
+}
+
+const TAGGED_TEMPLATES_FOLDER_NAME: &str = "Tagged Templates";
+
+#[derive(Debug, Serialize)]
+pub struct TaggerSaveLocationResponse {
+    /// `Some(path)` when this session's source file was imported from
+    /// Dropbox -- the `Tagged Templates` subfolder next to wherever that
+    /// file actually came from, which the frontend's save-to-Dropbox
+    /// picker should default `initialPath` to. `None` for a
+    /// locally-uploaded session. Mirrors `dedup::save_location`'s own
+    /// response shape exactly.
+    pub default_folder_path: Option<String>,
+}
+
+/// Mirrors `dedup::save_location` -- computes (but does not create)
+/// this session's default save-to-Dropbox location.
+pub async fn save_location(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(request): Json<TaggerSessionRequest>,
+) -> Response {
+    let source_folder = match state
+        .tagger_sessions
+        .with_owned_session(&request.session_id, user.user_id, |session| {
+            session.source_dropbox_folder_path.clone()
+        }) {
+        Some(source_folder) => source_folder,
+        None => return session_not_found(&request.session_id),
+    };
+
+    let default_folder_path =
+        source_folder.map(|folder| format!("{folder}/{TAGGED_TEMPLATES_FOLDER_NAME}"));
+
+    Json(TaggerSaveLocationResponse { default_folder_path }).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TaggerApplyToDropboxRequest {
+    pub session_id: String,
+    pub confirmed: Vec<ConfirmedSubstitution>,
+    #[serde(default)]
+    pub preserve_blanks: bool,
+    /// Full destination path, filename included -- resolved by the
+    /// frontend's Dropbox folder picker (or the one-click "Save to
+    /// Facility Folder" default), not guessed at here.
+    pub dropbox_path: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TaggerApplyToDropboxResponse {
+    pub path: String,
+}
+
+/// Dropbox-destination counterpart to `apply` -- same edit-building via
+/// `build_edited_docx`, destination is a Dropbox path instead of an HTTP
+/// response body. Mirrors `dedup::export_to_dropbox`.
+pub async fn apply_to_dropbox(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Json(request): Json<TaggerApplyToDropboxRequest>,
+) -> Response {
+    if let Err(response) = ensure_path_in_root(&state, &request.dropbox_path) {
+        return response;
+    }
+
+    let apply_request = TaggerApplyRequest {
+        session_id: request.session_id.clone(),
+        confirmed: request.confirmed,
+        preserve_blanks: request.preserve_blanks,
+    };
+    let (edited_bytes, _file_name) = match build_edited_docx(&state, &user, &apply_request).await
+    {
+        Ok(built) => built,
+        Err(response) => return response,
+    };
+
+    if let Some(folder) = parent_folder(&request.dropbox_path) {
+        if let Err(err) = state.dropbox.create_folder_if_missing(&folder).await {
+            tracing::error!(error = %err, path = %folder, "Dropbox create_folder_if_missing failed during tagger apply");
+            return internal_error("Could not create the destination folder in Dropbox");
+        }
+    }
+
+    if let Err(err) = state.dropbox.upload(&request.dropbox_path, edited_bytes).await {
+        tracing::error!(error = %err, path = %request.dropbox_path, "Dropbox upload failed during tagger apply");
+        return internal_error("Could not upload the tagged document to Dropbox");
+    }
+
+    tracing::info!(
+        session_id = %request.session_id,
+        owner_id = %user.user_id,
+        path = %request.dropbox_path,
+        "Tagger apply saved to Dropbox"
+    );
+
+    Json(TaggerApplyToDropboxResponse { path: request.dropbox_path }).into_response()
 }
 
 fn tagged_file_name(original: &str) -> String {
