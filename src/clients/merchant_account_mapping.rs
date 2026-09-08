@@ -340,6 +340,17 @@ pub struct MappedMerchantAccount {
     /// PS's own `Business_DBA` -- the operating/facility name half of
     /// the sole-proprietor naming rule (`clients::company_naming`).
     pub business_dba: Option<String>,
+    /// PS's own `Legal_Name?` -- a yes/no-shaped select, real observed
+    /// values `"Same as Business DBA"` / `"Different than Business
+    /// DBA"`. When it's "same", PS's own form never asks `Legal_Name_2`
+    /// at all (the AM doesn't retype the DBA into a second box), so
+    /// `legal_name` above comes back `None` even though a real legal
+    /// name -- `business_dba` -- is known; `clients::company_naming`
+    /// consults this field to catch that case instead of falling all
+    /// the way through to Intake's own (often blank, for a non-"first
+    /// time" facility) legal name. Kept as raw text, not a bool, same
+    /// Phase 1 convention as `ownership_type` below.
+    pub legal_name_same_as_dba: Option<String>,
     /// PS's own `Ownership_Type` (e.g. "LLC", "Sole Proprietorship" --
     /// real observed value so far is just "LLC", so this is kept as
     /// raw text, not a Rust enum, the same Phase 1 convention as every
@@ -466,6 +477,7 @@ pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccoun
         application_status: value_for(fields, "What_is_their_software_onboarding_status?"),
         legal_name: value_for(fields, "Legal_Name_2"),
         business_dba: value_for(fields, "Business_DBA"),
+        legal_name_same_as_dba: value_for(fields, "Legal_Name?"),
         ownership_type: value_for(fields, "Ownership_Type"),
         total_annual_business_revenue_raw: value_for(fields, "Total_Annual_Business_Revenue"),
         total_monthly_sales_raw: value_for(fields, "Total_Monthly_Sales"),

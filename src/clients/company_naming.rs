@@ -19,12 +19,29 @@
 //! -- small/sole-prop clients often don't have a distinct company legal
 //! name from PS's own perspective, so this constructs one worth showing
 //! rather than leaving it blank or wrong.
+//!
+//! **"Legal Name same as DBA?" exception, added 2026-09-08** (real bug:
+//! Dubuqueland Mini Storage, Inc. -- Boris): PS's own `Legal_Name?`
+//! field answers "Same as Business DBA" for a non-sole-prop client too,
+//! and when it does, PS's own form never asks `Legal_Name_2` at all --
+//! it comes back `None`, not a copy of the DBA. Previously that fell
+//! straight through to Intake's own legal name, which is itself often
+//! blank (a non-"first time" sister facility never gets asked its own
+//! Corporate Info at all -- see `intake_mapping`'s own doc on that
+//! convention), so the company ended up with no legal name whatsoever
+//! even though `Business_DBA` had the real answer sitting right there.
 
 use crate::clients::merchant_account_mapping::MappedMerchantAccount;
 
 fn is_sole_proprietor(ownership_type: Option<&str>) -> bool {
     ownership_type
         .map(|value| value.to_lowercase().contains("sole prop"))
+        .unwrap_or(false)
+}
+
+fn is_same_as_dba(legal_name_same_as_dba: Option<&str>) -> bool {
+    legal_name_same_as_dba
+        .map(|value| value.to_lowercase().contains("same as"))
         .unwrap_or(false)
 }
 
@@ -53,6 +70,12 @@ pub fn resolve_company_name(
         if is_sole_proprietor(nma.ownership_type.as_deref()) {
             if let (Some(owner), Some(dba)) = (primary_owner_name(nma), nma.business_dba.as_deref()) {
                 return Some(format!("{owner} DBA {dba}"));
+            }
+        }
+
+        if is_same_as_dba(nma.legal_name_same_as_dba.as_deref()) {
+            if let Some(dba) = nma.business_dba.as_deref() {
+                return Some(dba.to_string());
             }
         }
 
@@ -126,6 +149,52 @@ mod tests {
         // No Business_DBA -> can't build the DBA name, fall back to
         // whatever legal name is available rather than losing the name
         // entirely.
+        let resolved = resolve_company_name(None, Some(&nma));
+        assert_eq!(resolved.as_deref(), Some("Prairie Enterprises LLC"));
+    }
+
+    #[test]
+    fn same_as_dba_uses_business_dba_when_legal_name_2_is_blank() {
+        // The real Dubuqueland bug: PS answers Legal_Name? "Same as
+        // Business DBA" and, per that same answer, never asks
+        // Legal_Name_2 at all -- it comes back None, not a copy of the
+        // DBA. Highway 20's real Business_DBA is "Highway 20 self
+        // storage".
+        let mut nma = real_merchant_account();
+        nma.legal_name = None;
+        nma.legal_name_same_as_dba = Some("Same as Business DBA".to_string());
+        let resolved = resolve_company_name(Some("Ignored When Same As DBA"), Some(&nma));
+        assert_eq!(resolved.as_deref(), Some("Highway 20 self storage"));
+    }
+
+    #[test]
+    fn same_as_dba_match_is_case_insensitive() {
+        let mut nma = real_merchant_account();
+        nma.legal_name = None;
+        nma.legal_name_same_as_dba = Some("SAME AS BUSINESS DBA".to_string());
+        let resolved = resolve_company_name(None, Some(&nma));
+        assert_eq!(resolved.as_deref(), Some("Highway 20 self storage"));
+    }
+
+    #[test]
+    fn different_than_dba_does_not_trigger_the_same_as_dba_branch() {
+        let mut nma = real_merchant_account();
+        nma.legal_name_same_as_dba = Some("Different than Business DBA".to_string());
+        // legal_name is still Highway 20's real "Prairie Enterprises
+        // LLC" here -- the same_as_dba branch must not fire and steal
+        // it.
+        let resolved = resolve_company_name(None, Some(&nma));
+        assert_eq!(resolved.as_deref(), Some("Prairie Enterprises LLC"));
+    }
+
+    #[test]
+    fn same_as_dba_with_no_business_dba_falls_back_to_legal_name() {
+        let mut nma = real_merchant_account();
+        nma.legal_name_same_as_dba = Some("Same as Business DBA".to_string());
+        nma.business_dba = None;
+        // No DBA to use even though the answer says "same as" -- fall
+        // back to legal_name (still populated here) rather than losing
+        // the name entirely, same restraint the sole-prop branch uses.
         let resolved = resolve_company_name(None, Some(&nma));
         assert_eq!(resolved.as_deref(), Some("Prairie Enterprises LLC"));
     }
