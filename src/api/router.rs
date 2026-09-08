@@ -404,7 +404,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/clients/{company_id}/facilities/{facility_id}/people/{person_id}",
-            delete(clients_facility_people::unlink_facility_person),
+            put(clients_facility_people::edit_facility_person).delete(clients_facility_people::unlink_facility_person),
         )
         // Requires client_ops.perform to start; status read is any
         // authenticated caller -- see clients_sync's own module doc.

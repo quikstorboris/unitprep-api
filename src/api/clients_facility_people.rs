@@ -18,10 +18,23 @@
 //! refresh; that click now means unlink instead (see `DELETE` below), so
 //! the fix had to stop needing a click at all.
 //!
-//! `POST` is an "Add User" chip click for a candidate not yet on the
-//! roster -- the request body is one candidate row verbatim, upserted via
-//! `repository::upsert_person_and_link_to_facility` the same way the
-//! auto-heal pass above does.
+//! `POST` adds a person -- either an "Add User" chip click for a
+//! candidate not yet on the roster (`source: "process_street"`), or a
+//! brand-new person typed in by hand (`source: "manual"`). A 'manual'
+//! link is permanently excluded from the self-heal pass above -- see
+//! `clients.facility_people.source`'s own migration comment -- the
+//! "add a user that will never be overwritten by re-sync" Boris asked
+//! for, 2026-09-08.
+//!
+//! `PUT .../people/{person_id}` is the Users tab's "Edit" action --
+//! retyping a roster person's own name/email/phone/role directly. A
+//! 'process_street' person's edit carries `protect_from_resync`: when
+//! true, their link flips to 'manual' (so this edit itself survives the
+//! next self-heal); when false, the edit is saved but the next self-heal
+//! pass can still silently revert it back to whatever the index says --
+//! deliberately risky, the same choice/warning Boris asked the Users tab
+//! present at edit time rather than losing the edit invisibly later. A
+//! 'manual' person's edit never asks -- it's already permanently exempt.
 //!
 //! `DELETE .../people/{person_id}?role=...` unlinks one roster entry --
 //! the same chip, now rendered red for an already-linked candidate,
@@ -32,13 +45,17 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::people::PersonAssignment;
-use crate::clients::repository::{unlink_person_from_facility, upsert_person_and_link_to_facility};
+use crate::clients::repository::{
+    edit_person_and_facility_link, unlink_person_from_facility, upsert_person_and_link_to_facility,
+};
+
+const SOURCES: &[&str] = &["process_street", "manual"];
 
 fn not_found(entity: &'static str) -> Response {
     (
@@ -60,6 +77,7 @@ pub struct FacilityPerson {
     pub email: Option<String>,
     pub phone: Option<String>,
     pub role: String,
+    pub source: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -108,7 +126,7 @@ pub async fn get_facility_people(
     };
 
     let roster: Vec<FacilityPerson> = match sqlx::query_as(
-        "SELECT p.id AS person_id, p.full_name, p.email::text AS email, p.phone, fp.role
+        "SELECT p.id AS person_id, p.full_name, p.email::text AS email, p.phone, fp.role, fp.source
            FROM clients.facility_people fp
            JOIN clients.people p ON p.id = fp.person_id
           WHERE fp.facility_id = $1
@@ -155,6 +173,13 @@ pub async fn get_facility_people(
     // but `ps_person_index.email` is plain TEXT.
     let mut roster = roster;
     for person in &mut roster {
+        // A 'manual' person -- whether added by hand from scratch, or a
+        // Process Street person a manager chose to protect while
+        // editing -- is permanently exempt from this pass, same
+        // reasoning as a QSX-exempt policy category.
+        if person.source != "process_street" {
+            continue;
+        }
         let Some(email) = person.email.as_deref() else { continue };
         let Some(candidate) = candidates
             .iter()
@@ -167,7 +192,7 @@ pub async fn get_facility_people(
             continue;
         }
 
-        if let Err(err) = upsert_person_and_link_to_facility(&mut tx, facility_id, candidate).await {
+        if let Err(err) = upsert_person_and_link_to_facility(&mut tx, facility_id, candidate, "process_street").await {
             tracing::error!(
                 error = %err,
                 user_id = %user.user_id,
@@ -199,15 +224,37 @@ pub async fn get_facility_people(
 /// operation"; linking a person to a facility's own roster is closer to
 /// the create-time confirmation screen's own People chips, which carry
 /// no separate permission check of their own either).
+#[derive(Debug, Deserialize)]
+pub struct AddPersonRequest {
+    pub full_name: String,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub role: String,
+    /// "process_street" for an "Add User" chip click, "manual" for a
+    /// brand-new person typed in by hand and never touched by a future
+    /// policy-style sync.
+    pub source: String,
+}
+
 pub async fn add_facility_person(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
-    Json(assignment): Json<PersonAssignment>,
+    Json(request): Json<AddPersonRequest>,
 ) -> Response {
-    if assignment.full_name.trim().is_empty() {
+    if request.full_name.trim().is_empty() {
         return bad_request("full_name is required and must not be blank.");
     }
+    if !SOURCES.contains(&request.source.as_str()) {
+        return bad_request(&format!("\"{}\" is not a recognized source.", request.source));
+    }
+
+    let assignment = PersonAssignment {
+        full_name: request.full_name,
+        email: request.email,
+        phone: request.phone,
+        role: request.role,
+    };
 
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,
@@ -235,7 +282,7 @@ pub async fn add_facility_person(
         return not_found("facility");
     }
 
-    if let Err(err) = upsert_person_and_link_to_facility(&mut tx, facility_id, &assignment).await {
+    if let Err(err) = upsert_person_and_link_to_facility(&mut tx, facility_id, &assignment, &request.source).await {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, facility_id = %facility_id, "failed to upsert facility person");
         return internal_error("Could not add this person");
@@ -249,7 +296,96 @@ pub async fn add_facility_person(
     StatusCode::NO_CONTENT.into_response()
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Deserialize)]
+pub struct EditPersonRequest {
+    pub old_role: String,
+    pub full_name: String,
+    pub email: Option<String>,
+    pub phone: Option<String>,
+    pub role: String,
+    /// Only meaningful when this person's current link is
+    /// 'process_street' -- see `repository::edit_person_and_facility_link`'s
+    /// own doc comment. Ignored (already permanently protected) for an
+    /// already-'manual' person.
+    pub protect_from_resync: bool,
+}
+
+/// Same no-extra-permission reasoning as `add_facility_person` above.
+/// The frontend already knows this person's current `source` (from the
+/// roster `GET`), so it can decide whether to show the "protect from
+/// resync" choice before ever submitting this request -- this handler
+/// just carries out whatever was decided.
+pub async fn edit_facility_person(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path((company_id, facility_id, person_id)): Path<(Uuid, Uuid, Uuid)>,
+    Json(request): Json<EditPersonRequest>,
+) -> Response {
+    if request.full_name.trim().is_empty() {
+        return bad_request("full_name is required and must not be blank.");
+    }
+
+    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for edit facility person");
+            return internal_error("Could not save this person");
+        }
+    };
+
+    let facility_exists: Option<(Uuid,)> =
+        match sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
+            .bind(facility_id)
+            .bind(company_id)
+            .fetch_optional(&mut *tx)
+            .await
+        {
+            Ok(row) => row,
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for edit person failed");
+                return internal_error("Could not save this person");
+            }
+        };
+    if facility_exists.is_none() {
+        let _ = tx.rollback().await;
+        return not_found("facility");
+    }
+
+    let result = edit_person_and_facility_link(
+        &mut tx,
+        facility_id,
+        person_id,
+        &request.old_role,
+        &request.full_name,
+        request.email.as_deref(),
+        request.phone.as_deref(),
+        &request.role,
+        request.protect_from_resync,
+    )
+    .await;
+
+    match result {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            let _ = tx.rollback().await;
+            return not_found("person on this facility's roster");
+        }
+        Err(err) => {
+            let _ = tx.rollback().await;
+            tracing::error!(error = %err, user_id = %user.user_id, person_id = %person_id, "failed to edit facility person");
+            return internal_error("Could not save this person");
+        }
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit edit facility person transaction");
+        return internal_error("Could not save this person");
+    }
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Debug, Deserialize)]
 pub struct UnlinkFacilityPersonQuery {
     pub role: String,
 }
@@ -325,11 +461,31 @@ mod tests {
             State(empty_state()),
             test_user(),
             Path((Uuid::new_v4(), Uuid::new_v4())),
-            Json(PersonAssignment {
+            Json(AddPersonRequest {
                 full_name: "   ".to_string(),
                 email: Some("someone@example.com".to_string()),
                 phone: None,
                 role: "owner".to_string(),
+                source: "process_street".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn add_facility_person_rejects_an_unrecognized_source_without_touching_the_database() {
+        let response = add_facility_person(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+            Json(AddPersonRequest {
+                full_name: "Irene Chen".to_string(),
+                email: Some("irene@chenlawgroup.com".to_string()),
+                phone: None,
+                role: "owner".to_string(),
+                source: "not_a_real_source".to_string(),
             }),
         )
         .await;
@@ -343,11 +499,52 @@ mod tests {
             State(empty_state()),
             test_user(),
             Path((Uuid::new_v4(), Uuid::new_v4())),
-            Json(PersonAssignment {
+            Json(AddPersonRequest {
                 full_name: "Irene Chen".to_string(),
                 email: Some("irene@chenlawgroup.com".to_string()),
                 phone: Some("(301) 787-9221".to_string()),
                 role: "owner".to_string(),
+                source: "manual".to_string(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn edit_facility_person_rejects_a_blank_full_name_without_touching_the_database() {
+        let response = edit_facility_person(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
+            Json(EditPersonRequest {
+                old_role: "owner".to_string(),
+                full_name: "   ".to_string(),
+                email: None,
+                phone: None,
+                role: "owner".to_string(),
+                protect_from_resync: false,
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn edit_facility_person_reaches_the_database() {
+        let response = edit_facility_person(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
+            Json(EditPersonRequest {
+                old_role: "owner".to_string(),
+                full_name: "Irene Chen".to_string(),
+                email: Some("irene@chenlawgroup.com".to_string()),
+                phone: None,
+                role: "owner".to_string(),
+                protect_from_resync: true,
             }),
         )
         .await;

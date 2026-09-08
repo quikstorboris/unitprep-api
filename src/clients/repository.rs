@@ -362,6 +362,7 @@ pub async fn upsert_person_and_link_to_facility(
     tx: &mut Transaction<'_, Postgres>,
     facility_id: Uuid,
     assignment: &PersonAssignment,
+    source: &str,
 ) -> Result<(), sqlx::Error> {
     let existing: Option<(Uuid,)> = match &assignment.email {
         Some(email) => sqlx::query_as("SELECT id FROM clients.people WHERE email = $1")
@@ -396,14 +397,19 @@ pub async fn upsert_person_and_link_to_facility(
         }
     };
 
+    // ON CONFLICT DO NOTHING deliberately leaves `source` untouched on an
+    // already-existing link -- re-clicking a "Add User" chip for someone
+    // a manager already protected (flipped to 'manual' while editing)
+    // must never silently downgrade them back to 'process_street'.
     sqlx::query(
-        "INSERT INTO clients.facility_people (facility_id, person_id, role)
-         VALUES ($1, $2, $3)
+        "INSERT INTO clients.facility_people (facility_id, person_id, role, source)
+         VALUES ($1, $2, $3, $4)
          ON CONFLICT (facility_id, person_id, role) DO NOTHING",
     )
     .bind(facility_id)
     .bind(person_id)
     .bind(&assignment.role)
+    .bind(source)
     .execute(&mut **tx)
     .await?;
 
@@ -432,6 +438,81 @@ pub async fn unlink_person_from_facility(
         .await?;
 
     Ok(())
+}
+
+/// The Users tab's "Edit" action -- unlike `upsert_person_and_link_to_facility`
+/// (an "Add User" chip, or the GET self-heal pass, both always sourced
+/// from Process Street data), this is a human directly retyping a
+/// person's own name/email/phone/role. Always writes `clients.people`'s
+/// shared identity fields; a 'manual' person's link keeps its source
+/// unconditionally, but a 'process_street' one only flips to 'manual'
+/// when `protect_from_resync` is true -- the Users tab's own "this will
+/// keep getting refreshed from Process Street unless you protect it"
+/// choice, presented at edit time (2026-09-08) rather than silently
+/// losing the edit on the next self-heal pass. Returns the row's
+/// `source` *before* this call, so the caller can decide whether that
+/// choice needed presenting at all.
+pub async fn edit_person_and_facility_link(
+    tx: &mut Transaction<'_, Postgres>,
+    facility_id: Uuid,
+    person_id: Uuid,
+    old_role: &str,
+    full_name: &str,
+    email: Option<&str>,
+    phone: Option<&str>,
+    new_role: &str,
+    protect_from_resync: bool,
+) -> Result<Option<String>, sqlx::Error> {
+    let existing: Option<(String,)> = sqlx::query_as(
+        "SELECT source FROM clients.facility_people WHERE facility_id = $1 AND person_id = $2 AND role = $3",
+    )
+    .bind(facility_id)
+    .bind(person_id)
+    .bind(old_role)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((previous_source,)) = existing else {
+        return Ok(None);
+    };
+
+    sqlx::query("UPDATE clients.people SET full_name = $1, email = $2, phone = $3, updated_at = now() WHERE id = $4")
+        .bind(full_name)
+        .bind(email)
+        .bind(phone)
+        .bind(person_id)
+        .execute(&mut **tx)
+        .await?;
+
+    let new_source = if previous_source == "manual" || protect_from_resync { "manual" } else { "process_street" };
+
+    if new_role == old_role {
+        sqlx::query("UPDATE clients.facility_people SET source = $1 WHERE facility_id = $2 AND person_id = $3 AND role = $4")
+            .bind(new_source)
+            .bind(facility_id)
+            .bind(person_id)
+            .bind(old_role)
+            .execute(&mut **tx)
+            .await?;
+    } else {
+        sqlx::query("DELETE FROM clients.facility_people WHERE facility_id = $1 AND person_id = $2 AND role = $3")
+            .bind(facility_id)
+            .bind(person_id)
+            .bind(old_role)
+            .execute(&mut **tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO clients.facility_people (facility_id, person_id, role, source) VALUES ($1, $2, $3, $4)
+             ON CONFLICT (facility_id, person_id, role) DO UPDATE SET source = EXCLUDED.source",
+        )
+        .bind(facility_id)
+        .bind(person_id)
+        .bind(new_role)
+        .bind(new_source)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    Ok(Some(previous_source))
 }
 
 /// Either half of what can go wrong writing a Merchant Account run: the
@@ -936,6 +1017,7 @@ mod integration_tests {
                 phone: None,
                 role: "owner".to_string(),
             },
+            "process_street",
         )
         .await
         .expect("first upsert must succeed");
@@ -951,6 +1033,7 @@ mod integration_tests {
                 phone: Some("(301) 787-9221".to_string()),
                 role: "owner".to_string(),
             },
+            "process_street",
         )
         .await
         .expect("second upsert must succeed");
@@ -1041,6 +1124,104 @@ mod integration_tests {
         .execute(&mut *tx)
         .await;
         assert!(rejected.is_err(), "paid_through_date with a trigger_category must be rejected by the CHECK");
+
+        tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
+    }
+
+    /// Proves `edit_person_and_facility_link`'s actual point against
+    /// real Postgres: editing a 'process_street' person with
+    /// `protect_from_resync = true` flips their link's source to
+    /// 'manual' (permanently exempting them from the Users tab's own
+    /// self-heal pass, `api::clients_facility_people::get_facility_people`'s
+    /// own doc comment) -- without it, the edit stays 'process_street'.
+    /// Needs a real, reachable Postgres with every migration applied --
+    /// `#[ignore]`d for the same reason the other live tests here are.
+    #[tokio::test]
+    #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
+    async fn edit_person_and_facility_link_flips_source_to_manual_only_when_protected() {
+        let _ = dotenvy::from_filename(".env.local");
+        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let mut tx = crate::auth::begin_rls_transaction(&db, Uuid::new_v4(), &["onboarding_manager".to_string()])
+            .await
+            .unwrap();
+
+        let (company_id,): (Uuid,) =
+            sqlx::query_as("INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id")
+                .bind("Test Edit Person Co")
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+        let (facility_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO clients.facilities (company_id, name, source) VALUES ($1, $2, 'manual') RETURNING id",
+        )
+        .bind(company_id)
+        .bind("Test Edit Person Facility")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+
+        let assignment = PersonAssignment {
+            full_name: "Kyle Lindley".to_string(),
+            email: Some("kyle@example.com".to_string()),
+            phone: Some("630-650-0137".to_string()),
+            role: "owner".to_string(),
+        };
+        upsert_person_and_link_to_facility(&mut tx, facility_id, &assignment, "process_street").await.unwrap();
+
+        let (person_id,): (Uuid,) = sqlx::query_as("SELECT id FROM clients.people WHERE email = 'kyle@example.com'")
+            .fetch_one(&mut *tx)
+            .await
+            .unwrap();
+
+        // Edit without protecting -- stays 'process_street'.
+        edit_person_and_facility_link(
+            &mut tx,
+            facility_id,
+            person_id,
+            "owner",
+            "Kyle W. Lindley",
+            Some("kyle@example.com"),
+            Some("630-650-0137"),
+            "owner",
+            false,
+        )
+        .await
+        .unwrap();
+
+        let (source_after_unprotected_edit,): (String,) = sqlx::query_as(
+            "SELECT source FROM clients.facility_people WHERE facility_id = $1 AND person_id = $2 AND role = 'owner'",
+        )
+        .bind(facility_id)
+        .bind(person_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(source_after_unprotected_edit, "process_street");
+
+        // Edit with protecting -- flips to 'manual', permanently.
+        edit_person_and_facility_link(
+            &mut tx,
+            facility_id,
+            person_id,
+            "owner",
+            "Kyle W. Lindley",
+            Some("kyle@example.com"),
+            Some("630-650-0137"),
+            "owner",
+            true,
+        )
+        .await
+        .unwrap();
+
+        let (source_after_protected_edit,): (String,) = sqlx::query_as(
+            "SELECT source FROM clients.facility_people WHERE facility_id = $1 AND person_id = $2 AND role = 'owner'",
+        )
+        .bind(facility_id)
+        .bind(person_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        assert_eq!(source_after_protected_edit, "manual");
 
         tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
     }
