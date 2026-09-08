@@ -9,14 +9,26 @@
 //! this facility's own Intake run, already indexed.
 //!
 //! `GET` also silently self-heals: any roster person whose stored
-//! name/phone disagrees with a same-email, same-role candidate gets
-//! upserted to the fresh values before the response goes out (see
-//! `repository::upsert_person_and_link_to_facility`'s own doc comment for
-//! the real example, Sand-Sto's "Irene Chen - (301) 787-9221"). No click
-//! needed -- viewing the tab is enough. This replaced an earlier design
-//! (Boris, 2026-09-04) where a click on an already-linked chip did the
-//! refresh; that click now means unlink instead (see `DELETE` below), so
-//! the fix had to stop needing a click at all.
+//! name/phone disagrees with a fresh candidate gets corrected in place
+//! before the response goes out (see `repository::heal_person_in_place`'s
+//! own doc comment for the real example, Sand-Sto's "Irene Chen - (301)
+//! 787-9221"). No click needed -- viewing the tab is enough. This
+//! replaced an earlier design (Boris, 2026-09-04) where a click on an
+//! already-linked chip did the refresh; that click now means unlink
+//! instead (see `DELETE` below), so the fix had to stop needing a click
+//! at all.
+//!
+//! **Matching is by email+role, but a shared inbox can make that
+//! genuinely ambiguous** (2026-09-08, real bug: Dubuqueland's Soppe
+//! family -- several distinct people sharing one family email, all
+//! "owner"). Self-heal prefers an exact name match among same-email,
+//! same-role candidates; only falls back to a bare email+role match when
+//! it's unambiguous (exactly one such candidate). Two or more
+//! different-named candidates sharing that email+role is left alone
+//! rather than guessed at -- see `get_facility_people`'s own candidate-
+//! selection code below, and `repository::link_person_to_facility`'s doc
+//! comment for why `clients.people` identity itself is now (email, name)
+//! rather than email alone.
 //!
 //! `POST` adds a person -- either an "Add User" chip click for a
 //! candidate not yet on the roster (`source: "process_street"`), or a
@@ -52,7 +64,8 @@ use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::people::PersonAssignment;
 use crate::clients::repository::{
-    edit_person_and_facility_link, unlink_person_from_facility, upsert_person_and_link_to_facility,
+    edit_person_and_facility_link, heal_person_in_place, unlink_person_from_facility,
+    upsert_person_and_link_to_facility,
 };
 
 const SOURCES: &[&str] = &["process_street", "manual"];
@@ -167,10 +180,23 @@ pub async fn get_facility_people(
     };
 
     // Self-heal: a roster row whose stored name/phone disagrees with a
-    // same-email, same-role candidate gets corrected in place before the
-    // transaction commits -- see this module's own doc comment. Matched
+    // fresh candidate gets corrected in place before the transaction
+    // commits -- see this module's own doc comment. Matched
     // case-insensitively on email since `clients.people.email` is CITEXT
     // but `ps_person_index.email` is plain TEXT.
+    //
+    // Prefers an exact name match among same-email, same-role candidates
+    // -- safe even when a shared family inbox means several distinct
+    // people share the same email and role (real Dubuqueland/Soppe
+    // data, 2026-09-08). Only falls back to a bare email+role match when
+    // it's unambiguous (exactly one such candidate) -- that's the
+    // genuine "PS corrected this person's own name" case (Sand-Sto's own
+    // "Irene Chen"). Two or more different-named candidates sharing that
+    // email+role is left alone rather than guessed at -- corrects
+    // `heal_person_in_place`'s own known `person_id` directly, so unlike
+    // `upsert_person_and_link_to_facility` there's no risk of colliding
+    // this row with a *different* real person who happens to share the
+    // same email.
     let mut roster = roster;
     for person in &mut roster {
         // A 'manual' person -- whether added by hand from scratch, or a
@@ -181,18 +207,27 @@ pub async fn get_facility_people(
             continue;
         }
         let Some(email) = person.email.as_deref() else { continue };
-        let Some(candidate) = candidates
+
+        let same_email_role: Vec<&PersonAssignment> = candidates
             .iter()
-            .find(|c| c.role == person.role && c.email.as_deref().is_some_and(|e| e.eq_ignore_ascii_case(email)))
-        else {
-            continue;
-        };
+            .filter(|c| c.role == person.role && c.email.as_deref().is_some_and(|e| e.eq_ignore_ascii_case(email)))
+            .collect();
+
+        let candidate = same_email_role
+            .iter()
+            .find(|c| c.full_name.eq_ignore_ascii_case(&person.full_name))
+            .copied()
+            .or_else(|| (same_email_role.len() == 1).then(|| same_email_role[0]));
+
+        let Some(candidate) = candidate else { continue };
 
         if candidate.full_name == person.full_name && candidate.phone == person.phone {
             continue;
         }
 
-        if let Err(err) = upsert_person_and_link_to_facility(&mut tx, facility_id, candidate, "process_street").await {
+        if let Err(err) =
+            heal_person_in_place(&mut tx, person.person_id, &candidate.full_name, candidate.phone.as_deref()).await
+        {
             tracing::error!(
                 error = %err,
                 user_id = %user.user_id,

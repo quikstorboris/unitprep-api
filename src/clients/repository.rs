@@ -286,14 +286,23 @@ pub async fn ingest_intake_run(
     Ok((company_id, facility_id))
 }
 
-/// Finds an existing person by email (case-insensitive, via CITEXT) or
-/// creates one, then links them to the facility with the given role --
-/// idempotent via `ON CONFLICT DO NOTHING` on the (facility_id,
-/// person_id, role) primary key, since the same person/role pair can
-/// legitimately be re-ingested. Matching by name+phone alone (no email)
-/// is deliberately NOT attempted here -- that's the same
-/// manual-review-worthy fuzzy-match problem [[Dedup Tool Index|the
-/// dedup tool]] exists to solve, not something to guess at inline.
+/// Finds an existing person by (email, full_name) -- both
+/// case-insensitive, email via CITEXT -- or creates one, then links them
+/// to the facility with the given role. Idempotent via `ON CONFLICT DO
+/// NOTHING` on the (facility_id, person_id, role) primary key, since the
+/// same person/role pair can legitimately be re-ingested.
+///
+/// **Full name is part of identity, not just email** (2026-09-08, real
+/// bug: Dubuqueland's Soppe family): email alone isn't unique in real
+/// data -- several genuinely distinct family members (Barb Soppe, Carrie
+/// Krueger, Chad Soppe) share one family inbox at the same facility with
+/// the same role. Matching on email alone would silently collapse them
+/// into a single `clients.people` row, each overwriting the last one's
+/// name. Matching by name+phone with no email, or fuzzy name matching
+/// beyond an exact (case-insensitive) name, is still deliberately NOT
+/// attempted here -- that's the same manual-review-worthy fuzzy-match
+/// problem [[Dedup Tool Index|the dedup tool]] exists to solve, not
+/// something to guess at inline.
 async fn link_person_to_facility(
     tx: &mut Transaction<'_, Postgres>,
     facility_id: Uuid,
@@ -301,8 +310,9 @@ async fn link_person_to_facility(
     role: &str,
 ) -> Result<(), sqlx::Error> {
     let existing: Option<(Uuid,)> = match &person.email {
-        Some(email) => sqlx::query_as("SELECT id FROM clients.people WHERE email = $1")
+        Some(email) => sqlx::query_as("SELECT id FROM clients.people WHERE email = $1 AND full_name ILIKE $2")
             .bind(email)
+            .bind(&person.full_name)
             .fetch_optional(&mut **tx)
             .await?,
         None => None,
@@ -337,27 +347,22 @@ async fn link_person_to_facility(
     Ok(())
 }
 
-/// Same find-by-email-or-create-then-link shape as `link_person_to_facility`
-/// above, but for `api::clients_facility_people` rather than one-time
-/// ingest: when a matching `clients.people` row already exists, its
-/// `full_name`/`phone` are overwritten with the caller's values instead
-/// of left alone. `link_person_to_facility` deliberately never does this
-/// (ingest only ever runs once per facility, so there's nothing stale yet
-/// to correct at that point) -- this function exists specifically for the
-/// case that same restraint can't cover: a person already linked from an
-/// old ingest, whose stored name/phone drifted from what
-/// `clients.ps_person_index` -- refreshed nightly, independent of ingest
-/// -- currently says, e.g. Sand-Sto's own "Irene Chen - (301) 787-9221"
-/// (a pre-fix dash-format parse glued onto her name). Called two ways:
-/// an "Add User" chip click for a not-yet-linked candidate, and
-/// `get_facility_people`'s own silent auto-heal pass for an
-/// already-linked one whose stored values disagree with the index --
-/// Boris's own call, 2026-09-04: fixing this should need no explicit
-/// click at all, just viewing the tab, once "click an already-linked
-/// chip" was repurposed to mean unlink instead of refresh. Email is the
-/// only identity key, same reasoning as `link_person_to_facility`'s own
-/// doc comment -- name+phone fuzzy matching is dedup's problem, not this
-/// function's.
+/// Same find-by-(email,name)-or-create-then-link shape as
+/// `link_person_to_facility` above, for `api::clients_facility_people`'s
+/// "Add User" chip click (a not-yet-linked candidate) and its "+ Add
+/// Person Manually" form -- both add a person who isn't on this
+/// facility's roster yet. When a matching `clients.people` row already
+/// exists (same email AND same name -- see `link_person_to_facility`'s
+/// own doc comment on why name is part of identity, not just email),
+/// its `phone` is refreshed to the caller's value; `full_name` is
+/// intentionally never touched here, since a match already means the
+/// name agrees. Correcting a roster row whose *name itself* drifted
+/// (e.g. Sand-Sto's own "Irene Chen - (301) 787-9221") is
+/// `heal_person_in_place`'s job below, not this function's -- that path
+/// already knows the exact existing row to correct (the roster's own
+/// `person_id`), so it never needs this function's identity-resolution
+/// step at all, which matters precisely when resolution would otherwise
+/// be ambiguous (multiple distinct people sharing one email+role).
 pub async fn upsert_person_and_link_to_facility(
     tx: &mut Transaction<'_, Postgres>,
     facility_id: Uuid,
@@ -365,8 +370,9 @@ pub async fn upsert_person_and_link_to_facility(
     source: &str,
 ) -> Result<(), sqlx::Error> {
     let existing: Option<(Uuid,)> = match &assignment.email {
-        Some(email) => sqlx::query_as("SELECT id FROM clients.people WHERE email = $1")
+        Some(email) => sqlx::query_as("SELECT id FROM clients.people WHERE email = $1 AND full_name ILIKE $2")
             .bind(email)
+            .bind(&assignment.full_name)
             .fetch_optional(&mut **tx)
             .await?,
         None => None,
@@ -374,14 +380,11 @@ pub async fn upsert_person_and_link_to_facility(
 
     let person_id = match existing {
         Some((id,)) => {
-            sqlx::query(
-                "UPDATE clients.people SET full_name = $1, phone = $2, updated_at = now() WHERE id = $3",
-            )
-            .bind(&assignment.full_name)
-            .bind(&assignment.phone)
-            .bind(id)
-            .execute(&mut **tx)
-            .await?;
+            sqlx::query("UPDATE clients.people SET phone = $1, updated_at = now() WHERE id = $2")
+                .bind(&assignment.phone)
+                .bind(id)
+                .execute(&mut **tx)
+                .await?;
             id
         }
         None => {
@@ -413,6 +416,31 @@ pub async fn upsert_person_and_link_to_facility(
     .execute(&mut **tx)
     .await?;
 
+    Ok(())
+}
+
+/// Corrects a specific, already-known `clients.people` row's
+/// `full_name`/`phone` in place, by `person_id` -- used only by
+/// `get_facility_people`'s silent self-heal pass, which already knows
+/// exactly which roster row it means to correct (its own `person_id`),
+/// so it never has to re-resolve identity by email the way
+/// `upsert_person_and_link_to_facility` does for a not-yet-linked
+/// candidate. That matters precisely because a fresh email(+name)
+/// lookup can be genuinely ambiguous -- several distinct real people
+/// sharing one email+role (Dubuqueland's Soppe family) -- while an
+/// update scoped to an id already known is never ambiguous at all.
+pub async fn heal_person_in_place(
+    tx: &mut Transaction<'_, Postgres>,
+    person_id: Uuid,
+    full_name: &str,
+    phone: Option<&str>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE clients.people SET full_name = $1, phone = $2, updated_at = now() WHERE id = $3")
+        .bind(full_name)
+        .bind(phone)
+        .bind(person_id)
+        .execute(&mut **tx)
+        .await?;
     Ok(())
 }
 
@@ -972,16 +1000,14 @@ mod integration_tests {
     }
 
     /// Proves `upsert_person_and_link_to_facility`'s actual point against
-    /// real Postgres: a second call for the same email overwrites the
-    /// stored name/phone rather than leaving them alone or creating a
-    /// duplicate row -- the exact self-heal `api::clients_facility_people`
-    /// relies on for a facility like Sand-Sto, whose saved roster still
-    /// carries a pre-parser-fix garbled name. Needs a real, reachable
-    /// Postgres with every migration applied, same as the golden fixture
-    /// test above -- `#[ignore]`d for the same reason.
+    /// real Postgres, post-2026-09-08: a second call for the same email
+    /// AND the same name only refreshes phone, never creates a duplicate
+    /// row. Needs a real, reachable Postgres with every migration
+    /// applied, same as the golden fixture test above -- `#[ignore]`d for
+    /// the same reason.
     #[tokio::test]
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
-    async fn upsert_person_and_link_to_facility_overwrites_a_stale_name_and_phone_on_second_call() {
+    async fn upsert_person_and_link_to_facility_refreshes_phone_on_a_second_call_with_the_same_name() {
         let _ = dotenvy::from_filename(".env.local");
 
         let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
@@ -1006,15 +1032,13 @@ mod integration_tests {
         .await
         .unwrap();
 
-        // First call: a garbled name, same shape the old dash-format
-        // parser bug actually produced for Sand-Sto's own Irene Chen.
         upsert_person_and_link_to_facility(
             &mut tx,
             facility_id,
             &PersonAssignment {
-                full_name: "Irene Chen - (301) 787-9221".to_string(),
+                full_name: "Irene Chen".to_string(),
                 email: Some("irene@example.com".to_string()),
-                phone: None,
+                phone: Some("(301) 555-0100".to_string()),
                 role: "owner".to_string(),
             },
             "process_street",
@@ -1022,8 +1046,7 @@ mod integration_tests {
         .await
         .expect("first upsert must succeed");
 
-        // Second call: the fresh, correctly-parsed values for the same
-        // email -- what a chip click off `ps_person_index` sends today.
+        // Second call: same email, same name, a fresher phone number.
         upsert_person_and_link_to_facility(
             &mut tx,
             facility_id,
@@ -1049,8 +1072,161 @@ mod integration_tests {
         .await
         .unwrap();
 
-        assert_eq!(people.len(), 1, "the same email must never produce a second person or a second link");
-        assert_eq!(people[0].0, "Irene Chen", "the stale, garbled name must be overwritten, not left alone");
+        assert_eq!(people.len(), 1, "the same email+name must never produce a second person or a second link");
+        assert_eq!(people[0].2.as_deref(), Some("(301) 787-9221"), "phone must be refreshed");
+
+        tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
+    }
+
+    /// Proves the real 2026-09-08 Dubuqueland/Soppe bug is fixed: several
+    /// genuinely distinct people sharing one family inbox (and the same
+    /// role) must become separate `clients.people` rows, not collapse
+    /// into one because they share an email. Needs a real, reachable
+    /// Postgres with every migration applied, same as the golden fixture
+    /// test above -- `#[ignore]`d for the same reason.
+    #[tokio::test]
+    #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
+    async fn upsert_person_and_link_to_facility_keeps_distinct_names_separate_on_a_shared_email() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let user_id = Uuid::new_v4();
+        let mut tx = crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
+            .await
+            .expect("beginning an RLS transaction must succeed");
+
+        let (company_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id",
+        )
+        .bind("Test Shared Inbox Co")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+
+        let (facility_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO clients.facilities (company_id, name, source) VALUES ($1, $2, 'manual') RETURNING id",
+        )
+        .bind(company_id)
+        .bind("Test Shared Inbox Facility")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+
+        for full_name in ["Barb Soppe", "Carrie Krueger", "Chad Soppe"] {
+            upsert_person_and_link_to_facility(
+                &mut tx,
+                facility_id,
+                &PersonAssignment {
+                    full_name: full_name.to_string(),
+                    email: Some("dubuquemini@gmail.com".to_string()),
+                    phone: Some("563-583-5405".to_string()),
+                    role: "owner".to_string(),
+                },
+                "process_street",
+            )
+            .await
+            .unwrap_or_else(|_| panic!("upsert for {full_name} must succeed"));
+        }
+
+        let people: Vec<(String,)> = sqlx::query_as(
+            "SELECT p.full_name
+               FROM clients.facility_people fp
+               JOIN clients.people p ON p.id = fp.person_id
+              WHERE fp.facility_id = $1
+              ORDER BY p.full_name",
+        )
+        .bind(facility_id)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            people,
+            vec![("Barb Soppe".to_string(),), ("Carrie Krueger".to_string(),), ("Chad Soppe".to_string(),)],
+            "three distinct people sharing one email+role must stay three distinct roster rows"
+        );
+
+        tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
+    }
+
+    /// Proves `heal_person_in_place`'s actual point against real
+    /// Postgres: it corrects a specific, already-known person's own
+    /// name/phone by id -- the real self-heal case, Sand-Sto's own
+    /// "Irene Chen - (301) 787-9221" (a pre-fix dash-format parse glued
+    /// onto her name). Needs a real, reachable Postgres with every
+    /// migration applied, same as the golden fixture test above --
+    /// `#[ignore]`d for the same reason.
+    #[tokio::test]
+    #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
+    async fn heal_person_in_place_corrects_a_known_persons_own_name_and_phone() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let user_id = Uuid::new_v4();
+        let mut tx = crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
+            .await
+            .expect("beginning an RLS transaction must succeed");
+
+        let (company_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id",
+        )
+        .bind("Test Heal Co")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+
+        let (facility_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO clients.facilities (company_id, name, source) VALUES ($1, $2, 'manual') RETURNING id",
+        )
+        .bind(company_id)
+        .bind("Test Heal Facility")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+
+        // The garbled name, same shape the old dash-format parser bug
+        // actually produced for Sand-Sto's own Irene Chen.
+        upsert_person_and_link_to_facility(
+            &mut tx,
+            facility_id,
+            &PersonAssignment {
+                full_name: "Irene Chen - (301) 787-9221".to_string(),
+                email: Some("irene@example.com".to_string()),
+                phone: None,
+                role: "owner".to_string(),
+            },
+            "process_street",
+        )
+        .await
+        .expect("initial upsert must succeed");
+
+        let (person_id,): (Uuid,) = sqlx::query_as(
+            "SELECT p.id FROM clients.facility_people fp
+               JOIN clients.people p ON p.id = fp.person_id
+              WHERE fp.facility_id = $1",
+        )
+        .bind(facility_id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+
+        heal_person_in_place(&mut tx, person_id, "Irene Chen", Some("(301) 787-9221"))
+            .await
+            .expect("heal must succeed");
+
+        let people: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT p.full_name, p.email::text, p.phone
+               FROM clients.facility_people fp
+               JOIN clients.people p ON p.id = fp.person_id
+              WHERE fp.facility_id = $1",
+        )
+        .bind(facility_id)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+
+        assert_eq!(people.len(), 1, "healing in place must never create a second person or a second link");
+        assert_eq!(people[0].0, "Irene Chen", "the stale, garbled name must be corrected");
         assert_eq!(people[0].2.as_deref(), Some("(301) 787-9221"));
 
         tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
