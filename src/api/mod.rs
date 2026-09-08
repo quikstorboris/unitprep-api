@@ -20,6 +20,7 @@ mod client_ops_qms_tags;
 mod clients_companies;
 mod clients_create;
 mod clients_detail;
+mod clients_dropbox_folder;
 mod clients_elavon;
 mod clients_facility_people;
 mod clients_facility_policies_edit;

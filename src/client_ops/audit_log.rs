@@ -68,6 +68,12 @@ pub mod event {
     /// its `ps_task_status` rows for this facility; does not touch
     /// anything else about the facility or company.
     pub const MERCHANT_ACCOUNT_UNLINKED: &str = "merchant_account_unlinked";
+    /// A facility's linked Dropbox folder was manually changed via the
+    /// DropBox tab (`api::clients_dropbox_folder`) -- a rare, deliberate
+    /// action (the wrong facility folder was linked, or a client's own
+    /// folder structure changed), worth its own audited event the same
+    /// way a Merchant Account relink is.
+    pub const FACILITY_DROPBOX_FOLDER_CHANGED: &str = "facility_dropbox_folder_changed";
 
     /// Every event type this module writes, for the Activity Logs admin
     /// filter dropdown -- mirrors `auth::audit_log::event::ALL`'s own
@@ -85,6 +91,7 @@ pub mod event {
         SYNC_FAILED,
         MERCHANT_ACCOUNT_LINKED,
         MERCHANT_ACCOUNT_UNLINKED,
+        FACILITY_DROPBOX_FOLDER_CHANGED,
     ];
 }
 

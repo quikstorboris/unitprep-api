@@ -23,9 +23,9 @@ use super::{
     auth_configuration, auth_invites, auth_login, auth_logout, auth_passkey_reverify,
     auth_register, auth_roles, auth_totp, auth_user_role, auth_user_status, auth_users,
     cancel_session, client_ops_activity_logs, client_ops_activity_logs_export,
-    client_ops_qms_tags, clients_companies, clients_create, clients_detail, clients_elavon,
-    clients_facility_people, clients_facility_policies_edit, clients_preview, clients_resync, clients_search,
-    clients_sync, correct,
+    client_ops_qms_tags, clients_companies, clients_create, clients_detail, clients_dropbox_folder,
+    clients_elavon, clients_facility_people, clients_facility_policies_edit, clients_preview, clients_resync,
+    clients_search, clients_sync, correct,
     correct_group, dedup, discover, dropbox_browse,
     exclude_group, exclude_groups, exempt, export, group_file_confirm, group_file_upload,
     process_street_settings, resolve_unit_format, select_group_file, select_unit_file, tagger,
@@ -395,6 +395,12 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/clients/{company_id}/facilities/{facility_id}/elavon/link",
             post(clients_elavon::link_facility_elavon).delete(clients_elavon::unlink_facility_elavon),
+        )
+        // DropBox tab -- no extra permission check, RLS is the real
+        // gate (see clients_dropbox_folder's own module doc).
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/dropbox-folder",
+            put(clients_dropbox_folder::update_facility_dropbox_folder),
         )
         // Users tab -- read and write both just need authentication, RLS
         // is the real gate (see clients_facility_people's own module doc).
