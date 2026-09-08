@@ -115,6 +115,41 @@ async fn cross_origin_request_from_an_unlisted_origin_gets_no_allow_origin_heade
         .is_none());
 }
 
+/// Regression test for a real bug (2026-09-08): `allow_methods` never
+/// included `DELETE`, even though real routes use it (facility-person
+/// unlink, Elavon unlink, client delete, role revocation). DELETE isn't
+/// a CORS-"simple" method, so every cross-origin DELETE needs a
+/// preflight first -- with DELETE missing from this list, the browser's
+/// own preflight check silently refused to ever send the real request,
+/// surfacing in the UI as "Could not reach the API server" (a network
+/// failure, indistinguishable from the server actually being down) even
+/// though the server itself was healthy and never even saw the request.
+/// A direct handler call can't catch this at all, since `CorsLayer`
+/// (and the browser's own preflight decision this test stands in for)
+/// only exists on the real `Router`.
+#[tokio::test]
+async fn a_delete_route_is_allowed_by_the_cors_preflight() {
+    let addr = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .request(reqwest::Method::OPTIONS, format!("http://{addr}/clients/{}", uuid::Uuid::new_v4()))
+        .header("Origin", "http://localhost:3000")
+        .header("Access-Control-Request-Method", "DELETE")
+        .send()
+        .await
+        .expect("preflight request should reach the real server");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    let allow_methods = response
+        .headers()
+        .get("access-control-allow-methods")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(allow_methods.contains("DELETE"), "expected DELETE in Allow-Methods, got: {allow_methods}");
+}
+
 /// Regression test for the error-body-shape fix: malformed JSON used to
 /// reject with a plain-text body ("Failed to parse the request body as
 /// JSON: ...") before any handler ever ran, unlike every other error path

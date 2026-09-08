@@ -76,6 +76,7 @@ pub fn router(state: AppState) -> Router {
             axum::http::Method::POST,
             axum::http::Method::PUT,
             axum::http::Method::PATCH,
+            axum::http::Method::DELETE,
         ])
         .allow_headers([axum::http::header::CONTENT_TYPE])
         // The frontend's shared hooks (useSessionPost/useSessionAction)
