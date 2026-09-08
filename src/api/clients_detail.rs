@@ -422,6 +422,11 @@ pub struct FeeRow {
     pub raw_value: String,
 }
 
+/// Legacy free-text shape, read-only from here on -- superseded
+/// 2026-09-08 by `TaxEntryRow`/`policy_tax_entries` below, but never
+/// dropped: Highway 20 Self Storage has one real row here, and turning
+/// its prose into the new structured fields needs a human, not a
+/// migration. Still returned so that history isn't simply hidden.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct TaxesRow {
     pub sales_tax_applies_raw: Option<String>,
@@ -433,11 +438,45 @@ pub struct TaxesRow {
     pub other_recurring_taxes_raw: Option<String>,
 }
 
+/// Legacy free-text shape, read-only from here on -- superseded
+/// 2026-09-08 by `DelinquencyEntryRow`/`policy_delinquency_entries`
+/// below. Highway 20 Self Storage has 9 real rows here (one of which
+/// names two separate fees in the same free-text value) -- kept
+/// visible as history, not migrated automatically.
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct DelinquencyStepRow {
     pub step_order: i32,
     pub step_type: String,
     pub raw_value: String,
+}
+
+/// `flat_amount`/`attribute_payable_percent` are NUMERIC columns, cast
+/// to `float8` in every query that reads them (same convention
+/// `clients_elavon`/`clients_detail`'s own `ownership_percent::float8`
+/// already uses) -- avoids adding sqlx's `bigdecimal`/`rust_decimal`
+/// feature just for two fields.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct TaxEntryRow {
+    pub id: i64,
+    pub tax_type: String,
+    pub tax_name: String,
+    pub description: Option<String>,
+    pub flat_amount: Option<f64>,
+    pub attribute_payable_percent: Option<f64>,
+    pub is_recurring: bool,
+    pub sort_order: i32,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct DelinquencyEntryRow {
+    pub id: i64,
+    pub category: String,
+    pub name: String,
+    pub amount: f64,
+    pub days_after: Option<i32>,
+    pub trigger_type: String,
+    pub trigger_category: Option<String>,
+    pub sort_order: i32,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -457,8 +496,12 @@ pub struct CommissionRow {
 #[derive(Debug, Serialize)]
 pub struct FacilityPoliciesResponse {
     pub fees: Vec<FeeRow>,
+    /// Legacy free-text -- see `TaxesRow`'s own doc comment.
     pub taxes: Option<TaxesRow>,
+    pub tax_entries: Vec<TaxEntryRow>,
+    /// Legacy free-text -- see `DelinquencyStepRow`'s own doc comment.
     pub delinquency_steps: Vec<DelinquencyStepRow>,
+    pub delinquency_entries: Vec<DelinquencyEntryRow>,
     pub coverage_tiers: Vec<CoverageTierRow>,
     pub commission: Option<CommissionRow>,
     pub specials_raw_text: Option<String>,
@@ -511,6 +554,43 @@ async fn fetch_policy_fees(
     let rows = sqlx::query_as(
         "SELECT fee_type, label, raw_value FROM clients.policy_fees \
          WHERE facility_policies_id = $1 ORDER BY id",
+    )
+    .bind(facility_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}
+
+async fn fetch_tax_entries(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    role_keys: &[String],
+    facility_id: Uuid,
+) -> Result<Vec<TaxEntryRow>, sqlx::Error> {
+    let mut tx = begin_rls_transaction(db, user_id, role_keys).await?;
+    let rows = sqlx::query_as(
+        "SELECT id, tax_type, tax_name, description, flat_amount::float8 AS flat_amount, \
+         attribute_payable_percent::float8 AS attribute_payable_percent, is_recurring, sort_order \
+         FROM clients.policy_tax_entries WHERE facility_policies_id = $1 ORDER BY sort_order",
+    )
+    .bind(facility_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}
+
+async fn fetch_delinquency_entries(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    role_keys: &[String],
+    facility_id: Uuid,
+) -> Result<Vec<DelinquencyEntryRow>, sqlx::Error> {
+    let mut tx = begin_rls_transaction(db, user_id, role_keys).await?;
+    let rows = sqlx::query_as(
+        "SELECT id, category, name, amount::float8 AS amount, days_after, trigger_type, trigger_category, sort_order \
+         FROM clients.policy_delinquency_entries WHERE facility_policies_id = $1 ORDER BY sort_order",
     )
     .bind(facility_id)
     .fetch_all(&mut *tx)
@@ -671,7 +751,9 @@ pub async fn get_facility_policies(
         exists_result,
         fees_result,
         taxes_result,
+        tax_entries_result,
         steps_result,
+        delinquency_entries_result,
         tiers_result,
         commission_result,
         specials_result,
@@ -680,7 +762,9 @@ pub async fn get_facility_policies(
         fetch_facility_exists(&state.db, user.user_id, &user.role_keys, company_id, facility_id),
         fetch_policy_fees(&state.db, user.user_id, &user.role_keys, facility_id),
         fetch_policy_taxes(&state.db, user.user_id, &user.role_keys, facility_id),
+        fetch_tax_entries(&state.db, user.user_id, &user.role_keys, facility_id),
         fetch_delinquency_steps(&state.db, user.user_id, &user.role_keys, facility_id),
+        fetch_delinquency_entries(&state.db, user.user_id, &user.role_keys, facility_id),
         fetch_coverage_tiers(&state.db, user.user_id, &user.role_keys, facility_id),
         fetch_commission(&state.db, user.user_id, &user.role_keys, facility_id),
         fetch_specials_raw_text(&state.db, user.user_id, &user.role_keys, facility_id),
@@ -719,10 +803,26 @@ pub async fn get_facility_policies(
         }
     };
 
+    let tax_entries = match tax_entries_result {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "policy_tax_entries query failed");
+            return internal_error("Could not load this facility's policies");
+        }
+    };
+
     let delinquency_steps = match steps_result {
         Ok(rows) => rows,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_steps query failed");
+            return internal_error("Could not load this facility's policies");
+        }
+    };
+
+    let delinquency_entries = match delinquency_entries_result {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_entries query failed");
             return internal_error("Could not load this facility's policies");
         }
     };
@@ -762,7 +862,9 @@ pub async fn get_facility_policies(
     Json(FacilityPoliciesResponse {
         fees,
         taxes,
+        tax_entries,
         delinquency_steps,
+        delinquency_entries,
         coverage_tiers,
         commission,
         specials_raw_text,

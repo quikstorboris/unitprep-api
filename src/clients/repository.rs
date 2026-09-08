@@ -972,4 +972,76 @@ mod integration_tests {
 
         tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
     }
+
+    /// Proves `policy_delinquency_entries`' own CHECK constraint against
+    /// real Postgres, not just `api::clients_facility_policies_edit`'s
+    /// mirrored application-level validation -- a `trigger_type` of
+    /// `paid_through_date` must reject a `trigger_category`, and
+    /// `step_category` must require one. Needs a real, reachable
+    /// Postgres with every migration applied -- `#[ignore]`d for the
+    /// same reason the other live tests in this module are.
+    #[tokio::test]
+    #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
+    async fn policy_delinquency_entries_trigger_check_matches_the_apps_own_validation() {
+        let _ = dotenvy::from_filename(".env.local");
+        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let mut tx = crate::auth::begin_rls_transaction(&db, Uuid::new_v4(), &["onboarding_manager".to_string()])
+            .await
+            .unwrap();
+
+        let (company_id,): (Uuid,) =
+            sqlx::query_as("INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id")
+                .bind("Test Trigger Check Co")
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+        let (facility_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO clients.facilities (company_id, name, source) VALUES ($1, $2, 'manual') RETURNING id",
+        )
+        .bind(company_id)
+        .bind("Test Trigger Check Facility")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO clients.facility_policies (facility_id) VALUES ($1)")
+            .bind(facility_id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+
+        // Valid: paid_through_date with no trigger_category.
+        sqlx::query(
+            "INSERT INTO clients.policy_delinquency_entries \
+             (facility_policies_id, category, name, amount, trigger_type, sort_order) \
+             VALUES ($1, 'pre_lien', 'Pre-Lien Fee', 0, 'paid_through_date', 1)",
+        )
+        .bind(facility_id)
+        .execute(&mut *tx)
+        .await
+        .expect("paid_through_date with no trigger_category must be accepted");
+
+        // Valid: step_category with a real trigger_category set.
+        sqlx::query(
+            "INSERT INTO clients.policy_delinquency_entries \
+             (facility_policies_id, category, name, amount, trigger_type, trigger_category, sort_order) \
+             VALUES ($1, 'lien', 'Lien Fee', 25, 'step_category', 'pre_lien', 2)",
+        )
+        .bind(facility_id)
+        .execute(&mut *tx)
+        .await
+        .expect("step_category with a trigger_category must be accepted");
+
+        // Invalid: paid_through_date with a trigger_category set anyway.
+        let rejected = sqlx::query(
+            "INSERT INTO clients.policy_delinquency_entries \
+             (facility_policies_id, category, name, amount, trigger_type, trigger_category, sort_order) \
+             VALUES ($1, 'cut_lock', 'Cut Lock Fee', 10, 'paid_through_date', 'pre_lien', 3)",
+        )
+        .bind(facility_id)
+        .execute(&mut *tx)
+        .await;
+        assert!(rejected.is_err(), "paid_through_date with a trigger_category must be rejected by the CHECK");
+
+        tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
+    }
 }

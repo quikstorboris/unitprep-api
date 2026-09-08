@@ -33,6 +33,8 @@ use crate::clients::policy_exemption::{mark_exempt_if_qsx_and_was_empty, PolicyC
 
 const FEE_TYPES: &[&str] = &["security_deposit", "nsf_chargeback", "move_in_admin", "transfer", "cleaning", "other"];
 const STEP_TYPES: &[&str] = &["late_fee", "pre_lien", "lien", "cut_lock", "auction", "notice", "other"];
+const TAX_TYPES: &[&str] = &["fixed", "marginal", "percentage"];
+const TAX_NAMES: &[&str] = &["sales", "rental"];
 
 fn not_found() -> Response {
     (StatusCode::NOT_FOUND, Json(ApiErrorBody { error: "not_found", message: "No such facility.".to_string() }))
@@ -169,22 +171,40 @@ pub async fn update_fees(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct UpdateTaxesRequest {
-    pub sales_tax_applies_raw: Option<String>,
-    pub sales_tax_rate_raw: Option<String>,
-    pub rent_tax_applies_raw: Option<String>,
-    pub rent_tax_rate_raw: Option<String>,
-    pub rent_tax_applies_to_all_units_raw: Option<String>,
-    pub other_one_time_taxes_raw: Option<String>,
-    pub other_recurring_taxes_raw: Option<String>,
+pub struct TaxEntryInput {
+    pub tax_type: String,
+    pub tax_name: String,
+    pub description: Option<String>,
+    pub flat_amount: Option<f64>,
+    pub attribute_payable_percent: Option<f64>,
+    pub is_recurring: bool,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateTaxesRequest {
+    pub taxes: Vec<TaxEntryInput>,
+}
+
+/// Structured, list-shaped taxes (2026-09-08), replacing the single
+/// free-text `clients.policy_taxes` row this endpoint used to write --
+/// see the migration's own doc comment for why the old table is left
+/// alone (real historical data on Highway 20) rather than migrated.
+/// Only `tax_type = "fixed"` is meaningful yet; "marginal"/"percentage"
+/// are accepted (matching the DB's own CHECK) but have no dedicated
+/// fields of their own so far -- deliberately deferred.
 pub async fn update_taxes(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<UpdateTaxesRequest>,
 ) -> Response {
+    if let Some(tax) = request.taxes.iter().find(|t| !TAX_TYPES.contains(&t.tax_type.as_str())) {
+        return bad_request(format!("\"{}\" is not a recognized tax type.", tax.tax_type));
+    }
+    if let Some(tax) = request.taxes.iter().find(|t| !TAX_NAMES.contains(&t.tax_name.as_str())) {
+        return bad_request(format!("\"{}\" is not a recognized tax name.", tax.tax_name));
+    }
+
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
@@ -206,50 +226,53 @@ pub async fn update_taxes(
         }
     }
 
-    let existing: Option<(Uuid,)> =
-        match sqlx::query_as("SELECT facility_policies_id FROM clients.policy_taxes WHERE facility_policies_id = $1")
+    let was_empty: (i64,) =
+        match sqlx::query_as("SELECT count(*) FROM clients.policy_tax_entries WHERE facility_policies_id = $1")
             .bind(facility_id)
-            .fetch_optional(&mut *tx)
+            .fetch_one(&mut *tx)
             .await
         {
             Ok(row) => row,
             Err(err) => {
                 let _ = tx.rollback().await;
-                tracing::error!(error = %err, user_id = %user.user_id, "policy_taxes existence check failed");
+                tracing::error!(error = %err, user_id = %user.user_id, "policy_tax_entries count failed");
                 return internal_error("Could not save taxes");
             }
         };
-    let was_empty = existing.is_none();
+    let was_empty = was_empty.0 == 0;
 
-    if let Err(err) = sqlx::query(
-        "INSERT INTO clients.policy_taxes
-            (facility_policies_id, sales_tax_applies_raw, sales_tax_rate_raw, rent_tax_applies_raw,
-             rent_tax_rate_raw, rent_tax_applies_to_all_units_raw, other_one_time_taxes_raw,
-             other_recurring_taxes_raw)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (facility_policies_id) DO UPDATE SET
-             sales_tax_applies_raw = EXCLUDED.sales_tax_applies_raw,
-             sales_tax_rate_raw = EXCLUDED.sales_tax_rate_raw,
-             rent_tax_applies_raw = EXCLUDED.rent_tax_applies_raw,
-             rent_tax_rate_raw = EXCLUDED.rent_tax_rate_raw,
-             rent_tax_applies_to_all_units_raw = EXCLUDED.rent_tax_applies_to_all_units_raw,
-             other_one_time_taxes_raw = EXCLUDED.other_one_time_taxes_raw,
-             other_recurring_taxes_raw = EXCLUDED.other_recurring_taxes_raw",
-    )
-    .bind(facility_id)
-    .bind(&request.sales_tax_applies_raw)
-    .bind(&request.sales_tax_rate_raw)
-    .bind(&request.rent_tax_applies_raw)
-    .bind(&request.rent_tax_rate_raw)
-    .bind(&request.rent_tax_applies_to_all_units_raw)
-    .bind(&request.other_one_time_taxes_raw)
-    .bind(&request.other_recurring_taxes_raw)
-    .execute(&mut *tx)
-    .await
+    if let Err(err) = sqlx::query("DELETE FROM clients.policy_tax_entries WHERE facility_policies_id = $1")
+        .bind(facility_id)
+        .execute(&mut *tx)
+        .await
     {
         let _ = tx.rollback().await;
-        tracing::error!(error = %err, user_id = %user.user_id, "policy_taxes upsert failed");
+        tracing::error!(error = %err, user_id = %user.user_id, "policy_tax_entries delete failed");
         return internal_error("Could not save taxes");
+    }
+
+    for (index, tax) in request.taxes.iter().enumerate() {
+        if let Err(err) = sqlx::query(
+            "INSERT INTO clients.policy_tax_entries
+                (facility_policies_id, tax_type, tax_name, description, flat_amount,
+                 attribute_payable_percent, is_recurring, sort_order)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        )
+        .bind(facility_id)
+        .bind(&tax.tax_type)
+        .bind(&tax.tax_name)
+        .bind(&tax.description)
+        .bind(tax.flat_amount)
+        .bind(tax.attribute_payable_percent)
+        .bind(tax.is_recurring)
+        .bind(index as i32 + 1)
+        .execute(&mut *tx)
+        .await
+        {
+            let _ = tx.rollback().await;
+            tracing::error!(error = %err, user_id = %user.user_id, "policy_tax_entries insert failed");
+            return internal_error("Could not save taxes");
+        }
     }
 
     if let Err(err) = mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Taxes, was_empty).await {
@@ -267,32 +290,75 @@ pub async fn update_taxes(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct DelinquencyStepInput {
-    pub step_order: i32,
-    pub step_type: String,
-    pub raw_value: String,
+pub struct DelinquencyEntryInput {
+    pub category: String,
+    pub name: String,
+    pub amount: f64,
+    pub days_after: Option<i32>,
+    pub trigger_type: String,
+    pub trigger_category: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateDelinquencyRequest {
-    pub steps: Vec<DelinquencyStepInput>,
+    pub entries: Vec<DelinquencyEntryInput>,
 }
 
+const TRIGGER_TYPES: &[&str] = &["paid_through_date", "step_category"];
+
+/// Structured delinquency entries (2026-09-08), replacing the free-text
+/// `clients.policy_delinquency_steps` this endpoint used to write --
+/// see the migration's own doc comment for why the old table is left
+/// alone (9 real historical rows on Highway 20, one naming two separate
+/// fees in the same free-text value -- not something a migration can
+/// safely split on its own). `trigger_category` references another
+/// entry on this same facility's schedule by category rather than by
+/// row id (Boris's own call, 2026-09-08: a schedule can't reasonably
+/// have two rows in the same category, and category survives
+/// reordering a row id wouldn't).
 pub async fn update_delinquency(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<UpdateDelinquencyRequest>,
 ) -> Response {
-    if let Some(step) = request.steps.iter().find(|s| !STEP_TYPES.contains(&s.step_type.as_str())) {
-        return bad_request(format!("\"{}\" is not a recognized delinquency step type.", step.step_type));
+    if let Some(entry) = request.entries.iter().find(|e| !STEP_TYPES.contains(&e.category.as_str())) {
+        return bad_request(format!("\"{}\" is not a recognized delinquency category.", entry.category));
+    }
+    if let Some(entry) = request.entries.iter().find(|e| !TRIGGER_TYPES.contains(&e.trigger_type.as_str())) {
+        return bad_request(format!("\"{}\" is not a recognized trigger type.", entry.trigger_type));
+    }
+    for entry in &request.entries {
+        match entry.trigger_type.as_str() {
+            "paid_through_date" if entry.trigger_category.is_some() => {
+                return bad_request(
+                    "trigger_category must not be set when trigger_type is \"paid_through_date\".".to_string(),
+                );
+            }
+            "step_category" => match &entry.trigger_category {
+                None => {
+                    return bad_request(
+                        "trigger_category is required when trigger_type is \"step_category\".".to_string(),
+                    );
+                }
+                Some(trigger_category) => {
+                    if !STEP_TYPES.contains(&trigger_category.as_str()) {
+                        return bad_request(format!("\"{trigger_category}\" is not a recognized delinquency category."));
+                    }
+                    if trigger_category == &entry.category {
+                        return bad_request("A delinquency entry cannot trigger off its own category.".to_string());
+                    }
+                }
+            },
+            _ => {}
+        }
     }
 
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for update_delinquency");
-            return internal_error("Could not save delinquency steps");
+            return internal_error("Could not save delinquency entries");
         }
     };
 
@@ -305,12 +371,12 @@ pub async fn update_delinquency(
         Err(err) => {
             let _ = tx.rollback().await;
             tracing::error!(error = %err, user_id = %user.user_id, "facility lookup for update_delinquency failed");
-            return internal_error("Could not save delinquency steps");
+            return internal_error("Could not save delinquency entries");
         }
     }
 
     let was_empty: (i64,) =
-        match sqlx::query_as("SELECT count(*) FROM clients.policy_delinquency_steps WHERE facility_policies_id = $1")
+        match sqlx::query_as("SELECT count(*) FROM clients.policy_delinquency_entries WHERE facility_policies_id = $1")
             .bind(facility_id)
             .fetch_one(&mut *tx)
             .await
@@ -318,37 +384,42 @@ pub async fn update_delinquency(
             Ok(row) => row,
             Err(err) => {
                 let _ = tx.rollback().await;
-                tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_steps count failed");
-                return internal_error("Could not save delinquency steps");
+                tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_entries count failed");
+                return internal_error("Could not save delinquency entries");
             }
         };
     let was_empty = was_empty.0 == 0;
 
-    if let Err(err) = sqlx::query("DELETE FROM clients.policy_delinquency_steps WHERE facility_policies_id = $1")
+    if let Err(err) = sqlx::query("DELETE FROM clients.policy_delinquency_entries WHERE facility_policies_id = $1")
         .bind(facility_id)
         .execute(&mut *tx)
         .await
     {
         let _ = tx.rollback().await;
-        tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_steps delete failed");
-        return internal_error("Could not save delinquency steps");
+        tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_entries delete failed");
+        return internal_error("Could not save delinquency entries");
     }
 
-    for step in &request.steps {
+    for (index, entry) in request.entries.iter().enumerate() {
         if let Err(err) = sqlx::query(
-            "INSERT INTO clients.policy_delinquency_steps (facility_policies_id, step_order, step_type, raw_value) \
-             VALUES ($1, $2, $3, $4)",
+            "INSERT INTO clients.policy_delinquency_entries
+                (facility_policies_id, category, name, amount, days_after, trigger_type, trigger_category, sort_order)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(facility_id)
-        .bind(step.step_order)
-        .bind(&step.step_type)
-        .bind(&step.raw_value)
+        .bind(&entry.category)
+        .bind(&entry.name)
+        .bind(entry.amount)
+        .bind(entry.days_after)
+        .bind(&entry.trigger_type)
+        .bind(&entry.trigger_category)
+        .bind(index as i32 + 1)
         .execute(&mut *tx)
         .await
         {
             let _ = tx.rollback().await;
-            tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_steps insert failed");
-            return internal_error("Could not save delinquency steps");
+            tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_entries insert failed");
+            return internal_error("Could not save delinquency entries");
         }
     }
 
@@ -357,12 +428,12 @@ pub async fn update_delinquency(
     {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, "delinquency exemption update failed");
-        return internal_error("Could not save delinquency steps");
+        return internal_error("Could not save delinquency entries");
     }
 
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit update_delinquency transaction");
-        return internal_error("Could not save delinquency steps");
+        return internal_error("Could not save delinquency entries");
     }
 
     StatusCode::NO_CONTENT.into_response()
@@ -636,16 +707,107 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_delinquency_rejects_an_unrecognized_step_type_without_touching_the_database() {
+    async fn update_delinquency_rejects_an_unrecognized_category_without_touching_the_database() {
         let response = update_delinquency(
             State(empty_state()),
             test_user(),
             Path((Uuid::new_v4(), Uuid::new_v4())),
             Json(UpdateDelinquencyRequest {
-                steps: vec![DelinquencyStepInput {
-                    step_order: 1,
-                    step_type: "not_a_real_step".to_string(),
-                    raw_value: "whatever".to_string(),
+                entries: vec![DelinquencyEntryInput {
+                    category: "not_a_real_category".to_string(),
+                    name: "1st Late Fee".to_string(),
+                    amount: 10.0,
+                    days_after: Some(7),
+                    trigger_type: "paid_through_date".to_string(),
+                    trigger_category: None,
+                }],
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_delinquency_rejects_a_step_category_trigger_with_no_trigger_category_given() {
+        let response = update_delinquency(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+            Json(UpdateDelinquencyRequest {
+                entries: vec![DelinquencyEntryInput {
+                    category: "lien".to_string(),
+                    name: "Lien Fee".to_string(),
+                    amount: 25.0,
+                    days_after: Some(45),
+                    trigger_type: "step_category".to_string(),
+                    trigger_category: None,
+                }],
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_delinquency_rejects_a_category_triggering_off_itself() {
+        let response = update_delinquency(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+            Json(UpdateDelinquencyRequest {
+                entries: vec![DelinquencyEntryInput {
+                    category: "lien".to_string(),
+                    name: "Lien Fee".to_string(),
+                    amount: 25.0,
+                    days_after: Some(45),
+                    trigger_type: "step_category".to_string(),
+                    trigger_category: Some("lien".to_string()),
+                }],
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_delinquency_reaches_the_database() {
+        let response = update_delinquency(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+            Json(UpdateDelinquencyRequest {
+                entries: vec![DelinquencyEntryInput {
+                    category: "pre_lien".to_string(),
+                    name: "Pre-Lien Fee".to_string(),
+                    amount: 0.0,
+                    days_after: Some(30),
+                    trigger_type: "paid_through_date".to_string(),
+                    trigger_category: None,
+                }],
+            }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn update_taxes_rejects_an_unrecognized_tax_name_without_touching_the_database() {
+        let response = update_taxes(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+            Json(UpdateTaxesRequest {
+                taxes: vec![TaxEntryInput {
+                    tax_type: "fixed".to_string(),
+                    tax_name: "not_a_real_tax".to_string(),
+                    description: None,
+                    flat_amount: Some(0.0),
+                    attribute_payable_percent: None,
+                    is_recurring: false,
                 }],
             }),
         )
@@ -661,13 +823,14 @@ mod tests {
             test_user(),
             Path((Uuid::new_v4(), Uuid::new_v4())),
             Json(UpdateTaxesRequest {
-                sales_tax_applies_raw: None,
-                sales_tax_rate_raw: None,
-                rent_tax_applies_raw: None,
-                rent_tax_rate_raw: None,
-                rent_tax_applies_to_all_units_raw: None,
-                other_one_time_taxes_raw: None,
-                other_recurring_taxes_raw: None,
+                taxes: vec![TaxEntryInput {
+                    tax_type: "fixed".to_string(),
+                    tax_name: "sales".to_string(),
+                    description: Some("Sales tax".to_string()),
+                    flat_amount: None,
+                    attribute_payable_percent: Some(8.25),
+                    is_recurring: true,
+                }],
             }),
         )
         .await;
