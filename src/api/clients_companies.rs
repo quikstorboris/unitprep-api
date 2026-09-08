@@ -163,6 +163,73 @@ pub async fn unarchive_company(
     set_archived(state, user, company_id, false).await
 }
 
+/// Permanently deletes a company and everything under it -- every
+/// `clients.facilities` row, and everything that in turn cascades from
+/// those (policies, fees, taxes, facility_people links, Elavon/Contract
+/// Order data), all via `ON DELETE CASCADE` already declared on those
+/// tables' own foreign keys. Never touches `clients.people` itself: a
+/// person can legitimately be linked to facilities under other
+/// companies too, so only the link rows (`clients.facility_people`) go
+/// away, same restraint `unlink_person_from_facility` already uses.
+///
+/// Distinct from archive/unarchive (`set_archived` above), which is
+/// reversible and keeps the row around -- this is for a genuine mistake
+/// (e.g. a test import, or one created from the wrong Process Street
+/// runs) where archiving would just leave permanent clutter. Same
+/// `client_ops.perform` gate as archive; no separate confirmation step
+/// here since the frontend already asks before calling this.
+pub async fn delete_company(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    Path(company_id): Path<Uuid>,
+) -> Response {
+    if let Err(response) =
+        user.require_permission(&state.db, PERMISSION, "delete_company", None, None).await
+    {
+        return response;
+    }
+
+    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for company delete");
+            return internal_error("Could not delete this client");
+        }
+    };
+
+    let deleted: Result<Option<(Uuid,)>, sqlx::Error> =
+        sqlx::query_as("DELETE FROM clients.companies WHERE id = $1 RETURNING id")
+            .bind(company_id)
+            .fetch_optional(&mut *tx)
+            .await;
+
+    let deleted = match deleted {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, company_id = %company_id, "company delete failed");
+            return internal_error("Could not delete this client");
+        }
+    };
+
+    if deleted.is_none() {
+        let _ = tx.rollback().await;
+        return (
+            StatusCode::NOT_FOUND,
+            Json(ApiErrorBody { error: "not_found", message: "Client not found.".to_string() }),
+        )
+            .into_response();
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit company delete");
+        return internal_error("Could not delete this client");
+    }
+
+    tracing::info!(user_id = %user.user_id, company_id = %company_id, "user permanently deleted a client");
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +245,13 @@ mod tests {
     #[tokio::test]
     async fn unarchiving_refuses_insufficient_permission_without_touching_anything() {
         let response = unarchive_company(State(empty_state()), test_user(), Path(Uuid::new_v4())).await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn deleting_refuses_insufficient_permission_without_touching_anything() {
+        let response = delete_company(State(empty_state()), test_user(), Path(Uuid::new_v4())).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }

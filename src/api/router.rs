@@ -352,8 +352,14 @@ pub fn router(state: AppState) -> Router {
             "/clients/{company_id}/resync/apply",
             post(clients_resync::apply_resync),
         )
-        // Any authenticated caller -- see clients_detail's own module doc.
-        .route("/clients/{company_id}", get(clients_detail::get_company_detail))
+        // GET: any authenticated caller -- see clients_detail's own
+        // module doc. DELETE: requires client_ops.perform -- see
+        // clients_companies's own module doc (a genuine permanent
+        // delete, distinct from archive/unarchive above).
+        .route(
+            "/clients/{company_id}",
+            get(clients_detail::get_company_detail).delete(clients_companies::delete_company),
+        )
         .route(
             "/clients/{company_id}/facilities/{facility_id}",
             get(clients_detail::get_facility_detail),
