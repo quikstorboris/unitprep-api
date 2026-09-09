@@ -75,6 +75,42 @@ pub mod event {
     /// way a Merchant Account relink is.
     pub const FACILITY_DROPBOX_FOLDER_CHANGED: &str = "facility_dropbox_folder_changed";
 
+    /// A person was added to a facility's Users tab roster
+    /// (`api::clients_facility_people::add_facility_person`) -- either an
+    /// "Add User" chip click for a Process Street candidate, or a
+    /// brand-new person typed in by hand.
+    pub const FACILITY_PERSON_ADDED: &str = "facility_person_added";
+    /// A roster person's own name/email/phone/role was edited
+    /// (`api::clients_facility_people::edit_facility_person`).
+    pub const FACILITY_PERSON_UPDATED: &str = "facility_person_updated";
+    /// A person was removed from a facility's Users tab roster
+    /// (`api::clients_facility_people::unlink_facility_person`) -- the
+    /// gap this event closes: this action previously left no trail at
+    /// all (2026-09-09).
+    pub const FACILITY_PERSON_UNLINKED: &str = "facility_person_unlinked";
+
+    /// A facility's fee policy was edited (`api::clients_facility_policies_edit::update_fees`).
+    pub const FACILITY_FEES_UPDATED: &str = "facility_fees_updated";
+    /// A facility's tax policy was edited (`api::clients_facility_policies_edit::update_taxes`).
+    pub const FACILITY_TAXES_UPDATED: &str = "facility_taxes_updated";
+    /// A facility's delinquency policy was edited (`api::clients_facility_policies_edit::update_delinquency`).
+    pub const FACILITY_DELINQUENCY_UPDATED: &str = "facility_delinquency_updated";
+    /// A facility's coverage/insurance policy was edited (`api::clients_facility_policies_edit::update_coverage`).
+    pub const FACILITY_COVERAGE_UPDATED: &str = "facility_coverage_updated";
+    /// A facility's specials/promo policy was edited (`api::clients_facility_policies_edit::update_specials`).
+    pub const FACILITY_SPECIALS_UPDATED: &str = "facility_specials_updated";
+
+    /// A client company was archived (`api::clients_companies::archive_company`).
+    pub const CLIENT_ARCHIVED: &str = "client_archived";
+    /// A client company was unarchived (`api::clients_companies::unarchive_company`).
+    pub const CLIENT_UNARCHIVED: &str = "client_unarchived";
+    /// A client company was **permanently** deleted, cascading its
+    /// facilities/policies/people-links/Elavon data
+    /// (`api::clients_companies::delete_company`) -- the most severe of
+    /// this pass's gaps to close: an irreversible action previously left
+    /// no record at all.
+    pub const CLIENT_DELETED: &str = "client_deleted";
+
     /// Every event type this module writes, for the Activity Logs admin
     /// filter dropdown -- mirrors `auth::audit_log::event::ALL`'s own
     /// reasoning: straight from this list, so the frontend can never
@@ -92,6 +128,17 @@ pub mod event {
         MERCHANT_ACCOUNT_LINKED,
         MERCHANT_ACCOUNT_UNLINKED,
         FACILITY_DROPBOX_FOLDER_CHANGED,
+        FACILITY_PERSON_ADDED,
+        FACILITY_PERSON_UPDATED,
+        FACILITY_PERSON_UNLINKED,
+        FACILITY_FEES_UPDATED,
+        FACILITY_TAXES_UPDATED,
+        FACILITY_DELINQUENCY_UPDATED,
+        FACILITY_COVERAGE_UPDATED,
+        FACILITY_SPECIALS_UPDATED,
+        CLIENT_ARCHIVED,
+        CLIENT_UNARCHIVED,
+        CLIENT_DELETED,
     ];
 }
 

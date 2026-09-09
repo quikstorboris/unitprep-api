@@ -54,7 +54,7 @@
 
 use axum::{
     extract::{Json, Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -62,6 +62,7 @@ use uuid::Uuid;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::client_ops::audit_log;
 use crate::clients::people::PersonAssignment;
 use crate::clients::repository::{
     edit_person_and_facility_link, heal_person_in_place, unlink_person_from_facility,
@@ -81,6 +82,10 @@ fn not_found(entity: &'static str) -> Response {
 fn bad_request(message: &str) -> Response {
     (StatusCode::BAD_REQUEST, Json(ApiErrorBody { error: "invalid_request", message: message.to_string() }))
         .into_response()
+}
+
+fn request_context(headers: &HeaderMap) -> Option<&str> {
+    headers.get(axum::http::header::USER_AGENT).and_then(|value| value.to_str().ok())
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -274,9 +279,12 @@ pub struct AddPersonRequest {
 pub async fn add_facility_person(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    headers: HeaderMap,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<AddPersonRequest>,
 ) -> Response {
+    let user_agent = request_context(&headers);
+
     if request.full_name.trim().is_empty() {
         return bad_request("full_name is required and must not be blank.");
     }
@@ -323,6 +331,28 @@ pub async fn add_facility_person(
         return internal_error("Could not add this person");
     }
 
+    audit_log::record(
+        &state.db,
+        audit_log::event::FACILITY_PERSON_ADDED,
+        user.user_id,
+        "facility_person",
+        Some(&facility_id.to_string()),
+        audit_log::Change::from_to(
+            serde_json::json!(null),
+            serde_json::json!({
+                "full_name": assignment.full_name,
+                "email": assignment.email,
+                "phone": assignment.phone,
+                "role": assignment.role,
+                "source": request.source,
+            }),
+        ),
+        user_agent,
+        None,
+        serde_json::json!({}),
+    )
+    .await;
+
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit add facility person transaction");
         return internal_error("Could not add this person");
@@ -353,9 +383,12 @@ pub struct EditPersonRequest {
 pub async fn edit_facility_person(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    headers: HeaderMap,
     Path((company_id, facility_id, person_id)): Path<(Uuid, Uuid, Uuid)>,
     Json(request): Json<EditPersonRequest>,
 ) -> Response {
+    let user_agent = request_context(&headers);
+
     if request.full_name.trim().is_empty() {
         return bad_request("full_name is required and must not be blank.");
     }
@@ -386,6 +419,26 @@ pub async fn edit_facility_person(
         return not_found("facility");
     }
 
+    let previous: Option<(String, Option<String>, Option<String>)> = match sqlx::query_as(
+        "SELECT p.full_name, p.email::text, p.phone
+           FROM clients.facility_people fp
+           JOIN clients.people p ON p.id = fp.person_id
+          WHERE fp.facility_id = $1 AND fp.person_id = $2 AND fp.role = $3",
+    )
+    .bind(facility_id)
+    .bind(person_id)
+    .bind(&request.old_role)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            let _ = tx.rollback().await;
+            tracing::error!(error = %err, user_id = %user.user_id, person_id = %person_id, "failed to read prior facility person state");
+            return internal_error("Could not save this person");
+        }
+    };
+
     let result = edit_person_and_facility_link(
         &mut tx,
         facility_id,
@@ -412,6 +465,29 @@ pub async fn edit_facility_person(
         }
     }
 
+    audit_log::record(
+        &state.db,
+        audit_log::event::FACILITY_PERSON_UPDATED,
+        user.user_id,
+        "facility_person",
+        Some(&person_id.to_string()),
+        audit_log::Change::from_to(
+            serde_json::json!(previous.map(|(full_name, email, phone)| {
+                serde_json::json!({ "full_name": full_name, "email": email, "phone": phone, "role": request.old_role })
+            })),
+            serde_json::json!({
+                "full_name": request.full_name,
+                "email": request.email,
+                "phone": request.phone,
+                "role": request.role,
+            }),
+        ),
+        user_agent,
+        None,
+        serde_json::json!({ "facility_id": facility_id }),
+    )
+    .await;
+
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit edit facility person transaction");
         return internal_error("Could not save this person");
@@ -435,9 +511,12 @@ pub struct UnlinkFacilityPersonQuery {
 pub async fn unlink_facility_person(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    headers: HeaderMap,
     Path((company_id, facility_id, person_id)): Path<(Uuid, Uuid, Uuid)>,
     axum::extract::Query(query): axum::extract::Query<UnlinkFacilityPersonQuery>,
 ) -> Response {
+    let user_agent = request_context(&headers);
+
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
@@ -464,11 +543,49 @@ pub async fn unlink_facility_person(
         return not_found("facility");
     }
 
+    let removed: Option<(String, Option<String>, Option<String>)> = match sqlx::query_as(
+        "SELECT p.full_name, p.email::text, p.phone
+           FROM clients.facility_people fp
+           JOIN clients.people p ON p.id = fp.person_id
+          WHERE fp.facility_id = $1 AND fp.person_id = $2 AND fp.role = $3",
+    )
+    .bind(facility_id)
+    .bind(person_id)
+    .bind(&query.role)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            let _ = tx.rollback().await;
+            tracing::error!(error = %err, user_id = %user.user_id, person_id = %person_id, "failed to read facility person state before unlink");
+            return internal_error("Could not remove this person");
+        }
+    };
+
     if let Err(err) = unlink_person_from_facility(&mut tx, facility_id, person_id, &query.role).await {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, facility_id = %facility_id, person_id = %person_id, "failed to unlink facility person");
         return internal_error("Could not remove this person");
     }
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::FACILITY_PERSON_UNLINKED,
+        user.user_id,
+        "facility_person",
+        Some(&person_id.to_string()),
+        audit_log::Change::from_to(
+            serde_json::json!(removed.map(|(full_name, email, phone)| {
+                serde_json::json!({ "full_name": full_name, "email": email, "phone": phone, "role": query.role })
+            })),
+            serde_json::json!(null),
+        ),
+        user_agent,
+        None,
+        serde_json::json!({ "facility_id": facility_id }),
+    )
+    .await;
 
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit unlink facility person transaction");
@@ -495,6 +612,7 @@ mod tests {
         let response = add_facility_person(
             State(empty_state()),
             test_user(),
+            HeaderMap::new(),
             Path((Uuid::new_v4(), Uuid::new_v4())),
             Json(AddPersonRequest {
                 full_name: "   ".to_string(),
@@ -514,6 +632,7 @@ mod tests {
         let response = add_facility_person(
             State(empty_state()),
             test_user(),
+            HeaderMap::new(),
             Path((Uuid::new_v4(), Uuid::new_v4())),
             Json(AddPersonRequest {
                 full_name: "Irene Chen".to_string(),
@@ -533,6 +652,7 @@ mod tests {
         let response = add_facility_person(
             State(empty_state()),
             test_user(),
+            HeaderMap::new(),
             Path((Uuid::new_v4(), Uuid::new_v4())),
             Json(AddPersonRequest {
                 full_name: "Irene Chen".to_string(),
@@ -552,6 +672,7 @@ mod tests {
         let response = edit_facility_person(
             State(empty_state()),
             test_user(),
+            HeaderMap::new(),
             Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
             Json(EditPersonRequest {
                 old_role: "owner".to_string(),
@@ -572,6 +693,7 @@ mod tests {
         let response = edit_facility_person(
             State(empty_state()),
             test_user(),
+            HeaderMap::new(),
             Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
             Json(EditPersonRequest {
                 old_role: "owner".to_string(),
@@ -592,6 +714,7 @@ mod tests {
         let response = unlink_facility_person(
             State(empty_state()),
             test_user(),
+            HeaderMap::new(),
             Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
             axum::extract::Query(UnlinkFacilityPersonQuery { role: "owner".to_string() }),
         )

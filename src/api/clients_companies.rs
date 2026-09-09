@@ -12,7 +12,7 @@
 
 use axum::{
     extract::{Json, Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
@@ -21,8 +21,13 @@ use uuid::Uuid;
 
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::client_ops::audit_log;
 
 const PERMISSION: &str = "client_ops.perform";
+
+fn request_context(headers: &HeaderMap) -> Option<&str> {
+    headers.get(axum::http::header::USER_AGENT).and_then(|value| value.to_str().ok())
+}
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct CompanySummary {
@@ -82,15 +87,18 @@ pub async fn list_companies(State(state): State<AppState>, user: AuthenticatedUs
 async fn set_archived(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    headers: HeaderMap,
     company_id: Uuid,
     archive: bool,
 ) -> Response {
+    let user_agent = request_context(&headers);
+
     if let Err(response) = user
         .require_permission(
             &state.db,
             PERMISSION,
             if archive { "archive_company" } else { "unarchive_company" },
-            None,
+            user_agent,
             None,
         )
         .await
@@ -107,12 +115,12 @@ async fn set_archived(
     };
 
     let query = if archive {
-        "UPDATE clients.companies SET archived_at = now() WHERE id = $1 AND archived_at IS NULL RETURNING id"
+        "UPDATE clients.companies SET archived_at = now() WHERE id = $1 AND archived_at IS NULL RETURNING id, legal_name"
     } else {
-        "UPDATE clients.companies SET archived_at = NULL WHERE id = $1 AND archived_at IS NOT NULL RETURNING id"
+        "UPDATE clients.companies SET archived_at = NULL WHERE id = $1 AND archived_at IS NOT NULL RETURNING id, legal_name"
     };
 
-    let updated: Result<Option<(Uuid,)>, sqlx::Error> =
+    let updated: Result<Option<(Uuid, String)>, sqlx::Error> =
         sqlx::query_as(query).bind(company_id).fetch_optional(&mut *tx).await;
 
     let updated = match updated {
@@ -123,7 +131,7 @@ async fn set_archived(
         }
     };
 
-    if updated.is_none() {
+    let Some((_, legal_name)) = updated else {
         if let Err(err) = tx.rollback().await {
             tracing::error!(error = %err, "failed to roll back a no-op archive toggle");
         }
@@ -139,7 +147,20 @@ async fn set_archived(
             }),
         )
             .into_response();
-    }
+    };
+
+    audit_log::record(
+        &state.db,
+        if archive { audit_log::event::CLIENT_ARCHIVED } else { audit_log::event::CLIENT_UNARCHIVED },
+        user.user_id,
+        "company",
+        Some(&company_id.to_string()),
+        audit_log::Change::none(),
+        user_agent,
+        None,
+        serde_json::json!({ "legal_name": legal_name }),
+    )
+    .await;
 
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit company archive toggle");
@@ -151,16 +172,22 @@ async fn set_archived(
     StatusCode::NO_CONTENT.into_response()
 }
 
-pub async fn archive_company(state: State<AppState>, user: AuthenticatedUser, Path(company_id): Path<Uuid>) -> Response {
-    set_archived(state, user, company_id, true).await
+pub async fn archive_company(
+    state: State<AppState>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Path(company_id): Path<Uuid>,
+) -> Response {
+    set_archived(state, user, headers, company_id, true).await
 }
 
 pub async fn unarchive_company(
     state: State<AppState>,
     user: AuthenticatedUser,
+    headers: HeaderMap,
     Path(company_id): Path<Uuid>,
 ) -> Response {
-    set_archived(state, user, company_id, false).await
+    set_archived(state, user, headers, company_id, false).await
 }
 
 /// Permanently deletes a company and everything under it -- every
@@ -181,10 +208,13 @@ pub async fn unarchive_company(
 pub async fn delete_company(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    headers: HeaderMap,
     Path(company_id): Path<Uuid>,
 ) -> Response {
+    let user_agent = request_context(&headers);
+
     if let Err(response) =
-        user.require_permission(&state.db, PERMISSION, "delete_company", None, None).await
+        user.require_permission(&state.db, PERMISSION, "delete_company", user_agent, None).await
     {
         return response;
     }
@@ -197,8 +227,8 @@ pub async fn delete_company(
         }
     };
 
-    let deleted: Result<Option<(Uuid,)>, sqlx::Error> =
-        sqlx::query_as("DELETE FROM clients.companies WHERE id = $1 RETURNING id")
+    let deleted: Result<Option<(Uuid, String)>, sqlx::Error> =
+        sqlx::query_as("DELETE FROM clients.companies WHERE id = $1 RETURNING id, legal_name")
             .bind(company_id)
             .fetch_optional(&mut *tx)
             .await;
@@ -211,14 +241,27 @@ pub async fn delete_company(
         }
     };
 
-    if deleted.is_none() {
+    let Some((_, legal_name)) = deleted else {
         let _ = tx.rollback().await;
         return (
             StatusCode::NOT_FOUND,
             Json(ApiErrorBody { error: "not_found", message: "Client not found.".to_string() }),
         )
             .into_response();
-    }
+    };
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::CLIENT_DELETED,
+        user.user_id,
+        "company",
+        Some(&company_id.to_string()),
+        audit_log::Change::from_to(serde_json::json!({ "legal_name": legal_name }), serde_json::json!(null)),
+        user_agent,
+        None,
+        serde_json::json!({}),
+    )
+    .await;
 
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit company delete");
@@ -237,21 +280,24 @@ mod tests {
 
     #[tokio::test]
     async fn archiving_refuses_insufficient_permission_without_touching_anything() {
-        let response = archive_company(State(empty_state()), test_user(), Path(Uuid::new_v4())).await;
+        let response =
+            archive_company(State(empty_state()), test_user(), HeaderMap::new(), Path(Uuid::new_v4())).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn unarchiving_refuses_insufficient_permission_without_touching_anything() {
-        let response = unarchive_company(State(empty_state()), test_user(), Path(Uuid::new_v4())).await;
+        let response =
+            unarchive_company(State(empty_state()), test_user(), HeaderMap::new(), Path(Uuid::new_v4())).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn deleting_refuses_insufficient_permission_without_touching_anything() {
-        let response = delete_company(State(empty_state()), test_user(), Path(Uuid::new_v4())).await;
+        let response =
+            delete_company(State(empty_state()), test_user(), HeaderMap::new(), Path(Uuid::new_v4())).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
