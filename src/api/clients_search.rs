@@ -56,7 +56,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::company_naming::resolve_company_name;
 use crate::clients::merchant_account_correlation::{
@@ -140,17 +140,6 @@ pub struct PersonMatch {
 pub struct SearchClientsResponse {
     pub facility_matches: Vec<FacilityMatch>,
     pub person_matches: Vec<PersonMatch>,
-}
-
-fn bad_request(message: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "invalid_search_query",
-            message: message.to_string(),
-        }),
-    )
-        .into_response()
 }
 
 fn process_street_not_configured() -> Response {
@@ -274,7 +263,7 @@ pub async fn search_clients(
 ) -> Response {
     let q = query.q.trim();
     if q.is_empty() {
-        return bad_request("q is required and must not be blank.");
+        return bad_request("invalid_search_query", "q is required and must not be blank.".to_string());
     }
 
     let Some(client) = state.process_street.as_ref() else {

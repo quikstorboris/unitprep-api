@@ -27,7 +27,7 @@ use uuid::Uuid;
 
 use unitprep_core::uploaded_file::UploadedFile;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{internal_error, not_found, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 
 /// The directory portion of a Dropbox path -- `None` for a bare
@@ -246,17 +246,6 @@ pub async fn search_folders(
     }
 }
 
-fn not_found(entity: &'static str) -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiErrorBody {
-            error: "not_found",
-            message: format!("{entity} not found"),
-        }),
-    )
-        .into_response()
-}
-
 #[derive(Debug, Deserialize)]
 pub struct FacilityDropboxFolderQuery {
     /// A facility name already known to the caller (e.g. `Client.
@@ -328,7 +317,7 @@ pub async fn facility_dropbox_folder(
     }
 
     let Some((dropbox_folder_url,)) = facility else {
-        return not_found("facility");
+        return not_found("not_found", "facility not found".to_string());
     };
     let name = query.facility_name;
 

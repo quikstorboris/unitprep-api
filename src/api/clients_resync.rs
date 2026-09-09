@@ -32,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{internal_error, not_found, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::create::diff_company_fields;
@@ -44,17 +44,6 @@ use crate::clients::sync::{
 use crate::process_street::FormField;
 
 const PERMISSION: &str = "client_ops.perform";
-
-fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiErrorBody {
-            error: "company_not_found",
-            message: "No such company.".to_string(),
-        }),
-    )
-        .into_response()
-}
 
 fn process_street_not_configured() -> Response {
     (
@@ -391,7 +380,7 @@ pub async fn preview_resync(
 
     let comparisons = match load_comparisons(&mut tx, &client, company_id).await {
         Ok(Some(comparisons)) => comparisons,
-        Ok(None) => return not_found(),
+        Ok(None) => return not_found("company_not_found", "No such company.".to_string()),
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "resync preview query failed");
             return internal_error("Could not preview the re-sync");
@@ -485,7 +474,7 @@ pub async fn apply_resync(
 
     let (company, facilities) = match load_comparisons(&mut tx, &client, company_id).await {
         Ok(Some(comparisons)) => comparisons,
-        Ok(None) => return not_found(),
+        Ok(None) => return not_found("company_not_found", "No such company.".to_string()),
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "resync apply query failed");
             return internal_error("Could not apply the re-sync");

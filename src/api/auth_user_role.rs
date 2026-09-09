@@ -16,13 +16,13 @@ use std::net::SocketAddr;
 
 use axum::{
     extract::{ConnectInfo, Json, Path, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, conflict, internal_error, not_found, AppState};
 use crate::auth::{
     audit_log, begin_rls_transaction, remaining_active_admins_excluding, resolve_role_id,
     role_keys_for_user, AuthenticatedUser,
@@ -41,29 +41,6 @@ pub struct RoleChangeResponse {
     /// changed, since the point of multi-role is that the whole set
     /// matters.
     pub roles: Vec<String>,
-}
-
-fn bad_request(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
-}
-
-fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiErrorBody {
-            error: "user_not_found",
-            message: "No such user.".to_string(),
-        }),
-    )
-        .into_response()
-}
-
-fn conflict(error: &'static str, message: String) -> Response {
-    (StatusCode::CONFLICT, Json(ApiErrorBody { error, message })).into_response()
 }
 
 /// Confirms the target account exists and isn't soft-deleted -- same
@@ -131,7 +108,7 @@ pub async fn grant_role(
             if let Err(err) = tx.rollback().await {
                 tracing::error!(error = %err, "failed to roll back after a missing user lookup");
             }
-            return not_found();
+            return not_found("user_not_found", "No such user.".to_string());
         }
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "user lookup failed during role grant");
@@ -269,7 +246,7 @@ pub async fn revoke_role(
             if let Err(err) = tx.rollback().await {
                 tracing::error!(error = %err, "failed to roll back after a missing user lookup");
             }
-            return not_found();
+            return not_found("user_not_found", "No such user.".to_string());
         }
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "user lookup failed during role revoke");
@@ -392,6 +369,8 @@ pub async fn revoke_role(
 
 #[cfg(test)]
 mod tests {
+    use axum::http::StatusCode;
+
     use super::*;
     use crate::api::test_support::{admin_user, empty_state, onboarding_manager_user};
 

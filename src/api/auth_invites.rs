@@ -53,7 +53,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, conflict, internal_error, ApiErrorBody, AppState};
 use crate::auth::{
     audit_log, begin_rls_transaction, generate_token, resolve_role_id, AuthenticatedUser,
 };
@@ -93,32 +93,6 @@ pub struct CreateInviteResponse {
     /// True when this replaced an outstanding invite for an account that
     /// already existed, rather than creating a new account.
     pub reissued: bool,
-}
-
-fn bad_request(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
-}
-
-/// A deliberately *explicit* conflict, unlike the opaque refusals on the
-/// unauthenticated endpoints.
-///
-/// The caller here is an authenticated administrator who can already list
-/// users, so withholding the reason protects nothing and costs them the
-/// ability to act on it. Anti-enumeration reasoning applies to anonymous
-/// callers; applying it to an admin tool just makes the tool worse.
-fn conflict(message: String) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(ApiErrorBody {
-            error: "invite_not_applicable",
-            message,
-        }),
-    )
-        .into_response()
 }
 
 pub async fn create_invite(
@@ -253,7 +227,14 @@ pub async fn create_invite(
                 reason,
                 "invite refused"
             );
-            return conflict(message);
+            // A deliberately *explicit* conflict, unlike the opaque
+            // refusals on the unauthenticated endpoints -- the caller
+            // here is an authenticated administrator who can already
+            // list users, so withholding the reason protects nothing
+            // and costs them the ability to act on it. Anti-enumeration
+            // reasoning applies to anonymous callers; applying it to an
+            // admin tool just makes the tool worse.
+            return conflict("invite_not_applicable", message);
         }
 
         Err(IssueInviteError::InvalidRole(role_key)) => {
@@ -623,7 +604,7 @@ pub async fn recover_account(
             );
 
             return match user_id {
-                Some(_) => conflict(message),
+                Some(_) => conflict("invite_not_applicable", message),
                 None => account_not_found(&email),
             };
         }

@@ -35,7 +35,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::api::auth_invites::CreateInviteResponse;
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, conflict, internal_error, not_found, AppState};
 use crate::auth::{
     audit_log, begin_rls_transaction, generate_token, remaining_active_admins_excluding,
     AuthenticatedUser,
@@ -46,39 +46,6 @@ use crate::bootstrap::invite_hours;
 pub struct DeactivateUserResponse {
     pub user_id: Uuid,
     pub status: &'static str,
-}
-
-fn bad_request(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
-}
-
-fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiErrorBody {
-            error: "user_not_found",
-            message: "No such user.".to_string(),
-        }),
-    )
-        .into_response()
-}
-
-/// Unlike the unauthenticated endpoints, an authenticated admin who can
-/// already see the user list gets an explicit reason -- same stance as
-/// `auth_invites.rs`'s own `conflict`.
-fn conflict(message: String) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(ApiErrorBody {
-            error: "user_not_deactivatable",
-            message,
-        }),
-    )
-        .into_response()
 }
 
 pub async fn deactivate_user(
@@ -137,7 +104,7 @@ pub async fn deactivate_user(
             if let Err(err) = tx.rollback().await {
                 tracing::error!(error = %err, "failed to roll back after a missing user lookup");
             }
-            return not_found();
+            return not_found("user_not_found", "No such user.".to_string());
         }
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "user lookup failed during deactivation");
@@ -149,7 +116,7 @@ pub async fn deactivate_user(
         if let Err(err) = tx.rollback().await {
             tracing::error!(error = %err, "failed to roll back a no-op deactivation");
         }
-        return conflict("This user is already deactivated.".to_string());
+        return conflict("user_not_deactivatable", "This user is already deactivated.".to_string());
     }
 
     // Same reasoning as auth_user_role.rs's revoke_role equivalent check:
@@ -163,6 +130,7 @@ pub async fn deactivate_user(
                     tracing::error!(error = %err, "failed to roll back a last-admin deactivation");
                 }
                 return conflict(
+                    "user_not_deactivatable",
                     "This is the last active admin. Promote another user to admin before \
                      deactivating this one."
                         .to_string(),
@@ -198,6 +166,7 @@ pub async fn deactivate_user(
             tracing::error!(error = %err, "failed to roll back a concurrently-changed deactivation");
         }
         return conflict(
+            "user_not_deactivatable",
             "This user's status changed while this request was in progress. Check its \
              current state and try again."
                 .to_string(),
@@ -286,7 +255,7 @@ pub async fn reactivate_user(
             if let Err(err) = tx.rollback().await {
                 tracing::error!(error = %err, "failed to roll back after a missing user lookup");
             }
-            return not_found();
+            return not_found("user_not_found", "No such user.".to_string());
         }
         Err(err) => {
             tracing::error!(error = %err, admin_user_id = %admin.user_id, target_user_id = %target_user_id, "user lookup failed during reactivation");
@@ -298,9 +267,10 @@ pub async fn reactivate_user(
         if let Err(err) = tx.rollback().await {
             tracing::error!(error = %err, "failed to roll back a no-op reactivation");
         }
-        return conflict(format!(
-            "This user is not deactivated (current status: \"{prior_status}\")."
-        ));
+        return conflict(
+            "user_not_deactivatable",
+            format!("This user is not deactivated (current status: \"{prior_status}\")."),
+        );
     }
 
     // No intermediate step through `deactivated` needed here, unlike
@@ -325,6 +295,7 @@ pub async fn reactivate_user(
             tracing::error!(error = %err, "failed to roll back a concurrently-changed reactivation");
         }
         return conflict(
+            "user_not_deactivatable",
             "This user's status changed while this request was in progress. Check its \
              current state and try again."
                 .to_string(),

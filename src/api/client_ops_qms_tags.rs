@@ -21,7 +21,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, conflict, internal_error, not_found, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log::{self, Change};
 
@@ -52,29 +52,6 @@ pub struct CreateQmsTagRequest {
 pub struct UpdateQmsTagRequest {
     pub label: String,
     pub category: String,
-}
-
-fn bad_request(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
-}
-
-fn not_found(tag_key: &str) -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiErrorBody {
-            error: "qms_tag_not_found",
-            message: format!("No such tag: {tag_key}"),
-        }),
-    )
-        .into_response()
-}
-
-fn conflict(error: &'static str, message: String) -> Response {
-    (StatusCode::CONFLICT, Json(ApiErrorBody { error, message })).into_response()
 }
 
 fn request_context(headers: &HeaderMap) -> Option<&str> {
@@ -292,7 +269,7 @@ pub async fn update_qms_tag(
                 tag_key = %tag_key,
                 "qms tag update rejected: tag not found"
             );
-            return not_found(&tag_key);
+            return not_found("qms_tag_not_found", format!("No such tag: {tag_key}"));
         }
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, tag_key = %tag_key, "qms tag lookup failed during update");
@@ -391,7 +368,7 @@ async fn set_active(
                 action,
                 "qms tag activation change rejected: tag not found"
             );
-            return not_found(tag_key);
+            return not_found("qms_tag_not_found", format!("No such tag: {tag_key}"));
         }
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, tag_key = %tag_key, "qms tag lookup failed during activation change");

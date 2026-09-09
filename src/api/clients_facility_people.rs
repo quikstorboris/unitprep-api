@@ -60,7 +60,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, not_found, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::people::PersonAssignment;
@@ -70,19 +70,6 @@ use crate::clients::repository::{
 };
 
 const SOURCES: &[&str] = &["process_street", "manual"];
-
-fn not_found(entity: &'static str) -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiErrorBody { error: "not_found", message: format!("No such {entity}.") }),
-    )
-        .into_response()
-}
-
-fn bad_request(message: &str) -> Response {
-    (StatusCode::BAD_REQUEST, Json(ApiErrorBody { error: "invalid_request", message: message.to_string() }))
-        .into_response()
-}
 
 fn request_context(headers: &HeaderMap) -> Option<&str> {
     headers.get(axum::http::header::USER_AGENT).and_then(|value| value.to_str().ok())
@@ -140,7 +127,7 @@ pub async fn get_facility_people(
         };
     let Some(facility) = facility else {
         let _ = tx.commit().await;
-        return not_found("facility");
+        return not_found("not_found", "No such facility.".to_string());
     };
 
     let roster: Vec<FacilityPerson> = match sqlx::query_as(
@@ -286,10 +273,10 @@ pub async fn add_facility_person(
     let user_agent = request_context(&headers);
 
     if request.full_name.trim().is_empty() {
-        return bad_request("full_name is required and must not be blank.");
+        return bad_request("invalid_request", "full_name is required and must not be blank.".to_string());
     }
     if !SOURCES.contains(&request.source.as_str()) {
-        return bad_request(&format!("\"{}\" is not a recognized source.", request.source));
+        return bad_request("invalid_request", format!("\"{}\" is not a recognized source.", request.source));
     }
 
     let assignment = PersonAssignment {
@@ -322,7 +309,7 @@ pub async fn add_facility_person(
         };
     if facility_exists.is_none() {
         let _ = tx.rollback().await;
-        return not_found("facility");
+        return not_found("not_found", "No such facility.".to_string());
     }
 
     if let Err(err) = upsert_person_and_link_to_facility(&mut tx, facility_id, &assignment, &request.source).await {
@@ -390,7 +377,7 @@ pub async fn edit_facility_person(
     let user_agent = request_context(&headers);
 
     if request.full_name.trim().is_empty() {
-        return bad_request("full_name is required and must not be blank.");
+        return bad_request("invalid_request", "full_name is required and must not be blank.".to_string());
     }
 
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
@@ -416,7 +403,7 @@ pub async fn edit_facility_person(
         };
     if facility_exists.is_none() {
         let _ = tx.rollback().await;
-        return not_found("facility");
+        return not_found("not_found", "No such facility.".to_string());
     }
 
     let previous: Option<(String, Option<String>, Option<String>)> = match sqlx::query_as(
@@ -456,7 +443,7 @@ pub async fn edit_facility_person(
         Ok(Some(_)) => {}
         Ok(None) => {
             let _ = tx.rollback().await;
-            return not_found("person on this facility's roster");
+            return not_found("not_found", "No such person on this facility's roster.".to_string());
         }
         Err(err) => {
             let _ = tx.rollback().await;
@@ -540,7 +527,7 @@ pub async fn unlink_facility_person(
         };
     if facility_exists.is_none() {
         let _ = tx.rollback().await;
-        return not_found("facility");
+        return not_found("not_found", "No such facility.".to_string());
     }
 
     let removed: Option<(String, Option<String>, Option<String>)> = match sqlx::query_as(

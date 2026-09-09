@@ -27,7 +27,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{internal_error, not_found, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::merchant_account_correlation::{
@@ -40,14 +40,6 @@ use crate::clients::merchant_account_mapping::{
 use crate::clients::repository::{ingest_merchant_account_run, upsert_task_status, IngestMerchantAccountError};
 
 const PERMISSION: &str = "client_ops.perform";
-
-fn not_found(entity: &'static str) -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiErrorBody { error: "not_found", message: format!("No such {entity}.") }),
-    )
-        .into_response()
-}
 
 fn already_linked() -> Response {
     (
@@ -323,7 +315,7 @@ pub async fn get_facility_elavon(
         };
     let Some(facility) = facility else {
         let _ = tx.commit().await;
-        return not_found("facility");
+        return not_found("not_found", "No such facility.".to_string());
     };
 
     let existing: Option<ExistingMerchantAccountRow> = match sqlx::query_as(
@@ -513,7 +505,7 @@ pub async fn link_facility_elavon(
             };
         if facility_exists.is_none() {
             let _ = tx.rollback().await;
-            return not_found("facility");
+            return not_found("not_found", "No such facility.".to_string());
         }
 
         // Guard against the unique-violation `ingest_merchant_account_run`
@@ -687,7 +679,7 @@ pub async fn unlink_facility_elavon(
         };
     if facility_exists.is_none() {
         let _ = tx.rollback().await;
-        return not_found("facility");
+        return not_found("not_found", "No such facility.".to_string());
     }
 
     let existing: Option<(Option<String>,)> = match sqlx::query_as(
@@ -705,7 +697,7 @@ pub async fn unlink_facility_elavon(
     };
     let Some((ma_run_id,)) = existing else {
         let _ = tx.rollback().await;
-        return not_found("linked Merchant Account run");
+        return not_found("not_found", "No such linked Merchant Account run.".to_string());
     };
 
     if let Err(err) = sqlx::query("DELETE FROM clients.facility_merchant_account_parties WHERE facility_id = $1")

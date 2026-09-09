@@ -159,6 +159,29 @@ pub(crate) fn respond<T: Serialize>(
     }
 }
 
+/// Bad-request response, error code and message both supplied by the
+/// caller -- consolidates the identical
+/// `(StatusCode::BAD_REQUEST, Json(ApiErrorBody { error, message }))`
+/// literal that 14 handler files each separately defined their own copy
+/// of (2026-09-09).
+pub(crate) fn bad_request(error: &'static str, message: String) -> Response {
+    (StatusCode::BAD_REQUEST, Json(ApiErrorBody { error, message })).into_response()
+}
+
+/// Not-found response, error code and message both supplied by the
+/// caller -- same consolidation as `bad_request` above.
+pub(crate) fn not_found(error: &'static str, message: String) -> Response {
+    (StatusCode::NOT_FOUND, Json(ApiErrorBody { error, message })).into_response()
+}
+
+/// Conflict response, error code and message both supplied by the
+/// caller -- same consolidation as `bad_request` above. Distinct from
+/// `stage_conflict`, which is specifically about a unit-group session's
+/// workflow stage.
+pub(crate) fn conflict(error: &'static str, message: String) -> Response {
+    (StatusCode::CONFLICT, Json(ApiErrorBody { error, message })).into_response()
+}
+
 /// A genuine internal failure while processing an otherwise-valid
 /// request (not a data-quality or stage problem) — a 500. `context`
 /// should be a short, safe-to-display description; the real error detail

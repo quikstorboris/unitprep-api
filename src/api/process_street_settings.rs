@@ -32,14 +32,14 @@
 
 use axum::{
     extract::{Json, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::integrations::secrets;
 
@@ -65,14 +65,6 @@ fn request_context(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(axum::http::header::USER_AGENT)
         .and_then(|value| value.to_str().ok())
-}
-
-fn bad_request(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]

@@ -22,14 +22,9 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{internal_error, not_found, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
-
-fn not_found() -> Response {
-    (StatusCode::NOT_FOUND, Json(ApiErrorBody { error: "not_found", message: "No such facility.".to_string() }))
-        .into_response()
-}
 
 fn request_context(headers: &HeaderMap) -> Option<&str> {
     headers.get(axum::http::header::USER_AGENT).and_then(|value| value.to_str().ok())
@@ -77,7 +72,7 @@ pub async fn update_facility_dropbox_folder(
         };
     let Some((previous_url,)) = existing else {
         let _ = tx.rollback().await;
-        return not_found();
+        return not_found("not_found", "No such facility.".to_string());
     };
 
     if let Err(err) = sqlx::query(

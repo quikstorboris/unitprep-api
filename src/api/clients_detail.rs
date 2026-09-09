@@ -17,7 +17,6 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
@@ -25,17 +24,9 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{internal_error, not_found, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::merchant_account_mapping::decrypt_party_pii;
-
-fn not_found(entity: &'static str) -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiErrorBody { error: "not_found", message: format!("No such {entity}.") }),
-    )
-        .into_response()
-}
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct FacilitySummary {
@@ -258,7 +249,7 @@ pub async fn get_company_detail(
         }
     };
     let Some(company) = company else {
-        return not_found("company");
+        return not_found("not_found", "No such company.".to_string());
     };
 
     let facilities = match facilities_result {
@@ -411,7 +402,7 @@ pub async fn get_facility_detail(
 
     match facility {
         Some(facility) => Json(facility).into_response(),
-        None => not_found("facility"),
+        None => not_found("not_found", "No such facility.".to_string()),
     }
 }
 
@@ -784,7 +775,7 @@ pub async fn get_facility_policies(
         }
     };
     if !exists {
-        return not_found("facility");
+        return not_found("not_found", "No such facility.".to_string());
     }
 
     let fees = match fees_result {
@@ -880,6 +871,8 @@ pub async fn get_facility_policies(
 
 #[cfg(test)]
 mod tests {
+    use axum::http::StatusCode;
+
     use super::*;
     use crate::api::test_support::{empty_state, test_user};
 

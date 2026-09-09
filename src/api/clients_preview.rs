@@ -55,7 +55,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::company_naming::resolve_company_name;
 use crate::clients::intake_mapping::{map_intake_fields, MappedCompany, MappedFacility};
@@ -137,16 +137,6 @@ pub struct PreviewClientsResponse {
     pub runs: Vec<PreviewedRun>,
 }
 
-fn bad_request(message: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "invalid_request",
-            message: message.to_string(),
-        }),
-    )
-        .into_response()
-}
 
 fn process_street_not_configured() -> Response {
     tracing::warn!("client preview attempted with Process Street not configured");
@@ -206,7 +196,7 @@ pub async fn preview_clients(
     Json(request): Json<PreviewClientsRequest>,
 ) -> Response {
     if request.runs.is_empty() {
-        return bad_request("runs must not be empty.");
+        return bad_request("invalid_request", "runs must not be empty.".to_string());
     }
 
     let Some(client) = state.process_street.as_ref() else {
