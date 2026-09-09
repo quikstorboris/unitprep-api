@@ -218,8 +218,10 @@ so it was deliberately not implemented as a standalone check. If a
 future finding happens to also be in adjacent units, that's noted as
 supporting context in a human summary, never as its own trigger.
 
-**Implements**: `relatedness.rs` (`find_related_tenant_candidates`,
-`RelatedTenantEvidence`), `note_composer.rs`
+**Implements**: `relatedness/mod.rs` (`find_related_tenant_candidates`,
+`RelatedTenantEvidence`, per-signal clustering), `relatedness/household.rs`
+(the union-find transitive closure behind "households, not one row per
+signal" above — `MAX_HOUSEHOLD_SIZE`), `note_composer.rs`
 (`compose_relatedness_note`, `RelatednessEvidenceInput`), `report.rs`
 (wired in alongside rule 3).
 

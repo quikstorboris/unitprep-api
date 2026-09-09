@@ -1,190 +1,51 @@
 # unitprep-api
 
-UnitPrep is Quikstor's internal platform for preparing self-storage
-facility data during QMS onboarding and migration — a growing set of
-independent tools sharing one backend, one session model, and one
-frontend shell. This repo is that backend: a Rust/Axum HTTP API.
+<img src="assets/readme/hero.svg" alt="unitprep-api — passkey-authenticated Rust/Axum backend for self-storage onboarding" width="100%" />
 
-Two tools exist today:
-
-- **Group Prep** — the original tool this project was built around, and
-  the reason the platform is still named "UnitPrep" even though it now
-  covers more than one tool (internally the code still says
-  `unit-group`/`UnitGroup` throughout; the rename is product-facing
-  only so far). Compares UnitGroup names discovered in facility unit
-  exports against a master/reference Unit Group file, identifies
-  net-new groups, flags advisory (non-authoritative) similarity
-  warnings, and generates a downloadable ZIP of migration-ready import
-  artifacts.
-- **Duplicate tenant check** ("dedup") — flags multi-unit tenants whose
-  contact info disagrees across units, and surfaces likely typo/
-  name-variant tenants for human review. Exports a CSV report; no
-  corrective action happens in the platform itself.
-
-This project has no CLI — it is a session-oriented web service. The
+UnitPrep is Quikstor's internal platform for self-storage facility
+onboarding and QMS migration prep. This is the backend — a Rust/Axum
+API serving a client-management surface plus a growing set of
+standalone data-prep tools, all behind real passkey authentication. The
 frontend is [`unitprep-ui`](../unitprep-ui) (Next.js).
 
-Authentication is self-hosted, passwordless WebAuthn/passkeys with a
-TOTP fallback — see [AUTHENTICATION.md](AUTHENTICATION.md) for the full
-architecture, reasoning, user-facing workflows, audit posture, and the
-remaining build plan.
+## What it does
 
-## Running
+**Client management**, sourced from Process Street (Quikstor's
+onboarding workflow tool): search and import companies/facilities
+directly from Intake, Merchant Account, and Contract Order workflow
+runs, then manage each facility's general info, users, Dropbox link,
+Elavon merchant account, and policy data (fees, taxes, delinquency,
+coverage, specials). A background delta-sync keeps a person-search
+index current; a manual re-sync flow surfaces and resolves conflicts
+when Process Street data changes after import.
 
-```bash
-cargo run
-```
+**Three standalone tools**, each its own upload → process → export
+session (file-upload-only today — see [Platform
+direction](#platform-direction)):
 
-Starts the API on `http://0.0.0.0:8080` (reachable at `127.0.0.1:8080`
-locally). Override with the `HOST`/`PORT` env vars if needed — most
-hosting platforms (Fly.io, Render, etc.) inject `PORT` automatically.
+- **Group Prep** — compares UnitGroup names in a facility's unit
+  export against a master reference file, flags net-new groups and
+  advisory similarity warnings, exports migration-ready artifacts.
+- **Duplicate tenant check** — flags multi-unit tenants with
+  inconsistent contact info across units and surfaces typo/name-variant
+  candidates for human review.
+- **Template Tagger** — tags QMS document templates against a
+  maintained tag catalog.
 
-For anything performance-sensitive, run the optimized build instead —
-`cargo run --release` (or build once with `cargo build --release` and
-execute `target/release/unitprep` directly). The dev profile is
-meaningfully slower for CPU-bound work like Excel parsing; this is a
-deploy-time decision, not something toggled at runtime.
+**Dropbox integration** — browse and link a facility's own Dropbox
+folder; credentials are admin-configurable and stored encrypted, not
+hardcoded.
 
-CORS defaults to `http://localhost:3000` and `http://localhost:5173`
-(the frontend dev servers). Set `CORS_ALLOWED_ORIGINS` (comma-separated)
-to allow real deployed frontend origins instead.
+## Authentication
 
-## Request flow
+Real, and enforced everywhere. Passwordless WebAuthn/passkeys, TOTP as
+the only fallback, admin-issued invites (no self-signup), role-based
+permissions instead of hardcoded role checks. See
+[AUTHENTICATION.md](AUTHENTICATION.md) for the full architecture and
+[THREAT_MODEL.md](THREAT_MODEL.md) for the security posture, including
+what's deliberately still open.
 
-Each browser session is tracked server-side by `session_id` (in-memory,
-10-minute idle timeout by default — override with `SESSION_TIMEOUT_SECS`).
-
-### Group Prep request flow
-
-The pipeline is sequential:
-
-1. `POST /upload` — multipart upload of a folder's files. Creates a
-   session and parses every `.csv`, `.xlsx`, and `.xls` file (including
-   Excel 2003 SpreadsheetML XML mislabeled with a `.xls` extension) into
-   a `CsvDocument`, returns `session_id`.
-2. `POST /discover` — classifies the session's parsed documents into unit
-   files (have `UnitGroup`/`Number`/`Category` columns) and master group
-   files (have `Name`/`Description`/`AssignedTo`/`Status`/`LastUpdated`
-   columns).
-3. `POST /group-file/select` — required only when discovery finds more
-   than one candidate master group file; picks the authoritative one.
-4. `POST /validate` — checks discovered unit files for blank/suspicious
-   `UnitGroup` values, malformed dimensions, climate/locality/dimension
-   mismatches against the `UnitGroup` name, duplicate unit numbers,
-   inconsistent casing, and rare/single-unit groups. Each issue reports
-   the specific affected unit ids, not just a count, and (where a single
-   value can fix it) which columns are correctable.
-   - `POST /correct` — applies one corrected cell value (e.g. a unit's
-     Width) as a session-level overlay on top of the parsed data and
-     re-runs validation. The original upload is never mutated.
-   - `POST /exempt-dimensions` — marks a unit as intentionally
-     non-dimensioned (an office, an owner's apartment, etc. in the
-     catalog) so blank Width/Length stops being flagged for it, without
-     fabricating values.
-   - Export is blocked while Severity::Error issues remain — there is no
-     override; every Error-severity issue must be corrected or exempted
-     first.
-5. `POST /analyze` — compares each facility's UnitGroup names against the
-   selected master file. Existence is decided by **exact name match
-   only**; fuzzy (fingerprint + normalized Levenshtein) similarity is
-   advisory-only and never affects net-new determination.
-6. `POST /export` — requires validation and analysis to have completed;
-   generates net-new-groups CSV, facility/group assignment CSVs, advisory
-   reports, and a `batch_run.json`, and streams them back as a ZIP built
-   entirely in memory (no disk I/O, no export-folder cleanup).
-
-`GET /health` returns a liveness check.
-
-Every endpoint that looks up a session by id returns a distinct
-`404 Session not found or expired` when it doesn't exist (expired via
-the 10-minute idle timeout, or an invalid id) — never a fake zero-value
-success, since those are different situations and the frontend needs to
-tell them apart.
-
-### Duplicate tenant check request flow
-
-A separate, independent tool and session type, tracked the same way
-(`session_id`, same idle timeout). No correction loop — this tool's
-whole job is to identify and list inconsistencies; corrections are made
-by the client the report is prepared for, outside the platform:
-
-1. `POST /dedup/check` — multipart upload of one QMS End Users export
-   CSV. Ingests and runs the full check synchronously (no ambiguity to
-   resolve first, unlike UnitGroup's multi-file/group-file-selection
-   flow), creates a session, and returns `{session_id, report}` — every
-   multi-unit tenant with a contact-info mismatch (grouped by exact
-   `FirtLast` match), and every typo/name-variant candidate surfaced for
-   human confirmation (never auto-merged, regardless of similarity
-   score).
-2. `POST /dedup/report` — re-fetches the same report by `session_id`
-   (e.g. after a page refresh), without re-uploading the file.
-3. `POST /dedup/export` — the same report as a downloadable CSV:
-   flagged groups first (one row per record, note on each group's first
-   row), followed by a typo/name-variant section.
-
-## Platform vision
-
-"UnitPrep" is deliberately becoming a platform name, not a single
-tool's name — the plan is for more tools to arrive over time, all
-sharing this backend and one frontend shell. None of the following is
-built yet; it's recorded here so future work moves toward it rather
-than assuming today's two-tool, no-auth, file-upload-only shape is
-permanent:
-
-- **Client Prep navigation** — rather than a flat list of tools, the
-  frontend's eventual home screen is organized by client/facility: pick
-  a client, then run any available tool against it from tabs, in any
-  order, all optional. Group Prep and dedup would sit side by side
-  under one entry instead of being separate top-level pages.
-- **QMS vs. QSX** — QSX is Quikstor's legacy, desktop-only PMS, being
-  sunset; QMS is the modern cloud/API-capable platform this project is
-  building toward. Every tool is file-upload only today (export a CSV/
-  Excel file from either system, then upload it here). A QMS API
-  integration is planned — reading facility/group/tenant data directly
-  instead of requiring a manual export first — but only for tools whose
-  source data actually lives in QMS. Dedup, which migrates tenants
-  *from* QSX, would stay file-only regardless.
-- **Authentication** — deliberately not built yet (see "Current
-  security posture" below). The trigger is QMS API integration: once
-  this service holds real QMS credentials, the current no-auth internal
-  posture stops being acceptable. Not planned before that.
-- **Persistence** — sessions are in-memory only today; a process
-  restart loses everything (see `SessionStore`'s own doc comments).
-  Real persistence is planned once a concrete feature needs it — most
-  likely a shared "compare this run to a past run" capability serving
-  both dedup's re-check-over-time use case and Group Prep's own
-  cross-run comparison need.
-
-Each of these is meant to land only once a concrete need proves it's
-worth building, not speculatively ahead of that.
-
-## Current security posture
-
-Authentication exists but **is not yet enforced on the tool endpoints.**
-
-What works: passkey (WebAuthn) registration and sign-in, issuing an opaque
-session cookie that `GET /health/whoami` verifies. See `src/auth/` and the
-`/auth/*` routes.
-
-What does not: **none of the working endpoints require it.** Upload,
-discover, validate, correct, analyze, export and the dedup routes are all
-still open — any client that can reach this API can drive any session it
-has (or guesses) the `session_id` for. Session ids are random UUIDs, so
-this isn't trivially exploitable, but it is not a security boundary. That
-was an accepted gap for single-operator internal use; closing it is now a
-matter of requiring the extractor on those handlers, not of building
-anything new.
-
-Also still open: no sign-out, no invitation flow, no TOTP fallback, and no
-admin UI.
-
-### Creating the first administrator
-
-There is deliberately **no HTTP endpoint that can create an
-administrator**, and there never should be. An endpoint like that is only
-ever as safe as an environment variable being correct in every
-environment, forever; a command has no remote surface to get wrong. The
-first account is created on the host instead:
+First administrator:
 
 ```bash
 unitprep bootstrap-admin \
@@ -192,102 +53,63 @@ unitprep bootstrap-admin \
   --company quikstor
 ```
 
-Run `unitprep bootstrap-admin` with no arguments for the full usage, and
-see `src/bootstrap.rs` for the reasoning behind each constraint. In short:
+Requires `BOOTSTRAP_DATABASE_URL` — the owner connection, not the
+app's own restricted database role. Refuses to run once any user
+already exists. Prints a one-time setup token, redeemed through the
+same passkey-enrollment endpoint every later invited user goes
+through.
 
-- It requires `BOOTSTRAP_DATABASE_URL`, which must be the **owner/direct**
-  connection string, not the application's `DATABASE_URL`. The
-  application's database role deliberately cannot create users, so
-  pointing this at it fails on row-level security rather than half-working.
-- It **refuses to run if any user already exists.** It is one-time setup,
-  not a way to add people — for that, an existing administrator issues an
-  invite.
-- The account is created `invited`, not active. It prints a **setup token,
-  once**, valid for 24 hours. Only the token's hash is stored, so a lost
-  token cannot be recovered — use `--reissue-invite` to mint a fresh one.
-  Do **not** try to delete the account and start over: once it has any
-  audit history, it cannot be hard-deleted by anyone, including the owner
-  role.
+## Running
 
-The printed token is then redeemed against `POST /auth/register/begin`,
-which enrols the first passkey and signs the account in. That is the same
-endpoint every later invited user goes through — the first administrator
-gets no special path, so the enrolment route is exercised from the very
-first account rather than being a one-time special case nobody tests
-again.
+```bash
+cargo run
+```
 
-> **Removed:** an earlier `AUTH_BOOTSTRAP_ENABLED` environment variable
-> opened an unauthenticated first-passkey path keyed on an email address.
-> It has been deleted along with its database lookup — setting it now does
-> nothing. Possession of an unguessable invite token is the authorization,
-> which cannot be left switched on by a misconfigured deployment.
-
-## Project layout
-
-This is a Cargo workspace, not a single crate — `unitprep-core` holds the
-tool-agnostic engine (file ingestion/parsing, session storage) that any
-UnitPrep tool depends on; each tool's own domain logic lives in its own
-crate (`unit-group/`, `dedup/`); the binary holds only session/HTTP
-orchestration for both. See `Cargo.toml`'s own comments for the
-rationale.
-
-- `src/main.rs` — process entry point, logging setup, server bind.
-- `src/api/` — Axum handlers and routing, one module per endpoint.
-  Includes both UnitGroup's (internally still named that in code;
-  product-facing name is "Group Prep") endpoints and the
-  duplicate-tenant-check tool's (`/dedup/check`, `/dedup/report`,
-  `/dedup/export`).
-- `src/application/` — session orchestration, one pair of files per
-  tool: `unit_group_session.rs` (the stage machine — `Session`,
-  `WorkflowStage`, `StageError`, `SessionData`) plus
-  `session_service.rs` (parses uploads into a `Session`) for Group Prep;
-  `dedup_session_service.rs` (session envelope and orchestration
-  together, since it's much smaller) for duplicate-tenant-check. The
-  generic storage mechanics both build on (`SessionStore` trait,
-  `InMemorySessionStore`) live in `unitprep-core`, not here.
-- `src/infrastructure/` — export artifact generation: `csv_export.rs`
-  (Group Prep — CSV/JSON/ZIP) and `dedup_csv_export.rs`
-  (duplicate-tenant-check — CSV).
-- `src/ai/` — placeholder seam for future AI-assisted decision support;
-  not wired into the pipeline yet. (A more concrete version of this idea
-  already exists for one specific case — see `dedup/`'s `NoteComposer`
-  trait below.)
-- `core/` — the `unitprep-core` crate: `parsing/` (per-format parsers),
-  `csv_document.rs`/`uploaded_file.rs` (source-agnostic document models),
-  `session.rs`/`session_store.rs`/`in_memory_session_store.rs` (the
-  generic session engine, generic over any tool's own session type).
-- `unit-group/` — the `unitprep-unit-group` crate: Group Prep's own
-  domain logic (discovery-result/validation-result data, batch
-  building, the fingerprint-matching engine, validation rules,
-  manual-correction overlays), depending only on `unitprep-core`. No
-  session state, HTTP, or export format — those are the binary's job,
-  same boundary as `dedup/` below. (No longer an empty stub — this was
-  the original tool, extracted out once `dedup/` had proven the
-  boundary twice over.)
-- `dedup/` — the `unitprep-dedup` crate: the duplicate-tenant-check
-  tool's domain logic (grouping, contact-info comparison, note
-  composition, typo/name-variant detection), depending only on
-  `unitprep-core`. No session state, HTTP, or export format — those are
-  the binary's job, wired up in `src/application/dedup_session_service.rs`,
-  `src/api/dedup.rs`, and `src/infrastructure/dedup_csv_export.rs`.
-
-## Tests
+Starts on `http://0.0.0.0:8080`. Use `cargo run --release` for
+anything CPU-heavy — the dev profile is meaningfully slower for
+Excel parsing. Set `CORS_ALLOWED_ORIGINS` (comma-separated) for real
+deployed frontend origins; defaults to the local dev servers.
 
 ```bash
 cargo test
 ```
 
-Two layers of coverage:
+556 tests across the workspace: domain-level unit tests alongside the
+logic they cover (heaviest on Group Prep's fingerprint-matching
+engine, since every false-positive bug this project has hit came from
+two structurally different groups being fuzzy-matched as the same
+one), plus endpoint-level tests that call handlers directly against a
+session built via `src/api/test_support.rs` — no live server or
+fabricated multipart bodies needed.
 
-- Domain-level unit tests alongside the logic they cover — heaviest on
-  the fingerprint-matching engine (`unit-group/src/analysis/fingerprint.rs`),
-  since every false-positive bug this project has hit came from two
-  structurally different groups (by dimensions, location, climate, or
-  area code) being fuzzy-matched as the same group.
-- Endpoint-level tests in each `src/api/*.rs` module, calling handlers
-  directly (`handler(State(state), Json(request)).await`) against a
-  session built via the helpers in `src/api/mod.rs`'s `test_support`
-  module — covering the session-not-found 404 behavior, the
-  correction/exemption re-validation flow, and the export
-  acknowledge-override, without needing a live server or fabricated
-  multipart bodies.
+## Project layout
+
+A Cargo workspace, not a single crate:
+
+- `src/` — the `unitprep` binary: HTTP/session orchestration only.
+  `src/api/` holds one handler module per endpoint group (auth,
+  clients, dedup, tagger, Group Prep's upload/discover/validate/
+  analyze/export, Dropbox, Process Street settings).
+- `core/` — `unitprep-core`: the tool-agnostic engine (parsing,
+  session storage) every tool depends on.
+- `unit-group/`, `dedup/`, `template-tagger/` — each tool's own domain
+  logic, depending only on `core`. No session state, HTTP, or export
+  format — those stay the binary's job.
+- `docx-surgeon/`, `tagger-pipeline/` — a DOCX-editing library and the
+  glue between it and Template Tagger.
+
+## Platform direction
+
+More tools are expected to arrive on this same backend and session
+model over time — this is deliberately a platform, not a fixed set of
+three tools. QMS API integration (reading facility/tenant data
+directly instead of a manual export-then-upload step) is planned for
+tools whose source data actually lives in QMS; duplicate tenant check,
+which migrates tenants *from* the legacy QSX system, would stay
+file-only regardless.
+
+---
+
+See [CHANGELOG.md](CHANGELOG.md) for what shipped recently and
+[AUDIT_RETENTION.md](AUDIT_RETENTION.md) for how audit/activity logs
+are retained.
