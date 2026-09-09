@@ -226,6 +226,9 @@ pub fn admin_user() -> AuthenticatedUser {
             // migration comment), not an admin-only oversight tool the
             // way audit_logs.read is.
             "activity_logs.read",
+            // Integrations (Process Street, Dropbox) settings -- see
+            // add_integrations_manage_permission.
+            "integrations.manage",
         ]
         .into_iter()
         .map(String::from)
@@ -299,6 +302,33 @@ pub fn empty_state() -> AppState {
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        env_source: Arc::new(FakeEnvSource::default()),
+    }
+}
+
+/// A controllable [`EnvSource`] for tests that need to assert on the
+/// "no row saved yet, show what's actually configured" fallback path in
+/// the integration settings handlers, without touching real process
+/// env vars (which would race under the parallel test runner the way
+/// `TOTP_ENCRYPTION_KEY`/`CLIENT_PII_ENCRYPTION_KEY` tests already have
+/// to guard against with `#[serial]`).
+#[derive(Default, Clone)]
+pub struct FakeEnvSource(std::collections::HashMap<String, String>);
+
+impl FakeEnvSource {
+    pub fn with(pairs: &[(&str, &str)]) -> Self {
+        Self(
+            pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+        )
+    }
+}
+
+impl crate::integrations::env_source::EnvSource for FakeEnvSource {
+    fn get(&self, key: &str) -> Option<String> {
+        self.0.get(key).cloned()
     }
 }
 
@@ -347,6 +377,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        env_source: Arc::new(FakeEnvSource::default()),
     }
 }
 
@@ -422,6 +453,7 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        env_source: Arc::new(FakeEnvSource::default()),
     }
 }
 
@@ -475,6 +507,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        env_source: Arc::new(FakeEnvSource::default()),
     }
 }
 
@@ -538,6 +571,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        env_source: Arc::new(FakeEnvSource::default()),
     }
 }
 
@@ -625,5 +659,6 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        env_source: Arc::new(FakeEnvSource::default()),
     }
 }

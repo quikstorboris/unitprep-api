@@ -26,7 +26,7 @@ use super::{
     client_ops_qms_tags, clients_companies, clients_create, clients_detail, clients_dropbox_folder,
     clients_elavon, clients_facility_people, clients_facility_policies_edit, clients_preview, clients_resync,
     clients_search, clients_sync, correct,
-    correct_group, dedup, discover, dropbox_browse,
+    correct_group, dedup, discover, dropbox_browse, dropbox_settings,
     exclude_group, exclude_groups, exempt, export, group_file_confirm, group_file_upload,
     process_street_settings, resolve_unit_format, select_group_file, select_unit_file, tagger,
     unit_file_upload, upload, validate,
@@ -423,12 +423,20 @@ pub fn router(state: AppState) -> Router {
         // authenticated caller -- see clients_sync's own module doc.
         .route("/clients/sync", post(clients_sync::start_sync))
         .route("/clients/sync/status", get(clients_sync::sync_status))
-        // Read: any authenticated caller. Write: client_ops.perform --
-        // see the migration's own comment on why this follows that gate
-        // rather than auth.auth_configuration's admin-only one.
+        // Read: any authenticated caller. Write: integrations.manage
+        // (admin-only) -- see the 20260909140000/20260909150000
+        // migrations for why this moved off client_ops.perform.
         .route(
             "/integrations/process-street/settings",
             get(process_street_settings::get_settings).put(process_street_settings::update_settings),
+        )
+        // Admin-only (integrations.manage) read and write -- this one
+        // holds the Dropbox app's own secrets, so unlike the Process
+        // Street settings above, even the read side is gated. See
+        // dropbox_settings's own module doc.
+        .route(
+            "/integrations/dropbox/settings",
+            get(dropbox_settings::get_settings).put(dropbox_settings::update_settings),
         )
         // Any authenticated caller -- folder names only, nothing
         // sensitive, same reasoning as the qms-tags read above. See

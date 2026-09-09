@@ -8,6 +8,7 @@ mod clients;
 mod db;
 mod dropbox;
 mod infrastructure;
+mod integrations;
 mod process_street;
 
 use std::net::SocketAddr;
@@ -129,29 +130,63 @@ async fn main() {
 
     // See src/dropbox for the full scope/namespace caveats (Full Dropbox
     // access, app-level-only path enforcement, Team Space namespace).
-    let dropbox_client = Arc::new(dropbox::DropboxClient::new(
-        dropbox::DropboxConfig::from_env().unwrap_or_else(|err| {
-            panic!("Failed to configure Dropbox: {err}");
+    //
+    // DB-first, env-fallback (2026-09-09): `client_ops.dropbox_configuration`
+    // is now the admin settings page's source of truth (see
+    // `api::dropbox_settings`); `DROPBOX_*` env vars remain the fallback
+    // for a deployment that hasn't configured it there yet, or hit before
+    // that migration has run. A saved change on the settings page takes
+    // effect on the next server start -- nothing re-reads this mid-run,
+    // unlike Process Street's sync interval (see `clients::sync`).
+    let dropbox_config = match dropbox::DropboxConfig::from_db(&db_pool).await {
+        Ok(Some(config)) => config,
+        Ok(None) => dropbox::DropboxConfig::from_env().unwrap_or_else(|err| {
+            panic!("Dropbox is not configured in the database or the environment: {err}");
         }),
-    ));
-
-    // Unlike Dropbox/WebAuthn above, a missing PROCESS_STREET_API_KEY
-    // must not block startup -- this integration is still partial
-    // (Contract Order on hold, no frontend yet), and every environment
-    // that doesn't need it (most tests, a fresh dev checkout) shouldn't
-    // have to configure a real key just to run the server. Endpoints
-    // that need it return a clear error instead of silently no-op-ing;
-    // see `api::clients_search`.
-    let process_street_client = match process_street::ProcessStreetConfig::from_env() {
-        Ok(config) => Some(Arc::new(process_street::ProcessStreetClient::new(config))),
         Err(err) => {
             tracing::warn!(
                 error = %err,
-                "Process Street not configured -- PS-backed search/import endpoints will return an error until PROCESS_STREET_API_KEY is set"
+                "Could not read Dropbox configuration from the database, falling back to environment variables"
+            );
+            dropbox::DropboxConfig::from_env().unwrap_or_else(|env_err| {
+                panic!("Failed to configure Dropbox: {env_err}");
+            })
+        }
+    };
+    let dropbox_client = Arc::new(dropbox::DropboxClient::new(dropbox_config));
+
+    // DB-first, env-fallback (2026-09-09) -- same reasoning as Dropbox
+    // above. Unlike Dropbox/WebAuthn, a missing key here must still not
+    // block startup -- this integration is still partial (Contract
+    // Order on hold, no frontend yet), and every environment that
+    // doesn't need it (most tests, a fresh dev checkout) shouldn't have
+    // to configure a real key just to run the server. Endpoints that
+    // need it return a clear error instead of silently no-op-ing; see
+    // `api::clients_search`.
+    let process_street_config = match process_street::ProcessStreetConfig::from_db(&db_pool).await {
+        Ok(Some(config)) => Some(config),
+        Ok(None) => process_street::ProcessStreetConfig::from_env().ok(),
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "Could not read Process Street configuration from the database, falling back to environment variables"
+            );
+            process_street::ProcessStreetConfig::from_env().ok()
+        }
+    };
+    let process_street_client = match process_street_config {
+        Some(config) => Some(Arc::new(process_street::ProcessStreetClient::new(config))),
+        None => {
+            tracing::warn!(
+                "Process Street not configured -- PS-backed search/import endpoints will return an error until it's configured (Integrations > Process Street, or PROCESS_STREET_API_KEY)"
             );
             None
         }
     };
+
+    // See `integrations::env_source`'s own doc comment.
+    let env_source: Arc<dyn integrations::env_source::EnvSource> =
+        Arc::new(integrations::env_source::ProcessEnvSource);
 
     // The background sync that keeps clients.ps_person_index fresh --
     // only runs when PS is actually configured (see above). See
@@ -259,6 +294,7 @@ async fn main() {
         dropbox: dropbox_client,
         process_street: process_street_client,
         sync_progress,
+        env_source,
     };
 
     let app = api::router(state);

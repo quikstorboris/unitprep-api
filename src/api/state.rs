@@ -8,6 +8,7 @@ use crate::application::unit_group_session::Session;
 use crate::client_ops::vendor_format::VendorFormatCache;
 use crate::clients::sync::SyncProgressHandle;
 use crate::dropbox::DropboxClient;
+use crate::integrations::env_source::EnvSource;
 use crate::process_street::ProcessStreetClient;
 
 #[derive(Clone)]
@@ -88,4 +89,13 @@ pub struct AppState {
     // `Idle` value even when PS isn't configured -- only the endpoints
     // that read/act on it need to also check `process_street`.
     pub sync_progress: SyncProgressHandle,
+
+    // Where an integration settings page (Process Street, Dropbox) reads
+    // a credential's currently-effective value from when its own
+    // settings table doesn't have one saved yet -- see
+    // `integrations::env_source`'s own doc comment for why this is
+    // `Arc<dyn EnvSource>` (a swap point for a future non-env-var
+    // source) rather than every handler calling `std::env::var`
+    // directly.
+    pub env_source: Arc<dyn EnvSource>,
 }

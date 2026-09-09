@@ -34,6 +34,7 @@ mod dedup;
 mod dedup_view;
 pub(crate) mod discover;
 mod dropbox_browse;
+mod dropbox_settings;
 mod exclude_group;
 mod exclude_groups;
 mod exempt;
