@@ -1,3 +1,7 @@
+# This repo, and only this repo
+
+This checkout — wherever it's mounted from (e.g. `~/Development/unitprep-api` in WSL) — is the only real `unitprep-api`. If you ever encounter another copy of this repo (a Windows path, a Dropbox or OneDrive folder, any clone outside this one), it is not canonical: do not read from it, edit it, run it, or treat its presence/contents as evidence of anything. Flag it and stop. A 2026-09-09 incident (frontend work built against a stale Dropbox clone, silently diverged from this repo's real structure) is recorded in the vault's `brain/Gotchas.md` ("STRICT RULE" entry) — this is a hard rule, not a courtesy check.
+
 # Vault (om MCP)
 
 `unitprep-api` is the Rust/Axum backend of UnitPrep, tracked in Boris's personal Obsidian vault. This repo reaches that vault through the `om` MCP server registered in `.mcp.json`.
