@@ -323,6 +323,23 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
+    /// `developer` holds `integrations.manage` just like `admin` (see
+    /// `20260909170000_add_developer_role`) -- this passes the same
+    /// permission check `admin_user` would, then fails at the
+    /// disconnected test pool exactly like every other `*_reaches_the_
+    /// database` test in this codebase, proving it's not stuck at
+    /// FORBIDDEN.
+    #[tokio::test]
+    async fn get_allows_a_developer_and_reaches_the_database() {
+        let response = get_settings(
+            State(crate::api::test_support::empty_state()),
+            crate::api::test_support::developer_user(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     fn unconfigured_row() -> SettingsRow {
         SettingsRow {
             app_key: None,

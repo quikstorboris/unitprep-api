@@ -229,6 +229,11 @@ pub fn admin_user() -> AuthenticatedUser {
             // Integrations (Process Street, Dropbox) settings -- see
             // add_integrations_manage_permission.
             "integrations.manage",
+            // Same client-ops-adjacent sharing as client_ops.manage_tags
+            // -- see create_vendor_format_registry. Missing from this
+            // fixture until 2026-09-09 (confirmed live on /admin/roles
+            // while adding the `developer` role); backfilled here.
+            "client_ops.manage_vendor_formats",
         ]
         .into_iter()
         .map(String::from)
@@ -252,6 +257,8 @@ pub fn onboarding_manager_user() -> AuthenticatedUser {
             "client_credentials.revoke",
             "client_ops.manage_tags",
             "activity_logs.read",
+            // See admin_user's identical backfill comment.
+            "client_ops.manage_vendor_formats",
         ]
         .into_iter()
         .map(String::from)
@@ -277,6 +284,41 @@ pub fn department_manager_user() -> AuthenticatedUser {
             "client_credentials.approve",
             "client_ops.manage_tags",
             "activity_logs.read",
+            // See admin_user's identical backfill comment.
+            "client_ops.manage_vendor_formats",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
+        token_hash: vec![0u8; 32],
+        elevated_until: None,
+        requires_step_up: false,
+        passkey_reverified_until: None,
+    }
+}
+
+/// `developer`'s own fixture (added 2026-09-09) -- everything
+/// `onboarding_manager` can do, plus `integrations.manage`, matching the
+/// permission grants in `20260909170000_add_developer_role` +
+/// `20260909180000_developer_role_gets_vendor_formats_permission`.
+/// Deliberately does NOT carry `client_credentials.approve` (that stays
+/// `department_manager`-only, per Boris's own scope: "full access to
+/// everything onboarding manager has", not department_manager) or any
+/// admin-only permission (`users.manage`, `audit_logs.read`,
+/// `security_policies.manage`, `roles.manage`) -- those require the
+/// `admin` role to be assigned alongside, same as the real RBAC model.
+pub fn developer_user() -> AuthenticatedUser {
+    AuthenticatedUser {
+        user_id: uuid::Uuid::new_v4(),
+        role_keys: vec!["developer".to_string()],
+        permission_keys: [
+            "integrations.manage",
+            "activity_logs.read",
+            "client_ops.perform",
+            "client_ops.manage_tags",
+            "client_ops.manage_vendor_formats",
+            "client_credentials.add",
+            "client_credentials.revoke",
         ]
         .into_iter()
         .map(String::from)

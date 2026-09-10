@@ -293,6 +293,21 @@ mod tests {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
+    /// `developer` holds `integrations.manage` just like `admin` (see
+    /// `20260909170000_add_developer_role`) -- see
+    /// `dropbox_settings::tests::get_allows_a_developer_and_reaches_the_
+    /// database`'s identical reasoning.
+    #[tokio::test]
+    async fn get_allows_a_developer_and_reaches_the_database() {
+        let response = get_settings(
+            State(crate::api::test_support::empty_state()),
+            crate::api::test_support::developer_user(),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
     #[tokio::test]
     async fn update_rejects_an_interval_below_the_minimum_without_touching_the_database() {
         let mut request = valid_request();
