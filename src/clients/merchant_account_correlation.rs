@@ -121,6 +121,26 @@ fn parenthetical(run_name: &str) -> Option<&str> {
     }
 }
 
+/// Whether a parenthetical nickname is specific enough to trust as a
+/// correlation signal on its own. **Real bug, 2026-09-10**: Dubuqueland
+/// Mini Storage's own "Main" facility gave a Merchant Account run
+/// titled `"...(Main)"`, and `"main"` is a plain substring of an
+/// entirely unrelated new client's own Intake title, `"Main Street
+/// Storage - QMS Onboarding"` -- correlated as `Unambiguous` (nothing
+/// else competed for the slot) and silently seeded Dubuqueland's own
+/// legal name onto Main Street Storage's confirmation screen. A
+/// word-boundary check wouldn't have caught this: "Main" is a genuine
+/// whole word in both titles. The real problem is that a short,
+/// single-word nickname isn't a specific enough discriminator to
+/// trust unattended, so it's excluded as a candidate entirely here --
+/// same treatment as `parenthetical` returning `None`, i.e. it can
+/// still surface as `Correlation::Ambiguous` if some OTHER, more
+/// specific nickname also matches, but a lone short/generic nickname
+/// no longer produces a false `Unambiguous`.
+fn is_specific_enough(keyword: &str) -> bool {
+    keyword.split_whitespace().count() >= 2 || keyword.chars().count() >= 6
+}
+
 /// Correlates each Intake run in `intake_runs` against every Merchant
 /// Account run in `merchant_account_runs`, by checking whether a
 /// Merchant Account run's own parenthetical nickname appears
@@ -139,6 +159,9 @@ pub fn correlate_by_title(
         let Some(keyword) = parenthetical(&ma.run_name) else {
             continue;
         };
+        if !is_specific_enough(keyword) {
+            continue;
+        }
         let keyword_lower = keyword.to_lowercase();
 
         for intake in intake_runs {
@@ -191,6 +214,69 @@ mod tests {
     fn parenthetical_is_none_without_a_real_facility_name_inside() {
         assert_eq!(parenthetical("Prairie Enterprises LLC"), None);
         assert_eq!(parenthetical("Empty Parens ()"), None);
+    }
+
+    #[test]
+    fn short_single_word_nicknames_are_not_specific_enough() {
+        assert!(!is_specific_enough("Main"));
+        assert!(!is_specific_enough("West"));
+    }
+
+    #[test]
+    fn a_longer_single_word_nickname_is_specific_enough() {
+        assert!(is_specific_enough("Carpentersville"));
+    }
+
+    #[test]
+    fn a_short_multi_word_nickname_is_specific_enough() {
+        assert!(is_specific_enough("Pyott Rd"));
+    }
+
+    // Real bug, 2026-09-10: Dubuqueland Mini Storage's own "Main"
+    // facility's Merchant Account run title contains "main", which is
+    // also a plain substring of an entirely unrelated new client's own
+    // Intake title -- must not correlate the two just because nothing
+    // else happened to compete for the slot.
+    #[test]
+    fn a_short_generic_nickname_does_not_falsely_correlate_an_unrelated_facility() {
+        let intake_runs = vec![intake(
+            "intake-main-street-storage",
+            "Main Street Storage - QMS Onboarding",
+        )];
+        let merchant_account_runs = vec![ma(
+            "ma-dubuqueland-main",
+            "Dubuqueland Mini-Storage, Inc. (Main)",
+        )];
+
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+
+        assert!(!correlated.contains_key("intake-main-street-storage"));
+    }
+
+    // The real facility this nickname actually belongs to must still
+    // correlate correctly when its own title is the one being checked
+    // -- the guard only screens out short nicknames as candidates, it
+    // doesn't break a run that's genuinely titled with the word "Main"
+    // when a longer, more specific nickname is what's really being
+    // matched elsewhere.
+    #[test]
+    fn a_specific_enough_nickname_still_correlates_normally_alongside_a_generic_one() {
+        let intake_runs = vec![
+            intake("intake-main-street-storage", "Main Street Storage - QMS Onboarding"),
+            intake("intake-highway-20", "Highway 20 Self Storage - QMS Onboarding"),
+        ];
+        let merchant_account_runs = vec![
+            ma("ma-dubuqueland-main", "Dubuqueland Mini-Storage, Inc. (Main)"),
+            ma("ma-highway-20", "Prairie Enterprises (Highway 20)"),
+        ];
+
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+
+        assert!(!correlated.contains_key("intake-main-street-storage"));
+        assert_eq!(
+            correlated.get("intake-highway-20"),
+            Some(&Correlation::Unambiguous("ma-highway-20".to_string()))
+        );
     }
 
     // Real Prairie Enterprises data, captured 2026-09-02 -- proves the
