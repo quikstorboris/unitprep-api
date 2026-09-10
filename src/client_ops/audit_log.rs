@@ -68,6 +68,14 @@ pub mod event {
     /// its `ps_task_status` rows for this facility; does not touch
     /// anything else about the facility or company.
     pub const MERCHANT_ACCOUNT_UNLINKED: &str = "merchant_account_unlinked";
+    /// The Elavon tab's "Resync Elavon Data" action refreshed a linked
+    /// facility's whole Merchant Account picture from Process Street
+    /// (`api::clients_elavon::resync_elavon_data`) -- rate/status/
+    /// `credentials_added_to_qms`/financials/credentials/parties, all
+    /// overwritten from a fresh PS pull. Distinct from
+    /// `MERCHANT_ACCOUNT_LINKED`, which is the initial link, not a
+    /// refresh of an already-linked run.
+    pub const ELAVON_DATA_RESYNCED: &str = "elavon_data_resynced";
     /// A facility's linked Dropbox folder was manually changed via the
     /// DropBox tab (`api::clients_dropbox_folder`) -- a rare, deliberate
     /// action (the wrong facility folder was linked, or a client's own
@@ -127,6 +135,7 @@ pub mod event {
         SYNC_FAILED,
         MERCHANT_ACCOUNT_LINKED,
         MERCHANT_ACCOUNT_UNLINKED,
+        ELAVON_DATA_RESYNCED,
         FACILITY_DROPBOX_FOLDER_CHANGED,
         FACILITY_PERSON_ADDED,
         FACILITY_PERSON_UPDATED,

@@ -424,18 +424,21 @@ pub fn decrypt_party_pii(
     serde_json::from_slice(&plaintext).map_err(|_| EncryptionError::Undecryptable("malformed PartyPii plaintext"))
 }
 
-/// Decrypted view of the 3 `FacilitySecrets` fields the Elavon tab is
-/// allowed to surface (2026-09-03) -- EIN and the bank routing/account
-/// numbers, masked by `mask_bank_number` before ever reaching a caller
-/// outside this module. Deliberately NOT a `pub use` of the private
-/// write-time `FacilitySecrets` (same reasoning as `DecryptedPartyPii`'s
-/// own doc comment): this type omits the QMS/processor system
-/// credentials (`quikstor_password`, `qss_web_pin`, `pinpad_user_id`,
-/// `qss_api_pin`, `mid`, `account_id`) entirely -- serde silently drops
-/// unknown JSON keys on deserialize (no `deny_unknown_fields` on either
-/// struct), so those fields never get assigned to anything callable code
-/// could accidentally serialize back out. No display path exists for
-/// them; add a similarly-scoped type here if one is ever needed.
+/// Decrypted view of the 3 `FacilitySecrets` fields the Elavon tab's
+/// Financials section is allowed to surface (2026-09-03) -- EIN and the
+/// bank routing/account numbers, masked by `mask_bank_number` before
+/// ever reaching a caller outside this module. Deliberately NOT a `pub
+/// use` of the private write-time `FacilitySecrets` (same reasoning as
+/// `DecryptedPartyPii`'s own doc comment): this type omits the
+/// QMS/processor system credentials (`quikstor_password`, `qss_web_pin`,
+/// `pinpad_user_id`, `qss_api_pin`, `mid`, `account_id`) entirely --
+/// serde silently drops unknown JSON keys on deserialize (no
+/// `deny_unknown_fields` on either struct), so those fields never get
+/// assigned to anything callable code could accidentally serialize back
+/// out. See `DecryptedElavonCredentials` below for the similarly-scoped
+/// type that now surfaces 4 of those 6 (2026-09-09, the QMS Credentials
+/// / Pin Pad Credentials sections) -- `quikstor_password` and `mid`
+/// still have no display path anywhere.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DecryptedFacilitySecrets {
     pub ein: Option<String>,
@@ -452,6 +455,36 @@ pub fn decrypt_facility_secrets(
     facility_id: Uuid,
     blob: &[u8],
 ) -> Result<DecryptedFacilitySecrets, EncryptionError> {
+    let plaintext = encryption::decrypt(facility_id.as_bytes(), blob)?;
+    serde_json::from_slice(&plaintext)
+        .map_err(|_| EncryptionError::Undecryptable("malformed FacilitySecrets plaintext"))
+}
+
+/// Decrypted view of the 4 QMS/pinpad system credential fields the
+/// Elavon tab's QMS Credentials / Pin Pad Credentials sections show
+/// (2026-09-09) -- the read counterpart to `FacilitySecrets::from_fields`'s
+/// `account_id`, `qss_web_pin`, `pinpad_user_id`, `qss_api_pin`. Same
+/// "revealable on demand" convention `ElavonPartyInfo.ssn` already uses:
+/// the real plaintext is returned here, masking (with a Show/Hide
+/// toggle) is a frontend concern. Deliberately omits `ein`,
+/// `bank_routing_number`, `bank_account_number` (`DecryptedFacilitySecrets`'s
+/// own job) and `quikstor_password`/`mid` (no display path anywhere) --
+/// same unknown-JSON-keys-silently-dropped trick.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DecryptedElavonCredentials {
+    pub account_id: Option<String>,
+    pub qss_web_pin: Option<String>,
+    pub pinpad_user_id: Option<String>,
+    pub qss_api_pin: Option<String>,
+}
+
+/// Decrypts a facility's `encrypted_secrets` blob into just the 4
+/// credential fields -- same AAD convention as `decrypt_facility_secrets`
+/// (they decrypt the exact same blob, just into different-shaped views).
+pub fn decrypt_elavon_credentials(
+    facility_id: Uuid,
+    blob: &[u8],
+) -> Result<DecryptedElavonCredentials, EncryptionError> {
     let plaintext = encryption::decrypt(facility_id.as_bytes(), blob)?;
     serde_json::from_slice(&plaintext)
         .map_err(|_| EncryptionError::Undecryptable("malformed FacilitySecrets plaintext"))
@@ -725,4 +758,21 @@ mod tests {
         assert_eq!(mask_bank_number("12"), "••••");
         assert_eq!(mask_bank_number("104-000-016"), "•••••0016");
     }
+
+    #[test]
+    #[serial(client_pii_encryption_key_env)]
+    fn decrypts_elavon_credentials_to_the_4_qms_pinpad_fields_only() {
+        set_test_key();
+        let mapped = map_merchant_account_fields(&real_fields());
+        let facility_id = Uuid::new_v4();
+        let blob = mapped.encrypted_secrets(facility_id).unwrap().unwrap();
+
+        let credentials = decrypt_elavon_credentials(facility_id, &blob).expect("decryption must succeed");
+        assert_eq!(credentials.account_id.as_deref(), Some("0000000"));
+        assert_eq!(credentials.qss_web_pin.as_deref(), Some("FAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPIN00"));
+        assert_eq!(credentials.pinpad_user_id.as_deref(), Some("FAKEPINPADID"));
+        assert_eq!(credentials.qss_api_pin.as_deref(), Some("FAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPIN000"));
+        clear_test_key();
+    }
+
 }

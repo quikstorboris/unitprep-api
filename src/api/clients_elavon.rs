@@ -34,10 +34,12 @@ use crate::clients::merchant_account_correlation::{
     correlate_by_title, merchant_account_run_titles, Correlation, IntakeRunTitle, MerchantAccountRunInfo,
 };
 use crate::clients::merchant_account_mapping::{
-    credentials_added_to_qms_from_tasks, decrypt_facility_secrets, decrypt_party_pii, map_merchant_account_fields,
-    mask_bank_number,
+    credentials_added_to_qms_from_tasks, decrypt_elavon_credentials, decrypt_facility_secrets, decrypt_party_pii,
+    map_merchant_account_fields, mask_bank_number,
 };
-use crate::clients::repository::{ingest_merchant_account_run, upsert_task_status, IngestMerchantAccountError};
+use crate::clients::repository::{
+    ingest_merchant_account_run, resync_merchant_account_run, upsert_task_status, IngestMerchantAccountError,
+};
 
 const PERMISSION: &str = "client_ops.perform";
 
@@ -47,6 +49,17 @@ fn already_linked() -> Response {
         Json(ApiErrorBody {
             error: "already_linked",
             message: "This facility already has a linked Merchant Account run.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn not_linked() -> Response {
+    (
+        StatusCode::CONFLICT,
+        Json(ApiErrorBody {
+            error: "not_linked",
+            message: "This facility has no linked Merchant Account run yet.".to_string(),
         }),
     )
         .into_response()
@@ -130,6 +143,49 @@ pub struct ElavonCandidate {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// QuikStor's own fixed QMS web login username -- the same for every
+/// facility. Confirmed live against Process Street (2026-09-09, the
+/// Dubuqueland Upper Lot run the "Add Credentials to QMS" ticket linked
+/// to): it's static text in that task's own template, not a per-run form
+/// field the way `account_id`/`pin_password` are -- there is nothing to
+/// fetch or resync for it.
+const QMS_WEB_USER_ID: &str = "QSSWEB";
+
+/// The QMS Credentials half of the Elavon tab's credentials section
+/// (2026-09-09) -- mirrors the "Add Credentials to QMS" checklist step's
+/// own 3 lines (`account_id`/`pin_password` are real PS fields,
+/// `user_id` is `QMS_WEB_USER_ID` above). `pin_password` is the real
+/// decrypted value -- same "revealable on demand" convention
+/// `ElavonPartyInfo.ssn` already uses, masking is a frontend concern.
+#[derive(Debug, Serialize)]
+pub struct ElavonQmsCredentials {
+    pub account_id: Option<String>,
+    pub user_id: &'static str,
+    pub pin_password: Option<String>,
+}
+
+impl ElavonQmsCredentials {
+    fn empty() -> Self {
+        Self { account_id: None, user_id: QMS_WEB_USER_ID, pin_password: None }
+    }
+}
+
+/// The Pin Pad Credentials half -- present only for a client that
+/// actually got a pin pad (per the same PS ticket's own "If customer got
+/// a Pin Pad" conditional); `None`/`None` throughout otherwise, same as
+/// every other not-answered field in this tab.
+#[derive(Debug, Serialize)]
+pub struct ElavonPinpadCredentials {
+    pub pinpad_user_id: Option<String>,
+    pub qss_api_pin: Option<String>,
+}
+
+impl ElavonPinpadCredentials {
+    fn empty() -> Self {
+        Self { pinpad_user_id: None, qss_api_pin: None }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ElavonStatusResponse {
@@ -146,6 +202,8 @@ pub enum ElavonStatusResponse {
         // `ElavonStatusResponse` (including the far more common Unlinked
         // case) to be sized for the largest variant.
         financials: Box<ElavonFinancials>,
+        qms_credentials: ElavonQmsCredentials,
+        pinpad_credentials: ElavonPinpadCredentials,
     },
     Unlinked {
         /// Present when title correlation found exactly one candidate
@@ -231,6 +289,42 @@ fn build_financials(facility_id: Uuid, existing: &ExistingMerchantAccountRow) ->
         average_electronic_check_amount_raw: existing.average_electronic_check_amount_raw.clone(),
         maximum_electronic_check_amount_raw: existing.maximum_electronic_check_amount_raw.clone(),
     }
+}
+
+/// Decrypts `existing.encrypted_secrets` (when present) into the QMS
+/// Credentials / Pin Pad Credentials sections -- same decrypt-failure
+/// degradation as `build_financials` (logs, returns both halves empty
+/// rather than failing the whole tab).
+fn build_credentials(
+    facility_id: Uuid,
+    existing: &ExistingMerchantAccountRow,
+) -> (ElavonQmsCredentials, ElavonPinpadCredentials) {
+    let credentials = existing.encrypted_secrets.as_deref().and_then(|blob| {
+        match decrypt_elavon_credentials(facility_id, blob) {
+            Ok(credentials) => Some(credentials),
+            Err(err) => {
+                tracing::error!(
+                    error = %err,
+                    facility_id = %facility_id,
+                    "failed to decrypt facility secrets for the Elavon tab's credentials sections"
+                );
+                None
+            }
+        }
+    });
+
+    let Some(credentials) = credentials else {
+        return (ElavonQmsCredentials::empty(), ElavonPinpadCredentials::empty());
+    };
+
+    (
+        ElavonQmsCredentials {
+            account_id: credentials.account_id,
+            user_id: QMS_WEB_USER_ID,
+            pin_password: credentials.qss_web_pin,
+        },
+        ElavonPinpadCredentials { pinpad_user_id: credentials.pinpad_user_id, qss_api_pin: credentials.qss_api_pin },
+    )
 }
 
 #[derive(sqlx::FromRow)]
@@ -363,6 +457,7 @@ pub async fn get_facility_elavon(
         }
 
         let financials = Box::new(build_financials(facility_id, &existing));
+        let (qms_credentials, pinpad_credentials) = build_credentials(facility_id, &existing);
 
         return Json(ElavonStatusResponse::Linked {
             rate_provided: existing.rate_provided,
@@ -372,6 +467,8 @@ pub async fn get_facility_elavon(
             last_synced_at: existing.last_synced_at,
             parties: decrypt_parties(facility_id, party_rows),
             financials,
+            qms_credentials,
+            pinpad_credentials,
         })
         .into_response();
     }
@@ -759,6 +856,174 @@ pub async fn unlink_facility_elavon(
     StatusCode::NO_CONTENT.into_response()
 }
 
+/// Refreshes a linked facility's whole Elavon/Merchant Account picture
+/// from Process Street -- rate provided, application status,
+/// `credentials_added_to_qms`, financials, the 4 QMS/pinpad credential
+/// fields, and parties. The fix for this data having no refresh path
+/// short of a destructive unlink/relink once PS's own data changes
+/// after the initial link -- e.g. the "Add Credentials to QMS"
+/// checklist step gets completed sometime after this facility was
+/// first linked, and `credentials_added_to_qms` (only ever set at link
+/// time) is stuck showing "No" (2026-09-09). Fetches both
+/// `get_run_form_fields` and `get_run_tasks`, same two calls
+/// `link_facility_elavon` already makes -- see
+/// `repository::resync_merchant_account_run`'s own doc comment for why
+/// a full overwrite is safe here (nothing on this tab has a manual-edit
+/// UI to protect, unlike Intake's own resync).
+///
+/// Requires `client_ops.perform`, same as link/unlink.
+pub async fn resync_elavon_data(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
+) -> Response {
+    let user_agent = request_context(&headers);
+
+    if let Err(response) =
+        user.require_permission(&state.db, PERMISSION, "resync_elavon_data", user_agent, None).await
+    {
+        return response;
+    }
+
+    let Some(client) = state.process_street.clone() else {
+        return process_street_not_configured();
+    };
+
+    // --- Phase 1: look up the linked run id, in its own short
+    // transaction -- same phased shape `link_facility_elavon` uses and
+    // for the same reason (never hold a transaction across a PS round
+    // trip). ---
+    let ma_run_id = {
+        let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
+            Ok(tx) => tx,
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for elavon data resync");
+                return internal_error("Could not resync this facility's Elavon data");
+            }
+        };
+
+        let facility_exists: Option<(Uuid,)> =
+            match sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
+                .bind(facility_id)
+                .bind(company_id)
+                .fetch_optional(&mut *tx)
+                .await
+            {
+                Ok(row) => row,
+                Err(err) => {
+                    tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for elavon data resync failed");
+                    return internal_error("Could not resync this facility's Elavon data");
+                }
+            };
+        if facility_exists.is_none() {
+            let _ = tx.rollback().await;
+            return not_found("not_found", "No such facility.".to_string());
+        }
+
+        let existing: Option<(Option<String>,)> = match sqlx::query_as(
+            "SELECT ps_new_merchant_run_id FROM clients.facility_merchant_accounts WHERE facility_id = $1",
+        )
+        .bind(facility_id)
+        .fetch_optional(&mut *tx)
+        .await
+        {
+            Ok(row) => row,
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, "facility_merchant_accounts lookup for data resync failed");
+                return internal_error("Could not resync this facility's Elavon data");
+            }
+        };
+
+        if let Err(err) = tx.commit().await {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to commit elavon data resync's pre-check transaction");
+            return internal_error("Could not resync this facility's Elavon data");
+        }
+
+        match existing {
+            Some((Some(ma_run_id),)) => ma_run_id,
+            _ => return not_linked(),
+        }
+    };
+
+    // --- Phase 2: the live Process Street round trip, with no
+    // transaction open -- fields and tasks concurrently, same reasoning
+    // as `link_facility_elavon`'s own doc comment. ---
+    let (fields_result, tasks_result) =
+        tokio::join!(client.get_run_form_fields(&ma_run_id), client.get_run_tasks(&ma_run_id));
+
+    let fields = match fields_result {
+        Ok(fields) => fields,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, ma_run_id, "failed to fetch this run's fields from Process Street for a data resync");
+            return internal_error("Could not fetch this facility's data from Process Street");
+        }
+    };
+    let tasks = match tasks_result {
+        Ok(tasks) => tasks,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, ma_run_id, "failed to fetch this run's tasks from Process Street for a data resync");
+            return internal_error("Could not fetch this facility's data from Process Street");
+        }
+    };
+    let mapped = map_merchant_account_fields(&fields);
+    let credentials_added_to_qms = credentials_added_to_qms_from_tasks(&tasks);
+
+    // --- Phase 3: the write, in a fresh transaction opened only now
+    // that nothing left to do is network-bound. ---
+    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for elavon data resync write");
+            return internal_error("Could not resync this facility's Elavon data");
+        }
+    };
+
+    if let Err(err) =
+        resync_merchant_account_run(&mut tx, facility_id, &mapped, &ma_run_id, credentials_added_to_qms).await
+    {
+        let _ = tx.rollback().await;
+        tracing::error!(error = %err, user_id = %user.user_id, ma_run_id, "failed to resync this facility's Merchant Account data");
+        return match err {
+            IngestMerchantAccountError::Encryption(_) => encryption_not_configured(),
+            IngestMerchantAccountError::Database(_) => internal_error("Could not resync this facility's Elavon data"),
+        };
+    }
+
+    if let Err(err) = upsert_task_status(&mut tx, facility_id, "merchant_account", &tasks).await {
+        let _ = tx.rollback().await;
+        tracing::error!(error = %err, user_id = %user.user_id, ma_run_id, "failed to upsert merchant_account task status during a data resync");
+        return internal_error("Could not resync this facility's Elavon data");
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit elavon data resync transaction");
+        return internal_error("Could not resync this facility's Elavon data");
+    }
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::ELAVON_DATA_RESYNCED,
+        user.user_id,
+        "facility",
+        Some(&facility_id.to_string()),
+        audit_log::Change::none(),
+        user_agent,
+        None,
+        serde_json::json!({ "merchant_account_run_id": ma_run_id }),
+    )
+    .await;
+
+    tracing::info!(
+        user_id = %user.user_id,
+        facility_id = %facility_id,
+        ma_run_id,
+        "user resynced a facility's Elavon data"
+    );
+
+    StatusCode::NO_CONTENT.into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -823,5 +1088,31 @@ mod tests {
         .await;
 
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn resync_elavon_data_refuses_insufficient_permission_without_touching_anything() {
+        let response = resync_elavon_data(
+            State(empty_state()),
+            test_user(),
+            HeaderMap::new(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn resync_elavon_data_reports_not_configured_with_sufficient_permission() {
+        let response = resync_elavon_data(
+            State(empty_state()),
+            crate::api::test_support::onboarding_manager_user(),
+            HeaderMap::new(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

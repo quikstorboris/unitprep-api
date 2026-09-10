@@ -403,6 +403,10 @@ pub fn router(state: AppState) -> Router {
             "/clients/{company_id}/facilities/{facility_id}/elavon/link",
             post(clients_elavon::link_facility_elavon).delete(clients_elavon::unlink_facility_elavon),
         )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/elavon/resync",
+            post(clients_elavon::resync_elavon_data),
+        )
         // DropBox tab -- no extra permission check, RLS is the real
         // gate (see clients_dropbox_folder's own module doc).
         .route(
