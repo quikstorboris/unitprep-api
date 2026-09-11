@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
-    extract::{Json, Multipart, State},
+    extract::{Json, Multipart, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -26,6 +26,7 @@ use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::application::dedup_session_service::DedupSessionService;
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
+use crate::client_ops::tool_runs;
 use crate::infrastructure::csv_export::{build_zip, ExportFile};
 use crate::infrastructure::{dedup_csv_export, dedup_xlsx_export};
 
@@ -103,6 +104,18 @@ async fn first_uploaded_file(
     Ok(result)
 }
 
+/// A tool run must always be recorded against a real facility -- see
+/// `client_ops::tool_runs`'s own doc comment. `Query` reads the URI via
+/// `FromRequestParts`, so it composes cleanly ahead of the
+/// body-consuming `Multipart` extractor below with no change needed to
+/// `first_uploaded_file`'s field-scanning loop. No `#[serde(default)]`:
+/// a request missing `facility_id` fails extraction (400) the same way
+/// every other required field in this file already does.
+#[derive(Debug, Deserialize)]
+pub struct DedupCheckQuery {
+    pub facility_id: uuid::Uuid,
+}
+
 /// Uploads and analyzes a QMS export file in one step, creating a new
 /// dedup session. Combining upload+analyze (rather than UnitGroup's
 /// separate stages) is deliberate: there's no ambiguity to resolve
@@ -110,6 +123,7 @@ async fn first_uploaded_file(
 pub async fn check(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    Query(query): Query<DedupCheckQuery>,
     mut multipart: Multipart,
 ) -> Response {
     let started = Instant::now();
@@ -140,6 +154,7 @@ pub async fn check(
     };
 
     let file_name = file.file_name.clone();
+    let source_bytes = file.bytes.clone();
 
     // A synchronous read of the in-memory registry snapshot -- see
     // `client_ops::vendor_format`'s module doc comment for why this is
@@ -181,12 +196,56 @@ pub async fn check(
 
     let report = build_report_view(&report, &records);
 
+    tool_runs::create_dedup_run(
+        &state.db,
+        tool_runs::ToolRunCreate {
+            facility_id: query.facility_id,
+            session_id: &session_id,
+            actor_user_id: user.user_id,
+            role_keys: &user.role_keys,
+            source_file_name: &file_name,
+            source_dropbox_path: None,
+            source_bytes,
+            source_content_type: guess_content_type(&file_name),
+            report_summary: serde_json::to_value(&report).unwrap_or_default(),
+        },
+    )
+    .await;
+
     Json(DedupCheckResponse { session_id, report }).into_response()
+}
+
+/// A content type to store alongside `source_bytes`/`output_bytes` --
+/// `UploadedFile` (shared with every other tool) carries no content-type
+/// field of its own, so this is a filename-extension guess, same
+/// precision the browser's own `accept` attribute already offers on the
+/// way in.
+fn guess_content_type(file_name: &str) -> &'static str {
+    let lower = file_name.to_lowercase();
+
+    if lower.ends_with(".xlsx") {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    } else if lower.ends_with(".xls") {
+        "application/vnd.ms-excel"
+    } else {
+        "text/csv"
+    }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct DedupDropboxPathRequest {
     pub path: String,
+}
+
+/// Distinct from `DedupDropboxPathRequest` (used by the stateless
+/// `detect_vendor_format_dropbox` below, which has no facility to
+/// record) -- this one actually creates a session and a `tool_runs`
+/// row, so `facility_id` is required here. Same reasoning as
+/// `DedupCheckQuery::facility_id` -- required, no `#[serde(default)]`.
+#[derive(Debug, Deserialize)]
+pub struct DedupImportDropboxRequest {
+    pub path: String,
+    pub facility_id: uuid::Uuid,
 }
 
 /// Dropbox-sourced counterpart to `check()` -- same ingest/session-create
@@ -196,7 +255,7 @@ pub struct DedupDropboxPathRequest {
 pub async fn import_from_dropbox(
     State(state): State<AppState>,
     user: AuthenticatedUser,
-    Json(request): Json<DedupDropboxPathRequest>,
+    Json(request): Json<DedupImportDropboxRequest>,
 ) -> Response {
     let started = Instant::now();
 
@@ -210,6 +269,7 @@ pub async fn import_from_dropbox(
     };
 
     let file_name = file.file_name.clone();
+    let source_bytes = file.bytes.clone();
     let source_dropbox_folder_path = parent_folder(&request.path);
 
     // A synchronous read of the in-memory registry snapshot -- see
@@ -247,6 +307,22 @@ pub async fn import_from_dropbox(
     );
 
     let report = build_report_view(&report, &records);
+
+    tool_runs::create_dedup_run(
+        &state.db,
+        tool_runs::ToolRunCreate {
+            facility_id: request.facility_id,
+            session_id: &session_id,
+            actor_user_id: user.user_id,
+            role_keys: &user.role_keys,
+            source_file_name: request.path.rsplit('/').next().unwrap_or(&request.path),
+            source_dropbox_path: Some(&request.path),
+            source_bytes,
+            source_content_type: guess_content_type(&file_name),
+            report_summary: serde_json::to_value(&report).unwrap_or_default(),
+        },
+    )
+    .await;
 
     Json(DedupCheckResponse { session_id, report }).into_response()
 }
@@ -453,6 +529,17 @@ pub async fn export(
     let response = match generate_export(&request.format, &request.session_id, &report, &records)
     {
         Ok((bytes, content_type, file_name)) => {
+            tool_runs::attach_output_bytes(
+                &state.db,
+                user.user_id,
+                &user.role_keys,
+                &request.session_id,
+                bytes.clone(),
+                content_type,
+                file_name,
+            )
+            .await;
+
             audit_log::record(
                 &state.db,
                 audit_log::event::DEDUP_COMPLETED,
@@ -558,6 +645,15 @@ pub async fn export_to_dropbox(
         tracing::error!(error = %err, path = %request.dropbox_path, "Dropbox upload failed during dedup export");
         return internal_error("Could not upload export to Dropbox");
     }
+
+    tool_runs::attach_output_dropbox(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        &request.session_id,
+        &request.dropbox_path,
+    )
+    .await;
 
     audit_log::record(
         &state.db,
@@ -668,7 +764,7 @@ fn generate_export(
     }
 }
 
-fn file_response(bytes: Vec<u8>, content_type: &str, file_name: &str) -> Response {
+pub(crate) fn file_response(bytes: Vec<u8>, content_type: &str, file_name: &str) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
     headers.insert(

@@ -29,7 +29,7 @@ use super::{
     correct_group, dedup, discover, dropbox_browse, dropbox_settings,
     exclude_group, exclude_groups, exempt, export, group_file_confirm, group_file_upload,
     process_street_settings, resolve_unit_format, select_group_file, select_unit_file, tagger,
-    unit_file_upload, upload, validate,
+    tool_runs, unit_file_upload, upload, validate,
 };
 use super::{internal_error, ApiErrorBody, AppState};
 
@@ -422,6 +422,20 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/clients/{company_id}/facilities/{facility_id}/people/{person_id}",
             put(clients_facility_people::edit_facility_person).delete(clients_facility_people::unlink_facility_person),
+        )
+        // Onboarding Work tab -- read-only, any authenticated caller, RLS
+        // is the real gate (see tool_runs's own module doc).
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/tool-runs",
+            get(tool_runs::list_facility_tool_runs),
+        )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/output",
+            get(tool_runs::download_tool_run_output),
+        )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/source",
+            get(tool_runs::download_tool_run_source),
         )
         // Requires client_ops.perform to start; status read is any
         // authenticated caller -- see clients_sync's own module doc.

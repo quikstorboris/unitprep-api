@@ -342,8 +342,9 @@ async fn import_from_dropbox_rejects_a_path_outside_the_configured_root() {
     let response = import_from_dropbox(
         State(empty_state()),
         crate::api::test_support::test_user(),
-        Json(DedupDropboxPathRequest {
+        Json(DedupImportDropboxRequest {
             path: "/Not/Under/The/Configured/Root".to_string(),
+            facility_id: uuid::Uuid::new_v4(),
         }),
     )
     .await;

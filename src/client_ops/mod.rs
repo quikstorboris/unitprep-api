@@ -15,7 +15,10 @@
 //! DB-backed replacement for what used to be per-tool hardcoded vendor
 //! consts) into `unitprep_core::vendor_format::VendorFormat` -- a real
 //! repository module, unlike `qms_tag`, because two unrelated tools read
-//! it rather than one.
+//! it rather than one. `tool_runs` is the durable per-facility record of
+//! a tool run (Onboarding Work tab) -- see that module's own doc comment
+//! for how it differs from `audit_log`.
 
 pub mod audit_log;
+pub mod tool_runs;
 pub mod vendor_format;
