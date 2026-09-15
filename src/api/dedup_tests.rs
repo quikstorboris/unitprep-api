@@ -207,6 +207,7 @@ async fn export_returns_404_for_missing_session() {
             session_id: "missing".to_string(),
             format: ExportFormat::Csv,
             client_id: None,
+            facility_id: None,
         }),
     )
     .await;
@@ -239,6 +240,7 @@ async fn export_produces_csv_containing_the_flagged_group() {
             session_id: "s1".to_string(),
             format: ExportFormat::Csv,
             client_id: None,
+            facility_id: None,
         }),
     )
     .await;
@@ -247,6 +249,11 @@ async fn export_produces_csv_containing_the_flagged_group() {
     assert_eq!(
         response.headers().get(header::CONTENT_TYPE).unwrap(),
         "text/csv"
+    );
+    assert_eq!(
+        response.headers().get(header::CONTENT_DISPOSITION).unwrap(),
+        "attachment; filename=\"duplicate_tenant_check.csv\"",
+        "no facility_id -- must keep today's static fallback filename"
     );
 
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -274,6 +281,7 @@ async fn export_produces_xlsx_with_the_right_content_type() {
             session_id: "s1".to_string(),
             format: ExportFormat::Xlsx,
             client_id: None,
+            facility_id: None,
         }),
     )
     .await;
@@ -308,6 +316,7 @@ async fn export_produces_a_zip_containing_both_formats() {
             session_id: "s1".to_string(),
             format: ExportFormat::Both,
             client_id: None,
+            facility_id: None,
         }),
     )
     .await;
@@ -375,7 +384,8 @@ async fn export_to_dropbox_rejects_a_path_outside_the_configured_root() {
             session_id: "missing".to_string(),
             format: ExportFormat::Csv,
             client_id: None,
-            dropbox_path: "/Not/Under/The/Configured/Root/out.csv".to_string(),
+            facility_id: None,
+            folder_path: "/Not/Under/The/Configured/Root".to_string(),
         }),
     )
     .await;

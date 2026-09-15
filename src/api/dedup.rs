@@ -12,6 +12,7 @@ use axum::{
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 use unitprep_core::parsing::parse_document;
@@ -27,6 +28,7 @@ use crate::application::dedup_session_service::DedupSessionService;
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use crate::client_ops::tool_runs;
+use crate::clients::dedup_filename;
 use crate::infrastructure::csv_export::{build_zip, ExportFile};
 use crate::infrastructure::{dedup_csv_export, dedup_xlsx_export};
 
@@ -68,6 +70,16 @@ pub struct DedupExportRequest {
     /// is answerable without cross-referencing session ids by hand.
     #[serde(default)]
     pub client_id: Option<uuid::Uuid>,
+    /// The *facility* this check was run for -- dedup runs per-facility,
+    /// not per-company, so this drives the export filename's `{ABBREV}`
+    /// (from `clients.facilities.name`, not the company's DBA/legal
+    /// name) and per-facility version counter. Same optional/explicit
+    /// shape as `client_id` above, for the same reason: the session
+    /// itself carries no facility identity (see
+    /// `application::dedup_session_service::DedupSession`), and `None`
+    /// means a standalone run -- see `dedup_filename::standalone_file_name`.
+    #[serde(default)]
+    pub facility_id: Option<uuid::Uuid>,
 }
 
 /// Reads the first file field from `multipart` — a duplicate-tenant
@@ -280,8 +292,12 @@ pub async fn import_from_dropbox(
     let (session_id, report, records) = match DedupSessionService::new(Arc::clone(
         &state.dedup_sessions,
     ))
-    .create_session(file, Some(user.user_id), &tenant_vendors, source_dropbox_folder_path)
-    {
+    .create_session(
+        file,
+        Some(user.user_id),
+        &tenant_vendors,
+        source_dropbox_folder_path,
+    ) {
         Ok(created) => created,
         Err(err) => {
             tracing::warn!(file = %file_name, error = %err, "Dedup import-from-dropbox failed to ingest file");
@@ -489,11 +505,11 @@ pub async fn save_location(
     user: AuthenticatedUser,
     Json(request): Json<DedupSessionRequest>,
 ) -> Response {
-    let source_folder = match state
-        .dedup_sessions
-        .with_owned_session(&request.session_id, user.user_id, |session| {
-            session.source_dropbox_folder_path.clone()
-        }) {
+    let source_folder = match state.dedup_sessions.with_owned_session(
+        &request.session_id,
+        user.user_id,
+        |session| session.source_dropbox_folder_path.clone(),
+    ) {
         Some(source_folder) => source_folder,
         None => return session_not_found(&request.session_id),
     };
@@ -501,7 +517,10 @@ pub async fn save_location(
     let default_folder_path =
         source_folder.map(|folder| format!("{folder}/{DUPLICATE_CHECK_FOLDER_NAME}"));
 
-    Json(DedupSaveLocationResponse { default_folder_path }).into_response()
+    Json(DedupSaveLocationResponse {
+        default_folder_path,
+    })
+    .into_response()
 }
 
 /// Exports the full report as CSV, xlsx, or both (as a ZIP) — flagged
@@ -526,9 +545,27 @@ pub async fn export(
 
     let (report, records) = session_data;
 
-    let response = match generate_export(&request.format, &request.session_id, &report, &records)
+    let file_names = match compute_export_file_names(
+        &state.db,
+        &user,
+        request.facility_id,
+        &request.format,
+        false,
+    )
+    .await
     {
-        Ok((bytes, content_type, file_name)) => {
+        Ok(file_names) => file_names,
+        Err(response) => return response,
+    };
+
+    let response = match generate_export(
+        &request.format,
+        &request.session_id,
+        &report,
+        &records,
+        (&file_names.zip_csv, &file_names.zip_xlsx),
+    ) {
+        Ok((bytes, content_type)) => {
             tool_runs::attach_output_bytes(
                 &state.db,
                 user.user_id,
@@ -536,7 +573,7 @@ pub async fn export(
                 &request.session_id,
                 bytes.clone(),
                 content_type,
-                file_name,
+                &file_names.outer,
             )
             .await;
 
@@ -545,7 +582,11 @@ pub async fn export(
                 audit_log::event::DEDUP_COMPLETED,
                 user.user_id,
                 "client",
-                request.client_id.as_ref().map(ToString::to_string).as_deref(),
+                request
+                    .client_id
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .as_deref(),
                 audit_log::Change::none(),
                 None,
                 None,
@@ -558,7 +599,7 @@ pub async fn export(
                 }),
             )
             .await;
-            file_response(bytes, content_type, file_name)
+            file_response(bytes, content_type, &file_names.outer)
         }
         Err(response) => response,
     };
@@ -582,13 +623,18 @@ pub struct DedupExportToDropboxRequest {
     pub session_id: String,
     #[serde(default)]
     pub format: ExportFormat,
-    /// Full destination path, filename included -- resolved by the
-    /// frontend's Dropbox folder picker plus a client-generated
-    /// timestamped filename, not guessed at here.
-    pub dropbox_path: String,
+    /// Destination *folder* only -- resolved by the frontend's Dropbox
+    /// folder picker. The filename is no longer the frontend's concern:
+    /// the backend computes and appends it (see `dedup_filename`), the
+    /// same way `export()`'s Content-Disposition filename always has
+    /// been.
+    pub folder_path: String,
     /// Same reasoning as `DedupExportRequest::client_id`.
     #[serde(default)]
     pub client_id: Option<uuid::Uuid>,
+    /// Same reasoning as `DedupExportRequest::facility_id`.
+    #[serde(default)]
+    pub facility_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Serialize)]
@@ -607,7 +653,7 @@ pub async fn export_to_dropbox(
 ) -> Response {
     let started = Instant::now();
 
-    if let Err(response) = ensure_path_in_root(&state, &request.dropbox_path) {
+    if let Err(response) = ensure_path_in_root(&state, &request.folder_path) {
         return response;
     }
 
@@ -622,11 +668,41 @@ pub async fn export_to_dropbox(
 
     let (report, records) = session_data;
 
-    let (bytes, _content_type, _default_file_name) =
-        match generate_export(&request.format, &request.session_id, &report, &records) {
-            Ok(generated) => generated,
-            Err(response) => return response,
-        };
+    // Dropbox-save always uses the timestamped standalone fallback (not
+    // the plain static one `export()` keeps) when there's no facility --
+    // see `dedup_filename::standalone_file_name`'s own doc comment for
+    // why: `DropboxClient::upload` is overwrite-only, so two saves of
+    // the same standalone session to the same folder would otherwise
+    // silently clobber each other.
+    let file_names = match compute_export_file_names(
+        &state.db,
+        &user,
+        request.facility_id,
+        &request.format,
+        true,
+    )
+    .await
+    {
+        Ok(file_names) => file_names,
+        Err(response) => return response,
+    };
+
+    let (bytes, _content_type) = match generate_export(
+        &request.format,
+        &request.session_id,
+        &report,
+        &records,
+        (&file_names.zip_csv, &file_names.zip_xlsx),
+    ) {
+        Ok(generated) => generated,
+        Err(response) => return response,
+    };
+
+    let dropbox_path = format!(
+        "{}/{}",
+        request.folder_path.trim_end_matches('/'),
+        file_names.outer
+    );
 
     // Ensures the destination folder exists before writing to it --
     // covers the `Duplicate Check` subfolder specifically (never created
@@ -634,15 +710,17 @@ pub async fn export_to_dropbox(
     // above), but is deliberately unconditional: any destination folder
     // this call is ever pointed at should exist by the time the upload
     // itself is attempted, not just the one this feature was built for.
-    if let Some(folder) = parent_folder(&request.dropbox_path) {
-        if let Err(err) = state.dropbox.create_folder_if_missing(&folder).await {
-            tracing::error!(error = %err, path = %folder, "Dropbox create_folder_if_missing failed during dedup export");
-            return internal_error("Could not create the destination folder in Dropbox");
-        }
+    if let Err(err) = state
+        .dropbox
+        .create_folder_if_missing(&request.folder_path)
+        .await
+    {
+        tracing::error!(error = %err, path = %request.folder_path, "Dropbox create_folder_if_missing failed during dedup export");
+        return internal_error("Could not create the destination folder in Dropbox");
     }
 
-    if let Err(err) = state.dropbox.upload(&request.dropbox_path, bytes).await {
-        tracing::error!(error = %err, path = %request.dropbox_path, "Dropbox upload failed during dedup export");
+    if let Err(err) = state.dropbox.upload(&dropbox_path, bytes).await {
+        tracing::error!(error = %err, path = %dropbox_path, "Dropbox upload failed during dedup export");
         return internal_error("Could not upload export to Dropbox");
     }
 
@@ -651,7 +729,7 @@ pub async fn export_to_dropbox(
         user.user_id,
         &user.role_keys,
         &request.session_id,
-        &request.dropbox_path,
+        &dropbox_path,
     )
     .await;
 
@@ -660,14 +738,18 @@ pub async fn export_to_dropbox(
         audit_log::event::DEDUP_COMPLETED,
         user.user_id,
         "client",
-        request.client_id.as_ref().map(ToString::to_string).as_deref(),
+        request
+            .client_id
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         audit_log::Change::none(),
         None,
         None,
         serde_json::json!({
             "session_id": request.session_id,
             "format": format!("{:?}", request.format),
-            "dropbox_path": request.dropbox_path,
+            "dropbox_path": dropbox_path,
         }),
     )
     .await;
@@ -676,15 +758,12 @@ pub async fn export_to_dropbox(
         session_id = %request.session_id,
         owner_id = %user.user_id,
         format = ?request.format,
-        path = %request.dropbox_path,
+        path = %dropbox_path,
         export_ms = started.elapsed().as_millis(),
         "Dedup export saved to Dropbox"
     );
 
-    Json(DedupExportToDropboxResponse {
-        path: request.dropbox_path,
-    })
-    .into_response()
+    Json(DedupExportToDropboxResponse { path: dropbox_path }).into_response()
 }
 
 #[allow(clippy::result_large_err)]
@@ -711,22 +790,27 @@ fn generate_xlsx_bytes(
     })
 }
 
+/// `csv_file_name`/`xlsx_file_name` are the names the two files get
+/// *inside* the ZIP -- computed by the caller (`generate_export` below)
+/// so this stays a pure bytes-generator with no naming logic of its own.
 #[allow(clippy::result_large_err)]
 fn generate_zip_bytes(
     session_id: &str,
     report: &DedupReport,
     records: &[TenantRecord],
+    csv_file_name: &str,
+    xlsx_file_name: &str,
 ) -> Result<Vec<u8>, Response> {
     let csv_bytes = generate_csv_bytes(session_id, report, records)?;
     let xlsx_bytes = generate_xlsx_bytes(session_id, report, records)?;
 
     let files = vec![
         ExportFile {
-            file_name: "duplicate_tenant_check.csv".to_string(),
+            file_name: csv_file_name.to_string(),
             bytes: csv_bytes,
         },
         ExportFile {
-            file_name: "duplicate_tenant_check.xlsx".to_string(),
+            file_name: xlsx_file_name.to_string(),
             bytes: xlsx_bytes,
         },
     ];
@@ -740,28 +824,114 @@ fn generate_zip_bytes(
 /// Single format-dispatch point shared by `export()` (wraps the result in
 /// an HTTP response via `file_response`) and `export_to_dropbox()` (hands
 /// the bytes to `state.dropbox.upload` instead) -- the only place that
-/// needs to know which generator and content-type/filename go with which
-/// `ExportFormat`.
+/// needs to know which generator/content-type goes with which
+/// `ExportFormat`. Returns only bytes and content type now -- the actual
+/// filename is a facility-scoped, DB-sequenced value (or the standalone
+/// fallback) computed by `compute_export_file_names` before this is
+/// called, not a static constant baked in here. `zip_inner_names` (the
+/// ZIP's own two inner file names) is always passed in, even for
+/// `Csv`/`Xlsx`, to keep this a plain 4-argument function rather than an
+/// `Option` only one branch needs.
 #[allow(clippy::result_large_err)]
 fn generate_export(
     format: &ExportFormat,
     session_id: &str,
     report: &DedupReport,
     records: &[TenantRecord],
-) -> Result<(Vec<u8>, &'static str, &'static str), Response> {
+    zip_inner_names: (&str, &str),
+) -> Result<(Vec<u8>, &'static str), Response> {
     match format {
-        ExportFormat::Csv => generate_csv_bytes(session_id, report, records)
-            .map(|bytes| (bytes, "text/csv", "duplicate_tenant_check.csv")),
+        ExportFormat::Csv => {
+            generate_csv_bytes(session_id, report, records).map(|bytes| (bytes, "text/csv"))
+        }
         ExportFormat::Xlsx => generate_xlsx_bytes(session_id, report, records).map(|bytes| {
             (
                 bytes,
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                "duplicate_tenant_check.xlsx",
             )
         }),
-        ExportFormat::Both => generate_zip_bytes(session_id, report, records)
-            .map(|bytes| (bytes, "application/zip", "duplicate_tenant_check.zip")),
+        ExportFormat::Both => {
+            let (csv_file_name, xlsx_file_name) = zip_inner_names;
+            generate_zip_bytes(session_id, report, records, csv_file_name, xlsx_file_name)
+                .map(|bytes| (bytes, "application/zip"))
+        }
     }
+}
+
+/// The filenames one `/dedup/export`(-`dropbox`) call needs: `outer` --
+/// the download/Dropbox filename, extension matching the requested
+/// `ExportFormat` -- and `zip_csv`/`zip_xlsx`, the names the two files
+/// get *inside* the ZIP when (and only when) `format` is `Both`. All
+/// three are always populated (even when `format` isn't `Both`) so
+/// `generate_export` stays a plain function with no `Option` branching --
+/// they share one version number/date because computing them is exactly
+/// one `increment_export_sequence` call (or one standalone-fallback
+/// timestamp) reused three times, never three separate ones.
+struct ExportFileNames {
+    outer: String,
+    zip_csv: String,
+    zip_xlsx: String,
+}
+
+/// Computes the real filename(s) for one export action -- the single
+/// place `export()` and `export_to_dropbox()` both go through so the
+/// facility-scoped-vs-standalone decision, and the "one version number
+/// per export action" rule, live in exactly one spot.
+///
+/// `facility_id` is `None` for a standalone run (see
+/// `DedupExportRequest::facility_id`'s own doc comment) -- falls back to
+/// `dedup_filename::standalone_file_name`, static for a browser download
+/// (`timestamped_fallback: false`, matches today's unchanged behavior)
+/// or timestamped for a Dropbox save (`timestamped_fallback: true`, the
+/// anti-overwrite guarantee `useDedupSaveToDropbox.ts` used to provide
+/// client-side -- see that module's own doc comment).
+///
+/// `Some(facility_id)` atomically increments
+/// `clients.facilities.dedup_export_sequence` via
+/// `dedup_filename::increment_export_sequence` -- exactly once per call,
+/// regardless of `format`, since a ZIP export is one export action and
+/// must consume exactly one version number for both files it bundles.
+/// A DB failure here is surfaced as a 500 rather than silently falling
+/// back to a wrong or duplicate filename.
+async fn compute_export_file_names(
+    db: &sqlx::PgPool,
+    user: &AuthenticatedUser,
+    facility_id: Option<uuid::Uuid>,
+    format: &ExportFormat,
+    timestamped_fallback: bool,
+) -> Result<ExportFileNames, Response> {
+    let outer_ext = match format {
+        ExportFormat::Csv => "csv",
+        ExportFormat::Xlsx => "xlsx",
+        ExportFormat::Both => "zip",
+    };
+    let now = Utc::now();
+
+    let Some(facility_id) = facility_id else {
+        return Ok(ExportFileNames {
+            outer: dedup_filename::standalone_file_name(outer_ext, now, timestamped_fallback),
+            zip_csv: dedup_filename::standalone_file_name("csv", now, timestamped_fallback),
+            zip_xlsx: dedup_filename::standalone_file_name("xlsx", now, timestamped_fallback),
+        });
+    };
+
+    let (facility_name, sequence) = dedup_filename::increment_export_sequence(
+        db,
+        user.user_id,
+        &user.role_keys,
+        facility_id,
+    )
+    .await
+    .map_err(|err| {
+        tracing::error!(error = %err, %facility_id, "Failed computing dedup export filename");
+        internal_error("Failed computing export filename")
+    })?;
+
+    Ok(ExportFileNames {
+        outer: dedup_filename::format_export_filename(&facility_name, sequence, outer_ext, now),
+        zip_csv: dedup_filename::format_export_filename(&facility_name, sequence, "csv", now),
+        zip_xlsx: dedup_filename::format_export_filename(&facility_name, sequence, "xlsx", now),
+    })
 }
 
 pub(crate) fn file_response(bytes: Vec<u8>, content_type: &str, file_name: &str) -> Response {

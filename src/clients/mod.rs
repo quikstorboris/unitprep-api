@@ -13,6 +13,7 @@
 pub mod company_naming;
 pub mod contract_order_mapping;
 pub mod create;
+pub mod dedup_filename;
 pub mod encryption;
 pub mod fields;
 pub mod ingest;
