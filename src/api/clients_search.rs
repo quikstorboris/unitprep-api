@@ -1,6 +1,6 @@
 //! Search for a Process Street company/facility/person to import into
 //! OO -- the entry point the "Add client from PS" flow (still Phase 3,
-//! not built) will read from. Two genuinely different lookups running
+//! not built) will read from. Three genuinely different lookups running
 //! side by side in one response:
 //!
 //! - **Facility matches**: a live call to PS's own server-side `name`
@@ -10,6 +10,25 @@
 //!   `clients.facilities.ps_intake_run_id` so a search result can be
 //!   greyed out in the UI instead of silently inviting a duplicate
 //!   import.
+//! - **Merchant Account matches**: the same live server-side `name`
+//!   search, over New Merchant Account run titles instead
+//!   (`clients::search::search_by_merchant_account_name`). Added
+//!   2026-09-14 after a real incident: MSS Jenks, LLC's real Elavon
+//!   application (`rWwi2_88WoKj6C2qg8BG-g`) was invisible to this
+//!   endpoint because it has no discoverable Intake run, and
+//!   Intake-only search made a real, submitted application look like it
+//!   didn't exist in PS at all (see `clients::search`'s own doc comment
+//!   for the full story). **Not a facility identity on its own** -- an
+//!   MA-only match carries `already_linked` (is this run already
+//!   attached to some real facility via
+//!   `clients.facility_merchant_accounts.ps_new_merchant_run_id`?)
+//!   rather than `already_imported`, and the frontend must not offer to
+//!   "Add" one directly: `clients::create` still requires an Intake run
+//!   to build a real `clients.facilities` row from (address, PMS, etc.
+//!   all come from Intake, never from Merchant Account). This list is
+//!   for visibility/discovery -- confirming real PS data exists even
+//!   when its Intake counterpart can't be found -- not an alternate
+//!   import path.
 //! - **Person matches**: a local query against `clients.ps_person_index`
 //!   (`clients::sync`'s delta-synced projection) -- PS has no
 //!   server-side search over form-field values, so this is the only way
@@ -63,7 +82,7 @@ use crate::clients::merchant_account_correlation::{
     correlate_by_title, merchant_account_run_titles, Correlation, IntakeRunTitle,
 };
 use crate::clients::merchant_account_mapping::map_merchant_account_fields;
-use crate::clients::search::search_by_facility_name;
+use crate::clients::search::{search_by_facility_name, search_by_merchant_account_name};
 
 #[derive(Debug, Deserialize)]
 pub struct SearchClientsQuery {
@@ -136,9 +155,25 @@ pub struct PersonMatch {
     pub role: String,
 }
 
+/// One New Merchant Account run whose own title matched the query --
+/// see this module's own doc comment for why this exists as its own
+/// list rather than being folded into `facility_matches`.
+#[derive(Debug, Serialize)]
+pub struct MerchantAccountMatch {
+    pub run_id: String,
+    pub run_name: String,
+    pub status: String,
+    pub updated_at: DateTime<Utc>,
+    /// Whether some real facility already has this run attached via
+    /// `clients.facility_merchant_accounts.ps_new_merchant_run_id` --
+    /// the Merchant Account analog of `FacilityMatch::already_imported`.
+    pub already_linked: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SearchClientsResponse {
     pub facility_matches: Vec<FacilityMatch>,
+    pub merchant_account_matches: Vec<MerchantAccountMatch>,
     pub person_matches: Vec<PersonMatch>,
 }
 
@@ -263,7 +298,10 @@ pub async fn search_clients(
 ) -> Response {
     let q = query.q.trim();
     if q.is_empty() {
-        return bad_request("invalid_search_query", "q is required and must not be blank.".to_string());
+        return bad_request(
+            "invalid_search_query",
+            "q is required and must not be blank.".to_string(),
+        );
     }
 
     let Some(client) = state.process_street.as_ref() else {
@@ -274,6 +312,18 @@ pub async fn search_clients(
         Ok(results) => results,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, query = %q, "Process Street facility-name search failed");
+            return internal_error("Could not search Process Street");
+        }
+    };
+
+    // See this module's own doc comment (2026-09-14) -- a facility can
+    // have a real, live Merchant Account run with no discoverable
+    // Intake run, so this must be its own live search, not something
+    // inferred from `facility_results` alone.
+    let merchant_account_results = match search_by_merchant_account_name(client, q).await {
+        Ok(results) => results,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, query = %q, "Process Street merchant-account-name search failed");
             return internal_error("Could not search Process Street");
         }
     };
@@ -319,7 +369,8 @@ pub async fn search_clients(
         facility_results.iter().map(|r| r.run_id.as_str()).collect();
     let person_derived = derive_facilities_from_person_matches(&person_matches, &literal_run_ids);
 
-    let mut candidate_run_ids: Vec<String> = facility_results.iter().map(|r| r.run_id.clone()).collect();
+    let mut candidate_run_ids: Vec<String> =
+        facility_results.iter().map(|r| r.run_id.clone()).collect();
     candidate_run_ids.extend(person_derived.iter().map(|(run_id, ..)| run_id.clone()));
 
     // Every person already indexed under a facility that matched (by
@@ -352,7 +403,11 @@ pub async fn search_clients(
                 .map(|p| (p.ps_run_id.clone(), p.full_name.clone(), p.role.clone()))
                 .collect();
             for row in rows {
-                let key = (row.ps_run_id.clone(), row.full_name.clone(), row.role.clone());
+                let key = (
+                    row.ps_run_id.clone(),
+                    row.full_name.clone(),
+                    row.role.clone(),
+                );
                 if seen.insert(key) {
                     person_matches.push(row);
                 }
@@ -380,16 +435,37 @@ pub async fn search_clients(
         }
     };
 
+    let merchant_account_run_ids: Vec<String> = merchant_account_results
+        .iter()
+        .map(|r| r.run_id.clone())
+        .collect();
+    let already_linked_result: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as(
+        "SELECT ps_new_merchant_run_id FROM clients.facility_merchant_accounts
+          WHERE ps_new_merchant_run_id = ANY($1)",
+    )
+    .bind(&merchant_account_run_ids)
+    .fetch_all(&mut *tx)
+    .await;
+
+    let already_linked: std::collections::HashSet<String> = match already_linked_result {
+        Ok(rows) => rows.into_iter().map(|(id,)| id).collect(),
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "already-linked merchant account check failed");
+            return internal_error("Could not search Process Street");
+        }
+    };
+
     // Only for person-derived rows -- a literal title match already has
     // its own live `updated_at` straight from the search call itself
     // (`SearchResult::updated_at`), which is fresher than this.
-    let intake_last_synced_result: Result<Vec<(String, DateTime<Utc>)>, sqlx::Error> = sqlx::query_as(
-        "SELECT ps_run_id, ps_updated_at FROM clients.ps_sync_state
+    let intake_last_synced_result: Result<Vec<(String, DateTime<Utc>)>, sqlx::Error> =
+        sqlx::query_as(
+            "SELECT ps_run_id, ps_updated_at FROM clients.ps_sync_state
           WHERE workflow = 'intake' AND ps_run_id = ANY($1)",
-    )
-    .bind(&candidate_run_ids)
-    .fetch_all(&mut *tx)
-    .await;
+        )
+        .bind(&candidate_run_ids)
+        .fetch_all(&mut *tx)
+        .await;
 
     let intake_last_synced: HashMap<String, DateTime<Utc>> = match intake_last_synced_result {
         Ok(rows) => rows.into_iter().collect(),
@@ -414,11 +490,18 @@ pub async fn search_clients(
 
     let intake_titles: Vec<IntakeRunTitle> = facility_results
         .iter()
-        .map(|r| IntakeRunTitle { run_id: r.run_id.clone(), title_text: r.run_name.clone() })
-        .chain(person_derived.iter().map(|(run_id, run_name, ..)| IntakeRunTitle {
-            run_id: run_id.clone(),
-            title_text: run_name.clone(),
-        }))
+        .map(|r| IntakeRunTitle {
+            run_id: r.run_id.clone(),
+            title_text: r.run_name.clone(),
+        })
+        .chain(
+            person_derived
+                .iter()
+                .map(|(run_id, run_name, ..)| IntakeRunTitle {
+                    run_id: run_id.clone(),
+                    title_text: run_name.clone(),
+                }),
+        )
         .collect();
     let correlations = correlate_by_title(&intake_titles, &merchant_account_titles);
     let merchant_account_updated_at: HashMap<String, DateTime<Utc>> = merchant_account_titles
@@ -443,9 +526,9 @@ pub async fn search_clients(
         })
         .map(String::as_str)
         .collect();
-    let ma_fetches = distinct_ma_run_ids.iter().map(|ma_run_id| async move {
-        (*ma_run_id, client.get_run_form_fields(ma_run_id).await)
-    });
+    let ma_fetches = distinct_ma_run_ids
+        .iter()
+        .map(|ma_run_id| async move { (*ma_run_id, client.get_run_form_fields(ma_run_id).await) });
     let mut company_names: HashMap<String, Option<String>> = HashMap::new();
     for (ma_run_id, result) in futures::future::join_all(ma_fetches).await {
         let company_name = match result {
@@ -480,31 +563,46 @@ pub async fn search_clients(
         })
         .collect();
 
-    facility_matches.extend(person_derived.into_iter().flat_map(|(run_id, run_name, full_name, role)| {
-        let last_activity_at = intake_last_synced.get(&run_id).copied();
-        facility_matches_for(
-            run_id.clone(),
-            run_name,
-            None,
-            MatchedVia::Person { full_name, role },
-            already_imported.contains(&run_id),
-            last_activity_at,
-            correlations.get(&run_id),
-            &company_names,
-            &merchant_account_updated_at,
-        )
-    }));
+    facility_matches.extend(person_derived.into_iter().flat_map(
+        |(run_id, run_name, full_name, role)| {
+            let last_activity_at = intake_last_synced.get(&run_id).copied();
+            facility_matches_for(
+                run_id.clone(),
+                run_name,
+                None,
+                MatchedVia::Person { full_name, role },
+                already_imported.contains(&run_id),
+                last_activity_at,
+                correlations.get(&run_id),
+                &company_names,
+                &merchant_account_updated_at,
+            )
+        },
+    ));
+
+    let merchant_account_matches: Vec<MerchantAccountMatch> = merchant_account_results
+        .into_iter()
+        .map(|r| MerchantAccountMatch {
+            already_linked: already_linked.contains(&r.run_id),
+            run_id: r.run_id,
+            run_name: r.run_name,
+            status: r.status,
+            updated_at: r.updated_at,
+        })
+        .collect();
 
     tracing::info!(
         user_id = %user.user_id,
         query = %q,
         facility_match_count = facility_matches.len(),
+        merchant_account_match_count = merchant_account_matches.len(),
         person_match_count = person_matches.len(),
         "user searched for a Process Street client"
     );
 
     Json(SearchClientsResponse {
         facility_matches,
+        merchant_account_matches,
         person_matches,
     })
     .into_response()
@@ -520,7 +618,9 @@ mod tests {
         let response = search_clients(
             State(empty_state()),
             test_user(),
-            Query(SearchClientsQuery { q: "   ".to_string() }),
+            Query(SearchClientsQuery {
+                q: "   ".to_string(),
+            }),
         )
         .await;
 
@@ -535,14 +635,22 @@ mod tests {
         let response = search_clients(
             State(empty_state()),
             test_user(),
-            Query(SearchClientsQuery { q: "highway".to_string() }),
+            Query(SearchClientsQuery {
+                q: "highway".to_string(),
+            }),
         )
         .await;
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
-    fn person_match(workflow: &str, run_id: &str, run_name: &str, full_name: &str, role: &str) -> PersonMatch {
+    fn person_match(
+        workflow: &str,
+        run_id: &str,
+        run_name: &str,
+        full_name: &str,
+        role: &str,
+    ) -> PersonMatch {
         PersonMatch {
             workflow: workflow.to_string(),
             ps_run_id: run_id.to_string(),
@@ -641,7 +749,10 @@ mod tests {
         let derived = derive_facilities_from_person_matches(&matches, &literal_run_ids);
 
         assert_eq!(derived.len(), 1);
-        assert_eq!(derived[0].2, "Judy Armstrong", "first match in order wins as the shown reason");
+        assert_eq!(
+            derived[0].2, "Judy Armstrong",
+            "first match in order wins as the shown reason"
+        );
     }
 
     fn no_correlation_context() -> (
@@ -675,7 +786,10 @@ mod tests {
     #[test]
     fn an_unambiguous_correlation_produces_one_row_with_a_resolved_company_name() {
         let mut company_names = HashMap::new();
-        company_names.insert("ma-highway-20".to_string(), Some("Prairie Enterprises LLC".to_string()));
+        company_names.insert(
+            "ma-highway-20".to_string(),
+            Some("Prairie Enterprises LLC".to_string()),
+        );
         let ma_updated_at = HashMap::new();
         let correlation = Correlation::Unambiguous("ma-highway-20".to_string());
 
@@ -692,21 +806,35 @@ mod tests {
         );
 
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].company_name.as_deref(), Some("Prairie Enterprises LLC"));
+        assert_eq!(
+            matches[0].company_name.as_deref(),
+            Some("Prairie Enterprises LLC")
+        );
         assert!(matches[0].duplicate.is_none());
     }
 
     #[test]
-    fn an_ambiguous_correlation_produces_one_row_per_candidate_sharing_the_same_facility_identity() {
+    fn an_ambiguous_correlation_produces_one_row_per_candidate_sharing_the_same_facility_identity()
+    {
         // The real Carpentersville case: two distinct, identically
         // titled Merchant Account runs, each resolving to its own
         // (possibly differing) suggested company name.
         let mut company_names = HashMap::new();
-        company_names.insert("ma-carpentersville-1".to_string(), Some("Prairie Enterprises LLC".to_string()));
-        company_names.insert("ma-carpentersville-2".to_string(), Some("Carpentersville Self Storage".to_string()));
+        company_names.insert(
+            "ma-carpentersville-1".to_string(),
+            Some("Prairie Enterprises LLC".to_string()),
+        );
+        company_names.insert(
+            "ma-carpentersville-2".to_string(),
+            Some("Carpentersville Self Storage".to_string()),
+        );
         let mut ma_updated_at = HashMap::new();
-        let older = chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z").unwrap().to_utc();
-        let newer = chrono::DateTime::parse_from_rfc3339("2026-08-30T00:00:00Z").unwrap().to_utc();
+        let older = chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
+            .unwrap()
+            .to_utc();
+        let newer = chrono::DateTime::parse_from_rfc3339("2026-08-30T00:00:00Z")
+            .unwrap()
+            .to_utc();
         ma_updated_at.insert("ma-carpentersville-1".to_string(), newer);
         ma_updated_at.insert("ma-carpentersville-2".to_string(), older);
         let correlation = Correlation::Ambiguous(vec![
@@ -733,16 +861,40 @@ mod tests {
 
         let candidate_1 = matches
             .iter()
-            .find(|m| m.duplicate.as_ref().unwrap().merchant_account_run_id == "ma-carpentersville-1")
+            .find(|m| {
+                m.duplicate.as_ref().unwrap().merchant_account_run_id == "ma-carpentersville-1"
+            })
             .expect("candidate 1 present");
-        assert_eq!(candidate_1.company_name.as_deref(), Some("Prairie Enterprises LLC"));
-        assert_eq!(candidate_1.duplicate.as_ref().unwrap().merchant_account_updated_at, newer);
+        assert_eq!(
+            candidate_1.company_name.as_deref(),
+            Some("Prairie Enterprises LLC")
+        );
+        assert_eq!(
+            candidate_1
+                .duplicate
+                .as_ref()
+                .unwrap()
+                .merchant_account_updated_at,
+            newer
+        );
 
         let candidate_2 = matches
             .iter()
-            .find(|m| m.duplicate.as_ref().unwrap().merchant_account_run_id == "ma-carpentersville-2")
+            .find(|m| {
+                m.duplicate.as_ref().unwrap().merchant_account_run_id == "ma-carpentersville-2"
+            })
             .expect("candidate 2 present");
-        assert_eq!(candidate_2.company_name.as_deref(), Some("Carpentersville Self Storage"));
-        assert_eq!(candidate_2.duplicate.as_ref().unwrap().merchant_account_updated_at, older);
+        assert_eq!(
+            candidate_2.company_name.as_deref(),
+            Some("Carpentersville Self Storage")
+        );
+        assert_eq!(
+            candidate_2
+                .duplicate
+                .as_ref()
+                .unwrap()
+                .merchant_account_updated_at,
+            older
+        );
     }
 }

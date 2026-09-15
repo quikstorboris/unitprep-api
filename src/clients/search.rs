@@ -6,17 +6,29 @@
 //! half -- PS has no server-side search over form-field values, so that
 //! one reads `clients.ps_person_index` instead of calling PS live).
 //!
-//! **Intake only, not all three workflows** -- narrowed 2026-08-31
-//! (Boris's call). Every real facility has an Intake run; a Merchant
-//! Account run only exists when that client actually uses Elavon, so
-//! searching it too would make "no Merchant Account match" look like
-//! "this facility doesn't exist" rather than "this facility doesn't use
-//! Elavon." Facility identity (and the eventual "Add to OO" trigger)
-//! only ever needs the Intake run's id regardless.
+//! **Intake was the only workflow searched, 2026-08-31 to 2026-09-14**
+//! (Boris's original call: "every real facility has an Intake run, a
+//! Merchant Account run only exists when that client actually uses
+//! Elavon, so searching it too would make 'no Merchant Account match'
+//! look like 'this facility doesn't exist'"). **Reversed 2026-09-14,
+//! real incident**: MSS Jenks, LLC (DBA "Main Street Storage") has a
+//! real, live New Merchant Account run in PS
+//! (`rWwi2_88WoKj6C2qg8BG-g`) but Intake-only search could never find
+//! it -- searching "main street"/"jenks" only ever surfaced Dubuqueland
+//! Mini-Storage's own, entirely unrelated "Main Street Storage" Intake
+//! run (a coincidental real-world name collision, not a data error), so
+//! MSS Jenks looked completely absent from PS even though real,
+//! "more rigid" (an actual submitted financial services application,
+//! per Boris) data for it exists. `search_by_merchant_account_name`
+//! below searches New Merchant Account run titles the same way; see
+//! `api::clients_search`'s own doc comment for how the two are
+//! presented together without conflating them (an MA-only match is
+//! *not* a facility identity on its own -- `clients::create` still
+//! requires an Intake run to actually import anything).
 
 use chrono::{DateTime, Utc};
 
-use crate::clients::known_workflows::INTAKE_WORKFLOW_ID;
+use crate::clients::known_workflows::{INTAKE_WORKFLOW_ID, MERCHANT_ACCOUNT_WORKFLOW_ID};
 use crate::process_street::{ProcessStreetClient, ProcessStreetError};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,6 +50,28 @@ pub async fn search_by_facility_name(
 ) -> Result<Vec<SearchResult>, ProcessStreetError> {
     let runs = client
         .search_workflow_runs_by_name(INTAKE_WORKFLOW_ID, query)
+        .await?;
+    Ok(runs
+        .into_iter()
+        .map(|r| SearchResult {
+            updated_at: r.updated_at(),
+            run_id: r.id,
+            run_name: r.name,
+            status: r.status,
+        })
+        .collect())
+}
+
+/// Searches New Merchant Account run names for `query`, same mechanism
+/// as `search_by_facility_name` -- see this module's own doc comment
+/// for why this exists alongside the Intake search rather than instead
+/// of it.
+pub async fn search_by_merchant_account_name(
+    client: &ProcessStreetClient,
+    query: &str,
+) -> Result<Vec<SearchResult>, ProcessStreetError> {
+    let runs = client
+        .search_workflow_runs_by_name(MERCHANT_ACCOUNT_WORKFLOW_ID, query)
         .await?;
     Ok(runs
         .into_iter()
@@ -82,5 +116,28 @@ mod live_tests {
             .await
             .expect("a query with no matches must still succeed");
         assert!(no_match.is_empty());
+    }
+
+    /// The regression case for this module's own 2026-09-14 doc
+    /// comment: MSS Jenks, LLC's real New Merchant Account run must be
+    /// findable by title even though it has no discoverable Intake run.
+    /// `#[ignore]`d, run explicitly with `cargo test -- --ignored
+    /// searches_merchant_account_runs_for_a_real_facility`.
+    #[tokio::test]
+    #[ignore = "needs a real Process Street API key -- see doc comment"]
+    async fn searches_merchant_account_runs_for_a_real_facility() {
+        let _ = dotenvy::from_filename(".env.local");
+        let config = crate::process_street::ProcessStreetConfig::from_env()
+            .expect("PROCESS_STREET_API_KEY must be set in .env.local");
+        let client = ProcessStreetClient::new(config);
+
+        let results = search_by_merchant_account_name(&client, "main street")
+            .await
+            .expect("search must succeed against the live API");
+
+        assert!(
+            results.iter().any(|r| r.run_id == "rWwi2_88WoKj6C2qg8BG-g"),
+            "MSS Jenks' real Merchant Account run must be found by title, got: {results:?}"
+        );
     }
 }
