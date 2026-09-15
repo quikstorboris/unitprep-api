@@ -49,6 +49,9 @@ mod tests {
     #[serial(integrations_env_source_test_var)]
     fn returns_none_for_an_unset_var() {
         std::env::remove_var("INTEGRATIONS_ENV_SOURCE_TEST_VAR");
-        assert_eq!(ProcessEnvSource.get("INTEGRATIONS_ENV_SOURCE_TEST_VAR"), None);
+        assert_eq!(
+            ProcessEnvSource.get("INTEGRATIONS_ENV_SOURCE_TEST_VAR"),
+            None
+        );
     }
 }

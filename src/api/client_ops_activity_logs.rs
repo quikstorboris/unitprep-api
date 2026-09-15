@@ -79,7 +79,11 @@ fn parse_actor_ids(raw: &str) -> Result<Vec<Uuid>, String> {
 /// Shared with `client_ops_activity_logs_export`'s identical filter needs
 /// -- a no-op on an empty list, `IN (...)` otherwise, same convention as
 /// `auth_audit_logs::push_event_type_filter`.
-pub(super) fn push_in_filter(builder: &mut QueryBuilder<sqlx::Postgres>, column: &str, values: &[String]) {
+pub(super) fn push_in_filter(
+    builder: &mut QueryBuilder<sqlx::Postgres>,
+    column: &str,
+    values: &[String],
+) {
     if values.is_empty() {
         return;
     }
@@ -94,7 +98,11 @@ pub(super) fn push_in_filter(builder: &mut QueryBuilder<sqlx::Postgres>, column:
     builder.push(")");
 }
 
-pub(super) fn push_actor_filter(builder: &mut QueryBuilder<sqlx::Postgres>, column: &str, actor_ids: &[Uuid]) {
+pub(super) fn push_actor_filter(
+    builder: &mut QueryBuilder<sqlx::Postgres>,
+    column: &str,
+    actor_ids: &[Uuid],
+) {
     if actor_ids.is_empty() {
         return;
     }
@@ -262,20 +270,33 @@ pub struct ActivityEventTypesResponse {
 /// `auth_audit_logs::list_event_types`.
 pub async fn list_event_types(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
     if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "list_activity_log_event_types", None, None)
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "list_activity_log_event_types",
+            None,
+            None,
+        )
         .await
     {
         return response;
     }
 
     Json(ActivityEventTypesResponse {
-        event_types: audit_log::event::ALL.iter().map(|s| s.to_string()).collect(),
+        event_types: audit_log::event::ALL
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
     })
     .into_response()
 }
 
 pub(super) fn bad_request(error: &'static str, message: String) -> Response {
-    (StatusCode::BAD_REQUEST, Json(ApiErrorBody { error, message })).into_response()
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ApiErrorBody { error, message }),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -320,7 +341,10 @@ mod tests {
         let parsed: ActivityEventTypesResponse =
             serde_json::from_slice(&body).expect("response body must be valid JSON");
 
-        let expected: Vec<String> = audit_log::event::ALL.iter().map(|s| s.to_string()).collect();
+        let expected: Vec<String> = audit_log::event::ALL
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert_eq!(parsed.event_types, expected);
     }
 

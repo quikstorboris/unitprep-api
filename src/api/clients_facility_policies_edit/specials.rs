@@ -79,7 +79,9 @@ pub async fn update_specials(
         return internal_error("Could not save specials");
     }
 
-    if let Err(err) = mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Specials, was_empty).await
+    if let Err(err) =
+        mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Specials, was_empty)
+            .await
     {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, "specials exemption update failed");
@@ -92,7 +94,10 @@ pub async fn update_specials(
         user.user_id,
         "facility_policies_specials",
         Some(&facility_id.to_string()),
-        audit_log::Change::from_to(serde_json::json!(previous_raw_text), serde_json::json!(&request.raw_text)),
+        audit_log::Change::from_to(
+            serde_json::json!(previous_raw_text),
+            serde_json::json!(&request.raw_text),
+        ),
         user_agent,
         None,
         serde_json::json!({}),

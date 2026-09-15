@@ -116,7 +116,10 @@ pub async fn deactivate_user(
         if let Err(err) = tx.rollback().await {
             tracing::error!(error = %err, "failed to roll back a no-op deactivation");
         }
-        return conflict("user_not_deactivatable", "This user is already deactivated.".to_string());
+        return conflict(
+            "user_not_deactivatable",
+            "This user is already deactivated.".to_string(),
+        );
     }
 
     // Same reasoning as auth_user_role.rs's revoke_role equivalent check:

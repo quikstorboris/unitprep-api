@@ -214,8 +214,12 @@ mod tests {
         ];
         let people = extract_merchant_account_people(&fields);
 
-        assert!(people.iter().any(|p| p.full_name == "Alice Owner" && p.role == "owner"));
-        assert!(people.iter().any(|p| p.full_name == "Bob Signer" && p.role == "signer"));
+        assert!(people
+            .iter()
+            .any(|p| p.full_name == "Alice Owner" && p.role == "owner"));
+        assert!(people
+            .iter()
+            .any(|p| p.full_name == "Bob Signer" && p.role == "signer"));
     }
 
     #[test]
@@ -230,7 +234,10 @@ mod tests {
         // independent role. Boris's own correction, 2026-08-31: this
         // must produce exactly one entry (owner), not two.
         assert_eq!(
-            people.iter().filter(|p| p.full_name == "Kyle Lindley").count(),
+            people
+                .iter()
+                .filter(|p| p.full_name == "Kyle Lindley")
+                .count(),
             1,
             "Signer_Name naming an already-listed owner must not create a duplicate signer entry"
         );

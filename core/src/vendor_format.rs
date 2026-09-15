@@ -240,7 +240,12 @@ pub mod transforms {
         let second_line = second_line.trim();
 
         let Some((city_part, state_zip)) = second_line.rsplit_once(',') else {
-            return (street, String::new(), second_line.to_string(), String::new());
+            return (
+                street,
+                String::new(),
+                second_line.to_string(),
+                String::new(),
+            );
         };
         let city = city_part.trim().to_string();
         let state_zip = state_zip.trim();
@@ -249,7 +254,12 @@ pub mod transforms {
             return (street, city, state_zip.to_string(), String::new());
         };
 
-        (street, city, state.trim().to_string(), postal.trim().to_string())
+        (
+            street,
+            city,
+            state.trim().to_string(),
+            postal.trim().to_string(),
+        )
     }
 
     #[cfg(test)]
@@ -327,11 +337,25 @@ pub mod transforms {
             let result = split_ess_address(&doc);
             assert_eq!(
                 result.headers,
-                vec!["Unit", "Address", "AddressStreet1", "AddressCity", "AddressState", "AddressPostalCode"]
+                vec![
+                    "Unit",
+                    "Address",
+                    "AddressStreet1",
+                    "AddressCity",
+                    "AddressState",
+                    "AddressPostalCode"
+                ]
             );
             assert_eq!(
                 result.rows[0],
-                vec!["101", "208 Laurel Oak Dr.\nSt. Rose, Louisiana 70087", "208 Laurel Oak Dr.", "St. Rose", "Louisiana", "70087"]
+                vec![
+                    "101",
+                    "208 Laurel Oak Dr.\nSt. Rose, Louisiana 70087",
+                    "208 Laurel Oak Dr.",
+                    "St. Rose",
+                    "Louisiana",
+                    "70087"
+                ]
             );
         }
     }
@@ -374,7 +398,11 @@ mod tests {
         );
         let candidates = vec![
             vendor("QSX", &["UnitGroup", "Number"], &[]),
-            vendor("DoorSwap", &["Unit", "Unit Type", "Status", "Customer"], &[]),
+            vendor(
+                "DoorSwap",
+                &["Unit", "Unit Type", "Status", "Customer"],
+                &[],
+            ),
         ];
 
         let detected = detect_vendor(&doc, &candidates).expect("DoorSwap should match");
@@ -399,7 +427,11 @@ mod tests {
             vec![vec!["10x10", "1", "Standard", "Inside"]],
         );
         let candidates = vec![
-            vendor("Storage Commander", &["UnitGroup", "Number", "Category", "Locality"], &[]),
+            vendor(
+                "Storage Commander",
+                &["UnitGroup", "Number", "Category", "Locality"],
+                &[],
+            ),
             vendor("QSX", &["UnitGroup", "Number", "Category"], &[]),
         ];
 
@@ -416,7 +448,11 @@ mod tests {
         let v = vendor(
             "DoorSwap",
             &["Unit", "Unit Type"],
-            &[("Number", "Unit"), ("UnitGroup", "Unit Type"), ("Width", "Width")],
+            &[
+                ("Number", "Unit"),
+                ("UnitGroup", "Unit Type"),
+                ("Width", "Width"),
+            ],
         );
 
         let mapped = apply_field_mapping(&doc, &v).expect("mapping should succeed");

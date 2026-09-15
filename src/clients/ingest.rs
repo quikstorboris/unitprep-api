@@ -29,7 +29,9 @@ use uuid::Uuid;
 
 use crate::clients::contract_order_mapping::map_contract_order_fields;
 use crate::clients::intake_mapping::map_intake_fields;
-use crate::clients::merchant_account_mapping::{credentials_added_to_qms_from_tasks, map_merchant_account_fields};
+use crate::clients::merchant_account_mapping::{
+    credentials_added_to_qms_from_tasks, map_merchant_account_fields,
+};
 use crate::clients::repository::{
     ingest_contract_order_run, ingest_intake_run, ingest_merchant_account_run, upsert_task_status,
 };
@@ -197,19 +199,17 @@ mod live_tests {
         let _ = dotenvy::from_filename(".env.local");
         set_test_key();
 
-        let ps_config =
-            ProcessStreetConfig::from_env().expect("PROCESS_STREET_API_KEY must be set in .env.local");
+        let ps_config = ProcessStreetConfig::from_env()
+            .expect("PROCESS_STREET_API_KEY must be set in .env.local");
         let client = ProcessStreetClient::new(ps_config);
 
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
         let user_id = Uuid::new_v4();
-        let mut tx = crate::auth::begin_rls_transaction(
-            &db,
-            user_id,
-            &["onboarding_manager".to_string()],
-        )
-        .await
-        .expect("beginning an RLS transaction must succeed");
+        let mut tx =
+            crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
+                .await
+                .expect("beginning an RLS transaction must succeed");
 
         let result = ingest_facility(
             &client,

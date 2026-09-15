@@ -27,7 +27,9 @@ use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 
 fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers.get(axum::http::header::USER_AGENT).and_then(|value| value.to_str().ok())
+    headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,20 +58,21 @@ pub async fn update_facility_dropbox_folder(
         }
     };
 
-    let existing: Option<(Option<String>,)> =
-        match sqlx::query_as("SELECT dropbox_folder_url FROM clients.facilities WHERE id = $1 AND company_id = $2")
-            .bind(facility_id)
-            .bind(company_id)
-            .fetch_optional(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                let _ = tx.rollback().await;
-                tracing::error!(error = %err, user_id = %user.user_id, "facility lookup for dropbox folder update failed");
-                return internal_error("Could not update this facility's Dropbox folder");
-            }
-        };
+    let existing: Option<(Option<String>,)> = match sqlx::query_as(
+        "SELECT dropbox_folder_url FROM clients.facilities WHERE id = $1 AND company_id = $2",
+    )
+    .bind(facility_id)
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            let _ = tx.rollback().await;
+            tracing::error!(error = %err, user_id = %user.user_id, "facility lookup for dropbox folder update failed");
+            return internal_error("Could not update this facility's Dropbox folder");
+        }
+    };
     let Some((previous_url,)) = existing else {
         let _ = tx.rollback().await;
         return not_found("not_found", "No such facility.".to_string());

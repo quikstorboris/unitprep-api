@@ -12,7 +12,11 @@ use super::progress::SyncError;
 /// Street is ever applied. See `clients.companies`/`clients.facilities`
 /// `manually_edited_fields` columns' own migration comment for why this
 /// exists at all.
-fn refreshed_field<T: Clone + PartialEq>(current: &Option<T>, fresh: &Option<T>, is_protected: bool) -> Option<T> {
+fn refreshed_field<T: Clone + PartialEq>(
+    current: &Option<T>,
+    fresh: &Option<T>,
+    is_protected: bool,
+) -> Option<T> {
     if is_protected {
         return current.clone();
     }
@@ -27,10 +31,18 @@ fn refreshed_field<T: Clone + PartialEq>(current: &Option<T>, fresh: &Option<T>,
 /// `manually_edited_fields`) field by field -- mirrors
 /// `clients::create::diff_company_fields`'s own field list exactly,
 /// since the two are the write and read sides of the same protected set.
-pub(crate) fn apply_company_refresh(current: &MappedCompany, fresh: &MappedCompany, protected_fields: &[String]) -> MappedCompany {
+pub(crate) fn apply_company_refresh(
+    current: &MappedCompany,
+    fresh: &MappedCompany,
+    protected_fields: &[String],
+) -> MappedCompany {
     let is_protected = |field: &str| protected_fields.iter().any(|p| p == field);
     MappedCompany {
-        legal_name: refreshed_field(&current.legal_name, &fresh.legal_name, is_protected("legal_name")),
+        legal_name: refreshed_field(
+            &current.legal_name,
+            &fresh.legal_name,
+            is_protected("legal_name"),
+        ),
         corporate_email: refreshed_field(
             &current.corporate_email,
             &fresh.corporate_email,
@@ -61,7 +73,11 @@ pub(crate) fn apply_company_refresh(current: &MappedCompany, fresh: &MappedCompa
             &fresh.corporate_address_zip,
             is_protected("corporate_address_zip"),
         ),
-        subdomain: refreshed_field(&current.subdomain, &fresh.subdomain, is_protected("subdomain")),
+        subdomain: refreshed_field(
+            &current.subdomain,
+            &fresh.subdomain,
+            is_protected("subdomain"),
+        ),
         accepted_payment_methods: refreshed_field(
             &current.accepted_payment_methods,
             &fresh.accepted_payment_methods,
@@ -96,7 +112,11 @@ pub(crate) fn apply_company_refresh(current: &MappedCompany, fresh: &MappedCompa
         // anyway for the same reason `is_protected` still gates it: the
         // day this ever gains a real PS source, this line already does
         // the right thing.
-        website_url: refreshed_field(&current.website_url, &fresh.website_url, is_protected("website_url")),
+        website_url: refreshed_field(
+            &current.website_url,
+            &fresh.website_url,
+            is_protected("website_url"),
+        ),
     }
 }
 
@@ -104,23 +124,39 @@ pub(crate) fn apply_company_refresh(current: &MappedCompany, fresh: &MappedCompa
 /// `go_live_date` is always carried through from `current` untouched,
 /// same "never touched by anything but PS's own original mapping" rule
 /// `clients::create::apply_facility_overrides` already established.
-pub(crate) fn apply_facility_refresh(current: &MappedFacility, fresh: &MappedFacility, protected_fields: &[String]) -> MappedFacility {
+pub(crate) fn apply_facility_refresh(
+    current: &MappedFacility,
+    fresh: &MappedFacility,
+    protected_fields: &[String],
+) -> MappedFacility {
     let is_protected = |field: &str| protected_fields.iter().any(|p| p == field);
     MappedFacility {
         name: refreshed_field(&current.name, &fresh.name, is_protected("name")),
-        street_address: refreshed_field(&current.street_address, &fresh.street_address, is_protected("street_address")),
+        street_address: refreshed_field(
+            &current.street_address,
+            &fresh.street_address,
+            is_protected("street_address"),
+        ),
         city: refreshed_field(&current.city, &fresh.city, is_protected("city")),
         state: refreshed_field(&current.state, &fresh.state, is_protected("state")),
         zip: refreshed_field(&current.zip, &fresh.zip, is_protected("zip")),
         phone: refreshed_field(&current.phone, &fresh.phone, is_protected("phone")),
         email: refreshed_field(&current.email, &fresh.email, is_protected("email")),
-        units_count: refreshed_field(&current.units_count, &fresh.units_count, is_protected("units_count")),
+        units_count: refreshed_field(
+            &current.units_count,
+            &fresh.units_count,
+            is_protected("units_count"),
+        ),
         primary_storage_offering: refreshed_field(
             &current.primary_storage_offering,
             &fresh.primary_storage_offering,
             is_protected("primary_storage_offering"),
         ),
-        previous_pms: refreshed_field(&current.previous_pms, &fresh.previous_pms, is_protected("previous_pms")),
+        previous_pms: refreshed_field(
+            &current.previous_pms,
+            &fresh.previous_pms,
+            is_protected("previous_pms"),
+        ),
         access_control_system: refreshed_field(
             &current.access_control_system,
             &fresh.access_control_system,
@@ -131,14 +167,26 @@ pub(crate) fn apply_facility_refresh(current: &MappedFacility, fresh: &MappedFac
             &fresh.dropbox_folder_url,
             is_protected("dropbox_folder_url"),
         ),
-        subdomain: refreshed_field(&current.subdomain, &fresh.subdomain, is_protected("subdomain")),
+        subdomain: refreshed_field(
+            &current.subdomain,
+            &fresh.subdomain,
+            is_protected("subdomain"),
+        ),
         subdomain_exists_in_qms_raw: refreshed_field(
             &current.subdomain_exists_in_qms_raw,
             &fresh.subdomain_exists_in_qms_raw,
             is_protected("subdomain_exists_in_qms_raw"),
         ),
-        system_email: refreshed_field(&current.system_email, &fresh.system_email, is_protected("system_email")),
-        website_url: refreshed_field(&current.website_url, &fresh.website_url, is_protected("website_url")),
+        system_email: refreshed_field(
+            &current.system_email,
+            &fresh.system_email,
+            is_protected("system_email"),
+        ),
+        website_url: refreshed_field(
+            &current.website_url,
+            &fresh.website_url,
+            is_protected("website_url"),
+        ),
         go_live_date: current.go_live_date,
     }
 }
@@ -152,7 +200,10 @@ pub(crate) fn apply_facility_refresh(current: &MappedFacility, fresh: &MappedFac
 /// -- `clients::create::diff_company_fields` is `MappedCompany`'s own
 /// counterpart, directly reusable there since both its arguments are
 /// already `MappedCompany`.
-pub(crate) fn facility_fields_that_differ(a: &MappedFacility, b: &MappedFacility) -> Vec<&'static str> {
+pub(crate) fn facility_fields_that_differ(
+    a: &MappedFacility,
+    b: &MappedFacility,
+) -> Vec<&'static str> {
     let mut changed = Vec::new();
     if a.name != b.name {
         changed.push("name");
@@ -511,7 +562,10 @@ mod tests {
         let current = Some("old".to_string());
         let fresh = Some("new".to_string());
 
-        assert_eq!(refreshed_field(&current, &fresh, false), Some("new".to_string()));
+        assert_eq!(
+            refreshed_field(&current, &fresh, false),
+            Some("new".to_string())
+        );
     }
 
     #[test]
@@ -562,7 +616,10 @@ mod tests {
 
         let refreshed = apply_company_refresh(&current, &fresh, &[]);
 
-        assert_eq!(refreshed.legal_name.as_deref(), Some("Prairie Enterprises LLC"));
+        assert_eq!(
+            refreshed.legal_name.as_deref(),
+            Some("Prairie Enterprises LLC")
+        );
     }
 
     #[test]
@@ -573,7 +630,10 @@ mod tests {
 
         let refreshed = apply_company_refresh(&current, &fresh, &protected);
 
-        assert_eq!(refreshed.legal_name.as_deref(), Some("Manually Corrected LLC"));
+        assert_eq!(
+            refreshed.legal_name.as_deref(),
+            Some("Manually Corrected LLC")
+        );
         // Every other field is still free to refresh normally.
         assert_eq!(refreshed.corporate_email, fresh.corporate_email);
     }

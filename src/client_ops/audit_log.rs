@@ -187,7 +187,11 @@ pub async fn record(
     ip_address: Option<IpNetwork>,
     metadata: Value,
 ) {
-    let actor_user_id = if actor_user_id.is_nil() { None } else { Some(actor_user_id) };
+    let actor_user_id = if actor_user_id.is_nil() {
+        None
+    } else {
+        Some(actor_user_id)
+    };
 
     let result = sqlx::query(
         "INSERT INTO client_ops.audit_log

@@ -128,10 +128,15 @@ fn parse_comma_line(line: &str) -> Option<ParsedPerson> {
         return None;
     }
 
-    let email = parts.iter().find(|p| p.contains('@')).map(|s| s.to_string());
+    let email = parts
+        .iter()
+        .find(|p| p.contains('@'))
+        .map(|s| s.to_string());
     let phone = parts
         .iter()
-        .find(|p| !p.is_empty() && !p.contains('@') && p.chars().filter(char::is_ascii_digit).count() >= 7)
+        .find(|p| {
+            !p.is_empty() && !p.contains('@') && p.chars().filter(char::is_ascii_digit).count() >= 7
+        })
         .map(|s| s.to_string());
 
     Some(ParsedPerson {
@@ -215,9 +220,16 @@ mod tests {
                    j.armstrong@prairie-enterprises.com\n\
                    815-568-1307 ";
         let people = parse_people_block(raw);
-        assert_eq!(people.len(), 3, "three blank-line-separated records must yield three people");
+        assert_eq!(
+            people.len(),
+            3,
+            "three blank-line-separated records must yield three people"
+        );
         assert_eq!(people[0].full_name, "Kyle Lindley");
-        assert_eq!(people[0].email.as_deref(), Some("k.lindley@prairie-enterprises.com"));
+        assert_eq!(
+            people[0].email.as_deref(),
+            Some("k.lindley@prairie-enterprises.com")
+        );
         assert_eq!(people[0].phone.as_deref(), Some("630-650-0137"));
         assert_eq!(people[1].full_name, "Juanita Fleener");
         assert_eq!(people[2].full_name, "Judy Armstrong");
@@ -238,7 +250,10 @@ mod tests {
         assert_eq!(people[0].email.as_deref(), Some("irene@chenlawgroup.com"));
         assert_eq!(people[0].phone.as_deref(), Some("(301) 787-9221"));
         assert_eq!(people[1].full_name, "Amanda Ibarra");
-        assert_eq!(people[1].email.as_deref(), Some("chchenpropertymgmtteam1@gmail.com"));
+        assert_eq!(
+            people[1].email.as_deref(),
+            Some("chchenpropertymgmtteam1@gmail.com")
+        );
         assert_eq!(people[1].phone.as_deref(), Some("(423) 314-2096"));
     }
 

@@ -166,7 +166,10 @@ pub fn correlate_by_title(
 
         for intake in intake_runs {
             if intake.title_text.to_lowercase().contains(&keyword_lower) {
-                candidates.entry(&intake.run_id).or_default().insert(ma.run_id.as_str());
+                candidates
+                    .entry(&intake.run_id)
+                    .or_default()
+                    .insert(ma.run_id.as_str());
             }
         }
     }
@@ -207,7 +210,10 @@ mod tests {
 
     #[test]
     fn parenthetical_extracts_the_facility_nickname() {
-        assert_eq!(parenthetical("Prairie Enterprises (Highway 20)"), Some("Highway 20"));
+        assert_eq!(
+            parenthetical("Prairie Enterprises (Highway 20)"),
+            Some("Highway 20")
+        );
     }
 
     #[test]
@@ -262,11 +268,20 @@ mod tests {
     #[test]
     fn a_specific_enough_nickname_still_correlates_normally_alongside_a_generic_one() {
         let intake_runs = vec![
-            intake("intake-main-street-storage", "Main Street Storage - QMS Onboarding"),
-            intake("intake-highway-20", "Highway 20 Self Storage - QMS Onboarding"),
+            intake(
+                "intake-main-street-storage",
+                "Main Street Storage - QMS Onboarding",
+            ),
+            intake(
+                "intake-highway-20",
+                "Highway 20 Self Storage - QMS Onboarding",
+            ),
         ];
         let merchant_account_runs = vec![
-            ma("ma-dubuqueland-main", "Dubuqueland Mini-Storage, Inc. (Main)"),
+            ma(
+                "ma-dubuqueland-main",
+                "Dubuqueland Mini-Storage, Inc. (Main)",
+            ),
             ma("ma-highway-20", "Prairie Enterprises (Highway 20)"),
         ];
 
@@ -284,14 +299,29 @@ mod tests {
     #[test]
     fn real_prairie_data_correlates_each_facility_to_its_own_merchant_account_run() {
         let intake_runs = vec![
-            intake("intake-highway-20", "Highway 20 Self Storage - QMS Onboarding"),
-            intake("intake-carpentersville", "Carpentersville Self Storage - QMS Onboarding"),
-            intake("intake-pyott-road", "Pyott Road Self Storage - QMS Onboarding"),
+            intake(
+                "intake-highway-20",
+                "Highway 20 Self Storage - QMS Onboarding",
+            ),
+            intake(
+                "intake-carpentersville",
+                "Carpentersville Self Storage - QMS Onboarding",
+            ),
+            intake(
+                "intake-pyott-road",
+                "Pyott Road Self Storage - QMS Onboarding",
+            ),
         ];
         let merchant_account_runs = vec![
             ma("ma-highway-20", "Prairie Enterprises (Highway 20)"),
-            ma("ma-carpentersville-1", "Prairie Enterprises (Carpentersville)"),
-            ma("ma-carpentersville-2", "Prairie Enterprises (Carpentersville)"),
+            ma(
+                "ma-carpentersville-1",
+                "Prairie Enterprises (Carpentersville)",
+            ),
+            ma(
+                "ma-carpentersville-2",
+                "Prairie Enterprises (Carpentersville)",
+            ),
             ma("ma-pyott-road", "Prairie Enterprises (Pyott Road)"),
         ];
 
@@ -325,10 +355,16 @@ mod tests {
         // sister facility's Merchant Account run, not just his own.
         // Title correlation doesn't look at people at all, so it isn't
         // affected by that at all.
-        let intake_runs = vec![intake("intake-highway-20", "Highway 20 Self Storage - QMS Onboarding")];
+        let intake_runs = vec![intake(
+            "intake-highway-20",
+            "Highway 20 Self Storage - QMS Onboarding",
+        )];
         let merchant_account_runs = vec![
             ma("ma-highway-20", "Prairie Enterprises (Highway 20)"),
-            ma("ma-carpentersville", "Prairie Enterprises (Carpentersville)"),
+            ma(
+                "ma-carpentersville",
+                "Prairie Enterprises (Carpentersville)",
+            ),
             ma("ma-pyott-road", "Prairie Enterprises (Pyott Road)"),
         ];
 
@@ -353,8 +389,14 @@ mod tests {
     #[test]
     fn distinct_intake_runs_correlate_independently() {
         let intake_runs = vec![
-            intake("intake-highway-20", "Highway 20 Self Storage - QMS Onboarding"),
-            intake("intake-pyott-road", "Pyott Road Self Storage - QMS Onboarding"),
+            intake(
+                "intake-highway-20",
+                "Highway 20 Self Storage - QMS Onboarding",
+            ),
+            intake(
+                "intake-pyott-road",
+                "Pyott Road Self Storage - QMS Onboarding",
+            ),
         ];
         let merchant_account_runs = vec![
             ma("ma-highway-20", "Prairie Enterprises (Highway 20)"),

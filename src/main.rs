@@ -196,7 +196,9 @@ async fn main() {
     // "Sync Now" endpoint always has something to read even when PS
     // isn't configured -- it checks `process_street` separately before
     // acting on it.
-    let sync_progress = Arc::new(parking_lot::RwLock::new(clients::sync::SyncProgress::default()));
+    let sync_progress = Arc::new(parking_lot::RwLock::new(
+        clients::sync::SyncProgress::default(),
+    ));
     if let Some(client) = &process_street_client {
         clients::sync::start_background_sync_task(
             client.clone(),

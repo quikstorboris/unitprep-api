@@ -47,11 +47,25 @@ pub async fn update_taxes(
 ) -> Response {
     let user_agent = request_context(&headers);
 
-    if let Some(tax) = request.taxes.iter().find(|t| !TAX_TYPES.contains(&t.tax_type.as_str())) {
-        return bad_request(format!("\"{}\" is not a recognized tax type.", tax.tax_type));
+    if let Some(tax) = request
+        .taxes
+        .iter()
+        .find(|t| !TAX_TYPES.contains(&t.tax_type.as_str()))
+    {
+        return bad_request(format!(
+            "\"{}\" is not a recognized tax type.",
+            tax.tax_type
+        ));
     }
-    if let Some(tax) = request.taxes.iter().find(|t| !TAX_NAMES.contains(&t.tax_name.as_str())) {
-        return bad_request(format!("\"{}\" is not a recognized tax name.", tax.tax_name));
+    if let Some(tax) = request
+        .taxes
+        .iter()
+        .find(|t| !TAX_NAMES.contains(&t.tax_name.as_str()))
+    {
+        return bad_request(format!(
+            "\"{}\" is not a recognized tax name.",
+            tax.tax_name
+        ));
     }
 
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
@@ -75,25 +89,27 @@ pub async fn update_taxes(
         }
     }
 
-    let was_empty: (i64,) =
-        match sqlx::query_as("SELECT count(*) FROM clients.policy_tax_entries WHERE facility_policies_id = $1")
-            .bind(facility_id)
-            .fetch_one(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                let _ = tx.rollback().await;
-                tracing::error!(error = %err, user_id = %user.user_id, "policy_tax_entries count failed");
-                return internal_error("Could not save taxes");
-            }
-        };
+    let was_empty: (i64,) = match sqlx::query_as(
+        "SELECT count(*) FROM clients.policy_tax_entries WHERE facility_policies_id = $1",
+    )
+    .bind(facility_id)
+    .fetch_one(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            let _ = tx.rollback().await;
+            tracing::error!(error = %err, user_id = %user.user_id, "policy_tax_entries count failed");
+            return internal_error("Could not save taxes");
+        }
+    };
     let was_empty = was_empty.0 == 0;
 
-    if let Err(err) = sqlx::query("DELETE FROM clients.policy_tax_entries WHERE facility_policies_id = $1")
-        .bind(facility_id)
-        .execute(&mut *tx)
-        .await
+    if let Err(err) =
+        sqlx::query("DELETE FROM clients.policy_tax_entries WHERE facility_policies_id = $1")
+            .bind(facility_id)
+            .execute(&mut *tx)
+            .await
     {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, "policy_tax_entries delete failed");
@@ -124,7 +140,10 @@ pub async fn update_taxes(
         }
     }
 
-    if let Err(err) = mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Taxes, was_empty).await {
+    if let Err(err) =
+        mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Taxes, was_empty)
+            .await
+    {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, "taxes exemption update failed");
         return internal_error("Could not save taxes");
@@ -136,7 +155,10 @@ pub async fn update_taxes(
         user.user_id,
         "facility_policies_taxes",
         Some(&facility_id.to_string()),
-        audit_log::Change { before: None, after: Some(serde_json::json!(request.taxes)) },
+        audit_log::Change {
+            before: None,
+            after: Some(serde_json::json!(request.taxes)),
+        },
         user_agent,
         None,
         serde_json::json!({}),

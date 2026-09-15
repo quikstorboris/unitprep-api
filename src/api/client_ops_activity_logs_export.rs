@@ -24,7 +24,9 @@ use uuid::Uuid;
 use crate::api::client_ops_activity_logs::{bad_request, push_actor_filter, push_in_filter};
 use crate::api::{internal_error, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
-use crate::infrastructure::audit_log_pdf::{render_audit_log_pdf, AuditLogPdfReport, AuditLogPdfRow};
+use crate::infrastructure::audit_log_pdf::{
+    render_audit_log_pdf, AuditLogPdfReport, AuditLogPdfRow,
+};
 
 const EXPORT_ROW_CAP: i64 = 5000;
 const PREVIEW_ROW_CAP: i64 = 25;
@@ -49,7 +51,11 @@ pub struct ExportActivityLogsRequest {
 /// runs write as their actor (see that module's own `SYSTEM_USER_ID` doc
 /// comment) -- every other row has a real actor by construction, same
 /// reasoning `client_ops::audit_log`'s own module doc already states.
-fn actor_label(actor_user_id: Option<Uuid>, first_name: Option<String>, last_name: Option<String>) -> String {
+fn actor_label(
+    actor_user_id: Option<Uuid>,
+    first_name: Option<String>,
+    last_name: Option<String>,
+) -> String {
     match actor_user_id {
         None => "—".to_string(),
         Some(id) if id.is_nil() => "System (scheduled sync)".to_string(),
@@ -184,13 +190,17 @@ async fn fetch_filtered_activity_logs(
          WHERE l.created_at >= ",
     );
     builder.push_bind(request.date_from);
-    builder.push(" AND l.created_at <= ").push_bind(request.date_to);
+    builder
+        .push(" AND l.created_at <= ")
+        .push_bind(request.date_to);
 
     push_in_filter(&mut builder, "l.event_type", &request.event_types);
     push_in_filter(&mut builder, "l.entity_type", &request.entity_types);
     push_actor_filter(&mut builder, "l.actor_user_id", &request.actor_user_ids);
 
-    builder.push(" ORDER BY l.id DESC LIMIT ").push_bind(row_cap + 1);
+    builder
+        .push(" ORDER BY l.id DESC LIMIT ")
+        .push_bind(row_cap + 1);
 
     #[allow(clippy::type_complexity)]
     let rows: Vec<(
@@ -255,7 +265,13 @@ pub async fn export_activity_logs(
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "export_activity_logs", user_agent, ip_address)
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "export_activity_logs",
+            user_agent,
+            ip_address,
+        )
         .await
     {
         return response;
@@ -292,7 +308,9 @@ pub async fn export_activity_logs(
         None => user.user_id.to_string(),
     };
 
-    let (rows, truncated) = match fetch_filtered_activity_logs(&mut tx, &request, EXPORT_ROW_CAP).await {
+    let (rows, truncated) = match fetch_filtered_activity_logs(&mut tx, &request, EXPORT_ROW_CAP)
+        .await
+    {
         Ok(result) => result,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "activity log export query failed");
@@ -337,13 +355,18 @@ pub async fn export_activity_logs(
         }
     };
 
-    let filename = format!("unitprep-activity-log-{}.pdf", Utc::now().format("%Y-%m-%d"));
+    let filename = format!(
+        "unitprep-activity-log-{}.pdf",
+        Utc::now().format("%Y-%m-%d")
+    );
 
     let mut response_headers = HeaderMap::new();
     response_headers.insert(header::CONTENT_TYPE, "application/pdf".parse().unwrap());
     response_headers.insert(
         header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{filename}\"").parse().unwrap(),
+        format!("attachment; filename=\"{filename}\"")
+            .parse()
+            .unwrap(),
     );
 
     tracing::info!(
@@ -384,7 +407,13 @@ pub async fn preview_activity_logs(
     let ip_address = Some(IpNetwork::from(addr.ip()));
 
     if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "preview_activity_logs", None, ip_address)
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "preview_activity_logs",
+            None,
+            ip_address,
+        )
         .await
     {
         return response;
@@ -402,7 +431,9 @@ pub async fn preview_activity_logs(
         }
     };
 
-    let (rows, truncated) = match fetch_filtered_activity_logs(&mut tx, &request, PREVIEW_ROW_CAP).await {
+    let (rows, truncated) = match fetch_filtered_activity_logs(&mut tx, &request, PREVIEW_ROW_CAP)
+        .await
+    {
         Ok(result) => result,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "activity log preview query failed");
@@ -481,14 +512,21 @@ mod tests {
 
     #[test]
     fn actor_label_names_the_system_placeholder() {
-        assert_eq!(actor_label(Some(Uuid::nil()), None, None), "System (scheduled sync)");
+        assert_eq!(
+            actor_label(Some(Uuid::nil()), None, None),
+            "System (scheduled sync)"
+        );
     }
 
     #[test]
     fn actor_label_prefers_the_resolved_name_over_the_bare_id() {
         let id = Uuid::new_v4();
         assert_eq!(
-            actor_label(Some(id), Some("Boris".to_string()), Some("Maksimov".to_string())),
+            actor_label(
+                Some(id),
+                Some("Boris".to_string()),
+                Some("Maksimov".to_string())
+            ),
             "Boris Maksimov"
         );
     }

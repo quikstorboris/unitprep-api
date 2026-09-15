@@ -49,7 +49,13 @@ pub async fn upload_unit_file(
     // call.
     let unit_vendors = state.unit_vendors.read().clone();
 
-    apply_unit_file_upload(&state, &fields.session_id, user.user_id, document, &unit_vendors)
+    apply_unit_file_upload(
+        &state,
+        &fields.session_id,
+        user.user_id,
+        document,
+        &unit_vendors,
+    )
 }
 
 /// The testable core, separated from the Multipart-extracting handler

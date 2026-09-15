@@ -96,14 +96,30 @@ fn resolve(
         &row.root_namespace_id,
         &row.root_path,
     ) {
-        (Some(app_key), Some(app_secret), Some(refresh_token), Some(root_namespace_id), Some(root_path)) => {
-            Some((app_key, app_secret, refresh_token, root_namespace_id, root_path))
-        }
+        (
+            Some(app_key),
+            Some(app_secret),
+            Some(refresh_token),
+            Some(root_namespace_id),
+            Some(root_path),
+        ) => Some((
+            app_key,
+            app_secret,
+            refresh_token,
+            root_namespace_id,
+            root_path,
+        )),
         _ => None,
     };
 
     let (app_key, app_secret, refresh_token, root_namespace_id, root_path, source) = match saved {
-        Some((app_key, app_secret_ciphertext, refresh_token_ciphertext, root_namespace_id, root_path)) => (
+        Some((
+            app_key,
+            app_secret_ciphertext,
+            refresh_token_ciphertext,
+            root_namespace_id,
+            root_path,
+        )) => (
             app_key.clone(),
             secrets::decrypt(AAD, app_secret_ciphertext)?,
             secrets::decrypt(AAD, refresh_token_ciphertext)?,
@@ -115,7 +131,9 @@ fn resolve(
             env_source.get("DROPBOX_APP_KEY").unwrap_or_default(),
             env_source.get("DROPBOX_APP_SECRET").unwrap_or_default(),
             env_source.get("DROPBOX_REFRESH_TOKEN").unwrap_or_default(),
-            env_source.get("DROPBOX_ROOT_NAMESPACE_ID").unwrap_or_default(),
+            env_source
+                .get("DROPBOX_ROOT_NAMESPACE_ID")
+                .unwrap_or_default(),
             env_source.get("DROPBOX_ROOT_PATH").unwrap_or_default(),
             ConfigSource::Environment,
         ),
@@ -201,7 +219,13 @@ pub async fn update_settings(
     let user_agent = request_context(&headers);
 
     if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "update_dropbox_settings", user_agent, None)
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "update_dropbox_settings",
+            user_agent,
+            None,
+        )
         .await
     {
         return response;
@@ -318,7 +342,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_refuses_insufficient_permission_without_touching_the_database() {
-        let response = get_settings(State(crate::api::test_support::empty_state()), test_user()).await;
+        let response =
+            get_settings(State(crate::api::test_support::empty_state()), test_user()).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }

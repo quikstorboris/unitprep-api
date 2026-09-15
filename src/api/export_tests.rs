@@ -3,8 +3,8 @@ use unitprep_unit_group::{CorrectionKey, ValidationResult};
 
 use super::*;
 use crate::api::test_support::{
-    analyzed_state_ready_for_export, analyzed_state_with_errors, empty_state, uploaded_state,
-    unit_document, validated_state,
+    analyzed_state_ready_for_export, analyzed_state_with_errors, empty_state, unit_document,
+    uploaded_state, validated_state,
 };
 use crate::application::unit_group_session::WorkflowStage;
 

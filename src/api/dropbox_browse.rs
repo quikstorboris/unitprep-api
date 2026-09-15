@@ -331,7 +331,10 @@ pub async fn facility_dropbox_folder(
                     via = "shared_link",
                     "resolved a facility's default Dropbox folder"
                 );
-                return Json(FacilityDropboxFolderResponse { path: Some(entry.path_display) }).into_response();
+                return Json(FacilityDropboxFolderResponse {
+                    path: Some(entry.path_display),
+                })
+                .into_response();
             }
             Ok(None) => {} // falls through to the name-search fallback below
             Err(err) => {

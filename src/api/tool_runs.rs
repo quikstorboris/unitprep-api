@@ -314,15 +314,16 @@ pub async fn download_tool_run_source(
     }
 
     #[allow(clippy::type_complexity)]
-    let row: Result<Option<(Option<Vec<u8>>, Option<String>, String)>, sqlx::Error> = sqlx::query_as(
-        "SELECT source_bytes, source_content_type, source_file_name
+    let row: Result<Option<(Option<Vec<u8>>, Option<String>, String)>, sqlx::Error> =
+        sqlx::query_as(
+            "SELECT source_bytes, source_content_type, source_file_name
            FROM client_ops.tool_runs
           WHERE id = $1 AND facility_id = $2",
-    )
-    .bind(run_id)
-    .bind(facility_id)
-    .fetch_optional(&mut *tx)
-    .await;
+        )
+        .bind(run_id)
+        .bind(facility_id)
+        .fetch_optional(&mut *tx)
+        .await;
 
     let row = match row {
         Ok(row) => row,
@@ -338,7 +339,9 @@ pub async fn download_tool_run_source(
     }
 
     match row {
-        Some((Some(bytes), Some(content_type), file_name)) => file_response(bytes, &content_type, &file_name),
+        Some((Some(bytes), Some(content_type), file_name)) => {
+            file_response(bytes, &content_type, &file_name)
+        }
         _ => not_found(
             "tool_run_source_not_found",
             "No stored source file for this run.".to_string(),
@@ -359,7 +362,11 @@ mod tests {
             State(empty_state()),
             test_user(),
             Path((Uuid::new_v4(), Uuid::new_v4())),
-            Query(ListToolRunsQuery { tool: "dedup".to_string(), before_id: None, limit: None }),
+            Query(ListToolRunsQuery {
+                tool: "dedup".to_string(),
+                before_id: None,
+                limit: None,
+            }),
         )
         .await;
 

@@ -62,7 +62,10 @@ const PARTY_PII_SUFFIXES: &[&str] = &[
 ];
 
 fn all_sensitive_keys() -> Vec<String> {
-    let mut keys: Vec<String> = SENSITIVE_FACILITY_KEYS.iter().map(|k| k.to_string()).collect();
+    let mut keys: Vec<String> = SENSITIVE_FACILITY_KEYS
+        .iter()
+        .map(|k| k.to_string())
+        .collect();
     for prefix in party_prefixes() {
         for suffix in PARTY_PII_SUFFIXES {
             keys.push(format!("{prefix}_-_{suffix}"));
@@ -421,7 +424,8 @@ pub fn decrypt_party_pii(
 ) -> Result<DecryptedPartyPii, EncryptionError> {
     let aad = format!("{facility_id}:{party_role}:{party_index}");
     let plaintext = encryption::decrypt(aad.as_bytes(), blob)?;
-    serde_json::from_slice(&plaintext).map_err(|_| EncryptionError::Undecryptable("malformed PartyPii plaintext"))
+    serde_json::from_slice(&plaintext)
+        .map_err(|_| EncryptionError::Undecryptable("malformed PartyPii plaintext"))
 }
 
 /// Decrypted view of the 3 `FacilitySecrets` fields the Elavon tab's
@@ -506,7 +510,10 @@ pub fn mask_bank_number(value: &str) -> String {
 
 pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccount {
     MappedMerchantAccount {
-        rate_provided: value_for(fields, "What_Processing_Rates_did_you_provide_to_the_customer?"),
+        rate_provided: value_for(
+            fields,
+            "What_Processing_Rates_did_you_provide_to_the_customer?",
+        ),
         application_status: value_for(fields, "What_is_their_software_onboarding_status?"),
         legal_name: value_for(fields, "Legal_Name_2"),
         business_dba: value_for(fields, "Business_DBA"),
@@ -514,9 +521,18 @@ pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccoun
         ownership_type: value_for(fields, "Ownership_Type"),
         total_annual_business_revenue_raw: value_for(fields, "Total_Annual_Business_Revenue"),
         total_monthly_sales_raw: value_for(fields, "Total_Monthly_Sales"),
-        average_credit_card_payment_amount_raw: value_for(fields, "Average_credit_card_payment_amount"),
-        highest_credit_card_payment_amount_raw: value_for(fields, "Highest_credit_card_payment_amount"),
-        high_cc_payment_times_per_year_raw: value_for(fields, "#_times_per_year_for_the_high_CC_Payment"),
+        average_credit_card_payment_amount_raw: value_for(
+            fields,
+            "Average_credit_card_payment_amount",
+        ),
+        highest_credit_card_payment_amount_raw: value_for(
+            fields,
+            "Highest_credit_card_payment_amount",
+        ),
+        high_cc_payment_times_per_year_raw: value_for(
+            fields,
+            "#_times_per_year_for_the_high_CC_Payment",
+        ),
         offers_ach_raw: value_for(fields, "Do_you_want_to_offer_ACH"),
         annual_electronic_check_volume_raw: value_for(fields, "Annual_Electronic_Check_Volume"),
         average_electronic_check_amount_raw: value_for(fields, "Average_Electronic_Check_Amount"),
@@ -537,7 +553,12 @@ pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccoun
 /// never took a value for the column, so every real row defaulted to
 /// the schema's own `false`), not a mismapped field.
 pub fn credentials_added_to_qms_from_tasks(tasks: &[crate::process_street::Task]) -> bool {
-    tasks.iter().any(|task| task.name.trim().eq_ignore_ascii_case("Add Credentials to QMS") && task.status == "Completed")
+    tasks.iter().any(|task| {
+        task.name
+            .trim()
+            .eq_ignore_ascii_case("Add Credentials to QMS")
+            && task.status == "Completed"
+    })
 }
 
 #[cfg(test)]
@@ -561,12 +582,19 @@ mod tests {
     }
 
     fn task(name: &str, status: &str) -> crate::process_street::Task {
-        crate::process_street::Task { id: "t1".to_string(), name: name.to_string(), status: status.to_string() }
+        crate::process_street::Task {
+            id: "t1".to_string(),
+            name: name.to_string(),
+            status: status.to_string(),
+        }
     }
 
     #[test]
     fn credentials_added_to_qms_from_tasks_is_true_when_that_task_is_completed() {
-        let tasks = vec![task("Facility Information (Pre-App)", "Completed"), task("Add Credentials to QMS", "Completed")];
+        let tasks = vec![
+            task("Facility Information (Pre-App)", "Completed"),
+            task("Add Credentials to QMS", "Completed"),
+        ];
         assert!(credentials_added_to_qms_from_tasks(&tasks));
     }
 
@@ -605,7 +633,11 @@ mod tests {
 
         for key in all_sensitive_keys() {
             assert!(
-                !mapped.sanitized_snapshot.as_object().unwrap().contains_key(&key),
+                !mapped
+                    .sanitized_snapshot
+                    .as_object()
+                    .unwrap()
+                    .contains_key(&key),
                 "sanitized snapshot must never contain the sensitive key {key}"
             );
         }
@@ -620,8 +652,14 @@ mod tests {
     #[test]
     fn maps_legal_name_dba_and_ownership_type_from_the_real_pre_app_fields() {
         let mapped = map_merchant_account_fields(&real_fields());
-        assert_eq!(mapped.legal_name.as_deref(), Some("Prairie Enterprises LLC"));
-        assert_eq!(mapped.business_dba.as_deref(), Some("Highway 20 self storage"));
+        assert_eq!(
+            mapped.legal_name.as_deref(),
+            Some("Prairie Enterprises LLC")
+        );
+        assert_eq!(
+            mapped.business_dba.as_deref(),
+            Some("Highway 20 self storage")
+        );
         assert_eq!(mapped.ownership_type.as_deref(), Some("LLC"));
     }
 
@@ -640,8 +678,16 @@ mod tests {
     #[test]
     fn maps_three_real_owners_and_skips_the_blank_fourth_and_signer() {
         let mapped = map_merchant_account_fields(&real_fields());
-        let owners: Vec<_> = mapped.parties.iter().filter(|p| p.party_role == "owner").collect();
-        assert_eq!(owners.len(), 3, "owner 4 was blank on this real run and must be skipped");
+        let owners: Vec<_> = mapped
+            .parties
+            .iter()
+            .filter(|p| p.party_role == "owner")
+            .collect();
+        assert_eq!(
+            owners.len(),
+            3,
+            "owner 4 was blank on this real run and must be skipped"
+        );
         assert_eq!(owners[0].display_name.as_deref(), Some("Kyle Lindley"));
         assert_eq!(owners[0].ownership_percent, Some(30.0));
 
@@ -669,7 +715,8 @@ mod tests {
             .expect("owner 1 has real PII on this fixture");
 
         let aad = format!("{facility_id}:owner:1");
-        let decrypted = encryption::decrypt(aad.as_bytes(), &blob).expect("decryption must succeed");
+        let decrypted =
+            encryption::decrypt(aad.as_bytes(), &blob).expect("decryption must succeed");
         let pii: PartyPii = serde_json::from_slice(&decrypted).unwrap();
         assert_eq!(pii.ssn.as_deref(), Some("000000000")); // the fixture's fake SSN
         clear_test_key();
@@ -680,7 +727,11 @@ mod tests {
     fn a_partys_pii_does_not_decrypt_under_a_different_partys_aad() {
         set_test_key();
         let mapped = map_merchant_account_fields(&real_fields());
-        let owner1 = mapped.parties.iter().find(|p| p.party_index == 1 && p.party_role == "owner").unwrap();
+        let owner1 = mapped
+            .parties
+            .iter()
+            .find(|p| p.party_index == 1 && p.party_role == "owner")
+            .unwrap();
 
         let facility_id = Uuid::new_v4();
         let blob = owner1.encrypted_pii(facility_id).unwrap().unwrap();
@@ -718,22 +769,46 @@ mod tests {
         let decrypted = encryption::decrypt(facility_id.as_bytes(), &blob).unwrap();
         let secrets: FacilitySecrets = serde_json::from_slice(&decrypted).unwrap();
         assert_eq!(secrets.ein.as_deref(), Some("111111111"));
-        assert_eq!(secrets.quikstor_password.as_deref(), Some("FakeTestPassword123!"));
+        assert_eq!(
+            secrets.quikstor_password.as_deref(),
+            Some("FakeTestPassword123!")
+        );
         clear_test_key();
     }
 
     #[test]
     fn maps_revenue_and_volume_fields_from_the_real_pre_app_fields() {
         let mapped = map_merchant_account_fields(&real_fields());
-        assert_eq!(mapped.total_annual_business_revenue_raw.as_deref(), Some("840000"));
+        assert_eq!(
+            mapped.total_annual_business_revenue_raw.as_deref(),
+            Some("840000")
+        );
         assert_eq!(mapped.total_monthly_sales_raw.as_deref(), Some("70000"));
-        assert_eq!(mapped.average_credit_card_payment_amount_raw.as_deref(), Some("150"));
-        assert_eq!(mapped.highest_credit_card_payment_amount_raw.as_deref(), Some("2000"));
-        assert_eq!(mapped.high_cc_payment_times_per_year_raw.as_deref(), Some("25"));
+        assert_eq!(
+            mapped.average_credit_card_payment_amount_raw.as_deref(),
+            Some("150")
+        );
+        assert_eq!(
+            mapped.highest_credit_card_payment_amount_raw.as_deref(),
+            Some("2000")
+        );
+        assert_eq!(
+            mapped.high_cc_payment_times_per_year_raw.as_deref(),
+            Some("25")
+        );
         assert_eq!(mapped.offers_ach_raw.as_deref(), Some("Yes"));
-        assert_eq!(mapped.annual_electronic_check_volume_raw.as_deref(), Some("20000"));
-        assert_eq!(mapped.average_electronic_check_amount_raw.as_deref(), Some("150"));
-        assert_eq!(mapped.maximum_electronic_check_amount_raw.as_deref(), Some("1500"));
+        assert_eq!(
+            mapped.annual_electronic_check_volume_raw.as_deref(),
+            Some("20000")
+        );
+        assert_eq!(
+            mapped.average_electronic_check_amount_raw.as_deref(),
+            Some("150")
+        );
+        assert_eq!(
+            mapped.maximum_electronic_check_amount_raw.as_deref(),
+            Some("1500")
+        );
     }
 
     #[test]
@@ -744,7 +819,8 @@ mod tests {
         let facility_id = Uuid::new_v4();
         let blob = mapped.encrypted_secrets(facility_id).unwrap().unwrap();
 
-        let secrets = decrypt_facility_secrets(facility_id, &blob).expect("decryption must succeed");
+        let secrets =
+            decrypt_facility_secrets(facility_id, &blob).expect("decryption must succeed");
         assert_eq!(secrets.ein.as_deref(), Some("111111111"));
         assert_eq!(secrets.bank_routing_number.as_deref(), Some("011000015"));
         assert_eq!(secrets.bank_account_number.as_deref(), Some("999999999"));
@@ -767,12 +843,18 @@ mod tests {
         let facility_id = Uuid::new_v4();
         let blob = mapped.encrypted_secrets(facility_id).unwrap().unwrap();
 
-        let credentials = decrypt_elavon_credentials(facility_id, &blob).expect("decryption must succeed");
+        let credentials =
+            decrypt_elavon_credentials(facility_id, &blob).expect("decryption must succeed");
         assert_eq!(credentials.account_id.as_deref(), Some("0000000"));
-        assert_eq!(credentials.qss_web_pin.as_deref(), Some("FAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPIN00"));
+        assert_eq!(
+            credentials.qss_web_pin.as_deref(),
+            Some("FAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPINFAKEWEBPIN00")
+        );
         assert_eq!(credentials.pinpad_user_id.as_deref(), Some("FAKEPINPADID"));
-        assert_eq!(credentials.qss_api_pin.as_deref(), Some("FAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPIN000"));
+        assert_eq!(
+            credentials.qss_api_pin.as_deref(),
+            Some("FAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPINFAKEAPIPIN000")
+        );
         clear_test_key();
     }
-
 }

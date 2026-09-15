@@ -192,8 +192,11 @@ pub async fn upload(
             .into_response();
     }
 
-    let session_id = SessionService::new(Arc::clone(&state.unit_group_sessions))
-        .create_session(uploaded_files, Some(user.user_id), None);
+    let session_id = SessionService::new(Arc::clone(&state.unit_group_sessions)).create_session(
+        uploaded_files,
+        Some(user.user_id),
+        None,
+    );
 
     tracing::info!(
         session_id = %session_id,
@@ -253,7 +256,10 @@ pub async fn import_from_dropbox(
         }
     };
 
-    let file_entries: Vec<_> = entries.into_iter().filter(|entry| !entry.is_folder()).collect();
+    let file_entries: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| !entry.is_folder())
+        .collect();
 
     if file_entries.is_empty() {
         return (

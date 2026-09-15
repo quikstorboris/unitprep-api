@@ -137,7 +137,6 @@ pub struct PreviewClientsResponse {
     pub runs: Vec<PreviewedRun>,
 }
 
-
 fn process_street_not_configured() -> Response {
     tracing::warn!("client preview attempted with Process Street not configured");
     (
@@ -233,7 +232,10 @@ pub async fn preview_clients(
     let intake_titles: Vec<IntakeRunTitle> = request
         .runs
         .iter()
-        .map(|r| IntakeRunTitle { run_id: r.run_id.clone(), title_text: r.run_name.clone() })
+        .map(|r| IntakeRunTitle {
+            run_id: r.run_id.clone(),
+            title_text: r.run_name.clone(),
+        })
         .collect();
     let auto_correlated: std::collections::HashMap<String, String> =
         correlate_by_title(&intake_titles, &merchant_account_titles)
@@ -243,9 +245,12 @@ pub async fn preview_clients(
                 Correlation::Ambiguous(_) => None,
             })
             .collect();
-    let merchant_account_run_ids = apply_explicit_merchant_account_choices(auto_correlated, &request.runs);
-    let distinct_ma_run_ids: std::collections::HashSet<&str> =
-        merchant_account_run_ids.values().map(String::as_str).collect();
+    let merchant_account_run_ids =
+        apply_explicit_merchant_account_choices(auto_correlated, &request.runs);
+    let distinct_ma_run_ids: std::collections::HashSet<&str> = merchant_account_run_ids
+        .values()
+        .map(String::as_str)
+        .collect();
 
     // One combined concurrent batch -- every selected run's own Intake
     // fields AND every distinct correlated Merchant Account run's
@@ -262,24 +267,44 @@ pub async fn preview_clients(
     // their own, even when structurally identical.
     type BoxedFetch<'a> = futures::future::BoxFuture<
         'a,
-        (FetchKind, &'a str, Result<Vec<crate::process_street::FormField>, crate::process_street::ProcessStreetError>),
+        (
+            FetchKind,
+            &'a str,
+            Result<
+                Vec<crate::process_street::FormField>,
+                crate::process_street::ProcessStreetError,
+            >,
+        ),
     >;
     let intake_fetches = request.runs.iter().map(|r| {
         let run_id = r.run_id.as_str();
-        Box::pin(async move { (FetchKind::Intake, run_id, client.get_run_form_fields(run_id).await) }) as BoxedFetch
+        Box::pin(async move {
+            (
+                FetchKind::Intake,
+                run_id,
+                client.get_run_form_fields(run_id).await,
+            )
+        }) as BoxedFetch
     });
     let ma_fetches = distinct_ma_run_ids.iter().map(|ma_run_id| {
         Box::pin(async move {
-            (FetchKind::MerchantAccount, *ma_run_id, client.get_run_form_fields(ma_run_id).await)
+            (
+                FetchKind::MerchantAccount,
+                *ma_run_id,
+                client.get_run_form_fields(ma_run_id).await,
+            )
         }) as BoxedFetch
     });
 
-    let mut mapped_runs: std::collections::HashMap<String, crate::clients::intake_mapping::MappedIntakeRun> =
-        std::collections::HashMap::with_capacity(request.runs.len());
+    let mut mapped_runs: std::collections::HashMap<
+        String,
+        crate::clients::intake_mapping::MappedIntakeRun,
+    > = std::collections::HashMap::with_capacity(request.runs.len());
     let mut suggested_legal_names: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
 
-    for (kind, run_id, result) in futures::future::join_all(intake_fetches.chain(ma_fetches)).await {
+    for (kind, run_id, result) in futures::future::join_all(intake_fetches.chain(ma_fetches)).await
+    {
         match kind {
             FetchKind::Intake => {
                 let fields = match result {
@@ -312,7 +337,9 @@ pub async fn preview_clients(
 
     let mut runs = Vec::with_capacity(request.runs.len());
     for r in &request.runs {
-        let mapped = mapped_runs.remove(&r.run_id).expect("every run_id was mapped above");
+        let mapped = mapped_runs
+            .remove(&r.run_id)
+            .expect("every run_id was mapped above");
         let people = mapped.people();
 
         let company = apply_suggested_legal_name(
@@ -383,12 +410,22 @@ mod tests {
         let mut merchant_account_run_ids = std::collections::HashMap::new();
         merchant_account_run_ids.insert("run-highway-20".to_string(), "ma-highway-20".to_string());
         let mut suggested_legal_names = std::collections::HashMap::new();
-        suggested_legal_names.insert("ma-highway-20".to_string(), Some("Prairie Enterprises LLC".to_string()));
+        suggested_legal_names.insert(
+            "ma-highway-20".to_string(),
+            Some("Prairie Enterprises LLC".to_string()),
+        );
 
-        let result =
-            apply_suggested_legal_name(company, "run-highway-20", &merchant_account_run_ids, &suggested_legal_names);
+        let result = apply_suggested_legal_name(
+            company,
+            "run-highway-20",
+            &merchant_account_run_ids,
+            &suggested_legal_names,
+        );
 
-        assert_eq!(result.legal_name.as_deref(), Some("Prairie Enterprises LLC"));
+        assert_eq!(
+            result.legal_name.as_deref(),
+            Some("Prairie Enterprises LLC")
+        );
     }
 
     #[test]
@@ -426,8 +463,12 @@ mod tests {
         let mut suggested_legal_names = std::collections::HashMap::new();
         suggested_legal_names.insert("ma-highway-20".to_string(), None);
 
-        let result =
-            apply_suggested_legal_name(company, "run-highway-20", &merchant_account_run_ids, &suggested_legal_names);
+        let result = apply_suggested_legal_name(
+            company,
+            "run-highway-20",
+            &merchant_account_run_ids,
+            &suggested_legal_names,
+        );
 
         assert_eq!(result.legal_name.as_deref(), Some("Intake's Own Value"));
     }
@@ -446,7 +487,10 @@ mod tests {
         // (dropped as ambiguous), but the user picked the correct
         // candidate on the search page's "Potential Duplicates" rows.
         let auto_correlated = std::collections::HashMap::new();
-        let runs = vec![run_request("run-carpentersville", Some("ma-carpentersville-1"))];
+        let runs = vec![run_request(
+            "run-carpentersville",
+            Some("ma-carpentersville-1"),
+        )];
 
         let result = apply_explicit_merchant_account_choices(auto_correlated, &runs);
 
@@ -467,9 +511,11 @@ mod tests {
 
         let result = apply_explicit_merchant_account_choices(auto_correlated, &runs);
 
-        assert_eq!(result.get("run-highway-20"), Some(&"ma-user-picked".to_string()));
+        assert_eq!(
+            result.get("run-highway-20"),
+            Some(&"ma-user-picked".to_string())
+        );
     }
-
 
     #[test]
     fn a_run_with_no_explicit_choice_keeps_its_auto_correlated_value() {
@@ -479,6 +525,9 @@ mod tests {
 
         let result = apply_explicit_merchant_account_choices(auto_correlated, &runs);
 
-        assert_eq!(result.get("run-highway-20"), Some(&"ma-highway-20".to_string()));
+        assert_eq!(
+            result.get("run-highway-20"),
+            Some(&"ma-highway-20".to_string())
+        );
     }
 }

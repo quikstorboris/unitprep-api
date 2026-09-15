@@ -122,8 +122,11 @@ mod tests {
     #[serial(integration_secrets_encryption_key_env)]
     fn round_trips_through_encryption() {
         set_test_key();
-        let blob = encrypt(b"dropbox_configuration:1", "sl.a-real-looking-refresh-token")
-            .expect("encryption must succeed");
+        let blob = encrypt(
+            b"dropbox_configuration:1",
+            "sl.a-real-looking-refresh-token",
+        )
+        .expect("encryption must succeed");
         let recovered =
             decrypt(b"dropbox_configuration:1", &blob).expect("decryption must succeed");
         assert_eq!(recovered, "sl.a-real-looking-refresh-token");
@@ -146,8 +149,10 @@ mod tests {
     #[serial(integration_secrets_encryption_key_env)]
     fn encrypting_twice_produces_different_blobs() {
         set_test_key();
-        let first = encrypt(b"dropbox_configuration:1", "same-value").expect("encryption must succeed");
-        let second = encrypt(b"dropbox_configuration:1", "same-value").expect("encryption must succeed");
+        let first =
+            encrypt(b"dropbox_configuration:1", "same-value").expect("encryption must succeed");
+        let second =
+            encrypt(b"dropbox_configuration:1", "same-value").expect("encryption must succeed");
         assert_ne!(first, second, "the nonce must be fresh per call");
         clear_test_key();
     }
@@ -163,7 +168,8 @@ mod tests {
     #[serial(integration_secrets_encryption_key_env)]
     fn a_tampered_blob_does_not_decrypt() {
         set_test_key();
-        let mut blob = encrypt(b"dropbox_configuration:1", "value").expect("encryption must succeed");
+        let mut blob =
+            encrypt(b"dropbox_configuration:1", "value").expect("encryption must succeed");
         let last = blob.len() - 1;
         blob[last] ^= 0xFF;
         assert!(decrypt(b"dropbox_configuration:1", &blob).is_err());

@@ -114,7 +114,13 @@ fn resolve(
 
 pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
     if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "get_process_street_settings", None, None)
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "get_process_street_settings",
+            None,
+            None,
+        )
         .await
     {
         return response;
@@ -175,7 +181,13 @@ pub async fn update_settings(
     let user_agent = request_context(&headers);
 
     if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "update_process_street_settings", user_agent, None)
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "update_process_street_settings",
+            user_agent,
+            None,
+        )
         .await
     {
         return response;
@@ -194,10 +206,7 @@ pub async fn update_settings(
     }
 
     if request.api_key.is_empty() {
-        return bad_request(
-            "invalid_api_key",
-            "API key is required.".to_string(),
-        );
+        return bad_request("invalid_api_key", "API key is required.".to_string());
     }
 
     let api_key_ciphertext = match secrets::encrypt(AAD, &request.api_key) {
@@ -288,7 +297,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_refuses_insufficient_permission_without_touching_the_database() {
-        let response = get_settings(State(crate::api::test_support::empty_state()), test_user()).await;
+        let response =
+            get_settings(State(crate::api::test_support::empty_state()), test_user()).await;
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
@@ -367,10 +377,8 @@ mod tests {
 
     #[test]
     fn resolve_falls_back_to_the_env_source_when_no_key_is_saved() {
-        let env = crate::api::test_support::FakeEnvSource::with(&[(
-            "PROCESS_STREET_API_KEY",
-            "env-key",
-        )]);
+        let env =
+            crate::api::test_support::FakeEnvSource::with(&[("PROCESS_STREET_API_KEY", "env-key")]);
 
         let response = resolve(row_without_a_saved_key(), &env).expect("resolve must succeed");
 

@@ -31,14 +31,16 @@ use crate::api::{internal_error, not_found, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::merchant_account_correlation::{
-    correlate_by_title, merchant_account_run_titles, Correlation, IntakeRunTitle, MerchantAccountRunInfo,
+    correlate_by_title, merchant_account_run_titles, Correlation, IntakeRunTitle,
+    MerchantAccountRunInfo,
 };
 use crate::clients::merchant_account_mapping::{
-    credentials_added_to_qms_from_tasks, decrypt_elavon_credentials, decrypt_facility_secrets, decrypt_party_pii,
-    map_merchant_account_fields, mask_bank_number,
+    credentials_added_to_qms_from_tasks, decrypt_elavon_credentials, decrypt_facility_secrets,
+    decrypt_party_pii, map_merchant_account_fields, mask_bank_number,
 };
 use crate::clients::repository::{
-    ingest_merchant_account_run, resync_merchant_account_run, upsert_task_status, IngestMerchantAccountError,
+    ingest_merchant_account_run, resync_merchant_account_run, upsert_task_status,
+    IngestMerchantAccountError,
 };
 
 const PERMISSION: &str = "client_ops.perform";
@@ -88,7 +90,9 @@ fn encryption_not_configured() -> Response {
 }
 
 fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers.get(axum::http::header::USER_AGENT).and_then(|value| value.to_str().ok())
+    headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
 }
 
 #[derive(Debug, Serialize)]
@@ -166,7 +170,11 @@ pub struct ElavonQmsCredentials {
 
 impl ElavonQmsCredentials {
     fn empty() -> Self {
-        Self { account_id: None, user_id: QMS_WEB_USER_ID, pin_password: None }
+        Self {
+            account_id: None,
+            user_id: QMS_WEB_USER_ID,
+            pin_password: None,
+        }
     }
 }
 
@@ -182,7 +190,10 @@ pub struct ElavonPinpadCredentials {
 
 impl ElavonPinpadCredentials {
     fn empty() -> Self {
-        Self { pinpad_user_id: None, qss_api_pin: None }
+        Self {
+            pinpad_user_id: None,
+            qss_api_pin: None,
+        }
     }
 }
 
@@ -281,8 +292,12 @@ fn build_financials(facility_id: Uuid, existing: &ExistingMerchantAccountRow) ->
             .map(mask_bank_number),
         total_annual_business_revenue_raw: existing.total_annual_business_revenue_raw.clone(),
         total_monthly_sales_raw: existing.total_monthly_sales_raw.clone(),
-        average_credit_card_payment_amount_raw: existing.average_credit_card_payment_amount_raw.clone(),
-        highest_credit_card_payment_amount_raw: existing.highest_credit_card_payment_amount_raw.clone(),
+        average_credit_card_payment_amount_raw: existing
+            .average_credit_card_payment_amount_raw
+            .clone(),
+        highest_credit_card_payment_amount_raw: existing
+            .highest_credit_card_payment_amount_raw
+            .clone(),
         high_cc_payment_times_per_year_raw: existing.high_cc_payment_times_per_year_raw.clone(),
         offers_ach_raw: existing.offers_ach_raw.clone(),
         annual_electronic_check_volume_raw: existing.annual_electronic_check_volume_raw.clone(),
@@ -314,7 +329,10 @@ fn build_credentials(
     });
 
     let Some(credentials) = credentials else {
-        return (ElavonQmsCredentials::empty(), ElavonPinpadCredentials::empty());
+        return (
+            ElavonQmsCredentials::empty(),
+            ElavonPinpadCredentials::empty(),
+        );
     };
 
     (
@@ -323,7 +341,10 @@ fn build_credentials(
             user_id: QMS_WEB_USER_ID,
             pin_password: credentials.qss_web_pin,
         },
-        ElavonPinpadCredentials { pinpad_user_id: credentials.pinpad_user_id, qss_api_pin: credentials.qss_api_pin },
+        ElavonPinpadCredentials {
+            pinpad_user_id: credentials.pinpad_user_id,
+            qss_api_pin: credentials.qss_api_pin,
+        },
     )
 }
 
@@ -394,19 +415,20 @@ pub async fn get_facility_elavon(
         }
     };
 
-    let facility: Option<FacilityIdentity> =
-        match sqlx::query_as("SELECT ps_intake_run_id FROM clients.facilities WHERE id = $1 AND company_id = $2")
-            .bind(facility_id)
-            .bind(company_id)
-            .fetch_optional(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "facility lookup for elavon failed");
-                return internal_error("Could not load this facility's Elavon status");
-            }
-        };
+    let facility: Option<FacilityIdentity> = match sqlx::query_as(
+        "SELECT ps_intake_run_id FROM clients.facilities WHERE id = $1 AND company_id = $2",
+    )
+    .bind(facility_id)
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "facility lookup for elavon failed");
+            return internal_error("Could not load this facility's Elavon status");
+        }
+    };
     let Some(facility) = facility else {
         let _ = tx.commit().await;
         return not_found("not_found", "No such facility.".to_string());
@@ -496,7 +518,11 @@ pub async fn get_facility_elavon(
             match intake_title {
                 None => (None, Vec::new()),
                 Some((title_text,)) => {
-                    let ma_titles: Vec<MerchantAccountRunInfo> = match merchant_account_run_titles(&mut tx).await {
+                    let ma_titles: Vec<MerchantAccountRunInfo> = match merchant_account_run_titles(
+                        &mut tx,
+                    )
+                    .await
+                    {
                         Ok(titles) => titles,
                         Err(err) => {
                             tracing::error!(error = %err, user_id = %user.user_id, "merchant account title fetch failed");
@@ -505,20 +531,32 @@ pub async fn get_facility_elavon(
                     };
 
                     let as_candidate = |ma_run_id: &str| {
-                        ma_titles.iter().find(|ma| ma.run_id == ma_run_id).map(|ma| ElavonCandidate {
-                            merchant_account_run_id: ma.run_id.clone(),
-                            run_name: ma.run_name.clone(),
-                            updated_at: ma.updated_at,
-                        })
+                        ma_titles
+                            .iter()
+                            .find(|ma| ma.run_id == ma_run_id)
+                            .map(|ma| ElavonCandidate {
+                                merchant_account_run_id: ma.run_id.clone(),
+                                run_name: ma.run_name.clone(),
+                                updated_at: ma.updated_at,
+                            })
                     };
 
-                    let intake_runs = [IntakeRunTitle { run_id: intake_run_id.clone(), title_text }];
+                    let intake_runs = [IntakeRunTitle {
+                        run_id: intake_run_id.clone(),
+                        title_text,
+                    }];
                     let correlated = correlate_by_title(&intake_runs, &ma_titles);
                     match correlated.get(intake_run_id) {
-                        Some(Correlation::Unambiguous(ma_run_id)) => (as_candidate(ma_run_id), Vec::new()),
-                        Some(Correlation::Ambiguous(ma_run_ids)) => {
-                            (None, ma_run_ids.iter().filter_map(|id| as_candidate(id)).collect())
+                        Some(Correlation::Unambiguous(ma_run_id)) => {
+                            (as_candidate(ma_run_id), Vec::new())
                         }
+                        Some(Correlation::Ambiguous(ma_run_ids)) => (
+                            None,
+                            ma_run_ids
+                                .iter()
+                                .filter_map(|id| as_candidate(id))
+                                .collect(),
+                        ),
                         None => (None, Vec::new()),
                     }
                 }
@@ -531,7 +569,11 @@ pub async fn get_facility_elavon(
         return internal_error("Could not load this facility's Elavon status");
     }
 
-    Json(ElavonStatusResponse::Unlinked { candidate, ambiguous_candidates }).into_response()
+    Json(ElavonStatusResponse::Unlinked {
+        candidate,
+        ambiguous_candidates,
+    })
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -554,8 +596,15 @@ pub async fn link_facility_elavon(
 ) -> Response {
     let user_agent = request_context(&headers);
 
-    if let Err(response) =
-        user.require_permission(&state.db, PERMISSION, "link_facility_merchant_account", user_agent, None).await
+    if let Err(response) = user
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "link_facility_merchant_account",
+            user_agent,
+            None,
+        )
+        .await
     {
         return response;
     }
@@ -587,19 +636,20 @@ pub async fn link_facility_elavon(
             }
         };
 
-        let facility_exists: Option<(Uuid,)> =
-            match sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
-                .bind(facility_id)
-                .bind(company_id)
-                .fetch_optional(&mut *tx)
-                .await
-            {
-                Ok(row) => row,
-                Err(err) => {
-                    tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for elavon link failed");
-                    return internal_error("Could not link this Merchant Account run");
-                }
-            };
+        let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
+            "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",
+        )
+        .bind(facility_id)
+        .bind(company_id)
+        .fetch_optional(&mut *tx)
+        .await
+        {
+            Ok(row) => row,
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for elavon link failed");
+                return internal_error("Could not link this Merchant Account run");
+            }
+        };
         if facility_exists.is_none() {
             let _ = tx.rollback().await;
             return not_found("not_found", "No such facility.".to_string());
@@ -646,8 +696,10 @@ pub async fn link_facility_elavon(
     // shouldn't wait on each other. `credentials_added_to_qms` needs
     // tasks (it's a checklist step, not a form field -- see
     // `merchant_account_mapping::credentials_added_to_qms_from_tasks`). ---
-    let (fields_result, tasks_result) =
-        tokio::join!(client.get_run_form_fields(ma_run_id), client.get_run_tasks(ma_run_id));
+    let (fields_result, tasks_result) = tokio::join!(
+        client.get_run_form_fields(ma_run_id),
+        client.get_run_tasks(ma_run_id)
+    );
 
     let fields = match fields_result {
         Ok(fields) => fields,
@@ -681,14 +733,22 @@ pub async fn link_facility_elavon(
         }
     };
 
-    if let Err(err) =
-        ingest_merchant_account_run(&mut tx, facility_id, &mapped, ma_run_id, credentials_added_to_qms).await
+    if let Err(err) = ingest_merchant_account_run(
+        &mut tx,
+        facility_id,
+        &mapped,
+        ma_run_id,
+        credentials_added_to_qms,
+    )
+    .await
     {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, ma_run_id, "failed to ingest linked Merchant Account run");
         return match err {
             IngestMerchantAccountError::Encryption(_) => encryption_not_configured(),
-            IngestMerchantAccountError::Database(_) => internal_error("Could not link this Merchant Account run"),
+            IngestMerchantAccountError::Database(_) => {
+                internal_error("Could not link this Merchant Account run")
+            }
         };
     }
 
@@ -747,8 +807,15 @@ pub async fn unlink_facility_elavon(
 ) -> Response {
     let user_agent = request_context(&headers);
 
-    if let Err(response) =
-        user.require_permission(&state.db, PERMISSION, "unlink_facility_merchant_account", user_agent, None).await
+    if let Err(response) = user
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "unlink_facility_merchant_account",
+            user_agent,
+            None,
+        )
+        .await
     {
         return response;
     }
@@ -761,19 +828,20 @@ pub async fn unlink_facility_elavon(
         }
     };
 
-    let facility_exists: Option<(Uuid,)> =
-        match sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
-            .bind(facility_id)
-            .bind(company_id)
-            .fetch_optional(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for elavon unlink failed");
-                return internal_error("Could not unlink this facility's Merchant Account run");
-            }
-        };
+    let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
+        "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",
+    )
+    .bind(facility_id)
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for elavon unlink failed");
+            return internal_error("Could not unlink this facility's Merchant Account run");
+        }
+    };
     if facility_exists.is_none() {
         let _ = tx.rollback().await;
         return not_found("not_found", "No such facility.".to_string());
@@ -794,13 +862,17 @@ pub async fn unlink_facility_elavon(
     };
     let Some((ma_run_id,)) = existing else {
         let _ = tx.rollback().await;
-        return not_found("not_found", "No such linked Merchant Account run.".to_string());
+        return not_found(
+            "not_found",
+            "No such linked Merchant Account run.".to_string(),
+        );
     };
 
-    if let Err(err) = sqlx::query("DELETE FROM clients.facility_merchant_account_parties WHERE facility_id = $1")
-        .bind(facility_id)
-        .execute(&mut *tx)
-        .await
+    if let Err(err) =
+        sqlx::query("DELETE FROM clients.facility_merchant_account_parties WHERE facility_id = $1")
+            .bind(facility_id)
+            .execute(&mut *tx)
+            .await
     {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, "failed to delete merchant account parties on unlink");
@@ -818,10 +890,11 @@ pub async fn unlink_facility_elavon(
         return internal_error("Could not unlink this facility's Merchant Account run");
     }
 
-    if let Err(err) = sqlx::query("DELETE FROM clients.facility_merchant_accounts WHERE facility_id = $1")
-        .bind(facility_id)
-        .execute(&mut *tx)
-        .await
+    if let Err(err) =
+        sqlx::query("DELETE FROM clients.facility_merchant_accounts WHERE facility_id = $1")
+            .bind(facility_id)
+            .execute(&mut *tx)
+            .await
     {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, "failed to delete facility_merchant_accounts on unlink");
@@ -880,8 +953,15 @@ pub async fn resync_elavon_data(
 ) -> Response {
     let user_agent = request_context(&headers);
 
-    if let Err(response) =
-        user.require_permission(&state.db, PERMISSION, "resync_elavon_data", user_agent, None).await
+    if let Err(response) = user
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "resync_elavon_data",
+            user_agent,
+            None,
+        )
+        .await
     {
         return response;
     }
@@ -903,19 +983,20 @@ pub async fn resync_elavon_data(
             }
         };
 
-        let facility_exists: Option<(Uuid,)> =
-            match sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
-                .bind(facility_id)
-                .bind(company_id)
-                .fetch_optional(&mut *tx)
-                .await
-            {
-                Ok(row) => row,
-                Err(err) => {
-                    tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for elavon data resync failed");
-                    return internal_error("Could not resync this facility's Elavon data");
-                }
-            };
+        let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
+            "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",
+        )
+        .bind(facility_id)
+        .bind(company_id)
+        .fetch_optional(&mut *tx)
+        .await
+        {
+            Ok(row) => row,
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for elavon data resync failed");
+                return internal_error("Could not resync this facility's Elavon data");
+            }
+        };
         if facility_exists.is_none() {
             let _ = tx.rollback().await;
             return not_found("not_found", "No such facility.".to_string());
@@ -949,8 +1030,10 @@ pub async fn resync_elavon_data(
     // --- Phase 2: the live Process Street round trip, with no
     // transaction open -- fields and tasks concurrently, same reasoning
     // as `link_facility_elavon`'s own doc comment. ---
-    let (fields_result, tasks_result) =
-        tokio::join!(client.get_run_form_fields(&ma_run_id), client.get_run_tasks(&ma_run_id));
+    let (fields_result, tasks_result) = tokio::join!(
+        client.get_run_form_fields(&ma_run_id),
+        client.get_run_tasks(&ma_run_id)
+    );
 
     let fields = match fields_result {
         Ok(fields) => fields,
@@ -979,14 +1062,22 @@ pub async fn resync_elavon_data(
         }
     };
 
-    if let Err(err) =
-        resync_merchant_account_run(&mut tx, facility_id, &mapped, &ma_run_id, credentials_added_to_qms).await
+    if let Err(err) = resync_merchant_account_run(
+        &mut tx,
+        facility_id,
+        &mapped,
+        &ma_run_id,
+        credentials_added_to_qms,
+    )
+    .await
     {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, ma_run_id, "failed to resync this facility's Merchant Account data");
         return match err {
             IngestMerchantAccountError::Encryption(_) => encryption_not_configured(),
-            IngestMerchantAccountError::Database(_) => internal_error("Could not resync this facility's Elavon data"),
+            IngestMerchantAccountError::Database(_) => {
+                internal_error("Could not resync this facility's Elavon data")
+            }
         };
     }
 
@@ -1031,8 +1122,12 @@ mod tests {
 
     #[tokio::test]
     async fn get_facility_elavon_reaches_the_database() {
-        let response =
-            get_facility_elavon(State(empty_state()), test_user(), Path((Uuid::new_v4(), Uuid::new_v4()))).await;
+        let response = get_facility_elavon(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -1043,7 +1138,9 @@ mod tests {
             test_user(),
             HeaderMap::new(),
             Path((Uuid::new_v4(), Uuid::new_v4())),
-            Json(LinkElavonRequest { merchant_account_run_id: "abc123".to_string() }),
+            Json(LinkElavonRequest {
+                merchant_account_run_id: "abc123".to_string(),
+            }),
         )
         .await;
 
@@ -1057,7 +1154,9 @@ mod tests {
             crate::api::test_support::onboarding_manager_user(),
             HeaderMap::new(),
             Path((Uuid::new_v4(), Uuid::new_v4())),
-            Json(LinkElavonRequest { merchant_account_run_id: "   ".to_string() }),
+            Json(LinkElavonRequest {
+                merchant_account_run_id: "   ".to_string(),
+            }),
         )
         .await;
 

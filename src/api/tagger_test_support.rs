@@ -30,7 +30,13 @@ pub fn tagger_state_with_session(
     original_file_name: &str,
     candidates: Vec<RegionCandidate>,
 ) -> AppState {
-    tagger_state_with_source_folder(session_id, original_bytes, original_file_name, candidates, None)
+    tagger_state_with_source_folder(
+        session_id,
+        original_bytes,
+        original_file_name,
+        candidates,
+        None,
+    )
 }
 
 /// Same as `tagger_state_with_session`, but lets a test control

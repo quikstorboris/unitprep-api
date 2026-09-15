@@ -126,7 +126,13 @@ pub fn encrypt(aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, EncryptionError>
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
-        .encrypt(nonce, Payload { msg: plaintext, aad })
+        .encrypt(
+            nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .map_err(|_| EncryptionError::Undecryptable("encryption failed"))?;
 
     let mut blob = Vec::with_capacity(1 + NONCE_LEN + ciphertext.len());

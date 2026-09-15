@@ -81,44 +81,43 @@ async fn generate_export_zip(
     // Read-only session access.
     // This shape is deliberately future-proof for PR3.
     //
-    let session_data = match state.unit_group_sessions.with_owned_session(
-        session_id,
-        user.user_id,
-        |session| {
-            if let Err(err) = session.require_stage(WorkflowStage::Analyzed) {
-                tracing::warn!(
-                    session_id = %session_id,
-                    required = ?err.required,
-                    current = ?err.current,
-                    "Export attempted before validation/analysis completed"
-                );
+    let session_data =
+        match state
+            .unit_group_sessions
+            .with_owned_session(session_id, user.user_id, |session| {
+                if let Err(err) = session.require_stage(WorkflowStage::Analyzed) {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        required = ?err.required,
+                        current = ?err.current,
+                        "Export attempted before validation/analysis completed"
+                    );
 
-                return Err(err);
+                    return Err(err);
+                }
+
+                let validation = session
+                    .data
+                    .validation
+                    .clone()
+                    .expect("Analyzed stage guarantees validation data");
+
+                let analysis = session
+                    .data
+                    .analysis
+                    .clone()
+                    .expect("Analyzed stage guarantees analysis data");
+
+                Ok((validation, analysis, session.data_generation()))
+            }) {
+            Some(Ok(data)) => data,
+            Some(Err(err)) => {
+                return Err(stage_conflict(session_id, err));
             }
-
-            let validation = session
-                .data
-                .validation
-                .clone()
-                .expect("Analyzed stage guarantees validation data");
-
-            let analysis = session
-                .data
-                .analysis
-                .clone()
-                .expect("Analyzed stage guarantees analysis data");
-
-            Ok((validation, analysis, session.data_generation()))
-        },
-    ) {
-        Some(Ok(data)) => data,
-        Some(Err(err)) => {
-            return Err(stage_conflict(session_id, err));
-        }
-        None => {
-            return Err(session_not_found(session_id));
-        }
-    };
+            None => {
+                return Err(session_not_found(session_id));
+            }
+        };
 
     let (validation, analysis, read_generation) = session_data;
 
@@ -195,10 +194,9 @@ async fn generate_export_zip(
     //
     // Tiny mutation scope.
     //
-    match state.unit_group_sessions.with_owned_session_mut(
-        session_id,
-        user.user_id,
-        |session| {
+    match state
+        .unit_group_sessions
+        .with_owned_session_mut(session_id, user.user_id, |session| {
             // Same TOCTOU concern as analyze.rs: a correction landing in
             // this gap already downgraded `workflow` back to `Validated`
             // as its own safety net — unconditionally calling
@@ -211,8 +209,7 @@ async fn generate_export_zip(
             } else {
                 false
             }
-        },
-    ) {
+        }) {
         Some(true) => {}
 
         Some(false) => {
@@ -273,7 +270,11 @@ pub async fn export(
         audit_log::event::UNIT_GROUP_COMPLETED,
         user.user_id,
         "client",
-        request.client_id.as_ref().map(ToString::to_string).as_deref(),
+        request
+            .client_id
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         audit_log::Change::none(),
         None,
         None,
@@ -331,7 +332,10 @@ pub async fn save_location(
     let default_folder_path =
         source_folder.map(|folder| format!("{folder}/{GROUP_PREP_OUTPUT_FOLDER_NAME}"));
 
-    Json(ExportSaveLocationResponse { default_folder_path }).into_response()
+    Json(ExportSaveLocationResponse {
+        default_folder_path,
+    })
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -388,7 +392,11 @@ pub async fn export_to_dropbox(
         audit_log::event::UNIT_GROUP_COMPLETED,
         user.user_id,
         "client",
-        request.client_id.as_ref().map(ToString::to_string).as_deref(),
+        request
+            .client_id
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
         audit_log::Change::none(),
         None,
         None,
@@ -410,7 +418,10 @@ pub async fn export_to_dropbox(
         "Unit-group export saved to Dropbox"
     );
 
-    Json(ExportToDropboxResponse { path: request.dropbox_path }).into_response()
+    Json(ExportToDropboxResponse {
+        path: request.dropbox_path,
+    })
+    .into_response()
 }
 
 #[cfg(test)]

@@ -22,7 +22,10 @@ use uuid::Uuid;
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
-use crate::clients::create::{check_not_already_imported, fetch_create_data, write_create_data, CreateError, EditableFacilityFields};
+use crate::clients::create::{
+    check_not_already_imported, fetch_create_data, write_create_data, CreateError,
+    EditableFacilityFields,
+};
 use crate::clients::intake_mapping::MappedCompany;
 
 const PERMISSION: &str = "client_ops.perform";
@@ -49,10 +52,7 @@ fn already_imported(run_ids: Vec<String>) -> Response {
         StatusCode::CONFLICT,
         Json(ApiErrorBody {
             error: "already_imported",
-            message: format!(
-                "Already in OO, not imported again: {}",
-                run_ids.join(", ")
-            ),
+            message: format!("Already in OO, not imported again: {}", run_ids.join(", ")),
         }),
     )
         .into_response()
@@ -97,7 +97,13 @@ pub async fn create_client(
     let user_agent = request_context(&headers);
 
     if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "create_client_from_process_street", user_agent, None)
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "create_client_from_process_street",
+            user_agent,
+            None,
+        )
         .await
     {
         return response;
@@ -122,16 +128,28 @@ pub async fn create_client(
     let facility_selections: Vec<(String, EditableFacilityFields, Option<String>)> = request
         .facilities
         .into_iter()
-        .map(|selection| (selection.run_id, selection.fields, selection.merchant_account_run_id))
+        .map(|selection| {
+            (
+                selection.run_id,
+                selection.fields,
+                selection.merchant_account_run_id,
+            )
+        })
         .collect();
 
     let mut all_run_ids: Vec<&str> = vec![company_intake_run_id];
-    all_run_ids.extend(facility_selections.iter().map(|(run_id, _, _)| run_id.as_str()));
+    all_run_ids.extend(
+        facility_selections
+            .iter()
+            .map(|(run_id, _, _)| run_id.as_str()),
+    );
 
     // --- Phase 1: fail fast on an already-imported run before ever
     // talking to Process Street, in its own short transaction. ---
     {
-        let mut precheck_tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
+        let mut precheck_tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys)
+            .await
+        {
             Ok(tx) => tx,
             Err(err) => {
                 tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for client creation pre-check");
@@ -170,7 +188,9 @@ pub async fn create_client(
     // request left the connection stuck `idle in transaction`, blocking
     // unrelated queries elsewhere in the app. Same root cause and fix as
     // `api::clients_elavon`'s own "link" action.) ---
-    let fetched = match fetch_create_data(&client, company_intake_run_id, &facility_selections).await {
+    let fetched = match fetch_create_data(&client, company_intake_run_id, &facility_selections)
+        .await
+    {
         Ok(fetched) => fetched,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "failed to fetch runs from Process Street for client creation");
@@ -193,8 +213,14 @@ pub async fn create_client(
         }
     };
 
-    let result =
-        write_create_data(&mut tx, company_intake_run_id, &request.company, &facility_selections, &fetched).await;
+    let result = write_create_data(
+        &mut tx,
+        company_intake_run_id,
+        &request.company,
+        &facility_selections,
+        &fetched,
+    )
+    .await;
 
     let created = match result {
         Ok(created) => created,

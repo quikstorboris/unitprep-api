@@ -84,7 +84,9 @@ async fn manually_uploaded_file_with_unmatched_headers_becomes_a_selected_unit_f
         "s1",
         crate::api::test_support::test_user_id(),
         unmatched_document("boris_units.csv"),
-        &crate::api::test_support::default_unit_vendors_cache().read().clone(),
+        &crate::api::test_support::default_unit_vendors_cache()
+            .read()
+            .clone(),
     );
 
     assert_eq!(response.status(), StatusCode::OK);
@@ -117,7 +119,9 @@ async fn manual_selection_survives_a_subsequent_discovery_recompute() {
         "s1",
         crate::api::test_support::test_user_id(),
         unmatched_document("boris_units.csv"),
-        &crate::api::test_support::default_unit_vendors_cache().read().clone(),
+        &crate::api::test_support::default_unit_vendors_cache()
+            .read()
+            .clone(),
     );
 
     let recomputed = crate::api::discover::discover(

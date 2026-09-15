@@ -13,7 +13,9 @@ use crate::clients::policy_exemption::{mark_exempt_if_qsx_and_was_empty, PolicyC
 
 use super::{bad_request, ensure_facility_and_policies_row, not_found, request_context};
 
-const STEP_TYPES: &[&str] = &["late_fee", "pre_lien", "lien", "cut_lock", "auction", "notice", "other"];
+const STEP_TYPES: &[&str] = &[
+    "late_fee", "pre_lien", "lien", "cut_lock", "auction", "notice", "other",
+];
 const TRIGGER_TYPES: &[&str] = &["paid_through_date", "step_category"];
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,31 +52,51 @@ pub async fn update_delinquency(
 ) -> Response {
     let user_agent = request_context(&headers);
 
-    if let Some(entry) = request.entries.iter().find(|e| !STEP_TYPES.contains(&e.category.as_str())) {
-        return bad_request(format!("\"{}\" is not a recognized delinquency category.", entry.category));
+    if let Some(entry) = request
+        .entries
+        .iter()
+        .find(|e| !STEP_TYPES.contains(&e.category.as_str()))
+    {
+        return bad_request(format!(
+            "\"{}\" is not a recognized delinquency category.",
+            entry.category
+        ));
     }
-    if let Some(entry) = request.entries.iter().find(|e| !TRIGGER_TYPES.contains(&e.trigger_type.as_str())) {
-        return bad_request(format!("\"{}\" is not a recognized trigger type.", entry.trigger_type));
+    if let Some(entry) = request
+        .entries
+        .iter()
+        .find(|e| !TRIGGER_TYPES.contains(&e.trigger_type.as_str()))
+    {
+        return bad_request(format!(
+            "\"{}\" is not a recognized trigger type.",
+            entry.trigger_type
+        ));
     }
     for entry in &request.entries {
         match entry.trigger_type.as_str() {
             "paid_through_date" if entry.trigger_category.is_some() => {
                 return bad_request(
-                    "trigger_category must not be set when trigger_type is \"paid_through_date\".".to_string(),
+                    "trigger_category must not be set when trigger_type is \"paid_through_date\"."
+                        .to_string(),
                 );
             }
             "step_category" => match &entry.trigger_category {
                 None => {
                     return bad_request(
-                        "trigger_category is required when trigger_type is \"step_category\".".to_string(),
+                        "trigger_category is required when trigger_type is \"step_category\"."
+                            .to_string(),
                     );
                 }
                 Some(trigger_category) => {
                     if !STEP_TYPES.contains(&trigger_category.as_str()) {
-                        return bad_request(format!("\"{trigger_category}\" is not a recognized delinquency category."));
+                        return bad_request(format!(
+                            "\"{trigger_category}\" is not a recognized delinquency category."
+                        ));
                     }
                     if trigger_category == &entry.category {
-                        return bad_request("A delinquency entry cannot trigger off its own category.".to_string());
+                        return bad_request(
+                            "A delinquency entry cannot trigger off its own category.".to_string(),
+                        );
                     }
                 }
             },
@@ -103,25 +125,28 @@ pub async fn update_delinquency(
         }
     }
 
-    let was_empty: (i64,) =
-        match sqlx::query_as("SELECT count(*) FROM clients.policy_delinquency_entries WHERE facility_policies_id = $1")
-            .bind(facility_id)
-            .fetch_one(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                let _ = tx.rollback().await;
-                tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_entries count failed");
-                return internal_error("Could not save delinquency entries");
-            }
-        };
+    let was_empty: (i64,) = match sqlx::query_as(
+        "SELECT count(*) FROM clients.policy_delinquency_entries WHERE facility_policies_id = $1",
+    )
+    .bind(facility_id)
+    .fetch_one(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            let _ = tx.rollback().await;
+            tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_entries count failed");
+            return internal_error("Could not save delinquency entries");
+        }
+    };
     let was_empty = was_empty.0 == 0;
 
-    if let Err(err) = sqlx::query("DELETE FROM clients.policy_delinquency_entries WHERE facility_policies_id = $1")
-        .bind(facility_id)
-        .execute(&mut *tx)
-        .await
+    if let Err(err) = sqlx::query(
+        "DELETE FROM clients.policy_delinquency_entries WHERE facility_policies_id = $1",
+    )
+    .bind(facility_id)
+    .execute(&mut *tx)
+    .await
     {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_entries delete failed");
@@ -151,8 +176,13 @@ pub async fn update_delinquency(
         }
     }
 
-    if let Err(err) =
-        mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Delinquency, was_empty).await
+    if let Err(err) = mark_exempt_if_qsx_and_was_empty(
+        &mut tx,
+        facility_id,
+        PolicyCategory::Delinquency,
+        was_empty,
+    )
+    .await
     {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, "delinquency exemption update failed");
@@ -165,7 +195,10 @@ pub async fn update_delinquency(
         user.user_id,
         "facility_policies_delinquency",
         Some(&facility_id.to_string()),
-        audit_log::Change { before: None, after: Some(serde_json::json!(request.entries)) },
+        audit_log::Change {
+            before: None,
+            after: Some(serde_json::json!(request.entries)),
+        },
         user_agent,
         None,
         serde_json::json!({}),

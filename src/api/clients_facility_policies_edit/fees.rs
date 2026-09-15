@@ -13,7 +13,14 @@ use crate::clients::policy_exemption::{mark_exempt_if_qsx_and_was_empty, PolicyC
 
 use super::{bad_request, ensure_facility_and_policies_row, not_found, request_context};
 
-const FEE_TYPES: &[&str] = &["security_deposit", "nsf_chargeback", "move_in_admin", "transfer", "cleaning", "other"];
+const FEE_TYPES: &[&str] = &[
+    "security_deposit",
+    "nsf_chargeback",
+    "move_in_admin",
+    "transfer",
+    "cleaning",
+    "other",
+];
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FeeInput {
@@ -36,8 +43,15 @@ pub async fn update_fees(
 ) -> Response {
     let user_agent = request_context(&headers);
 
-    if let Some(fee) = request.fees.iter().find(|f| !FEE_TYPES.contains(&f.fee_type.as_str())) {
-        return bad_request(format!("\"{}\" is not a recognized fee type.", fee.fee_type));
+    if let Some(fee) = request
+        .fees
+        .iter()
+        .find(|f| !FEE_TYPES.contains(&f.fee_type.as_str()))
+    {
+        return bad_request(format!(
+            "\"{}\" is not a recognized fee type.",
+            fee.fee_type
+        ));
     }
 
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
@@ -61,10 +75,12 @@ pub async fn update_fees(
         }
     }
 
-    let was_empty: (i64,) = match sqlx::query_as("SELECT count(*) FROM clients.policy_fees WHERE facility_policies_id = $1")
-        .bind(facility_id)
-        .fetch_one(&mut *tx)
-        .await
+    let was_empty: (i64,) = match sqlx::query_as(
+        "SELECT count(*) FROM clients.policy_fees WHERE facility_policies_id = $1",
+    )
+    .bind(facility_id)
+    .fetch_one(&mut *tx)
+    .await
     {
         Ok(row) => row,
         Err(err) => {
@@ -102,7 +118,10 @@ pub async fn update_fees(
         }
     }
 
-    if let Err(err) = mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Fees, was_empty).await {
+    if let Err(err) =
+        mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Fees, was_empty)
+            .await
+    {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, "fees exemption update failed");
         return internal_error("Could not save fees");
@@ -114,7 +133,10 @@ pub async fn update_fees(
         user.user_id,
         "facility_policies_fees",
         Some(&facility_id.to_string()),
-        audit_log::Change { before: None, after: Some(serde_json::json!(request.fees)) },
+        audit_log::Change {
+            before: None,
+            after: Some(serde_json::json!(request.fees)),
+        },
         user_agent,
         None,
         serde_json::json!({}),

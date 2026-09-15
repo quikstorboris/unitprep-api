@@ -706,11 +706,11 @@ pub async fn save_location(
     user: AuthenticatedUser,
     Json(request): Json<TaggerSessionRequest>,
 ) -> Response {
-    let source_folder = match state
-        .tagger_sessions
-        .with_owned_session(&request.session_id, user.user_id, |session| {
-            session.source_dropbox_folder_path.clone()
-        }) {
+    let source_folder = match state.tagger_sessions.with_owned_session(
+        &request.session_id,
+        user.user_id,
+        |session| session.source_dropbox_folder_path.clone(),
+    ) {
         Some(source_folder) => source_folder,
         None => return session_not_found(&request.session_id),
     };
@@ -718,7 +718,10 @@ pub async fn save_location(
     let default_folder_path =
         source_folder.map(|folder| format!("{folder}/{TAGGED_TEMPLATES_FOLDER_NAME}"));
 
-    Json(TaggerSaveLocationResponse { default_folder_path }).into_response()
+    Json(TaggerSaveLocationResponse {
+        default_folder_path,
+    })
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -755,8 +758,7 @@ pub async fn apply_to_dropbox(
         confirmed: request.confirmed,
         preserve_blanks: request.preserve_blanks,
     };
-    let (edited_bytes, _file_name) = match build_edited_docx(&state, &user, &apply_request).await
-    {
+    let (edited_bytes, _file_name) = match build_edited_docx(&state, &user, &apply_request).await {
         Ok(built) => built,
         Err(response) => return response,
     };
@@ -768,7 +770,11 @@ pub async fn apply_to_dropbox(
         }
     }
 
-    if let Err(err) = state.dropbox.upload(&request.dropbox_path, edited_bytes).await {
+    if let Err(err) = state
+        .dropbox
+        .upload(&request.dropbox_path, edited_bytes)
+        .await
+    {
         tracing::error!(error = %err, path = %request.dropbox_path, "Dropbox upload failed during tagger apply");
         return internal_error("Could not upload the tagged document to Dropbox");
     }
@@ -780,7 +786,10 @@ pub async fn apply_to_dropbox(
         "Tagger apply saved to Dropbox"
     );
 
-    Json(TaggerApplyToDropboxResponse { path: request.dropbox_path }).into_response()
+    Json(TaggerApplyToDropboxResponse {
+        path: request.dropbox_path,
+    })
+    .into_response()
 }
 
 fn tagged_file_name(original: &str) -> String {

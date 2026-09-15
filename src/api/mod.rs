@@ -24,6 +24,7 @@ mod clients_dropbox_folder;
 mod clients_elavon;
 mod clients_facility_people;
 mod clients_facility_policies_edit;
+mod clients_filter_options;
 mod clients_preview;
 mod clients_resync;
 mod clients_search;
@@ -166,7 +167,11 @@ pub(crate) fn respond<T: Serialize>(
 /// literal that 14 handler files each separately defined their own copy
 /// of (2026-09-09).
 pub(crate) fn bad_request(error: &'static str, message: String) -> Response {
-    (StatusCode::BAD_REQUEST, Json(ApiErrorBody { error, message })).into_response()
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ApiErrorBody { error, message }),
+    )
+        .into_response()
 }
 
 /// Not-found response, error code and message both supplied by the

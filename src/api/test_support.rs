@@ -149,13 +149,15 @@ pub(crate) fn test_auth_backend() -> std::sync::Arc<dyn crate::auth::AuthBackend
 /// suite exercises `AppState::dropbox` yet, so this only needs to exist
 /// and construct successfully, not hold credentials that work.
 pub(crate) fn test_dropbox_client() -> std::sync::Arc<crate::dropbox::DropboxClient> {
-    std::sync::Arc::new(crate::dropbox::DropboxClient::new(crate::dropbox::DropboxConfig {
-        app_key: "test".to_string(),
-        app_secret: "test".to_string(),
-        refresh_token: "test".to_string(),
-        root_namespace_id: "test".to_string(),
-        root_path: "/test".to_string(),
-    }))
+    std::sync::Arc::new(crate::dropbox::DropboxClient::new(
+        crate::dropbox::DropboxConfig {
+            app_key: "test".to_string(),
+            app_secret: "test".to_string(),
+            refresh_token: "test".to_string(),
+            root_namespace_id: "test".to_string(),
+            root_path: "/test".to_string(),
+        },
+    ))
 }
 
 /// A fresh, `Idle` sync-progress handle -- nothing in the handler test

@@ -133,7 +133,10 @@ async fn a_delete_route_is_allowed_by_the_cors_preflight() {
     let client = reqwest::Client::new();
 
     let response = client
-        .request(reqwest::Method::OPTIONS, format!("http://{addr}/clients/{}", uuid::Uuid::new_v4()))
+        .request(
+            reqwest::Method::OPTIONS,
+            format!("http://{addr}/clients/{}", uuid::Uuid::new_v4()),
+        )
         .header("Origin", "http://localhost:3000")
         .header("Access-Control-Request-Method", "DELETE")
         .send()
@@ -147,7 +150,10 @@ async fn a_delete_route_is_allowed_by_the_cors_preflight() {
         .get("access-control-allow-methods")
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default();
-    assert!(allow_methods.contains("DELETE"), "expected DELETE in Allow-Methods, got: {allow_methods}");
+    assert!(
+        allow_methods.contains("DELETE"),
+        "expected DELETE in Allow-Methods, got: {allow_methods}"
+    );
 }
 
 /// Regression test for the error-body-shape fix: malformed JSON used to

@@ -387,7 +387,9 @@ mod tests {
         assert_eq!(items[1].name, "💳 New Merchant Account");
         assert_eq!(
             ProcessStreetClient::next_link(&page).as_deref(),
-            Some("https://public-api.process.st/api/v1.1/workflows?_=cXZqVHBZMjk3TU92TXJoa3BkVk1KQQ")
+            Some(
+                "https://public-api.process.st/api/v1.1/workflows?_=cXZqVHBZMjk3TU92TXJoa3BkVk1KQQ"
+            )
         );
     }
 

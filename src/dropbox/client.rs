@@ -183,10 +183,11 @@ impl DropboxClient {
             });
         }
 
-        let parsed: TokenResponse = serde_json::from_str(&body).map_err(|err| DropboxError::Api {
-            status: status.as_u16(),
-            body: format!("failed to parse token response ({err}): {body}"),
-        })?;
+        let parsed: TokenResponse =
+            serde_json::from_str(&body).map_err(|err| DropboxError::Api {
+                status: status.as_u16(),
+                body: format!("failed to parse token response ({err}): {body}"),
+            })?;
 
         let access_token = parsed.access_token.clone();
 
@@ -455,7 +456,10 @@ impl DropboxClient {
     /// take the only candidate" fallback was tried and reverted here --
     /// it isn't safe to assume Dropbox's search ranking narrowing to one
     /// result means that result is right.
-    pub async fn find_facility_folder(&self, facility_name: &str) -> Result<Option<Entry>, DropboxError> {
+    pub async fn find_facility_folder(
+        &self,
+        facility_name: &str,
+    ) -> Result<Option<Entry>, DropboxError> {
         let folders = self.search_folders(facility_name).await?;
         Ok(pick_facility_folder(folders, facility_name))
     }
@@ -639,7 +643,10 @@ mod tests {
     fn picks_nothing_when_multiple_candidates_have_no_exact_match() {
         let folders = vec![
             Entry::test_folder("Sand-Sto Storage", "/qms onboarding/sand-sto storage"),
-            Entry::test_folder("Sand-Sto Self Storage", "/qms onboarding/sand-sto self storage"),
+            Entry::test_folder(
+                "Sand-Sto Self Storage",
+                "/qms onboarding/sand-sto self storage",
+            ),
         ];
 
         assert!(pick_facility_folder(folders, "Sand-Sto Climate Controlled Storage").is_none());
@@ -661,9 +668,8 @@ mod tests {
     async fn lists_the_real_qms_onboarding_folder() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let config = DropboxConfig::from_env().expect(
-            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
-        );
+        let config = DropboxConfig::from_env()
+            .expect("DROPBOX_* env vars must be set in .env.local to run this ignored test");
         let root_path = config.root_path.clone();
         let client = DropboxClient::new(config);
 
@@ -678,7 +684,9 @@ mod tests {
             entries.len()
         );
         assert!(
-            entries.iter().any(|e| e.is_folder() && e.name == "Papa Ducks"),
+            entries
+                .iter()
+                .any(|e| e.is_folder() && e.name == "Papa Ducks"),
             "expected to find the known 'Papa Ducks' subfolder"
         );
     }
@@ -695,9 +703,8 @@ mod tests {
     async fn search_folders_finds_a_facility_by_name_alone() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let config = DropboxConfig::from_env().expect(
-            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
-        );
+        let config = DropboxConfig::from_env()
+            .expect("DROPBOX_* env vars must be set in .env.local to run this ignored test");
         let client = DropboxClient::new(config);
 
         let folders = client
@@ -726,9 +733,8 @@ mod tests {
     async fn resolves_highway_20s_real_shared_link_to_its_actual_path() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let config = DropboxConfig::from_env().expect(
-            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
-        );
+        let config = DropboxConfig::from_env()
+            .expect("DROPBOX_* env vars must be set in .env.local to run this ignored test");
         let client = DropboxClient::new(config);
 
         let found = client
@@ -754,9 +760,8 @@ mod tests {
     async fn resolves_sand_stos_real_shared_link_despite_the_oo_name_mismatch() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let config = DropboxConfig::from_env().expect(
-            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
-        );
+        let config = DropboxConfig::from_env()
+            .expect("DROPBOX_* env vars must be set in .env.local to run this ignored test");
         let client = DropboxClient::new(config);
 
         let found = client
@@ -783,9 +788,8 @@ mod tests {
     async fn finds_a_real_facilitys_own_folder_by_exact_name() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let config = DropboxConfig::from_env().expect(
-            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
-        );
+        let config = DropboxConfig::from_env()
+            .expect("DROPBOX_* env vars must be set in .env.local to run this ignored test");
         let client = DropboxClient::new(config);
 
         let found = client
@@ -795,7 +799,10 @@ mod tests {
             .expect("Highway 20 Self Storage's own folder must be found");
 
         assert!(found.is_folder());
-        assert!(found.path_display.to_lowercase().contains("prairie enterprises llc"));
+        assert!(found
+            .path_display
+            .to_lowercase()
+            .contains("prairie enterprises llc"));
     }
 
     // Real-network confirmation of the actual case found live 2026-09-04:
@@ -813,9 +820,8 @@ mod tests {
     async fn resolves_to_nothing_for_a_facility_whose_dropbox_folder_name_differs_from_oos_name() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let config = DropboxConfig::from_env().expect(
-            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
-        );
+        let config = DropboxConfig::from_env()
+            .expect("DROPBOX_* env vars must be set in .env.local to run this ignored test");
         let client = DropboxClient::new(config);
 
         let found = client
@@ -837,9 +843,8 @@ mod tests {
     async fn returns_none_when_no_folder_matches_the_name_exactly() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let config = DropboxConfig::from_env().expect(
-            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
-        );
+        let config = DropboxConfig::from_env()
+            .expect("DROPBOX_* env vars must be set in .env.local to run this ignored test");
         let client = DropboxClient::new(config);
 
         let found = client
@@ -861,11 +866,13 @@ mod tests {
     async fn create_folder_if_missing_is_idempotent_against_the_real_account() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let config = DropboxConfig::from_env().expect(
-            "DROPBOX_* env vars must be set in .env.local to run this ignored test",
-        );
+        let config = DropboxConfig::from_env()
+            .expect("DROPBOX_* env vars must be set in .env.local to run this ignored test");
         let client = DropboxClient::new(config);
-        let path = format!("{}/_unitprep_dropbox_client_test_scratch", client.root_path());
+        let path = format!(
+            "{}/_unitprep_dropbox_client_test_scratch",
+            client.root_path()
+        );
 
         client
             .create_folder_if_missing(&path)

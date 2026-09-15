@@ -17,7 +17,7 @@ use crate::clients::person_index::{
 };
 use crate::process_street::ProcessStreetClient;
 
-use super::progress::{SyncError, SyncProgressHandle, SyncState, SyncStats, try_claim_running};
+use super::progress::{try_claim_running, SyncError, SyncProgressHandle, SyncState, SyncStats};
 use super::refresh::{refresh_matching_company, refresh_matching_facility};
 
 /// See this module's own doc comment for why a fixed, non-empty
@@ -39,7 +39,10 @@ fn default_sync_interval_hours() -> i16 {
 /// fixture or live call needed. `None` (never synced before) always
 /// needs a refresh; otherwise a run only needs one when PS's own
 /// `updatedDate` has moved past what was last recorded.
-fn needs_refresh(previously_synced_at: Option<DateTime<Utc>>, current_updated_at: DateTime<Utc>) -> bool {
+fn needs_refresh(
+    previously_synced_at: Option<DateTime<Utc>>,
+    current_updated_at: DateTime<Utc>,
+) -> bool {
     match previously_synced_at {
         Some(prev) => prev < current_updated_at,
         None => true,
@@ -65,8 +68,16 @@ type ExtractFn = fn(&[crate::process_street::FormField]) -> Vec<ExtractedPerson>
 
 const WORKFLOWS: &[(&str, &str, ExtractFn)] = &[
     (INTAKE_WORKFLOW_ID, "intake", extract_intake_people),
-    (MERCHANT_ACCOUNT_WORKFLOW_ID, "merchant_account", extract_merchant_account_people),
-    (CONTRACT_ORDER_WORKFLOW_ID, "contract_order", extract_contract_order_people),
+    (
+        MERCHANT_ACCOUNT_WORKFLOW_ID,
+        "merchant_account",
+        extract_merchant_account_people,
+    ),
+    (
+        CONTRACT_ORDER_WORKFLOW_ID,
+        "contract_order",
+        extract_contract_order_people,
+    ),
 ];
 
 /// Applies the delta check to exactly one run, refreshing it (deleting
@@ -259,19 +270,23 @@ pub async fn run_all_workflows_with_progress(
         }
     }
 
-    let total_runs: usize = per_workflow_runs.iter().map(|(_, _, runs)| runs.len()).sum();
+    let total_runs: usize = per_workflow_runs
+        .iter()
+        .map(|(_, _, runs)| runs.len())
+        .sum();
     progress.write().total_runs = total_runs;
 
     let mut results = Vec::with_capacity(per_workflow_runs.len());
 
     for (workflow_key, extract, runs) in &per_workflow_runs {
-        let mut tx = match begin_rls_transaction(db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()]).await {
-            Ok(tx) => tx,
-            Err(err) => {
-                fail(db, progress, actor_user_id, err.to_string()).await;
-                return;
-            }
-        };
+        let mut tx =
+            match begin_rls_transaction(db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()]).await {
+                Ok(tx) => tx,
+                Err(err) => {
+                    fail(db, progress, actor_user_id, err.to_string()).await;
+                    return;
+                }
+            };
 
         let stats_result = sync_runs_within(&mut tx, client, workflow_key, runs, *extract, || {
             progress.write().processed_runs += 1;
@@ -525,8 +540,8 @@ mod live_tests {
     async fn sync_one_run_indexes_a_real_run_and_skips_an_unchanged_one() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let ps_config =
-            ProcessStreetConfig::from_env().expect("PROCESS_STREET_API_KEY must be set in .env.local");
+        let ps_config = ProcessStreetConfig::from_env()
+            .expect("PROCESS_STREET_API_KEY must be set in .env.local");
         let client = ProcessStreetClient::new(ps_config);
 
         let matches = client
@@ -538,14 +553,22 @@ mod live_tests {
             .find(|r| r.name == "Highway 20 Self Storage - QMS Onboarding")
             .expect("Highway 20's Intake run must be found");
 
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
         let mut tx = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
             .await
             .expect("beginning an RLS transaction must succeed");
 
-        let first_outcome = sync_one_run(&mut tx, &client, "intake", &run, None, extract_intake_people)
-            .await
-            .expect("first sync pass must succeed against the live API");
+        let first_outcome = sync_one_run(
+            &mut tx,
+            &client,
+            "intake",
+            &run,
+            None,
+            extract_intake_people,
+        )
+        .await
+        .expect("first sync pass must succeed against the live API");
 
         assert!(
             first_outcome.person_index_refreshed,
@@ -610,11 +633,12 @@ mod live_tests {
     async fn refresh_matching_facility_updates_unprotected_fields_and_skips_protected_ones() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let ps_config =
-            ProcessStreetConfig::from_env().expect("PROCESS_STREET_API_KEY must be set in .env.local");
+        let ps_config = ProcessStreetConfig::from_env()
+            .expect("PROCESS_STREET_API_KEY must be set in .env.local");
         let client = ProcessStreetClient::new(ps_config);
 
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
         let mut tx = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
             .await
             .expect("beginning an RLS transaction must succeed");
@@ -658,7 +682,10 @@ mod live_tests {
         let refreshed = refresh_matching_facility(&mut tx, run_id, &mapped.facility)
             .await
             .expect("refresh must succeed against the real schema");
-        assert!(refreshed, "the fresh name should differ from the seeded state and trigger an update");
+        assert!(
+            refreshed,
+            "the fresh name should differ from the seeded state and trigger an update"
+        );
 
         let (phone, name): (Option<String>, String) =
             sqlx::query_as("SELECT phone, name FROM clients.facilities WHERE id = $1")
@@ -667,8 +694,15 @@ mod live_tests {
                 .await
                 .expect("re-reading the facility must succeed");
 
-        assert_eq!(phone.as_deref(), Some("MANUALLY-CORRECTED"), "a protected field must survive a refresh");
-        assert_eq!(name, "Highway 20 Self Storage", "an unprotected field must take the fresh PS value");
+        assert_eq!(
+            phone.as_deref(),
+            Some("MANUALLY-CORRECTED"),
+            "a protected field must survive a refresh"
+        );
+        assert_eq!(
+            name, "Highway 20 Self Storage",
+            "an unprotected field must take the fresh PS value"
+        );
 
         tx.rollback()
             .await

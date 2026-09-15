@@ -14,7 +14,9 @@ use axum::{
 use tower_governor::{governor::GovernorConfigBuilder, GovernorError, GovernorLayer};
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer};
+use tower_http::request_id::{
+    MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
+};
 use tower_http::trace::TraceLayer;
 
 use super::health::{health, health_db, whoami};
@@ -22,14 +24,13 @@ use super::{
     acknowledge_group_warnings, analyze, auth_audit_logs, auth_audit_logs_export,
     auth_configuration, auth_invites, auth_login, auth_logout, auth_passkey_reverify,
     auth_register, auth_roles, auth_totp, auth_user_role, auth_user_status, auth_users,
-    cancel_session, client_ops_activity_logs, client_ops_activity_logs_export,
-    client_ops_qms_tags, clients_companies, clients_create, clients_detail, clients_dropbox_folder,
-    clients_elavon, clients_facility_people, clients_facility_policies_edit, clients_preview, clients_resync,
-    clients_search, clients_sync, correct,
-    correct_group, dedup, discover, dropbox_browse, dropbox_settings,
-    exclude_group, exclude_groups, exempt, export, group_file_confirm, group_file_upload,
-    process_street_settings, resolve_unit_format, select_group_file, select_unit_file, tagger,
-    tool_runs, unit_file_upload, upload, validate,
+    cancel_session, client_ops_activity_logs, client_ops_activity_logs_export, client_ops_qms_tags,
+    clients_companies, clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
+    clients_facility_people, clients_facility_policies_edit, clients_filter_options,
+    clients_preview, clients_resync, clients_search, clients_sync, correct, correct_group, dedup,
+    discover, dropbox_browse, dropbox_settings, exclude_group, exclude_groups, exempt, export,
+    group_file_confirm, group_file_upload, process_street_settings, resolve_unit_format,
+    select_group_file, select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
 };
 use super::{internal_error, ApiErrorBody, AppState};
 
@@ -341,9 +342,22 @@ pub fn router(state: AppState) -> Router {
             "/clients",
             get(clients_companies::list_companies).post(clients_create::create_client),
         )
+        // Any authenticated caller -- read-only discovery data for the
+        // clients-page filter checkboxes, same reasoning as
+        // clients_search above. See clients_filter_options's own module doc.
+        .route(
+            "/clients/filter-options",
+            get(clients_filter_options::get_filter_options),
+        )
         // Requires client_ops.perform -- see clients_companies's own module doc.
-        .route("/clients/{company_id}/archive", post(clients_companies::archive_company))
-        .route("/clients/{company_id}/unarchive", post(clients_companies::unarchive_company))
+        .route(
+            "/clients/{company_id}/archive",
+            post(clients_companies::archive_company),
+        )
+        .route(
+            "/clients/{company_id}/unarchive",
+            post(clients_companies::unarchive_company),
+        )
         // Requires client_ops.perform -- see clients_resync's own module doc.
         .route(
             "/clients/{company_id}/resync/preview",
@@ -401,7 +415,8 @@ pub fn router(state: AppState) -> Router {
         )
         .route(
             "/clients/{company_id}/facilities/{facility_id}/elavon/link",
-            post(clients_elavon::link_facility_elavon).delete(clients_elavon::unlink_facility_elavon),
+            post(clients_elavon::link_facility_elavon)
+                .delete(clients_elavon::unlink_facility_elavon),
         )
         .route(
             "/clients/{company_id}/facilities/{facility_id}/elavon/resync",
@@ -417,11 +432,13 @@ pub fn router(state: AppState) -> Router {
         // is the real gate (see clients_facility_people's own module doc).
         .route(
             "/clients/{company_id}/facilities/{facility_id}/people",
-            get(clients_facility_people::get_facility_people).post(clients_facility_people::add_facility_person),
+            get(clients_facility_people::get_facility_people)
+                .post(clients_facility_people::add_facility_person),
         )
         .route(
             "/clients/{company_id}/facilities/{facility_id}/people/{person_id}",
-            put(clients_facility_people::edit_facility_person).delete(clients_facility_people::unlink_facility_person),
+            put(clients_facility_people::edit_facility_person)
+                .delete(clients_facility_people::unlink_facility_person),
         )
         // Onboarding Work tab -- read-only, any authenticated caller, RLS
         // is the real gate (see tool_runs's own module doc).
@@ -446,7 +463,8 @@ pub fn router(state: AppState) -> Router {
         // migrations for why this moved off client_ops.perform.
         .route(
             "/integrations/process-street/settings",
-            get(process_street_settings::get_settings).put(process_street_settings::update_settings),
+            get(process_street_settings::get_settings)
+                .put(process_street_settings::update_settings),
         )
         // Admin-only (integrations.manage) read and write -- this one
         // holds the Dropbox app's own secrets, so unlike the Process
@@ -604,25 +622,27 @@ pub fn router(state: AppState) -> Router {
                         request_id = %request_id,
                     )
                 })
-                .on_response(|response: &Response, latency: Duration, _span: &tracing::Span| {
-                    // Read back off the response rather than threading
-                    // the id through separately -- PropagateRequestIdLayer
-                    // (more inner, so it runs first on the way out) has
-                    // already copied it onto this exact response by the
-                    // time this fires.
-                    let request_id = response
-                        .headers()
-                        .get(&REQUEST_ID_HEADER)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("unknown");
+                .on_response(
+                    |response: &Response, latency: Duration, _span: &tracing::Span| {
+                        // Read back off the response rather than threading
+                        // the id through separately -- PropagateRequestIdLayer
+                        // (more inner, so it runs first on the way out) has
+                        // already copied it onto this exact response by the
+                        // time this fires.
+                        let request_id = response
+                            .headers()
+                            .get(&REQUEST_ID_HEADER)
+                            .and_then(|v| v.to_str().ok())
+                            .unwrap_or("unknown");
 
-                    tracing::info!(
-                        request_id = %request_id,
-                        status = response.status().as_u16(),
-                        latency_ms = latency.as_millis(),
-                        "request completed"
-                    );
-                }),
+                        tracing::info!(
+                            request_id = %request_id,
+                            status = response.status().as_u16(),
+                            latency_ms = latency.as_millis(),
+                            "request completed"
+                        );
+                    },
+                ),
         )
         // Outermost layer overall -- assigns the id before anything else
         // (cors, body-limit, catch-panic, every route) sees the request,

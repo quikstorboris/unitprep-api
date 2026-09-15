@@ -237,7 +237,11 @@ impl MappedIntakeRun {
         self.owners
             .iter()
             .map(|p| (p, "owner"))
-            .chain(self.district_managers.iter().map(|p| (p, "district_manager")))
+            .chain(
+                self.district_managers
+                    .iter()
+                    .map(|p| (p, "district_manager")),
+            )
             .chain(self.managers.iter().map(|p| (p, "manager")))
             .map(|(p, role)| PersonAssignment {
                 full_name: p.full_name.clone(),
@@ -285,7 +289,10 @@ fn map_fees(fields: &[FormField]) -> Vec<MappedFee> {
 
 fn map_taxes(fields: &[FormField]) -> Option<MappedTaxes> {
     let taxes = MappedTaxes {
-        sales_tax_applies_raw: value_for(fields, "Is_this_facility_subject_to_sales_tax_on_retail_items?"),
+        sales_tax_applies_raw: value_for(
+            fields,
+            "Is_this_facility_subject_to_sales_tax_on_retail_items?",
+        ),
         sales_tax_rate_raw: value_for(fields, "Sales_Tax_Rate"),
         rent_tax_applies_raw: value_for(fields, "Does_the_facility_use_a_Rent_Tax?"),
         rent_tax_rate_raw: value_for(fields, "What_is_the_rate_of_this_Rent_Tax?"),
@@ -359,7 +366,10 @@ fn map_delinquency_steps(fields: &[FormField]) -> Vec<MappedDelinquencyStep> {
     }
 
     let notice_type = value_for(fields, "Which_type_of_late_notice_should_recur?");
-    let lockout_days = value_for(fields, "How_many_days_after_Paid_THRU_Date_should_Lockout_occur?");
+    let lockout_days = value_for(
+        fields,
+        "How_many_days_after_Paid_THRU_Date_should_Lockout_occur?",
+    );
     if notice_type.is_some() || lockout_days.is_some() {
         let parts: Vec<String> = [
             notice_type,
@@ -401,7 +411,10 @@ fn map_coverage_tiers(fields: &[FormField]) -> Vec<MappedCoverageTier> {
             fields,
             &format!("Coverage_Level_{tier_number}_-_Total_Coverage_Amount:"),
         );
-        let cost = value_for(fields, &format!("Coverage_Level_{tier_number}_-_Cost_to_Tenant:"));
+        let cost = value_for(
+            fields,
+            &format!("Coverage_Level_{tier_number}_-_Cost_to_Tenant:"),
+        );
         if amount.is_some() || cost.is_some() {
             tiers.push(MappedCoverageTier {
                 tier_number,
@@ -433,8 +446,11 @@ fn map_commission(fields: &[FormField]) -> Option<MappedCommission> {
 
 pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
     let company = MappedCompany {
-        legal_name: value_for(fields, "What_is_the_name_of_your_Corporation_/_Business_Entity?")
-            .or_else(|| value_for(fields, "Company_Name:")),
+        legal_name: value_for(
+            fields,
+            "What_is_the_name_of_your_Corporation_/_Business_Entity?",
+        )
+        .or_else(|| value_for(fields, "Company_Name:")),
         corporate_email: value_for(fields, "What_is_your_Corporate_Email_Address?"),
         corporate_phone: value_for(fields, "What_is_your_Corporate_Phone_Number?"),
         corporate_address_street: value_for(fields, "Corporate_Street_Address:"),
@@ -464,7 +480,10 @@ pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
         phone: value_for(fields, "What_is_the_facility_phone_number?"),
         email: value_for(fields, "What_is_the_facility_email_address?"),
         units_count: parse_units_count(fields, "How_many_units_does_this_facility_have?"),
-        primary_storage_offering: value_for(fields, "What_is_the_PRIMARY_storage_offering_at_this_facility?"),
+        primary_storage_offering: value_for(
+            fields,
+            "What_is_the_PRIMARY_storage_offering_at_this_facility?",
+        ),
         previous_pms: value_for(
             fields,
             "What_Property_Management_Software_is_this_facility_currently_using?",
@@ -473,7 +492,10 @@ pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
         go_live_date: parse_ps_date(fields, "What_is_the_Go_Live_Date_on_the_contract?"),
         dropbox_folder_url: value_for(fields, "Facility_Onboarding_folder_URL:"),
         subdomain: value_for(fields, "Facility_Subdomain:"),
-        subdomain_exists_in_qms_raw: value_for(fields, "Does_the_Facility_Subdomain_already_exist_in_QMS?"),
+        subdomain_exists_in_qms_raw: value_for(
+            fields,
+            "Does_the_Facility_Subdomain_already_exist_in_QMS?",
+        ),
         system_email: value_for(fields, "Facility_Email_Address:"),
         website_url: value_for(fields, "What_is_the_URL_for_this_facility?"),
     };
@@ -517,8 +539,14 @@ mod tests {
     fn maps_company_and_facility_from_the_real_highway20_run() {
         let mapped = map_intake_fields(&real_fields());
 
-        assert_eq!(mapped.company.legal_name.as_deref(), Some("Prairie Enterprises LLC"));
-        assert_eq!(mapped.facility.name.as_deref(), Some("Highway 20 Self Storage"));
+        assert_eq!(
+            mapped.company.legal_name.as_deref(),
+            Some("Prairie Enterprises LLC")
+        );
+        assert_eq!(
+            mapped.facility.name.as_deref(),
+            Some("Highway 20 Self Storage")
+        );
         // Real value has trailing whitespace in PS's own export -- must come back trimmed.
         assert_eq!(mapped.facility.city.as_deref(), Some("Marengo"));
         assert_eq!(mapped.facility.units_count, Some(788));
@@ -535,7 +563,10 @@ mod tests {
         // `map_intake_fields`, only ever set by the confirmation
         // screen's fallback-accept action.
         let mapped = map_intake_fields(&real_fields());
-        assert_eq!(mapped.facility.website_url.as_deref(), Some("https://www.highway20selfstorage.com"));
+        assert_eq!(
+            mapped.facility.website_url.as_deref(),
+            Some("https://www.highway20selfstorage.com")
+        );
         assert_eq!(mapped.company.website_url, None);
     }
 
@@ -576,7 +607,10 @@ mod tests {
             mapped.facility.subdomain.as_deref(),
             Some("tenant.highway20selfstorage.com")
         );
-        assert_eq!(mapped.facility.subdomain_exists_in_qms_raw.as_deref(), Some("No"));
+        assert_eq!(
+            mapped.facility.subdomain_exists_in_qms_raw.as_deref(),
+            Some("No")
+        );
         assert_eq!(
             mapped.facility.system_email.as_deref(),
             Some("info@tenant.highway20selfstorage.com")
@@ -621,7 +655,9 @@ mod tests {
         assert_eq!(mapped.coverage_tiers.len(), 5);
         assert_eq!(mapped.coverage_tiers[0].tier_number, 1);
         assert_eq!(
-            mapped.coverage_tiers[0].total_coverage_amount_raw.as_deref(),
+            mapped.coverage_tiers[0]
+                .total_coverage_amount_raw
+                .as_deref(),
             Some("2000.00")
         );
     }
@@ -656,7 +692,10 @@ mod tests {
             mapped.owners.len()
         );
         assert_eq!(
-            people.iter().filter(|p| p.role == "district_manager").count(),
+            people
+                .iter()
+                .filter(|p| p.role == "district_manager")
+                .count(),
             mapped.district_managers.len()
         );
         assert_eq!(

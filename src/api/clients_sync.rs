@@ -70,7 +70,13 @@ pub async fn start_sync(
     let user_agent = request_context(&headers);
 
     if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "start_process_street_sync", user_agent, None)
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "start_process_street_sync",
+            user_agent,
+            None,
+        )
         .await
     {
         return response;
@@ -93,7 +99,11 @@ pub async fn start_sync(
         run_all_workflows_with_progress(&client, &db, &progress, actor_user_id).await;
     });
 
-    (StatusCode::ACCEPTED, Json(StartSyncResponse { started: true })).into_response()
+    (
+        StatusCode::ACCEPTED,
+        Json(StartSyncResponse { started: true }),
+    )
+        .into_response()
 }
 
 #[derive(Debug, Serialize)]
@@ -149,8 +159,12 @@ mod tests {
         // empty_state() carries process_street: None -- confirms a
         // permitted caller still gets a clear 503, not a panic or a
         // silently-accepted no-op, when PS isn't configured.
-        let response =
-            start_sync(State(empty_state()), onboarding_manager_user(), HeaderMap::new()).await;
+        let response = start_sync(
+            State(empty_state()),
+            onboarding_manager_user(),
+            HeaderMap::new(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 

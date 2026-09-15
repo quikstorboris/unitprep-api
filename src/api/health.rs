@@ -120,15 +120,16 @@ pub(super) async fn whoami(
     })?
     .unwrap_or(false);
 
-    let (first_name, last_name): (String, String) =
-        sqlx::query_as("SELECT first_name, last_name FROM auth.users WHERE id = $1")
-            .bind(user.user_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|err| {
-                tracing::error!(error = %err, user_id = %user.user_id, "whoami: name lookup failed");
-                internal_error("Could not look up your account")
-            })?;
+    let (first_name, last_name): (String, String) = sqlx::query_as(
+        "SELECT first_name, last_name FROM auth.users WHERE id = $1",
+    )
+    .bind(user.user_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|err| {
+        tracing::error!(error = %err, user_id = %user.user_id, "whoami: name lookup failed");
+        internal_error("Could not look up your account")
+    })?;
 
     tx.commit().await.map_err(|err| {
         tracing::error!(error = %err, user_id = %user.user_id, "whoami: commit failed");

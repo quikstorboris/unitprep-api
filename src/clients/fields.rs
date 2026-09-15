@@ -91,7 +91,10 @@ mod tests {
 
     #[test]
     fn values_for_joins_a_multi_choice_fields_selected_values() {
-        let fields = vec![multi_choice_field("Accepted_Payment_Methods:", &["Cash", "Check", "Visa"])];
+        let fields = vec![multi_choice_field(
+            "Accepted_Payment_Methods:",
+            &["Cash", "Check", "Visa"],
+        )];
         assert_eq!(
             values_for(&fields, "Accepted_Payment_Methods:").as_deref(),
             Some("Cash, Check, Visa")

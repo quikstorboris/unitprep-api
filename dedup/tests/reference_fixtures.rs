@@ -65,7 +65,10 @@ fn qsx_vendor() -> VendorFormat {
             "CustNumb".to_string(),
             "AddressStreet1".to_string(),
         ],
-        field_mapping: columns.iter().map(|c| (c.to_string(), c.to_string())).collect(),
+        field_mapping: columns
+            .iter()
+            .map(|c| (c.to_string(), c.to_string()))
+            .collect(),
         transform_key: None,
     }
 }

@@ -61,10 +61,13 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::clients::intake_mapping::{map_intake_fields, MappedCompany, MappedFacility};
-use crate::clients::merchant_account_mapping::{credentials_added_to_qms_from_tasks, map_merchant_account_fields};
+use crate::clients::merchant_account_mapping::{
+    credentials_added_to_qms_from_tasks, map_merchant_account_fields,
+};
 use crate::clients::people::PersonAssignment;
 use crate::clients::repository::{
-    ingest_merchant_account_run, insert_company, insert_facility, insert_facility_policies_and_people,
+    ingest_merchant_account_run, insert_company, insert_facility,
+    insert_facility_policies_and_people,
 };
 use crate::process_street::{FormField, ProcessStreetClient, ProcessStreetError, Task};
 
@@ -111,7 +114,10 @@ pub struct EditableFacilityFields {
 /// comment) so a later sync -- scheduled or the scoped Re-sync button --
 /// never silently overwrites a real human correction with whatever
 /// Process Street currently says for that one field.
-pub(crate) fn diff_company_fields(fresh: &MappedCompany, reviewed: &MappedCompany) -> Vec<&'static str> {
+pub(crate) fn diff_company_fields(
+    fresh: &MappedCompany,
+    reviewed: &MappedCompany,
+) -> Vec<&'static str> {
     let mut changed = Vec::new();
     if fresh.legal_name != reviewed.legal_name {
         changed.push("legal_name");
@@ -162,7 +168,10 @@ pub(crate) fn diff_company_fields(fresh: &MappedCompany, reviewed: &MappedCompan
 /// `go_live_date` is never compared since it's not part of that type at
 /// all (see this module's own doc comment on why it's structurally
 /// excluded from review).
-fn diff_facility_fields(fresh: &MappedFacility, reviewed: &EditableFacilityFields) -> Vec<&'static str> {
+fn diff_facility_fields(
+    fresh: &MappedFacility,
+    reviewed: &EditableFacilityFields,
+) -> Vec<&'static str> {
     let mut changed = Vec::new();
     if fresh.name != reviewed.name {
         changed.push("name");
@@ -219,7 +228,10 @@ fn diff_facility_fields(fresh: &MappedFacility, reviewed: &EditableFacilityField
 /// -- `go_live_date` (and anything else future fields might add here
 /// before this module catches up) is left exactly as PS mapped it,
 /// never touched by the override.
-fn apply_facility_overrides(mapped: MappedFacility, overrides: EditableFacilityFields) -> MappedFacility {
+fn apply_facility_overrides(
+    mapped: MappedFacility,
+    overrides: EditableFacilityFields,
+) -> MappedFacility {
     MappedFacility {
         name: overrides.name,
         street_address: overrides.street_address,
@@ -291,7 +303,9 @@ pub(crate) async fn check_not_already_imported(
     if already.is_empty() {
         Ok(())
     } else {
-        Err(CreateError::AlreadyImported(already.into_iter().map(|(id,)| id).collect()))
+        Err(CreateError::AlreadyImported(
+            already.into_iter().map(|(id,)| id).collect(),
+        ))
     }
 }
 
@@ -333,11 +347,22 @@ pub async fn create_company_and_facilities(
     facility_selections: &[(String, EditableFacilityFields, Option<String>)],
 ) -> Result<CreatedFromSelection, CreateError> {
     let mut all_run_ids: Vec<&str> = vec![company_intake_run_id];
-    all_run_ids.extend(facility_selections.iter().map(|(run_id, _, _)| run_id.as_str()));
+    all_run_ids.extend(
+        facility_selections
+            .iter()
+            .map(|(run_id, _, _)| run_id.as_str()),
+    );
     check_not_already_imported(tx, &all_run_ids).await?;
 
     let fetched = fetch_create_data(client, company_intake_run_id, facility_selections).await?;
-    write_create_data(tx, company_intake_run_id, reviewed_company, facility_selections, &fetched).await
+    write_create_data(
+        tx,
+        company_intake_run_id,
+        reviewed_company,
+        facility_selections,
+        &fetched,
+    )
+    .await
 }
 
 /// Every distinct run id's fields/tasks, fetched once from PS,
@@ -372,7 +397,11 @@ pub async fn fetch_create_data(
     // combined concurrent fetch, not a second round after facility
     // creation.
     let mut fetch_run_ids: HashSet<&str> = std::iter::once(company_intake_run_id)
-        .chain(facility_selections.iter().map(|(run_id, _, _)| run_id.as_str()))
+        .chain(
+            facility_selections
+                .iter()
+                .map(|(run_id, _, _)| run_id.as_str()),
+        )
         .collect();
     fetch_run_ids.extend(
         facility_selections
@@ -395,8 +424,10 @@ pub async fn fetch_create_data(
     // own doc for why). Intake/Contract Order tasks aren't fetched here;
     // `ps_task_status` population for those is separate, still-unbuilt
     // work (Phase 4 item 7).
-    let distinct_ma_run_ids: HashSet<&str> =
-        facility_selections.iter().filter_map(|(_, _, ma_run_id)| ma_run_id.as_deref()).collect();
+    let distinct_ma_run_ids: HashSet<&str> = facility_selections
+        .iter()
+        .filter_map(|(_, _, ma_run_id)| ma_run_id.as_deref())
+        .collect();
     let task_fetches = distinct_ma_run_ids.into_iter().map(|run_id| async move {
         let result = client.get_run_tasks(run_id).await;
         (run_id.to_string(), result)
@@ -406,7 +437,10 @@ pub async fn fetch_create_data(
         tasks_by_ma_run_id.insert(run_id, result?);
     }
 
-    Ok(FetchedCreateData { fields_by_run_id, tasks_by_ma_run_id })
+    Ok(FetchedCreateData {
+        fields_by_run_id,
+        tasks_by_ma_run_id,
+    })
 }
 
 /// The database-only half -- takes data `fetch_create_data` already
@@ -424,7 +458,11 @@ pub async fn write_create_data(
     fetched: &FetchedCreateData,
 ) -> Result<CreatedFromSelection, CreateError> {
     let mut all_run_ids: Vec<&str> = vec![company_intake_run_id];
-    all_run_ids.extend(facility_selections.iter().map(|(run_id, _, _)| run_id.as_str()));
+    all_run_ids.extend(
+        facility_selections
+            .iter()
+            .map(|(run_id, _, _)| run_id.as_str()),
+    );
     check_not_already_imported(tx, &all_run_ids).await?;
 
     let company_fields = fetched
@@ -433,7 +471,8 @@ pub async fn write_create_data(
         .expect("the company's own run was fetched above");
     let company_snapshot: Value = serde_json::to_value(company_fields).unwrap_or(Value::Null);
     let fresh_company_mapping = map_intake_fields(company_fields);
-    let company_manually_edited_fields = diff_company_fields(&fresh_company_mapping.company, reviewed_company);
+    let company_manually_edited_fields =
+        diff_company_fields(&fresh_company_mapping.company, reviewed_company);
 
     let legal_name = reviewed_company
         .legal_name
@@ -471,7 +510,8 @@ pub async fn write_create_data(
             &facility_manually_edited_fields,
         )
         .await?;
-        insert_facility_policies_and_people(tx, facility_id, &mapped, &snapshot, &overrides.people).await?;
+        insert_facility_policies_and_people(tx, facility_id, &mapped, &snapshot, &overrides.people)
+            .await?;
 
         if let Some(ma_run_id) = merchant_account_run_id {
             let ma_fields = fetched
@@ -484,13 +524,23 @@ pub async fn write_create_data(
                 .get(ma_run_id.as_str())
                 .expect("every resolved Merchant Account run's tasks were fetched above");
             let credentials_added_to_qms = credentials_added_to_qms_from_tasks(ma_tasks);
-            ingest_merchant_account_run(tx, facility_id, &mapped_ma, ma_run_id, credentials_added_to_qms).await?;
+            ingest_merchant_account_run(
+                tx,
+                facility_id,
+                &mapped_ma,
+                ma_run_id,
+                credentials_added_to_qms,
+            )
+            .await?;
         }
 
         facility_ids.push(facility_id);
     }
 
-    Ok(CreatedFromSelection { company_id, facility_ids })
+    Ok(CreatedFromSelection {
+        company_id,
+        facility_ids,
+    })
 }
 
 #[cfg(test)]
@@ -551,7 +601,8 @@ mod override_tests {
         // `None` here means "the user cleared this field", not "leave it
         // alone" -- confirms the merge is a real overlay of every
         // editable field, not a sparse patch.
-        let result = apply_facility_overrides(fully_mapped_facility(), EditableFacilityFields::default());
+        let result =
+            apply_facility_overrides(fully_mapped_facility(), EditableFacilityFields::default());
 
         assert_eq!(result.name, None);
         assert_eq!(result.street_address, None);
@@ -560,8 +611,8 @@ mod override_tests {
 
 #[cfg(test)]
 mod diff_tests {
-    use super::*;
     use super::override_tests::fully_mapped_facility;
+    use super::*;
 
     fn fully_mapped_company() -> MappedCompany {
         MappedCompany {
@@ -704,15 +755,17 @@ mod live_tests {
         let _ = dotenvy::from_filename(".env.local");
         set_test_key();
 
-        let ps_config =
-            ProcessStreetConfig::from_env().expect("PROCESS_STREET_API_KEY must be set in .env.local");
+        let ps_config = ProcessStreetConfig::from_env()
+            .expect("PROCESS_STREET_API_KEY must be set in .env.local");
         let client = ProcessStreetClient::new(ps_config);
 
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
         let user_id = Uuid::new_v4();
-        let mut tx = crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
-            .await
-            .expect("beginning an RLS transaction must succeed");
+        let mut tx =
+            crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
+                .await
+                .expect("beginning an RLS transaction must succeed");
 
         let reviewed_company = MappedCompany {
             legal_name: Some("Prairie Enterprises LLC".to_string()),
@@ -767,15 +820,17 @@ mod live_tests {
         let _ = dotenvy::from_filename(".env.local");
         set_test_key();
 
-        let ps_config =
-            ProcessStreetConfig::from_env().expect("PROCESS_STREET_API_KEY must be set in .env.local");
+        let ps_config = ProcessStreetConfig::from_env()
+            .expect("PROCESS_STREET_API_KEY must be set in .env.local");
         let client = ProcessStreetClient::new(ps_config);
 
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
         let user_id = Uuid::new_v4();
-        let mut tx = crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
-            .await
-            .expect("beginning an RLS transaction must succeed");
+        let mut tx =
+            crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
+                .await
+                .expect("beginning an RLS transaction must succeed");
 
         let reviewed_company = MappedCompany {
             legal_name: Some("Prairie Enterprises LLC".to_string()),
@@ -787,7 +842,11 @@ mod live_tests {
             &mut tx,
             highway_20_run_id,
             &reviewed_company,
-            &[(highway_20_run_id.to_string(), EditableFacilityFields::default(), None)],
+            &[(
+                highway_20_run_id.to_string(),
+                EditableFacilityFields::default(),
+                None,
+            )],
         )
         .await
         .expect("creating a company whose source run is also a facility must succeed");
@@ -800,7 +859,10 @@ mod live_tests {
                 .fetch_one(&mut *tx)
                 .await
                 .unwrap();
-        assert_eq!(facility_ps_intake_run_id.as_deref(), Some(highway_20_run_id));
+        assert_eq!(
+            facility_ps_intake_run_id.as_deref(),
+            Some(highway_20_run_id)
+        );
 
         tx.rollback()
             .await
@@ -819,27 +881,40 @@ mod live_tests {
         let _ = dotenvy::from_filename(".env.local");
         set_test_key();
 
-        let ps_config =
-            ProcessStreetConfig::from_env().expect("PROCESS_STREET_API_KEY must be set in .env.local");
+        let ps_config = ProcessStreetConfig::from_env()
+            .expect("PROCESS_STREET_API_KEY must be set in .env.local");
         let client = ProcessStreetClient::new(ps_config);
 
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
         let user_id = Uuid::new_v4();
-        let mut tx = crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
-            .await
-            .expect("beginning an RLS transaction must succeed");
+        let mut tx =
+            crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
+                .await
+                .expect("beginning an RLS transaction must succeed");
 
         let reviewed_company = MappedCompany {
             legal_name: Some("Prairie Enterprises LLC".to_string()),
             ..Default::default()
         };
-        create_company_and_facilities(&client, &mut tx, "iy22NyiqGjwAAytKp0NErQ", &reviewed_company, &[])
-            .await
-            .expect("first create must succeed");
+        create_company_and_facilities(
+            &client,
+            &mut tx,
+            "iy22NyiqGjwAAytKp0NErQ",
+            &reviewed_company,
+            &[],
+        )
+        .await
+        .expect("first create must succeed");
 
-        let second_attempt =
-            create_company_and_facilities(&client, &mut tx, "iy22NyiqGjwAAytKp0NErQ", &reviewed_company, &[])
-                .await;
+        let second_attempt = create_company_and_facilities(
+            &client,
+            &mut tx,
+            "iy22NyiqGjwAAytKp0NErQ",
+            &reviewed_company,
+            &[],
+        )
+        .await;
 
         match second_attempt {
             Err(CreateError::AlreadyImported(ids)) => {

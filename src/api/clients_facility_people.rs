@@ -72,7 +72,9 @@ use crate::clients::repository::{
 const SOURCES: &[&str] = &["process_street", "manual"];
 
 fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers.get(axum::http::header::USER_AGENT).and_then(|value| value.to_str().ok())
+    headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -112,19 +114,20 @@ pub async fn get_facility_people(
         }
     };
 
-    let facility: Option<FacilityIdentity> =
-        match sqlx::query_as("SELECT ps_intake_run_id FROM clients.facilities WHERE id = $1 AND company_id = $2")
-            .bind(facility_id)
-            .bind(company_id)
-            .fetch_optional(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "facility lookup for people tab failed");
-                return internal_error("Could not load this facility's Users tab");
-            }
-        };
+    let facility: Option<FacilityIdentity> = match sqlx::query_as(
+        "SELECT ps_intake_run_id FROM clients.facilities WHERE id = $1 AND company_id = $2",
+    )
+    .bind(facility_id)
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "facility lookup for people tab failed");
+            return internal_error("Could not load this facility's Users tab");
+        }
+    };
     let Some(facility) = facility else {
         let _ = tx.commit().await;
         return not_found("not_found", "No such facility.".to_string());
@@ -198,11 +201,18 @@ pub async fn get_facility_people(
         if person.source != "process_street" {
             continue;
         }
-        let Some(email) = person.email.as_deref() else { continue };
+        let Some(email) = person.email.as_deref() else {
+            continue;
+        };
 
         let same_email_role: Vec<&PersonAssignment> = candidates
             .iter()
-            .filter(|c| c.role == person.role && c.email.as_deref().is_some_and(|e| e.eq_ignore_ascii_case(email)))
+            .filter(|c| {
+                c.role == person.role
+                    && c.email
+                        .as_deref()
+                        .is_some_and(|e| e.eq_ignore_ascii_case(email))
+            })
             .collect();
 
         let candidate = same_email_role
@@ -217,8 +227,13 @@ pub async fn get_facility_people(
             continue;
         }
 
-        if let Err(err) =
-            heal_person_in_place(&mut tx, person.person_id, &candidate.full_name, candidate.phone.as_deref()).await
+        if let Err(err) = heal_person_in_place(
+            &mut tx,
+            person.person_id,
+            &candidate.full_name,
+            candidate.phone.as_deref(),
+        )
+        .await
         {
             tracing::error!(
                 error = %err,
@@ -273,10 +288,16 @@ pub async fn add_facility_person(
     let user_agent = request_context(&headers);
 
     if request.full_name.trim().is_empty() {
-        return bad_request("invalid_request", "full_name is required and must not be blank.".to_string());
+        return bad_request(
+            "invalid_request",
+            "full_name is required and must not be blank.".to_string(),
+        );
     }
     if !SOURCES.contains(&request.source.as_str()) {
-        return bad_request("invalid_request", format!("\"{}\" is not a recognized source.", request.source));
+        return bad_request(
+            "invalid_request",
+            format!("\"{}\" is not a recognized source.", request.source),
+        );
     }
 
     let assignment = PersonAssignment {
@@ -294,25 +315,28 @@ pub async fn add_facility_person(
         }
     };
 
-    let facility_exists: Option<(Uuid,)> =
-        match sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
-            .bind(facility_id)
-            .bind(company_id)
-            .fetch_optional(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for add person failed");
-                return internal_error("Could not add this person");
-            }
-        };
+    let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
+        "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",
+    )
+    .bind(facility_id)
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for add person failed");
+            return internal_error("Could not add this person");
+        }
+    };
     if facility_exists.is_none() {
         let _ = tx.rollback().await;
         return not_found("not_found", "No such facility.".to_string());
     }
 
-    if let Err(err) = upsert_person_and_link_to_facility(&mut tx, facility_id, &assignment, &request.source).await {
+    if let Err(err) =
+        upsert_person_and_link_to_facility(&mut tx, facility_id, &assignment, &request.source).await
+    {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, facility_id = %facility_id, "failed to upsert facility person");
         return internal_error("Could not add this person");
@@ -377,7 +401,10 @@ pub async fn edit_facility_person(
     let user_agent = request_context(&headers);
 
     if request.full_name.trim().is_empty() {
-        return bad_request("invalid_request", "full_name is required and must not be blank.".to_string());
+        return bad_request(
+            "invalid_request",
+            "full_name is required and must not be blank.".to_string(),
+        );
     }
 
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
@@ -388,19 +415,20 @@ pub async fn edit_facility_person(
         }
     };
 
-    let facility_exists: Option<(Uuid,)> =
-        match sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
-            .bind(facility_id)
-            .bind(company_id)
-            .fetch_optional(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for edit person failed");
-                return internal_error("Could not save this person");
-            }
-        };
+    let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
+        "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",
+    )
+    .bind(facility_id)
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for edit person failed");
+            return internal_error("Could not save this person");
+        }
+    };
     if facility_exists.is_none() {
         let _ = tx.rollback().await;
         return not_found("not_found", "No such facility.".to_string());
@@ -443,7 +471,10 @@ pub async fn edit_facility_person(
         Ok(Some(_)) => {}
         Ok(None) => {
             let _ = tx.rollback().await;
-            return not_found("not_found", "No such person on this facility's roster.".to_string());
+            return not_found(
+                "not_found",
+                "No such person on this facility's roster.".to_string(),
+            );
         }
         Err(err) => {
             let _ = tx.rollback().await;
@@ -512,19 +543,20 @@ pub async fn unlink_facility_person(
         }
     };
 
-    let facility_exists: Option<(Uuid,)> =
-        match sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
-            .bind(facility_id)
-            .bind(company_id)
-            .fetch_optional(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for unlink person failed");
-                return internal_error("Could not remove this person");
-            }
-        };
+    let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
+        "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",
+    )
+    .bind(facility_id)
+    .bind(company_id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "facility existence check for unlink person failed");
+            return internal_error("Could not remove this person");
+        }
+    };
     if facility_exists.is_none() {
         let _ = tx.rollback().await;
         return not_found("not_found", "No such facility.".to_string());
@@ -550,7 +582,9 @@ pub async fn unlink_facility_person(
         }
     };
 
-    if let Err(err) = unlink_person_from_facility(&mut tx, facility_id, person_id, &query.role).await {
+    if let Err(err) =
+        unlink_person_from_facility(&mut tx, facility_id, person_id, &query.role).await
+    {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, facility_id = %facility_id, person_id = %person_id, "failed to unlink facility person");
         return internal_error("Could not remove this person");
@@ -589,8 +623,12 @@ mod tests {
 
     #[tokio::test]
     async fn get_facility_people_reaches_the_database() {
-        let response =
-            get_facility_people(State(empty_state()), test_user(), Path((Uuid::new_v4(), Uuid::new_v4()))).await;
+        let response = get_facility_people(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
@@ -703,7 +741,9 @@ mod tests {
             test_user(),
             HeaderMap::new(),
             Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
-            axum::extract::Query(UnlinkFacilityPersonQuery { role: "owner".to_string() }),
+            axum::extract::Query(UnlinkFacilityPersonQuery {
+                role: "owner".to_string(),
+            }),
         )
         .await;
 

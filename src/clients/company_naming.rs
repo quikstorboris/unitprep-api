@@ -68,7 +68,8 @@ pub fn resolve_company_name(
 ) -> Option<String> {
     if let Some(nma) = merchant_account {
         if is_sole_proprietor(nma.ownership_type.as_deref()) {
-            if let (Some(owner), Some(dba)) = (primary_owner_name(nma), nma.business_dba.as_deref()) {
+            if let (Some(owner), Some(dba)) = (primary_owner_name(nma), nma.business_dba.as_deref())
+            {
                 return Some(format!("{owner} DBA {dba}"));
             }
         }
@@ -130,7 +131,10 @@ mod tests {
         // merchant_account_mapping's own tests) and its real
         // Business_DBA is "Highway 20 self storage".
         let resolved = resolve_company_name(Some("Ignored When Sole Prop"), Some(&nma));
-        assert_eq!(resolved.as_deref(), Some("Kyle Lindley DBA Highway 20 self storage"));
+        assert_eq!(
+            resolved.as_deref(),
+            Some("Kyle Lindley DBA Highway 20 self storage")
+        );
     }
 
     #[test]
@@ -138,7 +142,10 @@ mod tests {
         let mut nma = real_merchant_account();
         nma.ownership_type = Some("SOLE PROP".to_string());
         let resolved = resolve_company_name(None, Some(&nma));
-        assert_eq!(resolved.as_deref(), Some("Kyle Lindley DBA Highway 20 self storage"));
+        assert_eq!(
+            resolved.as_deref(),
+            Some("Kyle Lindley DBA Highway 20 self storage")
+        );
     }
 
     #[test]

@@ -56,7 +56,8 @@ mod tests {
     // directly: no SSN/bank-account/government-ID field exists in
     // either real run's ~99 fields).
     const TRI_COUNTY_FIELDS: &str = include_str!("testdata/tri_county_contract_order_fields.json");
-    const DUBUQUELAND_FIELDS: &str = include_str!("testdata/dubuqueland_contract_order_fields.json");
+    const DUBUQUELAND_FIELDS: &str =
+        include_str!("testdata/dubuqueland_contract_order_fields.json");
 
     fn fields(json: &str) -> Vec<FormField> {
         serde_json::from_str(json).expect("fixture must parse as Vec<FormField>")

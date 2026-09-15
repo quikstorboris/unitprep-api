@@ -298,7 +298,11 @@ pub async fn get_company_detail(
             OwnerInfo {
                 facility_id: row.facility_id,
                 facility_name: row.facility_name,
-                party_role: if row.party_role == "signer" { "signer" } else { "owner" },
+                party_role: if row.party_role == "signer" {
+                    "signer"
+                } else {
+                    "owner"
+                },
                 display_name: row.display_name,
                 title: row.title,
                 ownership_percent: row.ownership_percent,
@@ -526,11 +530,12 @@ async fn fetch_facility_exists(
     facility_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
     let mut tx = begin_rls_transaction(db, user_id, role_keys).await?;
-    let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
-        .bind(facility_id)
-        .bind(company_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2")
+            .bind(facility_id)
+            .bind(company_id)
+            .fetch_optional(&mut *tx)
+            .await?;
     tx.commit().await?;
     Ok(row.is_some())
 }
@@ -670,11 +675,12 @@ async fn fetch_specials_raw_text(
     facility_id: Uuid,
 ) -> Result<Option<String>, sqlx::Error> {
     let mut tx = begin_rls_transaction(db, user_id, role_keys).await?;
-    let row: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT raw_text FROM clients.policy_specials WHERE facility_policies_id = $1")
-            .bind(facility_id)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT raw_text FROM clients.policy_specials WHERE facility_policies_id = $1",
+    )
+    .bind(facility_id)
+    .fetch_optional(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(row.and_then(|(text,)| text))
 }
@@ -750,7 +756,13 @@ pub async fn get_facility_policies(
         specials_result,
         flags_result,
     ) = tokio::join!(
-        fetch_facility_exists(&state.db, user.user_id, &user.role_keys, company_id, facility_id),
+        fetch_facility_exists(
+            &state.db,
+            user.user_id,
+            &user.role_keys,
+            company_id,
+            facility_id
+        ),
         fetch_policy_fees(&state.db, user.user_id, &user.role_keys, facility_id),
         fetch_policy_taxes(&state.db, user.user_id, &user.role_keys, facility_id),
         fetch_tax_entries(&state.db, user.user_id, &user.role_keys, facility_id),
@@ -882,21 +894,30 @@ mod tests {
         // empty_state()'s pool never connects, so any handler that
         // reaches the database at all surfaces as a 500 -- the success
         // signal here is "it reached the query", not a real 404.
-        let response = get_company_detail(State(empty_state()), test_user(), Path(Uuid::new_v4())).await;
+        let response =
+            get_company_detail(State(empty_state()), test_user(), Path(Uuid::new_v4())).await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
     async fn get_facility_detail_reaches_the_database() {
-        let response =
-            get_facility_detail(State(empty_state()), test_user(), Path((Uuid::new_v4(), Uuid::new_v4()))).await;
+        let response = get_facility_detail(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]
     async fn get_facility_policies_reaches_the_database() {
-        let response =
-            get_facility_policies(State(empty_state()), test_user(), Path((Uuid::new_v4(), Uuid::new_v4()))).await;
+        let response = get_facility_policies(
+            State(empty_state()),
+            test_user(),
+            Path((Uuid::new_v4(), Uuid::new_v4())),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

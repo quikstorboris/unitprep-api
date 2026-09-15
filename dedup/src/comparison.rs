@@ -169,9 +169,7 @@ fn field_matches_across(
     name: FieldName,
     kind: crate::types::FieldKind,
 ) -> bool {
-    let mut values = group
-        .iter()
-        .map(|r| comparison_key(kind, r.field(name)));
+    let mut values = group.iter().map(|r| comparison_key(kind, r.field(name)));
     let first = match values.next() {
         Some(v) => v,
         None => return true,
@@ -343,7 +341,9 @@ mod tests {
         ];
         let differing = find_differing_categories(&group);
         assert!(
-            differing.iter().all(|m| m.category != FieldCategory::AltContact),
+            differing
+                .iter()
+                .all(|m| m.category != FieldCategory::AltContact),
             "a placeholder value in a Plain field must match a genuinely blank one: {differing:?}"
         );
     }

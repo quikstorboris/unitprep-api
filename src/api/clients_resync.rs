@@ -192,12 +192,10 @@ async fn fetch_fresh_fields(
     client: &crate::process_street::ProcessStreetClient,
     run_ids: HashSet<String>,
 ) -> HashMap<String, Vec<FormField>> {
-    let fetches = run_ids
-        .into_iter()
-        .map(|run_id| async move {
-            let result = client.get_run_form_fields(&run_id).await;
-            (run_id, result)
-        });
+    let fetches = run_ids.into_iter().map(|run_id| async move {
+        let result = client.get_run_form_fields(&run_id).await;
+        (run_id, result)
+    });
 
     let mut fields_by_run_id = HashMap::new();
     for (run_id, result) in join_all(fetches).await {
@@ -282,12 +280,18 @@ async fn load_comparisons(
                 .as_deref()
                 .and_then(|id| fields_by_run_id.get(id))
                 .map(|fields| map_intake_fields(fields).facility);
-            FacilityComparison { row: facility, fresh }
+            FacilityComparison {
+                row: facility,
+                fresh,
+            }
         })
         .collect();
 
     Ok(Some((
-        CompanyComparison { row: company, fresh: company_fresh },
+        CompanyComparison {
+            row: company,
+            fresh: company_fresh,
+        },
         facility_comparisons,
     )))
 }
@@ -308,7 +312,12 @@ fn classify_company_diff(company: &CompanyComparison) -> (usize, Vec<ResyncConfl
     let mut safe_count = 0;
     let mut conflicts = Vec::new();
     for field in differing {
-        if company.row.manually_edited_fields.iter().any(|p| p == field) {
+        if company
+            .row
+            .manually_edited_fields
+            .iter()
+            .any(|p| p == field)
+        {
             conflicts.push(ResyncConflict {
                 entity_type: "company",
                 entity_id: company.row.id,
@@ -335,7 +344,12 @@ fn classify_facility_diff(facility: &FacilityComparison) -> (usize, Vec<ResyncCo
     let mut safe_count = 0;
     let mut conflicts = Vec::new();
     for field in differing {
-        if facility.row.manually_edited_fields.iter().any(|p| p == field) {
+        if facility
+            .row
+            .manually_edited_fields
+            .iter()
+            .any(|p| p == field)
+        {
             conflicts.push(ResyncConflict {
                 entity_type: "facility",
                 entity_id: facility.row.id,
@@ -400,7 +414,11 @@ pub async fn preview_resync(
         conflicts.extend(facility_conflicts);
     }
 
-    Json(PreviewResyncResponse { safe_update_count, conflicts }).into_response()
+    Json(PreviewResyncResponse {
+        safe_update_count,
+        conflicts,
+    })
+    .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -439,9 +457,12 @@ fn effective_protected_fields(
     stored
         .iter()
         .filter(|field| {
-            !resolutions
-                .iter()
-                .any(|r| r.use_fresh && r.entity_type == entity_type && r.entity_id == entity_id && &r.field == *field)
+            !resolutions.iter().any(|r| {
+                r.use_fresh
+                    && r.entity_type == entity_type
+                    && r.entity_id == entity_id
+                    && &r.field == *field
+            })
         })
         .cloned()
         .collect()
@@ -484,8 +505,12 @@ pub async fn apply_resync(
     let mut updated_count = 0;
 
     if let Some(fresh) = &company.fresh {
-        let effective_protected =
-            effective_protected_fields(&company.row.manually_edited_fields, &request.resolutions, "company", company.row.id);
+        let effective_protected = effective_protected_fields(
+            &company.row.manually_edited_fields,
+            &request.resolutions,
+            "company",
+            company.row.id,
+        );
         let current = company.row.mapped();
         let refreshed = apply_company_refresh(&current, fresh, &effective_protected);
 
@@ -534,7 +559,9 @@ pub async fn apply_resync(
     }
 
     for facility in &facilities {
-        let Some(fresh) = &facility.fresh else { continue };
+        let Some(fresh) = &facility.fresh else {
+            continue;
+        };
         let effective_protected = effective_protected_fields(
             &facility.row.manually_edited_fields,
             &request.resolutions,
@@ -630,7 +657,10 @@ mod tests {
             offers_tenant_insurance_raw: Some("Yes".to_string()),
             insurance_provider: Some("Example Insurance Co".to_string()),
             website_url: Some("https://example.com".to_string()),
-            manually_edited_fields: manually_edited_fields.into_iter().map(String::from).collect(),
+            manually_edited_fields: manually_edited_fields
+                .into_iter()
+                .map(String::from)
+                .collect(),
         }
     }
 
@@ -655,7 +685,10 @@ mod tests {
             subdomain_exists_in_qms_raw: Some("No".to_string()),
             system_email: Some("system@example.com".to_string()),
             website_url: Some("https://facility.example.com".to_string()),
-            manually_edited_fields: manually_edited_fields.into_iter().map(String::from).collect(),
+            manually_edited_fields: manually_edited_fields
+                .into_iter()
+                .map(String::from)
+                .collect(),
         }
     }
 
@@ -663,8 +696,14 @@ mod tests {
     fn classify_company_diff_reports_no_conflicts_when_nothing_is_protected() {
         let row = company_row("Old Legal Name LLC", vec![]);
         let fresh = row.mapped();
-        let fresh = MappedCompany { legal_name: Some("Prairie Enterprises LLC".to_string()), ..fresh };
-        let comparison = CompanyComparison { row, fresh: Some(fresh) };
+        let fresh = MappedCompany {
+            legal_name: Some("Prairie Enterprises LLC".to_string()),
+            ..fresh
+        };
+        let comparison = CompanyComparison {
+            row,
+            fresh: Some(fresh),
+        };
 
         let (safe_count, conflicts) = classify_company_diff(&comparison);
 
@@ -676,8 +715,14 @@ mod tests {
     fn classify_company_diff_surfaces_a_conflict_for_a_protected_field_that_genuinely_differs() {
         let row = company_row("Manually Corrected LLC", vec!["legal_name"]);
         let fresh = row.mapped();
-        let fresh = MappedCompany { legal_name: Some("Stale PS Legal Name LLC".to_string()), ..fresh };
-        let comparison = CompanyComparison { row, fresh: Some(fresh) };
+        let fresh = MappedCompany {
+            legal_name: Some("Stale PS Legal Name LLC".to_string()),
+            ..fresh
+        };
+        let comparison = CompanyComparison {
+            row,
+            fresh: Some(fresh),
+        };
 
         let (safe_count, conflicts) = classify_company_diff(&comparison);
 
@@ -686,8 +731,14 @@ mod tests {
         let conflict = &conflicts[0];
         assert_eq!(conflict.entity_type, "company");
         assert_eq!(conflict.field, "legal_name");
-        assert_eq!(conflict.current_value.as_deref(), Some("Manually Corrected LLC"));
-        assert_eq!(conflict.fresh_value.as_deref(), Some("Stale PS Legal Name LLC"));
+        assert_eq!(
+            conflict.current_value.as_deref(),
+            Some("Manually Corrected LLC")
+        );
+        assert_eq!(
+            conflict.fresh_value.as_deref(),
+            Some("Stale PS Legal Name LLC")
+        );
     }
 
     #[test]
@@ -711,7 +762,10 @@ mod tests {
         // there is nothing to choose between.
         let row = company_row("Same Value LLC", vec!["legal_name"]);
         let fresh = row.mapped();
-        let comparison = CompanyComparison { row, fresh: Some(fresh) };
+        let comparison = CompanyComparison {
+            row,
+            fresh: Some(fresh),
+        };
 
         let (safe_count, conflicts) = classify_company_diff(&comparison);
 
@@ -723,8 +777,14 @@ mod tests {
     fn classify_facility_diff_reports_no_conflicts_when_nothing_is_protected() {
         let row = facility_row("Highway 20 Self Storage", "555-000-0000", vec![]);
         let fresh = row.mapped();
-        let fresh = MappedFacility { phone: Some("555-111-1111".to_string()), ..fresh };
-        let comparison = FacilityComparison { row, fresh: Some(fresh) };
+        let fresh = MappedFacility {
+            phone: Some("555-111-1111".to_string()),
+            ..fresh
+        };
+        let comparison = FacilityComparison {
+            row,
+            fresh: Some(fresh),
+        };
 
         let (safe_count, conflicts) = classify_facility_diff(&comparison);
 
@@ -736,8 +796,14 @@ mod tests {
     fn classify_facility_diff_surfaces_a_conflict_for_a_protected_field_that_genuinely_differs() {
         let row = facility_row("Highway 20 Self Storage", "555-CORRECTED", vec!["phone"]);
         let fresh = row.mapped();
-        let fresh = MappedFacility { phone: Some("555-STALE".to_string()), ..fresh };
-        let comparison = FacilityComparison { row, fresh: Some(fresh) };
+        let fresh = MappedFacility {
+            phone: Some("555-STALE".to_string()),
+            ..fresh
+        };
+        let comparison = FacilityComparison {
+            row,
+            fresh: Some(fresh),
+        };
 
         let (safe_count, conflicts) = classify_facility_diff(&comparison);
 
@@ -761,7 +827,10 @@ mod tests {
             go_live_date: chrono::NaiveDate::from_ymd_opt(2026, 12, 31),
             ..row.mapped()
         };
-        let comparison = FacilityComparison { row, fresh: Some(fresh) };
+        let comparison = FacilityComparison {
+            row,
+            fresh: Some(fresh),
+        };
 
         let (safe_count, conflicts) = classify_facility_diff(&comparison);
 
@@ -773,8 +842,14 @@ mod tests {
     fn company_field_value_reads_every_known_field_by_name() {
         let company = company_row("Prairie Enterprises LLC", vec![]).mapped();
 
-        assert_eq!(company_field_value(&company, "legal_name").as_deref(), Some("Prairie Enterprises LLC"));
-        assert_eq!(company_field_value(&company, "corporate_email").as_deref(), Some("office@example.com"));
+        assert_eq!(
+            company_field_value(&company, "legal_name").as_deref(),
+            Some("Prairie Enterprises LLC")
+        );
+        assert_eq!(
+            company_field_value(&company, "corporate_email").as_deref(),
+            Some("office@example.com")
+        );
         assert_eq!(company_field_value(&company, "not_a_real_field"), None);
     }
 
@@ -782,22 +857,34 @@ mod tests {
     fn facility_field_value_reads_every_known_field_by_name_including_numeric_ones() {
         let facility = facility_row("Highway 20 Self Storage", "555-000-0000", vec![]).mapped();
 
-        assert_eq!(facility_field_value(&facility, "name").as_deref(), Some("Highway 20 Self Storage"));
+        assert_eq!(
+            facility_field_value(&facility, "name").as_deref(),
+            Some("Highway 20 Self Storage")
+        );
         // units_count is Option<i32>, not Option<String> -- confirms it's
         // stringified, not silently dropped as a type mismatch.
-        assert_eq!(facility_field_value(&facility, "units_count").as_deref(), Some("100"));
+        assert_eq!(
+            facility_field_value(&facility, "units_count").as_deref(),
+            Some("100")
+        );
         assert_eq!(facility_field_value(&facility, "not_a_real_field"), None);
     }
 
     #[tokio::test]
     async fn preview_refuses_insufficient_permission_without_touching_anything() {
-        let response = preview_resync(State(empty_state()), test_user(), Path(Uuid::new_v4())).await;
+        let response =
+            preview_resync(State(empty_state()), test_user(), Path(Uuid::new_v4())).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn preview_reports_not_configured_with_sufficient_permission() {
-        let response = preview_resync(State(empty_state()), onboarding_manager_user(), Path(Uuid::new_v4())).await;
+        let response = preview_resync(
+            State(empty_state()),
+            onboarding_manager_user(),
+            Path(Uuid::new_v4()),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
@@ -807,13 +894,20 @@ mod tests {
             State(empty_state()),
             test_user(),
             Path(Uuid::new_v4()),
-            Json(ApplyResyncRequest { resolutions: vec![] }),
+            Json(ApplyResyncRequest {
+                resolutions: vec![],
+            }),
         )
         .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
-    fn conflict_resolution(entity_type: &str, entity_id: Uuid, field: &str, use_fresh: bool) -> ConflictResolution {
+    fn conflict_resolution(
+        entity_type: &str,
+        entity_id: Uuid,
+        field: &str,
+        use_fresh: bool,
+    ) -> ConflictResolution {
         ConflictResolution {
             entity_type: entity_type.to_string(),
             entity_id,
@@ -836,7 +930,12 @@ mod tests {
     fn a_resolution_with_use_fresh_false_keeps_the_field_protected() {
         let stored = vec!["legal_name".to_string()];
         let entity_id = Uuid::new_v4();
-        let resolutions = vec![conflict_resolution("company", entity_id, "legal_name", false)];
+        let resolutions = vec![conflict_resolution(
+            "company",
+            entity_id,
+            "legal_name",
+            false,
+        )];
 
         let effective = effective_protected_fields(&stored, &resolutions, "company", entity_id);
 
@@ -847,7 +946,12 @@ mod tests {
     fn a_resolution_with_use_fresh_true_drops_the_field_from_protection() {
         let stored = vec!["legal_name".to_string(), "corporate_phone".to_string()];
         let entity_id = Uuid::new_v4();
-        let resolutions = vec![conflict_resolution("company", entity_id, "legal_name", true)];
+        let resolutions = vec![conflict_resolution(
+            "company",
+            entity_id,
+            "legal_name",
+            true,
+        )];
 
         let effective = effective_protected_fields(&stored, &resolutions, "company", entity_id);
 
@@ -861,9 +965,15 @@ mod tests {
         let stored = vec!["phone".to_string()];
         let this_facility = Uuid::new_v4();
         let other_facility = Uuid::new_v4();
-        let resolutions = vec![conflict_resolution("facility", other_facility, "phone", true)];
+        let resolutions = vec![conflict_resolution(
+            "facility",
+            other_facility,
+            "phone",
+            true,
+        )];
 
-        let effective = effective_protected_fields(&stored, &resolutions, "facility", this_facility);
+        let effective =
+            effective_protected_fields(&stored, &resolutions, "facility", this_facility);
 
         assert_eq!(effective, stored);
     }

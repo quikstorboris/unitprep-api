@@ -156,11 +156,13 @@ pub async fn insert_facility_policies_and_people(
     raw_ps_snapshot: &Value,
     people: &[PersonAssignment],
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("INSERT INTO clients.facility_policies (facility_id, raw_ps_snapshot) VALUES ($1, $2)")
-        .bind(facility_id)
-        .bind(raw_ps_snapshot)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO clients.facility_policies (facility_id, raw_ps_snapshot) VALUES ($1, $2)",
+    )
+    .bind(facility_id)
+    .bind(raw_ps_snapshot)
+    .execute(&mut **tx)
+    .await?;
 
     for fee in &mapped.fees {
         sqlx::query(
@@ -238,11 +240,13 @@ pub async fn insert_facility_policies_and_people(
     }
 
     if let Some(specials) = &mapped.specials_raw_text {
-        sqlx::query("INSERT INTO clients.policy_specials (facility_policies_id, raw_text) VALUES ($1, $2)")
-            .bind(facility_id)
-            .bind(specials)
-            .execute(&mut **tx)
-            .await?;
+        sqlx::query(
+            "INSERT INTO clients.policy_specials (facility_policies_id, raw_text) VALUES ($1, $2)",
+        )
+        .bind(facility_id)
+        .bind(specials)
+        .execute(&mut **tx)
+        .await?;
     }
 
     for assignment in people {
@@ -278,11 +282,26 @@ pub async fn ingest_intake_run(
         .legal_name
         .as_deref()
         .unwrap_or("(unnamed company)");
-    let company_id =
-        insert_company(tx, legal_name, &mapped.company, ps_intake_run_id, raw_ps_snapshot, &[]).await?;
-    let facility_id =
-        insert_facility(tx, company_id, &mapped.facility, ps_intake_run_id, raw_ps_snapshot, &[]).await?;
-    insert_facility_policies_and_people(tx, facility_id, mapped, raw_ps_snapshot, &mapped.people()).await?;
+    let company_id = insert_company(
+        tx,
+        legal_name,
+        &mapped.company,
+        ps_intake_run_id,
+        raw_ps_snapshot,
+        &[],
+    )
+    .await?;
+    let facility_id = insert_facility(
+        tx,
+        company_id,
+        &mapped.facility,
+        ps_intake_run_id,
+        raw_ps_snapshot,
+        &[],
+    )
+    .await?;
+    insert_facility_policies_and_people(tx, facility_id, mapped, raw_ps_snapshot, &mapped.people())
+        .await?;
     Ok((company_id, facility_id))
 }
 
@@ -310,11 +329,13 @@ async fn link_person_to_facility(
     role: &str,
 ) -> Result<(), sqlx::Error> {
     let existing: Option<(Uuid,)> = match &person.email {
-        Some(email) => sqlx::query_as("SELECT id FROM clients.people WHERE email = $1 AND full_name ILIKE $2")
-            .bind(email)
-            .bind(&person.full_name)
-            .fetch_optional(&mut **tx)
-            .await?,
+        Some(email) => {
+            sqlx::query_as("SELECT id FROM clients.people WHERE email = $1 AND full_name ILIKE $2")
+                .bind(email)
+                .bind(&person.full_name)
+                .fetch_optional(&mut **tx)
+                .await?
+        }
         None => None,
     };
 
@@ -370,11 +391,13 @@ pub async fn upsert_person_and_link_to_facility(
     source: &str,
 ) -> Result<(), sqlx::Error> {
     let existing: Option<(Uuid,)> = match &assignment.email {
-        Some(email) => sqlx::query_as("SELECT id FROM clients.people WHERE email = $1 AND full_name ILIKE $2")
-            .bind(email)
-            .bind(&assignment.full_name)
-            .fetch_optional(&mut **tx)
-            .await?,
+        Some(email) => {
+            sqlx::query_as("SELECT id FROM clients.people WHERE email = $1 AND full_name ILIKE $2")
+                .bind(email)
+                .bind(&assignment.full_name)
+                .fetch_optional(&mut **tx)
+                .await?
+        }
         None => None,
     };
 
@@ -435,12 +458,14 @@ pub async fn heal_person_in_place(
     full_name: &str,
     phone: Option<&str>,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE clients.people SET full_name = $1, phone = $2, updated_at = now() WHERE id = $3")
-        .bind(full_name)
-        .bind(phone)
-        .bind(person_id)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query(
+        "UPDATE clients.people SET full_name = $1, phone = $2, updated_at = now() WHERE id = $3",
+    )
+    .bind(full_name)
+    .bind(phone)
+    .bind(person_id)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -511,7 +536,11 @@ pub async fn edit_person_and_facility_link(
         .execute(&mut **tx)
         .await?;
 
-    let new_source = if previous_source == "manual" || protect_from_resync { "manual" } else { "process_street" };
+    let new_source = if previous_source == "manual" || protect_from_resync {
+        "manual"
+    } else {
+        "process_street"
+    };
 
     if new_role == old_role {
         sqlx::query("UPDATE clients.facility_people SET source = $1 WHERE facility_id = $2 AND person_id = $3 AND role = $4")
@@ -793,8 +822,7 @@ mod integration_tests {
     // commit (Intake has no sensitive data at all; the Merchant Account
     // fixture has every sensitive value replaced with an obvious fake
     // before it was ever written to disk).
-    const HIGHWAY20_INTAKE_FIELDS: &str =
-        include_str!("testdata/highway20_intake_fields.json");
+    const HIGHWAY20_INTAKE_FIELDS: &str = include_str!("testdata/highway20_intake_fields.json");
     const HIGHWAY20_INTAKE_TASKS: &str = include_str!("testdata/highway20_intake_tasks.json");
     const HIGHWAY20_NMA_FIELDS_SANITIZED: &str =
         include_str!("testdata/highway20_merchant_account_fields_sanitized.json");
@@ -845,21 +873,20 @@ mod integration_tests {
         let _ = dotenvy::from_filename(".env.local");
         set_test_key();
 
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
         let user_id = Uuid::new_v4();
-        let mut tx = crate::auth::begin_rls_transaction(
-            &db,
-            user_id,
-            &["onboarding_manager".to_string()],
-        )
-        .await
-        .expect("beginning an RLS transaction must succeed");
+        let mut tx =
+            crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
+                .await
+                .expect("beginning an RLS transaction must succeed");
 
         let intake_fields: Vec<FormField> =
             serde_json::from_str(HIGHWAY20_INTAKE_FIELDS).expect("intake fixture must parse");
-        let intake_tasks: Vec<Task> =
-            serde_json::from_value(serde_json::from_str::<Value>(HIGHWAY20_INTAKE_TASKS).unwrap()["tasks"].take())
-                .expect("intake tasks fixture must parse");
+        let intake_tasks: Vec<Task> = serde_json::from_value(
+            serde_json::from_str::<Value>(HIGHWAY20_INTAKE_TASKS).unwrap()["tasks"].take(),
+        )
+        .expect("intake tasks fixture must parse");
         let nma_fields: Vec<FormField> =
             serde_json::from_str(HIGHWAY20_NMA_FIELDS_SANITIZED).expect("NMA fixture must parse");
 
@@ -875,9 +902,15 @@ mod integration_tests {
         .await
         .expect("ingesting the real Intake run must succeed");
 
-        ingest_merchant_account_run(&mut tx, facility_id, &mapped_nma, "n1JtiN4m3mP-I0j8BChG4A", true)
-            .await
-            .expect("ingesting the sanitized Merchant Account run must succeed");
+        ingest_merchant_account_run(
+            &mut tx,
+            facility_id,
+            &mapped_nma,
+            "n1JtiN4m3mP-I0j8BChG4A",
+            true,
+        )
+        .await
+        .expect("ingesting the sanitized Merchant Account run must succeed");
 
         upsert_task_status(&mut tx, facility_id, "intake", &intake_tasks)
             .await
@@ -892,13 +925,12 @@ mod integration_tests {
                 .unwrap();
         assert_eq!(legal_name, "Prairie Enterprises LLC");
 
-        let (facility_name, units_count): (String, Option<i32>) = sqlx::query_as(
-            "SELECT name, units_count FROM clients.facilities WHERE id = $1",
-        )
-        .bind(facility_id)
-        .fetch_one(&mut *tx)
-        .await
-        .unwrap();
+        let (facility_name, units_count): (String, Option<i32>) =
+            sqlx::query_as("SELECT name, units_count FROM clients.facilities WHERE id = $1")
+                .bind(facility_id)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
         assert_eq!(facility_name, "Highway 20 Self Storage");
         assert_eq!(units_count, Some(788));
 
@@ -908,7 +940,10 @@ mod integration_tests {
                 .fetch_one(&mut *tx)
                 .await
                 .unwrap();
-        assert_eq!(company_subdomain.as_deref(), Some("prairie-enterprises.qms-email.com"));
+        assert_eq!(
+            company_subdomain.as_deref(),
+            Some("prairie-enterprises.qms-email.com")
+        );
 
         let (facility_subdomain, subdomain_exists_raw, system_email): (
             Option<String>,
@@ -922,9 +957,15 @@ mod integration_tests {
         .fetch_one(&mut *tx)
         .await
         .unwrap();
-        assert_eq!(facility_subdomain.as_deref(), Some("tenant.highway20selfstorage.com"));
+        assert_eq!(
+            facility_subdomain.as_deref(),
+            Some("tenant.highway20selfstorage.com")
+        );
         assert_eq!(subdomain_exists_raw.as_deref(), Some("No"));
-        assert_eq!(system_email.as_deref(), Some("info@tenant.highway20selfstorage.com"));
+        assert_eq!(
+            system_email.as_deref(),
+            Some("info@tenant.highway20selfstorage.com")
+        );
 
         let (fee_count,): (i64,) = sqlx::query_as(
             "SELECT count(*) FROM clients.policy_fees WHERE facility_policies_id = $1",
@@ -933,7 +974,10 @@ mod integration_tests {
         .fetch_one(&mut *tx)
         .await
         .unwrap();
-        assert!(fee_count >= 5, "named fees plus the Any Other Fees blob must all be present");
+        assert!(
+            fee_count >= 5,
+            "named fees plus the Any Other Fees blob must all be present"
+        );
 
         let (tier_count,): (i64,) = sqlx::query_as(
             "SELECT count(*) FROM clients.policy_coverage_tiers WHERE facility_policies_id = $1",
@@ -961,9 +1005,11 @@ mod integration_tests {
         .fetch_one(&mut *tx)
         .await
         .unwrap();
-        let decrypted_secrets =
-            crate::clients::encryption::decrypt(facility_id.as_bytes(), &encrypted_secrets.unwrap())
-                .expect("facility secrets stored in real Postgres must decrypt");
+        let decrypted_secrets = crate::clients::encryption::decrypt(
+            facility_id.as_bytes(),
+            &encrypted_secrets.unwrap(),
+        )
+        .expect("facility secrets stored in real Postgres must decrypt");
         let secrets_json: Value = serde_json::from_slice(&decrypted_secrets).unwrap();
         assert_eq!(secrets_json["ein"], "111111111"); // the fixture's fake EIN
 
@@ -976,9 +1022,11 @@ mod integration_tests {
         .await
         .unwrap();
         let owner1_aad = format!("{facility_id}:owner:1");
-        let decrypted_pii =
-            crate::clients::encryption::decrypt(owner1_aad.as_bytes(), &owner1_encrypted_pii.unwrap())
-                .expect("owner 1's PII stored in real Postgres must decrypt under its own AAD");
+        let decrypted_pii = crate::clients::encryption::decrypt(
+            owner1_aad.as_bytes(),
+            &owner1_encrypted_pii.unwrap(),
+        )
+        .expect("owner 1's PII stored in real Postgres must decrypt under its own AAD");
         let pii_json: Value = serde_json::from_slice(&decrypted_pii).unwrap();
         assert_eq!(pii_json["ssn"], "000000000"); // the fixture's fake SSN
 
@@ -1040,8 +1088,9 @@ mod integration_tests {
         assert!(!raw_snapshot.to_string().contains("111111111")); // the fake EIN must not leak into the plaintext snapshot
 
         // --- Verify ingest_contract_order_run's SQL is valid against the real schema ---
-        let tri_county_fields: Vec<FormField> = serde_json::from_str(TRI_COUNTY_CONTRACT_ORDER_FIELDS)
-            .expect("Tri County contract order fixture must parse");
+        let tri_county_fields: Vec<FormField> =
+            serde_json::from_str(TRI_COUNTY_CONTRACT_ORDER_FIELDS)
+                .expect("Tri County contract order fixture must parse");
         let mapped_contract_order = map_contract_order_fields(&tri_county_fields);
         let contract_order_snapshot: Value =
             serde_json::to_value(&tri_county_fields).unwrap_or(Value::Null);
@@ -1065,7 +1114,9 @@ mod integration_tests {
         .unwrap();
         assert_eq!(stored_run_id, "iz7Jz_awRApa68WuMjtKHw");
 
-        tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
+        tx.rollback()
+            .await
+            .expect("rollback must succeed -- this test writes no real data");
         clear_test_key();
     }
 
@@ -1077,21 +1128,25 @@ mod integration_tests {
     /// the same reason.
     #[tokio::test]
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
-    async fn upsert_person_and_link_to_facility_refreshes_phone_on_a_second_call_with_the_same_name() {
+    async fn upsert_person_and_link_to_facility_refreshes_phone_on_a_second_call_with_the_same_name(
+    ) {
         let _ = dotenvy::from_filename(".env.local");
 
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
         let user_id = Uuid::new_v4();
-        let mut tx = crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
-            .await
-            .expect("beginning an RLS transaction must succeed");
-
-        let (company_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id")
-                .bind("Test Upsert Co")
-                .fetch_one(&mut *tx)
+        let mut tx =
+            crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
                 .await
-                .unwrap();
+                .expect("beginning an RLS transaction must succeed");
+
+        let (company_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id",
+        )
+        .bind("Test Upsert Co")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
 
         let (facility_id,): (Uuid,) = sqlx::query_as(
             "INSERT INTO clients.facilities (company_id, name, source) VALUES ($1, $2, 'manual') RETURNING id",
@@ -1142,10 +1197,20 @@ mod integration_tests {
         .await
         .unwrap();
 
-        assert_eq!(people.len(), 1, "the same email+name must never produce a second person or a second link");
-        assert_eq!(people[0].2.as_deref(), Some("(301) 787-9221"), "phone must be refreshed");
+        assert_eq!(
+            people.len(),
+            1,
+            "the same email+name must never produce a second person or a second link"
+        );
+        assert_eq!(
+            people[0].2.as_deref(),
+            Some("(301) 787-9221"),
+            "phone must be refreshed"
+        );
 
-        tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
+        tx.rollback()
+            .await
+            .expect("rollback must succeed -- this test writes no real data");
     }
 
     /// Proves the real 2026-09-08 Dubuqueland/Soppe bug is fixed: several
@@ -1159,11 +1224,13 @@ mod integration_tests {
     async fn upsert_person_and_link_to_facility_keeps_distinct_names_separate_on_a_shared_email() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
         let user_id = Uuid::new_v4();
-        let mut tx = crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
-            .await
-            .expect("beginning an RLS transaction must succeed");
+        let mut tx =
+            crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
+                .await
+                .expect("beginning an RLS transaction must succeed");
 
         let (company_id,): (Uuid,) = sqlx::query_as(
             "INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id",
@@ -1212,11 +1279,17 @@ mod integration_tests {
 
         assert_eq!(
             people,
-            vec![("Barb Soppe".to_string(),), ("Carrie Krueger".to_string(),), ("Chad Soppe".to_string(),)],
+            vec![
+                ("Barb Soppe".to_string(),),
+                ("Carrie Krueger".to_string(),),
+                ("Chad Soppe".to_string(),)
+            ],
             "three distinct people sharing one email+role must stay three distinct roster rows"
         );
 
-        tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
+        tx.rollback()
+            .await
+            .expect("rollback must succeed -- this test writes no real data");
     }
 
     /// Proves `heal_person_in_place`'s actual point against real
@@ -1231,11 +1304,13 @@ mod integration_tests {
     async fn heal_person_in_place_corrects_a_known_persons_own_name_and_phone() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
         let user_id = Uuid::new_v4();
-        let mut tx = crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
-            .await
-            .expect("beginning an RLS transaction must succeed");
+        let mut tx =
+            crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
+                .await
+                .expect("beginning an RLS transaction must succeed");
 
         let (company_id,): (Uuid,) = sqlx::query_as(
             "INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id",
@@ -1295,11 +1370,20 @@ mod integration_tests {
         .await
         .unwrap();
 
-        assert_eq!(people.len(), 1, "healing in place must never create a second person or a second link");
-        assert_eq!(people[0].0, "Irene Chen", "the stale, garbled name must be corrected");
+        assert_eq!(
+            people.len(),
+            1,
+            "healing in place must never create a second person or a second link"
+        );
+        assert_eq!(
+            people[0].0, "Irene Chen",
+            "the stale, garbled name must be corrected"
+        );
         assert_eq!(people[0].2.as_deref(), Some("(301) 787-9221"));
 
-        tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
+        tx.rollback()
+            .await
+            .expect("rollback must succeed -- this test writes no real data");
     }
 
     /// Proves `policy_delinquency_entries`' own CHECK constraint against
@@ -1313,17 +1397,23 @@ mod integration_tests {
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
     async fn policy_delinquency_entries_trigger_check_matches_the_apps_own_validation() {
         let _ = dotenvy::from_filename(".env.local");
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
-        let mut tx = crate::auth::begin_rls_transaction(&db, Uuid::new_v4(), &["onboarding_manager".to_string()])
-            .await
-            .unwrap();
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let mut tx = crate::auth::begin_rls_transaction(
+            &db,
+            Uuid::new_v4(),
+            &["onboarding_manager".to_string()],
+        )
+        .await
+        .unwrap();
 
-        let (company_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id")
-                .bind("Test Trigger Check Co")
-                .fetch_one(&mut *tx)
-                .await
-                .unwrap();
+        let (company_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id",
+        )
+        .bind("Test Trigger Check Co")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
         let (facility_id,): (Uuid,) = sqlx::query_as(
             "INSERT INTO clients.facilities (company_id, name, source) VALUES ($1, $2, 'manual') RETURNING id",
         )
@@ -1369,9 +1459,14 @@ mod integration_tests {
         .bind(facility_id)
         .execute(&mut *tx)
         .await;
-        assert!(rejected.is_err(), "paid_through_date with a trigger_category must be rejected by the CHECK");
+        assert!(
+            rejected.is_err(),
+            "paid_through_date with a trigger_category must be rejected by the CHECK"
+        );
 
-        tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
+        tx.rollback()
+            .await
+            .expect("rollback must succeed -- this test writes no real data");
     }
 
     /// Proves `edit_person_and_facility_link`'s actual point against
@@ -1386,17 +1481,23 @@ mod integration_tests {
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
     async fn edit_person_and_facility_link_flips_source_to_manual_only_when_protected() {
         let _ = dotenvy::from_filename(".env.local");
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
-        let mut tx = crate::auth::begin_rls_transaction(&db, Uuid::new_v4(), &["onboarding_manager".to_string()])
-            .await
-            .unwrap();
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let mut tx = crate::auth::begin_rls_transaction(
+            &db,
+            Uuid::new_v4(),
+            &["onboarding_manager".to_string()],
+        )
+        .await
+        .unwrap();
 
-        let (company_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id")
-                .bind("Test Edit Person Co")
-                .fetch_one(&mut *tx)
-                .await
-                .unwrap();
+        let (company_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id",
+        )
+        .bind("Test Edit Person Co")
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
         let (facility_id,): (Uuid,) = sqlx::query_as(
             "INSERT INTO clients.facilities (company_id, name, source) VALUES ($1, $2, 'manual') RETURNING id",
         )
@@ -1412,12 +1513,15 @@ mod integration_tests {
             phone: Some("630-650-0137".to_string()),
             role: "owner".to_string(),
         };
-        upsert_person_and_link_to_facility(&mut tx, facility_id, &assignment, "process_street").await.unwrap();
-
-        let (person_id,): (Uuid,) = sqlx::query_as("SELECT id FROM clients.people WHERE email = 'kyle@example.com'")
-            .fetch_one(&mut *tx)
+        upsert_person_and_link_to_facility(&mut tx, facility_id, &assignment, "process_street")
             .await
             .unwrap();
+
+        let (person_id,): (Uuid,) =
+            sqlx::query_as("SELECT id FROM clients.people WHERE email = 'kyle@example.com'")
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
 
         // Edit without protecting -- stays 'process_street'.
         edit_person_and_facility_link(
@@ -1469,6 +1573,8 @@ mod integration_tests {
         .unwrap();
         assert_eq!(source_after_protected_edit, "manual");
 
-        tx.rollback().await.expect("rollback must succeed -- this test writes no real data");
+        tx.rollback()
+            .await
+            .expect("rollback must succeed -- this test writes no real data");
     }
 }

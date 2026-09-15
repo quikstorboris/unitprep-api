@@ -96,7 +96,14 @@ pub fn generate_xlsx(report: &DedupReport, all_records: &[TenantRecord]) -> Resu
                 // column A) so the banner reads as one continuous
                 // divider, not a one-cell label sitting in an otherwise
                 // empty row that looks like a malformed data row.
-                worksheet.merge_range(excel_row, 0, excel_row, LAST_COLUMN, text, &banner_format)?;
+                worksheet.merge_range(
+                    excel_row,
+                    0,
+                    excel_row,
+                    LAST_COLUMN,
+                    text,
+                    &banner_format,
+                )?;
             }
             PlannedRow::Data {
                 record,
@@ -119,7 +126,13 @@ pub fn generate_xlsx(report: &DedupReport, all_records: &[TenantRecord]) -> Resu
                     }
                 }
 
-                write_note_cell(worksheet, excel_row, note, hyperlink_target.as_deref(), &format)?;
+                write_note_cell(
+                    worksheet,
+                    excel_row,
+                    note,
+                    hyperlink_target.as_deref(),
+                    &format,
+                )?;
             }
         }
     }

@@ -43,9 +43,13 @@ use uuid::Uuid;
 const QSX_PREVIOUS_PMS_MARKERS: &[&str] = &["quikstor express", "qsx"];
 
 pub fn is_qsx_legacy(previous_pms: Option<&str>) -> bool {
-    let Some(previous_pms) = previous_pms else { return false };
+    let Some(previous_pms) = previous_pms else {
+        return false;
+    };
     let lower = previous_pms.to_lowercase();
-    QSX_PREVIOUS_PMS_MARKERS.iter().any(|marker| lower.contains(marker))
+    QSX_PREVIOUS_PMS_MARKERS
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 /// One of the five Facility Policies categories -- the column name this
@@ -95,7 +99,9 @@ pub async fn mark_exempt_if_qsx_and_was_empty(
             .fetch_optional(&mut **tx)
             .await?;
 
-    let is_qsx = previous_pms.and_then(|(pms,)| pms).is_some_and(|pms| is_qsx_legacy(Some(&pms)));
+    let is_qsx = previous_pms
+        .and_then(|(pms,)| pms)
+        .is_some_and(|pms| is_qsx_legacy(Some(&pms)));
     if !is_qsx {
         return Ok(());
     }
@@ -104,7 +110,10 @@ pub async fn mark_exempt_if_qsx_and_was_empty(
         "UPDATE clients.facility_policies SET {col} = true WHERE facility_id = $1",
         col = category.exempt_column()
     );
-    sqlx::query(&sql).bind(facility_id).execute(&mut **tx).await?;
+    sqlx::query(&sql)
+        .bind(facility_id)
+        .execute(&mut **tx)
+        .await?;
 
     Ok(())
 }
@@ -157,12 +166,13 @@ mod live_tests {
         tx: &mut Transaction<'_, Postgres>,
         previous_pms: Option<&str>,
     ) -> Uuid {
-        let (company_id,): (Uuid,) =
-            sqlx::query_as("INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id")
-                .bind("Test Exemption Co")
-                .fetch_one(&mut **tx)
-                .await
-                .unwrap();
+        let (company_id,): (Uuid,) = sqlx::query_as(
+            "INSERT INTO clients.companies (legal_name, source) VALUES ($1, 'manual') RETURNING id",
+        )
+        .bind("Test Exemption Co")
+        .fetch_one(&mut **tx)
+        .await
+        .unwrap();
 
         let (facility_id,): (Uuid,) = sqlx::query_as(
             "INSERT INTO clients.facilities (company_id, name, previous_pms, source) \
@@ -185,12 +195,13 @@ mod live_tests {
     }
 
     async fn fees_exempt(tx: &mut Transaction<'_, Postgres>, facility_id: Uuid) -> bool {
-        let (exempt,): (bool,) =
-            sqlx::query_as("SELECT fees_manually_exempt FROM clients.facility_policies WHERE facility_id = $1")
-                .bind(facility_id)
-                .fetch_one(&mut **tx)
-                .await
-                .unwrap();
+        let (exempt,): (bool,) = sqlx::query_as(
+            "SELECT fees_manually_exempt FROM clients.facility_policies WHERE facility_id = $1",
+        )
+        .bind(facility_id)
+        .fetch_one(&mut **tx)
+        .await
+        .unwrap();
         exempt
     }
 
@@ -198,16 +209,26 @@ mod live_tests {
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
     async fn a_qsx_facilitys_empty_category_gets_permanently_exempt() {
         let _ = dotenvy::from_filename(".env.local");
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
-        let mut tx = crate::auth::begin_rls_transaction(&db, Uuid::new_v4(), &["onboarding_manager".to_string()])
-            .await
-            .unwrap();
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let mut tx = crate::auth::begin_rls_transaction(
+            &db,
+            Uuid::new_v4(),
+            &["onboarding_manager".to_string()],
+        )
+        .await
+        .unwrap();
 
         let facility_id = insert_test_facility(&mut tx, Some("QuikStor Express")).await;
 
-        mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Fees, true).await.unwrap();
+        mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Fees, true)
+            .await
+            .unwrap();
 
-        assert!(fees_exempt(&mut tx, facility_id).await, "an empty category on a QSX facility must become exempt");
+        assert!(
+            fees_exempt(&mut tx, facility_id).await,
+            "an empty category on a QSX facility must become exempt"
+        );
 
         tx.rollback().await.unwrap();
     }
@@ -216,17 +237,24 @@ mod live_tests {
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
     async fn a_qsx_facilitys_already_populated_category_never_becomes_exempt() {
         let _ = dotenvy::from_filename(".env.local");
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
-        let mut tx = crate::auth::begin_rls_transaction(&db, Uuid::new_v4(), &["onboarding_manager".to_string()])
-            .await
-            .unwrap();
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let mut tx = crate::auth::begin_rls_transaction(
+            &db,
+            Uuid::new_v4(),
+            &["onboarding_manager".to_string()],
+        )
+        .await
+        .unwrap();
 
         let facility_id = insert_test_facility(&mut tx, Some("QuikStor Express")).await;
 
         // was_empty = false -- this is what a write handler passes when
         // the category already had rows before this save (came from PS,
         // or a previous manual edit), regardless of QSX status.
-        mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Fees, false).await.unwrap();
+        mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Fees, false)
+            .await
+            .unwrap();
 
         assert!(
             !fees_exempt(&mut tx, facility_id).await,
@@ -240,14 +268,21 @@ mod live_tests {
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
     async fn a_non_qsx_facilitys_empty_category_never_becomes_exempt() {
         let _ = dotenvy::from_filename(".env.local");
-        let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
-        let mut tx = crate::auth::begin_rls_transaction(&db, Uuid::new_v4(), &["onboarding_manager".to_string()])
-            .await
-            .unwrap();
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let mut tx = crate::auth::begin_rls_transaction(
+            &db,
+            Uuid::new_v4(),
+            &["onboarding_manager".to_string()],
+        )
+        .await
+        .unwrap();
 
         let facility_id = insert_test_facility(&mut tx, Some("SiteLink")).await;
 
-        mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Fees, true).await.unwrap();
+        mark_exempt_if_qsx_and_was_empty(&mut tx, facility_id, PolicyCategory::Fees, true)
+            .await
+            .unwrap();
 
         assert!(
             !fees_exempt(&mut tx, facility_id).await,

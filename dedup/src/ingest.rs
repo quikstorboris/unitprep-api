@@ -108,11 +108,7 @@ pub fn records_from_csv_document(
 
     let resolved: Vec<(usize, ColumnSetter)> = COLUMNS
         .iter()
-        .filter_map(|(header, setter)| {
-            normalized
-                .header_index(header)
-                .map(|idx| (idx, *setter))
-        })
+        .filter_map(|(header, setter)| normalized.header_index(header).map(|idx| (idx, *setter)))
         .collect();
 
     Ok(normalized
@@ -172,7 +168,10 @@ mod tests {
                 "CustNumb".to_string(),
                 "AddressStreet1".to_string(),
             ],
-            field_mapping: columns.iter().map(|c| (c.to_string(), c.to_string())).collect(),
+            field_mapping: columns
+                .iter()
+                .map(|c| (c.to_string(), c.to_string()))
+                .collect(),
             transform_key: None,
         }
     }
@@ -223,8 +222,20 @@ mod tests {
     #[test]
     fn builds_a_tenant_record_from_a_matching_row() {
         let doc = document(
-            vec!["CustNumb", "UnitNumber", "FirtLast", "Email", "AddressStreet1"],
-            vec![vec!["C1", "101", "Doe, Jane", "jane@example.com", "1 Main St"]],
+            vec![
+                "CustNumb",
+                "UnitNumber",
+                "FirtLast",
+                "Email",
+                "AddressStreet1",
+            ],
+            vec![vec![
+                "C1",
+                "101",
+                "Doe, Jane",
+                "jane@example.com",
+                "1 Main St",
+            ]],
         );
 
         let records =
@@ -290,8 +301,7 @@ mod tests {
         );
 
         let vendors = vec![ess_vendor()];
-        let records =
-            records_from_csv_document(&doc, &vendors).expect("known-good ESS document");
+        let records = records_from_csv_document(&doc, &vendors).expect("known-good ESS document");
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].unit_number, "1");
@@ -313,6 +323,8 @@ mod tests {
         let err = records_from_csv_document(&doc, &qsx_vendors())
             .expect_err("headers don't satisfy any registered vendor's signature");
 
-        assert!(err.to_string().contains("Unrecognized tenant export format"));
+        assert!(err
+            .to_string()
+            .contains("Unrecognized tenant export format"));
     }
 }
