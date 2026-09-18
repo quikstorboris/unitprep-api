@@ -46,6 +46,37 @@
 //! as `Correlation::Ambiguous` rather than just dropping it, so
 //! `clients_search` can show both candidates as "Potential Duplicate"
 //! rows instead of silently leaving Company blank with no explanation.
+//!
+//! **2026-09-17: added a second signal, the run's own `Business_DBA`
+//! field.** The title's parenthetical is a human-typed, best-effort
+//! proxy for the same identifying information the Merchant Account
+//! form already captures cleanly in `Business_DBA` -- and PS's own
+//! naming convention isn't universal: a real Merchant Account run can
+//! be titled plainly (`"<name> - New Elavon Account"`, no parens at
+//! all), which `parenthetical()` can never extract anything from,
+//! regardless of how specific that name is. Real case: Main Street
+//! Storage's own completed application never correlated to anything
+//! by title (confirmed missed a 2-week window this way) while its
+//! `Business_DBA` ("Main Street Storage") matches its Intake facility
+//! name exactly. `Business_DBA` is additive, not a replacement --
+//! either signal alone is enough to make a run a candidate, and a run
+//! with a specific parenthetical AND a specific DBA that disagree on
+//! *which* Intake run they point to still correctly surfaces as
+//! `Correlation::Ambiguous` rather than picking one silently.
+//!
+//! **Known blind spot, confirmed against real data, not yet solved
+//! here**: `Business_DBA` itself can legitimately differ from the
+//! Intake facility name -- e.g. a management company's own internal
+//! name for a property vs. the name a sales rep typed into Intake.
+//! Absolute Storage Management's own conversions are the clearest
+//! examples of this seen so far (**note: Absolute is not a
+//! representative example of client data generally -- see
+//! `[[Gotchas]]`'s own note on this; Prairie Enterprises, Dubuqueland,
+//! and Affordable Storage (Beau Ryan) are the good reference cases**),
+//! and also submit via a PDF-import path that leaves every owner/
+//! signer/address field blank, so there's no fallback signal to try
+//! either. Neither signal here is expected to solve that subset; it
+//! remains a manual-link case.
 
 use std::collections::{HashMap, HashSet};
 
@@ -57,6 +88,14 @@ use sqlx::{Postgres, Transaction};
 pub struct MerchantAccountRunInfo {
     pub run_id: String,
     pub run_name: String,
+    /// This run's own `Business_DBA` form field (falling back to the
+    /// `Facility_Name_in_CRM`/`Facility_Name_in_Zoho` key-drift variants
+    /// -- see `sync::orchestrator::sync_one_run`'s own extraction),
+    /// persisted at sync time so this stays a purely-local lookup. A
+    /// second, more direct correlation signal alongside the run's own
+    /// title -- see `correlate_by_title`'s own doc comment for why
+    /// this was added 2026-09-17.
+    pub business_dba: Option<String>,
     /// PS's own `audit.updatedDate` as of the last sync -- not live,
     /// but this is exactly the value that lets a user tell which of
     /// two duplicate runs is the stale one without leaving this app.
@@ -71,7 +110,7 @@ pub async fn merchant_account_run_titles(
     tx: &mut Transaction<'_, Postgres>,
 ) -> Result<Vec<MerchantAccountRunInfo>, sqlx::Error> {
     sqlx::query_as(
-        "SELECT ps_run_id AS run_id, run_name, ps_updated_at AS updated_at
+        "SELECT ps_run_id AS run_id, run_name, business_dba, ps_updated_at AS updated_at
            FROM clients.ps_sync_state
           WHERE workflow = 'merchant_account'",
     )
@@ -141,14 +180,40 @@ fn is_specific_enough(keyword: &str) -> bool {
     keyword.split_whitespace().count() >= 2 || keyword.chars().count() >= 6
 }
 
+/// Every candidate keyword one Merchant Account run could be found by
+/// -- its own title's parenthetical nickname (the original signal) and
+/// its own `business_dba` (added 2026-09-17), each independently
+/// gated by `is_specific_enough`. Either, both, or neither may apply to
+/// a given run; `correlate_by_title` doesn't need to know which
+/// signal(s) actually fired, just that at least one did.
+fn candidate_keywords(ma: &MerchantAccountRunInfo) -> Vec<&str> {
+    let mut keywords = Vec::new();
+
+    if let Some(nickname) = parenthetical(&ma.run_name) {
+        if is_specific_enough(nickname) {
+            keywords.push(nickname);
+        }
+    }
+
+    if let Some(dba) = ma.business_dba.as_deref().map(str::trim) {
+        if !dba.is_empty() && is_specific_enough(dba) {
+            keywords.push(dba);
+        }
+    }
+
+    keywords
+}
+
 /// Correlates each Intake run in `intake_runs` against every Merchant
-/// Account run in `merchant_account_runs`, by checking whether a
-/// Merchant Account run's own parenthetical nickname appears
-/// (case-insensitive substring) inside the Intake run's own title
-/// text. An Intake run matching zero Merchant Account runs is simply
-/// absent from the result -- matching two or more is surfaced as
-/// `Correlation::Ambiguous`, not silently dropped (see this module's
-/// own doc comment for why that distinction matters for real data).
+/// Account run in `merchant_account_runs`, by checking whether any of
+/// a Merchant Account run's own candidate keywords (see
+/// `candidate_keywords`) appears (case-insensitive substring) inside
+/// the Intake run's own title text. An Intake run matching zero
+/// Merchant Account runs is simply absent from the result -- matching
+/// two or more (whether via the same keyword or two different ones) is
+/// surfaced as `Correlation::Ambiguous`, not silently dropped or
+/// arbitrarily picked (see this module's own doc comment for why that
+/// distinction matters for real data).
 pub fn correlate_by_title(
     intake_runs: &[IntakeRunTitle],
     merchant_account_runs: &[MerchantAccountRunInfo],
@@ -156,20 +221,16 @@ pub fn correlate_by_title(
     let mut candidates: HashMap<&str, HashSet<&str>> = HashMap::new();
 
     for ma in merchant_account_runs {
-        let Some(keyword) = parenthetical(&ma.run_name) else {
-            continue;
-        };
-        if !is_specific_enough(keyword) {
-            continue;
-        }
-        let keyword_lower = keyword.to_lowercase();
+        for keyword in candidate_keywords(ma) {
+            let keyword_lower = keyword.to_lowercase();
 
-        for intake in intake_runs {
-            if intake.title_text.to_lowercase().contains(&keyword_lower) {
-                candidates
-                    .entry(&intake.run_id)
-                    .or_default()
-                    .insert(ma.run_id.as_str());
+            for intake in intake_runs {
+                if intake.title_text.to_lowercase().contains(&keyword_lower) {
+                    candidates
+                        .entry(&intake.run_id)
+                        .or_default()
+                        .insert(ma.run_id.as_str());
+                }
             }
         }
     }
@@ -204,6 +265,16 @@ mod tests {
         MerchantAccountRunInfo {
             run_id: run_id.to_string(),
             run_name: run_name.to_string(),
+            business_dba: None,
+            updated_at: DateTime::UNIX_EPOCH,
+        }
+    }
+
+    fn ma_with_dba(run_id: &str, run_name: &str, business_dba: &str) -> MerchantAccountRunInfo {
+        MerchantAccountRunInfo {
+            run_id: run_id.to_string(),
+            run_name: run_name.to_string(),
+            business_dba: Some(business_dba.to_string()),
             updated_at: DateTime::UNIX_EPOCH,
         }
     }
@@ -406,5 +477,119 @@ mod tests {
         let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
 
         assert_eq!(correlated.len(), 2);
+    }
+
+    // Real bug, 2026-09-17: Main Street Storage's own completed
+    // Merchant Account application ("Main Street Storage - New Elavon
+    // Account") has no parenthetical at all, so it never correlated to
+    // anything by title -- confirmed live, missed entirely until
+    // caught by hand. Its own `Business_DBA` ("Main Street Storage")
+    // matches its Intake facility name exactly, which the DBA signal
+    // now catches on its own, with zero contribution from the title.
+    #[test]
+    fn a_business_dba_with_no_useful_parenthetical_still_correlates() {
+        let intake_runs = vec![intake(
+            "intake-main-street-storage",
+            "Main Street Storage - QMS Onboarding",
+        )];
+        let merchant_account_runs = vec![ma_with_dba(
+            "ma-main-street-storage",
+            "Main Street Storage - New Elavon Account",
+            "Main Street Storage",
+        )];
+
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+
+        assert_eq!(
+            correlated.get("intake-main-street-storage"),
+            Some(&Correlation::Unambiguous(
+                "ma-main-street-storage".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn a_short_generic_business_dba_is_not_specific_enough_either() {
+        let intake_runs = vec![intake("intake-west", "West Self Storage - QMS Onboarding")];
+        let merchant_account_runs = vec![ma_with_dba(
+            "ma-west",
+            "Some Owner LLC - New Elavon Account",
+            "West",
+        )];
+
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+
+        assert!(correlated.is_empty());
+    }
+
+    /// Both signals can independently find the same run for the same
+    /// Intake run -- still just one `Unambiguous` match, not treated as
+    /// a stronger or different kind of result. This module doesn't
+    /// model confidence levels, only whether a run is a candidate at
+    /// all.
+    #[test]
+    fn a_run_found_by_both_signals_at_once_is_still_a_single_unambiguous_match() {
+        let intake_runs = vec![intake(
+            "intake-highway-20",
+            "Highway 20 Self Storage - QMS Onboarding",
+        )];
+        let merchant_account_runs = vec![ma_with_dba(
+            "ma-highway-20",
+            "Prairie Enterprises (Highway 20)",
+            "Highway 20 self storage",
+        )];
+
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+
+        assert_eq!(
+            correlated.get("intake-highway-20"),
+            Some(&Correlation::Unambiguous("ma-highway-20".to_string()))
+        );
+    }
+
+    /// **Known limitation, confirmed here rather than silently
+    /// "fixed"**: a single Merchant Account run whose two signals
+    /// disagree -- its title's parenthetical points at one Intake run,
+    /// its `Business_DBA` points at a *different* one -- currently
+    /// resolves to `Unambiguous` for **both**, independently, since
+    /// each Intake run only ever sees its own candidate count and has
+    /// no way to know the same `ma.run_id` was also claimed elsewhere.
+    /// This blind spot predates the DBA signal (the same thing happens
+    /// today if one run's parenthetical alone happened to substring-
+    /// match two different Intake titles) -- adding a second signal
+    /// just made it easier to hit in practice, since it doubled the
+    /// chances of exactly this disagreement. Not fixed in this pass;
+    /// flagged for a real design discussion (e.g. a post-pass that
+    /// demotes any `ma.run_id` claimed `Unambiguous` by more than one
+    /// Intake run to `Ambiguous` for all of them) rather than guessed
+    /// at here.
+    #[test]
+    fn disagreement_between_the_two_signals_independently_unambiguous_for_both_today() {
+        let intake_runs = vec![
+            intake(
+                "intake-highway-20",
+                "Highway 20 Self Storage - QMS Onboarding",
+            ),
+            intake(
+                "intake-pyott-road",
+                "Pyott Road Self Storage - QMS Onboarding",
+            ),
+        ];
+        let merchant_account_runs = vec![ma_with_dba(
+            "ma-mismatched",
+            "Prairie Enterprises (Highway 20)",
+            "Pyott Road self storage",
+        )];
+
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+
+        assert_eq!(
+            correlated.get("intake-highway-20"),
+            Some(&Correlation::Unambiguous("ma-mismatched".to_string()))
+        );
+        assert_eq!(
+            correlated.get("intake-pyott-road"),
+            Some(&Correlation::Unambiguous("ma-mismatched".to_string()))
+        );
     }
 }

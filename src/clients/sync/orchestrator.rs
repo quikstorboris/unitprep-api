@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::auth::begin_rls_transaction;
 use crate::client_ops::audit_log;
+use crate::clients::fields::value_for_any;
 use crate::clients::intake_mapping::map_intake_fields;
 use crate::clients::known_workflows::{
     CONTRACT_ORDER_WORKFLOW_ID, INTAKE_WORKFLOW_ID, MERCHANT_ACCOUNT_WORKFLOW_ID,
@@ -135,17 +136,37 @@ async fn sync_one_run(
         .await?;
     }
 
+    // A Merchant Account run's own `Business_DBA` -- falling back to
+    // the two known key-drift variants PS's own template has used for
+    // the same "internal name" concept (see
+    // `merchant_account_correlation.rs`'s own doc comment on why this
+    // is a more direct correlation signal than the run's title). Never
+    // populated for intake/contract_order runs today, since neither
+    // workflow's form has these fields -- `value_for_any` just returns
+    // `None`, not an error, so this needs no `if workflow_key == ...`
+    // branch.
+    let business_dba = value_for_any(
+        &fields,
+        &[
+            "Business_DBA".to_string(),
+            "Facility_Name_in_CRM".to_string(),
+            "Facility_Name_in_Zoho".to_string(),
+        ],
+    );
+
     sqlx::query(
-        "INSERT INTO clients.ps_sync_state (workflow, ps_run_id, run_name, ps_updated_at, last_synced_at)
-         VALUES ($1, $2, $3, $4, now())
+        "INSERT INTO clients.ps_sync_state (workflow, ps_run_id, run_name, business_dba, ps_updated_at, last_synced_at)
+         VALUES ($1, $2, $3, $4, $5, now())
          ON CONFLICT (workflow, ps_run_id) DO UPDATE SET
              run_name = EXCLUDED.run_name,
+             business_dba = EXCLUDED.business_dba,
              ps_updated_at = EXCLUDED.ps_updated_at,
              last_synced_at = now()",
     )
     .bind(workflow_key)
     .bind(&run.id)
     .bind(&run.name)
+    .bind(&business_dba)
     .bind(run.updated_at())
     .execute(&mut **tx)
     .await?;
@@ -607,6 +628,62 @@ mod live_tests {
             "an unchanged run must not need re-fetching"
         );
         assert_eq!(second_outcome.people_indexed, 0);
+
+        tx.rollback()
+            .await
+            .expect("rollback must succeed -- this is a one-time check, not a real sync");
+    }
+
+    /// Proves `business_dba` extraction (added 2026-09-17, see
+    /// `merchant_account_correlation.rs`'s own doc comment) actually
+    /// persists a real value, against Highway 20's own real, already-
+    /// linked Merchant Account run -- confirmed elsewhere this session
+    /// to answer `Business_DBA: "Highway 20 self storage"`.
+    #[tokio::test]
+    #[ignore = "needs a real, reachable Postgres AND a real Process Street API key -- see doc comment"]
+    #[serial(client_pii_encryption_key_env)]
+    async fn sync_one_run_persists_a_real_business_dba_for_a_merchant_account_run() {
+        let _ = dotenvy::from_filename(".env.local");
+
+        let ps_config = ProcessStreetConfig::from_env()
+            .expect("PROCESS_STREET_API_KEY must be set in .env.local");
+        let client = ProcessStreetClient::new(ps_config);
+
+        let matches = client
+            .search_workflow_runs_by_name(MERCHANT_ACCOUNT_WORKFLOW_ID, "highway 20")
+            .await
+            .expect("search must succeed against the live API");
+        let run = matches
+            .into_iter()
+            .find(|r| r.name == "Prairie Enterprises (Highway 20)")
+            .expect("Highway 20's own Merchant Account run must be found");
+
+        let db =
+            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let mut tx = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
+            .await
+            .expect("beginning an RLS transaction must succeed");
+
+        sync_one_run(
+            &mut tx,
+            &client,
+            "merchant_account",
+            &run,
+            None,
+            extract_merchant_account_people,
+        )
+        .await
+        .expect("sync pass must succeed against the live API");
+
+        let (business_dba,): (Option<String>,) = sqlx::query_as(
+            "SELECT business_dba FROM clients.ps_sync_state WHERE workflow = 'merchant_account' AND ps_run_id = $1",
+        )
+        .bind(&run.id)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+
+        assert_eq!(business_dba.as_deref(), Some("Highway 20 self storage"));
 
         tx.rollback()
             .await
