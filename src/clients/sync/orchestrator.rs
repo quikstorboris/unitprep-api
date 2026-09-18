@@ -201,12 +201,30 @@ async fn sync_one_run(
 /// `run_all_workflows_with_progress` uses it to advance a shared
 /// progress counter; the plain `sync_workflow` entry point below passes
 /// a no-op.
+///
+/// `force`: when true, every run is treated as never-synced-before
+/// (`previously_synced_at` is always `None`, regardless of what's
+/// actually recorded), so `needs_refresh` unconditionally refetches
+/// every single run in scope rather than skipping unchanged ones. Added
+/// 2026-09-18 specifically so a newly-added locally-indexed field (like
+/// `business_dba`) can be backfilled onto every already-indexed run --
+/// the normal delta sync has no way to do that on its own, since a run
+/// whose PS-side data hasn't changed since its last sync never gets
+/// re-fetched otherwise, no matter how long ago that was or how much
+/// this codebase now wants to extract from it. This is real cost, not
+/// free: forcing every run treats the whole workflow as if none of it
+/// had ever synced, which is exactly what a full backfill needs but
+/// also exactly the number of Process Street requests the delta check
+/// exists to avoid paying every single tick -- see this module's own
+/// "2,500 requests/hour" gotcha before running this against a large
+/// workflow.
 async fn sync_runs_within(
     tx: &mut Transaction<'_, Postgres>,
     client: &ProcessStreetClient,
     workflow_key: &'static str,
     runs: &[crate::process_street::WorkflowRun],
     extract: ExtractFn,
+    force: bool,
     mut on_processed: impl FnMut(),
 ) -> Result<SyncStats, SyncError> {
     let existing: HashMap<String, DateTime<Utc>> = sqlx::query_as(
@@ -224,12 +242,17 @@ async fn sync_runs_within(
     let mut facilities_refreshed = 0;
 
     for run in runs {
+        let previously_synced_at = if force {
+            None
+        } else {
+            existing.get(&run.id).copied()
+        };
         let outcome = sync_one_run(
             tx,
             client,
             workflow_key,
             run,
-            existing.get(&run.id).copied(),
+            previously_synced_at,
             extract,
         )
         .await?;
@@ -274,11 +297,15 @@ async fn sync_runs_within(
 /// `SYNC_COMPLETED` and `SYNC_FAILED` (see `client_ops::audit_log`'s own
 /// module doc on why a failed Process Street call belongs in the same
 /// trail as every other activity, not just server logs).
+///
+/// `force`: see `sync_runs_within`'s own doc comment -- passed straight
+/// through unchanged, applies to every workflow in this one pass.
 pub async fn run_all_workflows_with_progress(
     client: &ProcessStreetClient,
     db: &PgPool,
     progress: &SyncProgressHandle,
     actor_user_id: Uuid,
+    force: bool,
 ) {
     let mut per_workflow_runs = Vec::with_capacity(WORKFLOWS.len());
     for (workflow_id, workflow_key, extract) in WORKFLOWS {
@@ -309,9 +336,17 @@ pub async fn run_all_workflows_with_progress(
                 }
             };
 
-        let stats_result = sync_runs_within(&mut tx, client, workflow_key, runs, *extract, || {
-            progress.write().processed_runs += 1;
-        })
+        let stats_result = sync_runs_within(
+            &mut tx,
+            client,
+            workflow_key,
+            runs,
+            *extract,
+            force,
+            || {
+                progress.write().processed_runs += 1;
+            },
+        )
         .await;
 
         let stats = match stats_result {
@@ -344,6 +379,7 @@ pub async fn run_all_workflows_with_progress(
         None,
         None,
         serde_json::json!({
+            "force": force,
             "total_runs": total_runs,
             "companies_refreshed": companies_refreshed,
             "facilities_refreshed": facilities_refreshed,
@@ -472,7 +508,11 @@ pub fn start_background_sync_task(
                 continue;
             }
 
-            run_all_workflows_with_progress(&client, &db, &progress, SYSTEM_USER_ID).await;
+            // Never forced -- the nightly timer is the routine delta
+            // pass this whole module exists to make cheap. Forcing is
+            // an explicit, occasional choice made through the manual
+            // "Sync Now" trigger, never automatic.
+            run_all_workflows_with_progress(&client, &db, &progress, SYSTEM_USER_ID, false).await;
 
             let finished = progress.read().clone();
             match finished.state {

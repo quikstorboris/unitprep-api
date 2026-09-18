@@ -7,12 +7,12 @@
 //! running" instead of starting a second, overlapping pass.
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::api::{ApiErrorBody, AppState};
 use crate::auth::AuthenticatedUser;
@@ -56,6 +56,19 @@ pub struct StartSyncResponse {
     started: bool,
 }
 
+/// `?force=true` -- see `sync::orchestrator::sync_runs_within`'s own
+/// doc comment for exactly what this changes (every run in every
+/// workflow is treated as never-synced-before, not just the ones PS
+/// itself says changed) and why it costs real Process Street API
+/// budget to run. Defaults to `false` so the existing "Sync Now" button
+/// (which sends no query string at all) keeps its current, cheap
+/// delta-only behavior unchanged.
+#[derive(Debug, Default, Deserialize)]
+pub struct StartSyncQuery {
+    #[serde(default)]
+    pub force: bool,
+}
+
 /// Requires `client_ops.perform` -- same standing permission every
 /// other client-data-mutating action in this app gates on
 /// (`onboarding_manager`/`department_manager` both hold it); the actual
@@ -66,6 +79,7 @@ pub async fn start_sync(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     headers: HeaderMap,
+    Query(query): Query<StartSyncQuery>,
 ) -> Response {
     let user_agent = request_context(&headers);
 
@@ -90,13 +104,18 @@ pub async fn start_sync(
         return already_running();
     }
 
-    tracing::info!(user_id = %user.user_id, "user triggered a manual Process Street sync");
+    tracing::info!(
+        user_id = %user.user_id,
+        force = query.force,
+        "user triggered a manual Process Street sync"
+    );
 
     let db = state.db.clone();
     let progress = state.sync_progress.clone();
     let actor_user_id = user.user_id;
+    let force = query.force;
     tokio::spawn(async move {
-        run_all_workflows_with_progress(&client, &db, &progress, actor_user_id).await;
+        run_all_workflows_with_progress(&client, &db, &progress, actor_user_id, force).await;
     });
 
     (
@@ -150,7 +169,13 @@ mod tests {
 
     #[tokio::test]
     async fn start_sync_refuses_insufficient_permission_without_touching_anything() {
-        let response = start_sync(State(empty_state()), test_user(), HeaderMap::new()).await;
+        let response = start_sync(
+            State(empty_state()),
+            test_user(),
+            HeaderMap::new(),
+            Query(StartSyncQuery::default()),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
@@ -163,6 +188,7 @@ mod tests {
             State(empty_state()),
             onboarding_manager_user(),
             HeaderMap::new(),
+            Query(StartSyncQuery::default()),
         )
         .await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
