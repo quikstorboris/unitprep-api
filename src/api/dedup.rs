@@ -394,6 +394,7 @@ pub async fn detect_vendor_format(
     let document = match parse_document(&file) {
         Ok(document) => document,
         Err(err) => {
+            tracing::warn!(file = %file.file_name, error = %err, "Dedup vendor detection failed to read file");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ApiErrorBody {
@@ -437,6 +438,7 @@ pub async fn detect_vendor_format_dropbox(
     let document = match parse_document(&file) {
         Ok(document) => document,
         Err(err) => {
+            tracing::warn!(file = %file.file_name, error = %err, "Dedup vendor detection (Dropbox) failed to read file");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ApiErrorBody {

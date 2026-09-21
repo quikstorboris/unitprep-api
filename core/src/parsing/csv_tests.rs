@@ -89,6 +89,21 @@ fn csv_parser_pads_short_rows() {
     assert_eq!(document.rows[0], vec!["A01", "10x10 Climate", ""]);
 }
 
+#[test]
+fn csv_parser_falls_back_to_windows_1252_on_invalid_utf8() {
+    // Byte 0x92 is Windows-1252's curly right single quote ("'") -- a
+    // real byte from a real facility export (a tenant name typed with a
+    // smart quote in Excel) that is not valid UTF-8 on its own. Confirms
+    // the fallback recovers the file instead of rejecting it outright.
+    let mut bytes = b"Number,Name\nA01,O".to_vec();
+    bytes.push(0x92);
+    bytes.extend_from_slice(b"Brien\n");
+
+    let document = parse_csv_document(&file_with_bytes(bytes)).unwrap();
+
+    assert_eq!(document.rows[0], vec!["A01", "O\u{2019}Brien"]);
+}
+
 fn file_with_bytes(bytes: Vec<u8>) -> UploadedFile {
     UploadedFile {
         file_name: "fuzz.csv".to_string(),

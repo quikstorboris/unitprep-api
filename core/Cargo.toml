@@ -9,6 +9,12 @@ csv = "1"
 tracing = "0.1"
 serde = { version = "1", features = ["derive"] }
 
+# CSV encoding fallback -- real facility exports are frequently
+# Windows-1252 (Excel's default "CSV" save format), not true UTF-8. Already
+# pulled in transitively via calamine, so this just makes it a direct,
+# version-pinned dependency instead of relying on that incidentally.
+encoding_rs = "0.8"
+
 # Async runtime — the background session-cleanup task (tokio::spawn +
 # tokio::time::interval only, not a full runtime feature set)
 tokio = { version = "1", features = ["rt", "time"] }

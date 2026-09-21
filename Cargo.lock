@@ -3722,6 +3722,7 @@ dependencies = [
  "calamine",
  "chrono",
  "csv",
+ "encoding_rs",
  "parking_lot",
  "proptest",
  "quick-xml",

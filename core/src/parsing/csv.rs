@@ -3,8 +3,33 @@ use std::io::Cursor;
 use crate::csv_document::CsvDocument;
 use crate::uploaded_file::UploadedFile;
 
+/// Decodes raw file bytes to UTF-8 text, tolerating non-UTF-8 input.
+/// Real facility exports are frequently saved by Excel as Windows-1252,
+/// not true UTF-8 -- smart quotes, accented names, and em/en dashes are
+/// all valid Windows-1252 but not valid UTF-8, which otherwise rejects
+/// the entire file over a single character deep in a name field (a real
+/// case, not hypothetical: byte 0x92 in "O'Brien" typed with a curly
+/// apostrophe). Valid UTF-8 is used as-is; anything else is decoded as
+/// Windows-1252, the encoding these exports actually use in practice.
+fn decode_to_utf8(file_name: &str, bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => text.to_string(),
+        Err(err) => {
+            let (text, _, had_replacements) = encoding_rs::WINDOWS_1252.decode(bytes);
+            tracing::warn!(
+                file = %file_name,
+                utf8_error = %err,
+                had_replacements,
+                "CSV file was not valid UTF-8 -- decoded as Windows-1252 instead"
+            );
+            text.into_owned()
+        }
+    }
+}
+
 pub fn parse_csv_document(file: &UploadedFile) -> anyhow::Result<CsvDocument> {
-    let cursor = Cursor::new(&file.bytes);
+    let text = decode_to_utf8(&file.file_name, &file.bytes);
+    let cursor = Cursor::new(text.as_bytes());
 
     // `flexible(true)`: some facility export tools emit a trailing empty
     // column on every data row that the header doesn't name (confirmed
