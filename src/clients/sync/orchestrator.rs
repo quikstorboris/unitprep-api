@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, NaiveTime, TimeZone, Utc};
+use chrono_tz::Tz;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -421,16 +423,36 @@ async fn fail(db: &PgPool, progress: &SyncProgressHandle, actor_user_id: Uuid, m
     guard.error = Some(message);
 }
 
-/// Reads `client_ops.process_street_settings.sync_interval_hours` on the
-/// same system role/RLS pattern as everything else in this module. Falls
-/// back to `default_sync_interval_hours()` (never a panic, never
-/// blocking the loop forever) on any read failure -- a transient DB
-/// hiccup should delay this cycle's sync, not crash the background task.
-async fn fetch_sync_interval_hours(db: &PgPool) -> i16 {
-    let result: Result<(i16,), sqlx::Error> = async {
+#[derive(Debug, Clone)]
+struct ScheduleConfig {
+    /// `"interval"` | `"daily_time"`.
+    mode: String,
+    interval_hours: i16,
+    sync_time: Option<NaiveTime>,
+    sync_timezone: Option<String>,
+}
+
+fn default_schedule_config() -> ScheduleConfig {
+    ScheduleConfig {
+        mode: "interval".to_string(),
+        interval_hours: default_sync_interval_hours(),
+        sync_time: None,
+        sync_timezone: None,
+    }
+}
+
+/// Reads the whole schedule config off `client_ops.process_street_settings`
+/// on the same system role/RLS pattern as everything else in this
+/// module. Falls back to `default_schedule_config()` (never a panic,
+/// never blocking the loop forever) on any read failure -- a transient
+/// DB hiccup should delay this cycle's sync, not crash the background
+/// task.
+async fn fetch_schedule_config(db: &PgPool) -> ScheduleConfig {
+    let result: Result<(String, i16, Option<NaiveTime>, Option<String>), sqlx::Error> = async {
         let mut tx = begin_rls_transaction(db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()]).await?;
         let row = sqlx::query_as(
-            "SELECT sync_interval_hours FROM client_ops.process_street_settings WHERE id = 1",
+            "SELECT schedule_mode, sync_interval_hours, sync_time, sync_timezone
+               FROM client_ops.process_street_settings WHERE id = 1",
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -440,36 +462,112 @@ async fn fetch_sync_interval_hours(db: &PgPool) -> i16 {
     .await;
 
     match result {
-        Ok((interval_hours,)) => interval_hours,
+        Ok((mode, interval_hours, sync_time, sync_timezone)) => ScheduleConfig {
+            mode,
+            interval_hours,
+            sync_time,
+            sync_timezone,
+        },
         Err(err) => {
             tracing::error!(
                 error = %err,
-                "failed to read the configured Process Street sync interval; defaulting to 24h for this cycle"
+                "failed to read the configured Process Street sync schedule; defaulting to a 24h interval for this cycle"
             );
-            default_sync_interval_hours()
+            default_schedule_config()
         }
     }
 }
 
-/// Sleeps for the currently configured interval before the next sync
-/// tick -- re-read on every call, not cached, so a settings change
-/// (`api::process_street_settings`) takes effect on the very next cycle
-/// without needing a server restart. Unlike the old fixed-time-of-day
-/// schedule this replaces, there is no "next occurrence" to compute:
-/// every tick is simply "interval hours after the last one finished",
-/// which is exactly what sleeping this long, then looping, already does
-/// -- see `clients::sync`'s own module doc for why a much shorter
-/// interval than the old once-daily default is now realistic at all
-/// (the delta mechanism makes an unchanged run essentially free).
-async fn sleep_until_next_scheduled_sync(db: &PgPool) {
-    let interval_hours = fetch_sync_interval_hours(db).await;
-    let sleep_duration = std::time::Duration::from_secs((interval_hours.max(1) as u64) * 3600);
+/// The next UTC instant `sync_time` occurs at or after `now`, in `tz` --
+/// today if it hasn't passed yet there, otherwise tomorrow. Pulled out
+/// as its own pure function (no DB, no sleeping) so the DST/rollover
+/// edge cases have direct unit tests, same reasoning `needs_refresh`
+/// above already uses.
+///
+/// A DST transition can make a given local wall-clock instant either
+/// ambiguous (repeated, "fall back") or nonexistent (skipped, "spring
+/// forward"). Ambiguous resolves to the earliest of the two real
+/// instants; nonexistent nudges the local time forward by an hour (a
+/// DST gap is always under two hours) and resolves that instead. Both
+/// only matter on the one or two days a year the configured `sync_time`
+/// happens to fall exactly inside that zone's transition window -- a
+/// tick landing an hour early/late that day is an acceptable trade for
+/// never blocking the loop entirely.
+fn next_daily_occurrence(now: DateTime<Utc>, sync_time: NaiveTime, tz: Tz) -> DateTime<Utc> {
+    fn resolve(tz: Tz, naive: chrono::NaiveDateTime, fallback: DateTime<Utc>) -> DateTime<Utc> {
+        match tz.from_local_datetime(&naive) {
+            chrono::LocalResult::Single(dt) => dt.with_timezone(&Utc),
+            chrono::LocalResult::Ambiguous(earliest, _latest) => earliest.with_timezone(&Utc),
+            chrono::LocalResult::None => tz
+                .from_local_datetime(&(naive + ChronoDuration::hours(1)))
+                .single()
+                .map(|dt| dt.with_timezone(&Utc))
+                .unwrap_or(fallback),
+        }
+    }
 
-    tracing::info!(
-        next_sync_at = %(Utc::now() + ChronoDuration::hours(i64::from(interval_hours))),
-        interval_hours,
-        "Process Street sync scheduled"
-    );
+    let today_naive = now.with_timezone(&tz).date_naive().and_time(sync_time);
+    let today_at_time = resolve(tz, today_naive, now);
+
+    if today_at_time > now {
+        today_at_time
+    } else {
+        resolve(tz, today_naive + ChronoDuration::days(1), now)
+    }
+}
+
+/// Sleeps until the next scheduled sync per the currently configured
+/// mode -- re-read on every call, not cached, so a settings change
+/// (`api::process_street_settings`) takes effect on the very next cycle
+/// without needing a server restart. `"interval"` sleeps for the
+/// configured number of hours (every tick is simply "interval hours
+/// after the last one finished" -- see `clients::sync`'s own module doc
+/// for why a much shorter interval than the old once-daily default is
+/// realistic at all). `"daily_time"` sleeps until the next occurrence of
+/// the configured clock time in the configured timezone -- falls back
+/// to the default interval (logged as an error, not a panic) if the
+/// stored timezone somehow isn't parseable, which should never happen
+/// given `api::process_street_settings` only ever writes a value from
+/// its own closed, validated list.
+async fn sleep_until_next_scheduled_sync(db: &PgPool) {
+    let config = fetch_schedule_config(db).await;
+
+    let sleep_duration = if config.mode == "daily_time" {
+        let tz = config
+            .sync_timezone
+            .as_deref()
+            .and_then(|zone| Tz::from_str(zone).ok());
+
+        match (config.sync_time, tz) {
+            (Some(sync_time), Some(tz)) => {
+                let now = Utc::now();
+                let next = next_daily_occurrence(now, sync_time, tz);
+                tracing::info!(
+                    next_sync_at = %next,
+                    timezone = %tz,
+                    "Process Street sync scheduled (daily_time)"
+                );
+                (next - now)
+                    .to_std()
+                    .unwrap_or(std::time::Duration::from_secs(0))
+            }
+            _ => {
+                tracing::error!(
+                    sync_timezone = ?config.sync_timezone,
+                    "schedule_mode is daily_time but sync_time/sync_timezone is missing or unparseable; falling back to the default interval for this cycle"
+                );
+                std::time::Duration::from_secs((default_sync_interval_hours().max(1) as u64) * 3600)
+            }
+        }
+    } else {
+        let interval_hours = config.interval_hours;
+        tracing::info!(
+            next_sync_at = %(Utc::now() + ChronoDuration::hours(i64::from(interval_hours))),
+            interval_hours,
+            "Process Street sync scheduled (interval)"
+        );
+        std::time::Duration::from_secs((interval_hours.max(1) as u64) * 3600)
+    };
 
     tokio::time::sleep(sleep_duration).await;
 }
@@ -564,6 +662,68 @@ mod tests {
         let later = Utc::now();
         let earlier = later - ChronoDuration::days(1);
         assert!(!needs_refresh(Some(later), earlier));
+    }
+
+    #[test]
+    fn next_daily_occurrence_is_later_today_in_utc_when_the_time_has_not_passed_yet() {
+        let now = "2026-08-31T10:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let noon = NaiveTime::from_hms_opt(12, 0, 0).unwrap();
+
+        assert_eq!(
+            next_daily_occurrence(now, noon, Tz::UTC),
+            "2026-08-31T12:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    #[test]
+    fn next_daily_occurrence_rolls_to_tomorrow_when_the_time_has_already_passed_today() {
+        let now = "2026-08-31T23:30:00Z".parse::<DateTime<Utc>>().unwrap();
+        let ten_pm = NaiveTime::from_hms_opt(22, 0, 0).unwrap();
+
+        assert_eq!(
+            next_daily_occurrence(now, ten_pm, Tz::UTC),
+            "2026-09-01T22:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    #[test]
+    fn next_daily_occurrence_at_the_exact_current_instant_rolls_to_tomorrow_not_zero_sleep() {
+        // An exact tie must not be treated as "still ahead" -- sleeping
+        // for zero seconds and immediately re-triggering would turn one
+        // scheduled sync into a tight loop right at the boundary.
+        let now = "2026-08-31T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let midnight = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+
+        assert_eq!(
+            next_daily_occurrence(now, midnight, Tz::UTC),
+            "2026-09-01T00:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    #[test]
+    fn next_daily_occurrence_converts_a_real_timezone_to_the_correct_utc_instant() {
+        // 3:00 AM Pacific in late August is PDT (UTC-7) -- 10:00 UTC.
+        let now = "2026-08-31T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let three_am = NaiveTime::from_hms_opt(3, 0, 0).unwrap();
+
+        assert_eq!(
+            next_daily_occurrence(now, three_am, chrono_tz::America::Los_Angeles),
+            "2026-08-31T10:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+    }
+
+    #[test]
+    fn next_daily_occurrence_does_not_panic_across_a_real_spring_forward_gap() {
+        // US DST began 2026-03-08 at 02:00 Pacific (clocks jump straight
+        // to 03:00) -- 02:30 that day never happened locally. Only
+        // asserts this resolves to *something* sane (a real instant,
+        // not a panic/unwrap failure) -- the exact chosen instant during
+        // a gap is a documented, acceptable imprecision, not a contract.
+        let now = "2026-03-08T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        let two_thirty_am = NaiveTime::from_hms_opt(2, 30, 0).unwrap();
+
+        let next = next_daily_occurrence(now, two_thirty_am, chrono_tz::America::Los_Angeles);
+        assert!(next > now);
     }
 }
 

@@ -7,12 +7,16 @@
 //! integration's own API key (`api_key`, added 2026-09-09 alongside
 //! `client_ops.dropbox_configuration`'s equivalent fields).
 //!
-//! **Was a fixed daily clock time (`sync_time`) until 2026-09-02** --
-//! replaced with a plain hourly interval once it was clear the sync's
-//! own delta mechanism makes a much tighter cadence realistic (an
-//! unchanged run costs almost nothing beyond one shared list call), not
-//! just a once-a-day compromise. See the migration's own comment
-//! (`activity_logs_and_configurable_sync`) for the full reasoning.
+//! **Two schedule modes as of 2026-09-21** (`schedule_mode`): the plain
+//! hourly interval added 2026-09-02 (once it was clear the sync's own
+//! delta mechanism makes a much tighter cadence realistic than a
+//! once-a-day compromise -- see `activity_logs_and_configurable_sync`'s
+//! own comment), or a fixed daily clock time in one of a closed set of
+//! real IANA timezones (`sync_time`/`sync_timezone`,
+//! `ALLOWED_TIMEZONES` below) -- brought back per Boris's own call, for
+//! syncs that should run at a specific time in a specific place rather
+//! than "every N hours from whenever." Real IANA zone names, not fixed
+//! UTC offsets, so Daylight Saving Time shifts correctly on its own.
 //!
 //! **Both read and write are admin-only (`integrations.manage`) as of
 //! 2026-09-09** -- `get_settings` used to be any-authenticated (a plain
@@ -35,13 +39,31 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::{bad_request, internal_error, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::integrations::secrets;
+
+/// The closed set of timezones the "run at a specific time" schedule
+/// mode offers -- Boris's own list (2026-09-21): the four continental
+/// US zones plus UTC plus Serbia's own zone. Real IANA names (not fixed
+/// UTC offsets) so Daylight Saving Time is handled automatically rather
+/// than needing to be flipped by hand twice a year. Matches the CHECK
+/// constraint on `client_ops.process_street_settings.sync_timezone` --
+/// validated again here so a bad value gets a clear 400 instead of an
+/// opaque database constraint-violation error, same reasoning as
+/// `MIN_INTERVAL_HOURS`/`MAX_INTERVAL_HOURS` below.
+const ALLOWED_TIMEZONES: &[&str] = &[
+    "America/Los_Angeles",
+    "America/Denver",
+    "America/Chicago",
+    "America/New_York",
+    "UTC",
+    "Europe/Belgrade",
+];
 
 // Moved from client_ops.perform to integrations.manage (2026-09-09):
 // Process Street/Dropbox settings became an admin-only "Integrations"
@@ -76,7 +98,15 @@ pub enum ConfigSource {
 
 #[derive(Debug, Serialize)]
 pub struct ProcessStreetSettingsResponse {
+    /// `"interval"` | `"daily_time"`.
+    pub schedule_mode: String,
     pub sync_interval_hours: i16,
+    /// `"HH:MM:SS"` -- only meaningful (non-`None`) when `schedule_mode
+    /// == "daily_time"`.
+    pub sync_time: Option<NaiveTime>,
+    /// An IANA zone name from `ALLOWED_TIMEZONES` -- only meaningful
+    /// when `schedule_mode == "daily_time"`.
+    pub sync_timezone: Option<String>,
     pub api_key: String,
     pub api_key_source: ConfigSource,
     pub updated_at: DateTime<Utc>,
@@ -85,7 +115,10 @@ pub struct ProcessStreetSettingsResponse {
 
 #[derive(sqlx::FromRow)]
 struct SettingsRow {
+    schedule_mode: String,
     sync_interval_hours: i16,
+    sync_time: Option<NaiveTime>,
+    sync_timezone: Option<String>,
     api_key_ciphertext: Option<Vec<u8>>,
     updated_at: DateTime<Utc>,
     updated_by: Option<Uuid>,
@@ -104,7 +137,10 @@ fn resolve(
     };
 
     Ok(ProcessStreetSettingsResponse {
+        schedule_mode: row.schedule_mode,
         sync_interval_hours: row.sync_interval_hours,
+        sync_time: row.sync_time,
+        sync_timezone: row.sync_timezone,
         api_key,
         api_key_source,
         updated_at: row.updated_at,
@@ -135,7 +171,9 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
     };
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
-        "SELECT sync_interval_hours, api_key_ciphertext, updated_at, updated_by FROM client_ops.process_street_settings WHERE id = 1",
+        "SELECT schedule_mode, sync_interval_hours, sync_time, sync_timezone,
+                api_key_ciphertext, updated_at, updated_by
+           FROM client_ops.process_street_settings WHERE id = 1",
     )
     .fetch_one(&mut *tx)
     .await;
@@ -166,9 +204,20 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
 /// `dropbox_settings::UpdateDropboxSettingsRequest`, there's no "leave
 /// unchanged" convention, saving just re-encrypts and stores exactly
 /// what came in.
+///
+/// `sync_time`/`sync_timezone` are only required (and only validated)
+/// when `schedule_mode == "daily_time"` -- when `schedule_mode ==
+/// "interval"`, whatever's sent for them is ignored and NULLed out in
+/// the database, matching the CHECK constraint that only enforces their
+/// presence for the other mode.
 #[derive(Debug, Deserialize)]
 pub struct UpdateProcessStreetSettingsRequest {
+    pub schedule_mode: String,
     pub sync_interval_hours: i16,
+    /// `"HH:MM"` or `"HH:MM:SS"`, required when `schedule_mode ==
+    /// "daily_time"`.
+    pub sync_time: Option<String>,
+    pub sync_timezone: Option<String>,
     pub api_key: String,
 }
 
@@ -193,6 +242,19 @@ pub async fn update_settings(
         return response;
     }
 
+    let schedule_mode = request.schedule_mode.trim();
+    if !matches!(schedule_mode, "interval" | "daily_time") {
+        tracing::warn!(
+            user_id = %user.user_id,
+            schedule_mode,
+            "Process Street settings update rejected: unknown schedule_mode"
+        );
+        return bad_request(
+            "invalid_schedule_mode",
+            "schedule_mode must be \"interval\" or \"daily_time\".".to_string(),
+        );
+    }
+
     if !(MIN_INTERVAL_HOURS..=MAX_INTERVAL_HOURS).contains(&request.sync_interval_hours) {
         tracing::warn!(
             user_id = %user.user_id,
@@ -204,6 +266,50 @@ pub async fn update_settings(
             format!("sync_interval_hours must be between {MIN_INTERVAL_HOURS} and {MAX_INTERVAL_HOURS}."),
         );
     }
+
+    // sync_time/sync_timezone only matter for "daily_time" -- NULLed
+    // out for "interval", matching the CHECK constraint that only
+    // requires their presence for the other mode.
+    let (sync_time, sync_timezone): (Option<NaiveTime>, Option<String>) =
+        if schedule_mode == "daily_time" {
+            let raw_time = request.sync_time.as_deref().unwrap_or("").trim();
+            let parsed_time = NaiveTime::parse_from_str(raw_time, "%H:%M:%S")
+                .or_else(|_| NaiveTime::parse_from_str(raw_time, "%H:%M"));
+            let parsed_time = match parsed_time {
+                Ok(time) => time,
+                Err(_) => {
+                    tracing::warn!(
+                        user_id = %user.user_id,
+                        sync_time = raw_time,
+                        "Process Street settings update rejected: unparseable sync_time"
+                    );
+                    return bad_request(
+                        "invalid_sync_time",
+                        format!("{raw_time:?} is not a valid HH:MM time."),
+                    );
+                }
+            };
+
+            let timezone = request.sync_timezone.as_deref().unwrap_or("").trim().to_string();
+            if !ALLOWED_TIMEZONES.contains(&timezone.as_str()) {
+                tracing::warn!(
+                    user_id = %user.user_id,
+                    sync_timezone = timezone,
+                    "Process Street settings update rejected: unsupported sync_timezone"
+                );
+                return bad_request(
+                    "invalid_sync_timezone",
+                    format!(
+                        "{timezone:?} is not a supported timezone. Choose one of: {}.",
+                        ALLOWED_TIMEZONES.join(", ")
+                    ),
+                );
+            }
+
+            (Some(parsed_time), Some(timezone))
+        } else {
+            (None, None)
+        };
 
     if request.api_key.is_empty() {
         return bad_request("invalid_api_key", "API key is required.".to_string());
@@ -227,11 +333,16 @@ pub async fn update_settings(
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
         "UPDATE client_ops.process_street_settings
-            SET sync_interval_hours = $1, api_key_ciphertext = $2, updated_by = $3
+            SET schedule_mode = $1, sync_interval_hours = $2, sync_time = $3,
+                sync_timezone = $4, api_key_ciphertext = $5, updated_by = $6
           WHERE id = 1
-      RETURNING sync_interval_hours, api_key_ciphertext, updated_at, updated_by",
+      RETURNING schedule_mode, sync_interval_hours, sync_time, sync_timezone,
+                api_key_ciphertext, updated_at, updated_by",
     )
+    .bind(schedule_mode)
     .bind(request.sync_interval_hours)
+    .bind(sync_time)
+    .bind(&sync_timezone)
     .bind(&api_key_ciphertext)
     .bind(user.user_id)
     .fetch_one(&mut *tx)
@@ -277,8 +388,20 @@ mod tests {
 
     fn valid_request() -> UpdateProcessStreetSettingsRequest {
         UpdateProcessStreetSettingsRequest {
+            schedule_mode: "interval".to_string(),
             sync_interval_hours: 24,
+            sync_time: None,
+            sync_timezone: None,
             api_key: "a-real-looking-key".to_string(),
+        }
+    }
+
+    fn valid_daily_time_request() -> UpdateProcessStreetSettingsRequest {
+        UpdateProcessStreetSettingsRequest {
+            schedule_mode: "daily_time".to_string(),
+            sync_time: Some("03:00".to_string()),
+            sync_timezone: Some("America/Los_Angeles".to_string()),
+            ..valid_request()
         }
     }
 
@@ -351,6 +474,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn update_rejects_an_unknown_schedule_mode_without_touching_the_database() {
+        let mut request = valid_request();
+        request.schedule_mode = "weekly".to_string();
+
+        let response = update_settings(
+            State(crate::api::test_support::empty_state()),
+            admin_user(),
+            HeaderMap::new(),
+            Json(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_rejects_daily_time_mode_missing_a_sync_time_without_touching_the_database() {
+        let mut request = valid_daily_time_request();
+        request.sync_time = None;
+
+        let response = update_settings(
+            State(crate::api::test_support::empty_state()),
+            admin_user(),
+            HeaderMap::new(),
+            Json(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_rejects_an_unparseable_sync_time_without_touching_the_database() {
+        let mut request = valid_daily_time_request();
+        request.sync_time = Some("not a time".to_string());
+
+        let response = update_settings(
+            State(crate::api::test_support::empty_state()),
+            admin_user(),
+            HeaderMap::new(),
+            Json(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_rejects_an_unsupported_timezone_without_touching_the_database() {
+        let mut request = valid_daily_time_request();
+        request.sync_timezone = Some("Mars/Olympus_Mons".to_string());
+
+        let response = update_settings(
+            State(crate::api::test_support::empty_state()),
+            admin_user(),
+            HeaderMap::new(),
+            Json(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn update_accepts_a_valid_daily_time_request_and_reaches_the_database() {
+        // empty_state()'s pool never actually connects -- this proves
+        // the daily_time validation itself passes (reaches the DB call)
+        // rather than being rejected as a 400, same convention as the
+        // interval-mode "reaches the database" tests elsewhere in this
+        // file/`dropbox_settings`.
+        let response = update_settings(
+            State(crate::api::test_support::empty_state()),
+            admin_user(),
+            HeaderMap::new(),
+            Json(valid_daily_time_request()),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
     async fn update_rejects_an_empty_api_key_without_touching_the_database() {
         let mut request = valid_request();
         request.api_key = String::new();
@@ -368,7 +573,10 @@ mod tests {
 
     fn row_without_a_saved_key() -> SettingsRow {
         SettingsRow {
+            schedule_mode: "interval".to_string(),
             sync_interval_hours: 24,
+            sync_time: None,
+            sync_timezone: None,
             api_key_ciphertext: None,
             updated_at: Utc::now(),
             updated_by: None,
@@ -395,7 +603,10 @@ mod tests {
         );
 
         let row = SettingsRow {
+            schedule_mode: "interval".to_string(),
             sync_interval_hours: 24,
+            sync_time: None,
+            sync_timezone: None,
             api_key_ciphertext: Some(secrets::encrypt(AAD, "db-key").unwrap()),
             updated_at: Utc::now(),
             updated_by: None,

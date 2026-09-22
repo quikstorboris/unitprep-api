@@ -70,16 +70,20 @@ pub async fn initial_cache(db: &PgPool, content_type: ContentType) -> VendorForm
     Arc::new(RwLock::new(vendors))
 }
 
-/// Refreshes `cache` from `client_ops.vendor_format` every 5 minutes --
-/// long enough that this is never a meaningful load on Postgres, short
-/// enough that a vendor added through the (future) self-service UI, or a
-/// Postgres connection that wasn't up yet at boot, shows up without a
-/// restart. Mirrors `InMemorySessionStore::start_cleanup_task`'s shape:
-/// spawned once at startup, loops forever, one failed tick is logged and
-/// skipped rather than ending the task.
+/// Refreshes `cache` from `client_ops.vendor_format` every 4 hours --
+/// long enough that this never collides with Neon's default 5-minute
+/// autosuspend window (a tighter interval kept the compute permanently
+/// "active" any time the server was left running, since each tick reset
+/// the idle timer just before it would have fired -- see the vault's
+/// Neon compute-usage investigation, 2026-09-21), short enough that a
+/// vendor added through the (future) self-service UI, or a Postgres
+/// connection that wasn't up yet at boot, still shows up same-day
+/// without a restart. Mirrors `InMemorySessionStore::start_cleanup_task`'s
+/// shape: spawned once at startup, loops forever, one failed tick is
+/// logged and skipped rather than ending the task.
 pub fn start_refresh_task(cache: VendorFormatCache, db: PgPool, content_type: ContentType) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(300));
+        let mut interval = tokio::time::interval(Duration::from_secs(4 * 60 * 60));
 
         loop {
             interval.tick().await;
