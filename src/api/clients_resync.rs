@@ -37,6 +37,7 @@ use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::create::diff_company_fields;
 use crate::clients::intake_mapping::{map_intake_fields, MappedCompany, MappedFacility};
+use crate::clients::person_index::{extract_intake_people, ExtractedPerson};
 use crate::clients::sync::{
     apply_company_refresh, apply_facility_refresh, company_field_value, facility_field_value,
     facility_fields_that_differ,
@@ -249,7 +250,14 @@ async fn load_comparisons(
     tx: &mut Transaction<'_, Postgres>,
     client: &crate::process_street::ProcessStreetClient,
     company_id: Uuid,
-) -> Result<Option<(CompanyComparison, Vec<FacilityComparison>)>, sqlx::Error> {
+) -> Result<
+    Option<(
+        CompanyComparison,
+        Vec<FacilityComparison>,
+        HashMap<String, Vec<ExtractedPerson>>,
+    )>,
+    sqlx::Error,
+> {
     let Some((company, facilities)) = fetch_company_and_facilities(tx, company_id).await? else {
         return Ok(None);
     };
@@ -265,6 +273,22 @@ async fn load_comparisons(
     }
 
     let fields_by_run_id = fetch_fresh_fields(client, run_ids).await;
+
+    // Same `extract_intake_people` projection the scheduled/"Sync Now"
+    // background sync writes into `clients.ps_person_index` (see
+    // `clients::sync::orchestrator::sync_one_run`) -- this per-client
+    // "Re-sync" button fetches these same runs' fields anyway for the
+    // company/facility field refresh below, so it can keep the Users
+    // tab's own "Add User" candidates fresh too, at no extra PS request
+    // cost. Without this, a person added in Process Street after a
+    // facility's already been imported into OO never shows up here no
+    // matter how many times Re-sync is clicked -- only the separate
+    // scheduled sync (or "Sync Now" on the search page) ever refreshed
+    // `ps_person_index` before this fix.
+    let people_by_run_id: HashMap<String, Vec<ExtractedPerson>> = fields_by_run_id
+        .iter()
+        .map(|(run_id, fields)| (run_id.clone(), extract_intake_people(fields)))
+        .collect();
 
     let company_fresh = company
         .ps_intake_run_id
@@ -293,6 +317,7 @@ async fn load_comparisons(
             fresh: company_fresh,
         },
         facility_comparisons,
+        people_by_run_id,
     )))
 }
 
@@ -406,7 +431,7 @@ pub async fn preview_resync(
         return internal_error("Could not preview the re-sync");
     }
 
-    let (company, facilities) = comparisons;
+    let (company, facilities, _people_by_run_id) = comparisons;
     let (mut safe_update_count, mut conflicts) = classify_company_diff(&company);
     for facility in &facilities {
         let (facility_safe, facility_conflicts) = classify_facility_diff(facility);
@@ -493,14 +518,15 @@ pub async fn apply_resync(
         }
     };
 
-    let (company, facilities) = match load_comparisons(&mut tx, &client, company_id).await {
-        Ok(Some(comparisons)) => comparisons,
-        Ok(None) => return not_found("company_not_found", "No such company.".to_string()),
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "resync apply query failed");
-            return internal_error("Could not apply the re-sync");
-        }
-    };
+    let (company, facilities, people_by_run_id) =
+        match load_comparisons(&mut tx, &client, company_id).await {
+            Ok(Some(comparisons)) => comparisons,
+            Ok(None) => return not_found("company_not_found", "No such company.".to_string()),
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, "resync apply query failed");
+                return internal_error("Could not apply the re-sync");
+            }
+        };
 
     let mut updated_count = 0;
 
@@ -609,6 +635,83 @@ pub async fn apply_resync(
         }
     }
 
+    // Refresh `clients.ps_person_index` for every run just fetched --
+    // the Users tab's own "Add User" candidates (`api::clients_facility_people`)
+    // are sourced entirely from that table, and until this it was only
+    // ever kept fresh by the separate scheduled/"Sync Now" background
+    // sync, never by this per-client button despite its own doc comment
+    // claiming a full re-pull. Same rebuild-wholesale, delete-then-insert
+    // shape `sync_one_run` already uses -- a genuine `run_name` value is
+    // only available from `ps_sync_state` (that data isn't part of the
+    // form-fields fetch this endpoint already makes), so a run with no
+    // prior sync_state row at all falls back to the entity's own current
+    // name rather than leaving `run_name` unset (NOT NULL).
+    let mut run_names: HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
+        "SELECT ps_run_id, run_name FROM clients.ps_sync_state \
+         WHERE workflow = 'intake' AND ps_run_id = ANY($1)",
+    )
+    .bind(people_by_run_id.keys().cloned().collect::<Vec<_>>())
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap_or_default()
+    .into_iter()
+    .collect();
+
+    if let Some(run_id) = &company.row.ps_intake_run_id {
+        run_names
+            .entry(run_id.clone())
+            .or_insert_with(|| company.row.legal_name.clone());
+    }
+    for facility in &facilities {
+        if let Some(run_id) = &facility.row.ps_intake_run_id {
+            run_names
+                .entry(run_id.clone())
+                .or_insert_with(|| facility.row.name.clone());
+        }
+    }
+
+    let mut people_indexed = 0;
+    for (run_id, people) in &people_by_run_id {
+        let run_name = run_names
+            .get(run_id)
+            .cloned()
+            .unwrap_or_else(|| run_id.clone());
+
+        if let Err(err) = sqlx::query(
+            "DELETE FROM clients.ps_person_index WHERE workflow = 'intake' AND ps_run_id = $1",
+        )
+        .bind(run_id)
+        .execute(&mut *tx)
+        .await
+        {
+            tracing::error!(error = %err, user_id = %user.user_id, run_id, "resync apply failed to clear ps_person_index for a run");
+            let _ = tx.rollback().await;
+            return internal_error("Could not apply the re-sync");
+        }
+
+        for person in people {
+            if let Err(err) = sqlx::query(
+                "INSERT INTO clients.ps_person_index
+                     (workflow, ps_run_id, run_name, full_name, email, phone, role)
+                 VALUES ('intake', $1, $2, $3, $4, $5, $6)",
+            )
+            .bind(run_id)
+            .bind(&run_name)
+            .bind(&person.full_name)
+            .bind(&person.email)
+            .bind(&person.phone)
+            .bind(person.role)
+            .execute(&mut *tx)
+            .await
+            {
+                tracing::error!(error = %err, user_id = %user.user_id, run_id, "resync apply failed to index a person");
+                let _ = tx.rollback().await;
+                return internal_error("Could not apply the re-sync");
+            }
+            people_indexed += 1;
+        }
+    }
+
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit resync apply transaction");
         return internal_error("Could not apply the re-sync");
@@ -626,6 +729,7 @@ pub async fn apply_resync(
         serde_json::json!({
             "trigger": "manual_resync",
             "updated_count": updated_count,
+            "people_indexed": people_indexed,
             "resolutions_applied": request.resolutions.iter().filter(|r| r.use_fresh).count(),
         }),
     )
