@@ -37,12 +37,18 @@ use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::create::diff_company_fields;
 use crate::clients::intake_mapping::{map_intake_fields, MappedCompany, MappedFacility};
+use crate::clients::merchant_account_mapping::{
+    credentials_added_to_qms_from_tasks, map_merchant_account_fields, MappedMerchantAccount,
+};
 use crate::clients::person_index::{extract_intake_people, ExtractedPerson};
+use crate::clients::repository::{
+    resync_merchant_account_run, upsert_task_status, IngestMerchantAccountError,
+};
 use crate::clients::sync::{
     apply_company_refresh, apply_facility_refresh, company_field_value, facility_field_value,
     facility_fields_that_differ,
 };
-use crate::process_street::FormField;
+use crate::process_street::{FormField, Task};
 
 const PERMISSION: &str = "client_ops.perform";
 
@@ -52,6 +58,21 @@ fn process_street_not_configured() -> Response {
         Json(ApiErrorBody {
             error: "process_street_not_configured",
             message: "Process Street integration is not configured on this server.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+/// Same shape as `api::clients_elavon`'s own -- this endpoint now writes
+/// `clients.facility_merchant_accounts` too (see `MerchantAccountRefresh`),
+/// which can hit the same missing-`CLIENT_PII_ENCRYPTION_KEY` case that
+/// module already surfaces this way.
+fn encryption_not_configured() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiErrorBody {
+            error: "encryption_not_configured",
+            message: "CLIENT_PII_ENCRYPTION_KEY is not configured on this server.".to_string(),
         }),
     )
         .into_response()
@@ -212,6 +233,93 @@ async fn fetch_fresh_fields(
     fields_by_run_id
 }
 
+/// A linked facility's freshly-fetched Merchant Account picture -- the
+/// Elavon tab's own `credentials_added_to_qms`/task checklist previously
+/// only ever refreshed via that tab's dedicated "Resync Elavon Data"
+/// button (`api::clients_elavon::resync_elavon_data`), never via this
+/// per-client Re-sync -- confirmed 2026-09-22 against a real stale case
+/// (Main Street Storage's "Add Credentials to QMS" reverted in Process
+/// Street 4 days after this facility's last Elavon-tab-specific resync,
+/// and this button had no way to notice). No manual-edit protection
+/// exists on this tab (same reasoning `resync_elavon_data`'s own doc
+/// comment gives), so -- unlike Intake's company/facility fields -- this
+/// is always a full overwrite, never a per-field conflict choice.
+struct MerchantAccountRefresh {
+    ps_new_merchant_run_id: String,
+    mapped: MappedMerchantAccount,
+    credentials_added_to_qms: bool,
+    tasks: Vec<Task>,
+}
+
+/// `clients.facility_merchant_accounts.ps_new_merchant_run_id` for every
+/// one of this company's facilities that's actually linked to Elavon --
+/// a facility with no row there (never linked) is simply absent from the
+/// result, same "nothing to refresh against" resilience `fetch_fresh_fields`
+/// already has for a missing `ps_intake_run_id`.
+async fn fetch_linked_merchant_account_runs(
+    tx: &mut Transaction<'_, Postgres>,
+    facility_ids: &[Uuid],
+) -> Result<HashMap<Uuid, String>, sqlx::Error> {
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT facility_id, ps_new_merchant_run_id FROM clients.facility_merchant_accounts \
+         WHERE facility_id = ANY($1) AND ps_new_merchant_run_id IS NOT NULL",
+    )
+    .bind(facility_ids)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    Ok(rows.into_iter().collect())
+}
+
+/// Fetches each linked run's fields + tasks concurrently (same two calls
+/// `link_facility_elavon`/`resync_elavon_data` already make), maps them,
+/// and derives `credentials_added_to_qms` from the fresh task list -- a
+/// run that fails to fetch degrades to "not refreshed this time" for
+/// just that one facility, same resilience `fetch_fresh_fields` has.
+async fn fetch_fresh_merchant_account_data(
+    client: &crate::process_street::ProcessStreetClient,
+    run_ids_by_facility: HashMap<Uuid, String>,
+) -> HashMap<Uuid, MerchantAccountRefresh> {
+    let fetches = run_ids_by_facility.into_iter().map(|(facility_id, run_id)| async move {
+        let (fields_result, tasks_result) = tokio::join!(
+            client.get_run_form_fields(&run_id),
+            client.get_run_tasks(&run_id)
+        );
+        (facility_id, run_id, fields_result, tasks_result)
+    });
+
+    let mut refreshes = HashMap::new();
+    for (facility_id, run_id, fields_result, tasks_result) in join_all(fetches).await {
+        let fields = match fields_result {
+            Ok(fields) => fields,
+            Err(err) => {
+                tracing::warn!(error = %err, run_id, "failed to fetch a Merchant Account run's fields during Re-sync -- skipping it");
+                continue;
+            }
+        };
+        let tasks = match tasks_result {
+            Ok(tasks) => tasks,
+            Err(err) => {
+                tracing::warn!(error = %err, run_id, "failed to fetch a Merchant Account run's tasks during Re-sync -- skipping it");
+                continue;
+            }
+        };
+
+        let mapped = map_merchant_account_fields(&fields);
+        let credentials_added_to_qms = credentials_added_to_qms_from_tasks(&tasks);
+        refreshes.insert(
+            facility_id,
+            MerchantAccountRefresh {
+                ps_new_merchant_run_id: run_id,
+                mapped,
+                credentials_added_to_qms,
+                tasks,
+            },
+        );
+    }
+    refreshes
+}
+
 #[derive(Debug, Serialize)]
 pub struct ResyncConflict {
     /// "company" | "facility".
@@ -231,6 +339,11 @@ pub struct PreviewResyncResponse {
     /// edited, so no choice is needed.
     pub safe_update_count: usize,
     pub conflicts: Vec<ResyncConflict>,
+    /// How many linked facilities' Elavon/Merchant Account data (task
+    /// checklist + `credentials_added_to_qms`, financials, parties) will
+    /// be refreshed -- always a full overwrite, so unlike the counts
+    /// above there is no per-field conflict to list.
+    pub merchant_accounts_to_refresh: usize,
 }
 
 /// One company/facility's own (current, fresh) pair plus its protected
@@ -255,6 +368,7 @@ async fn load_comparisons(
         CompanyComparison,
         Vec<FacilityComparison>,
         HashMap<String, Vec<ExtractedPerson>>,
+        HashMap<Uuid, MerchantAccountRefresh>,
     )>,
     sqlx::Error,
 > {
@@ -272,7 +386,13 @@ async fn load_comparisons(
         }
     }
 
-    let fields_by_run_id = fetch_fresh_fields(client, run_ids).await;
+    let facility_ids: Vec<Uuid> = facilities.iter().map(|f| f.id).collect();
+    let merchant_account_run_ids = fetch_linked_merchant_account_runs(tx, &facility_ids).await?;
+
+    let (fields_by_run_id, merchant_account_refreshes) = tokio::join!(
+        fetch_fresh_fields(client, run_ids),
+        fetch_fresh_merchant_account_data(client, merchant_account_run_ids)
+    );
 
     // Same `extract_intake_people` projection the scheduled/"Sync Now"
     // background sync writes into `clients.ps_person_index` (see
@@ -318,6 +438,7 @@ async fn load_comparisons(
         },
         facility_comparisons,
         people_by_run_id,
+        merchant_account_refreshes,
     )))
 }
 
@@ -431,7 +552,7 @@ pub async fn preview_resync(
         return internal_error("Could not preview the re-sync");
     }
 
-    let (company, facilities, _people_by_run_id) = comparisons;
+    let (company, facilities, _people_by_run_id, merchant_account_refreshes) = comparisons;
     let (mut safe_update_count, mut conflicts) = classify_company_diff(&company);
     for facility in &facilities {
         let (facility_safe, facility_conflicts) = classify_facility_diff(facility);
@@ -442,6 +563,7 @@ pub async fn preview_resync(
     Json(PreviewResyncResponse {
         safe_update_count,
         conflicts,
+        merchant_accounts_to_refresh: merchant_account_refreshes.len(),
     })
     .into_response()
 }
@@ -467,6 +589,7 @@ pub struct ApplyResyncRequest {
 #[derive(Debug, Serialize)]
 pub struct ApplyResyncResponse {
     pub updated_count: usize,
+    pub merchant_accounts_refreshed: usize,
 }
 
 /// The fields still protected after folding in this apply's own
@@ -518,7 +641,7 @@ pub async fn apply_resync(
         }
     };
 
-    let (company, facilities, people_by_run_id) =
+    let (company, facilities, people_by_run_id, merchant_account_refreshes) =
         match load_comparisons(&mut tx, &client, company_id).await {
             Ok(Some(comparisons)) => comparisons,
             Ok(None) => return not_found("company_not_found", "No such company.".to_string()),
@@ -712,6 +835,44 @@ pub async fn apply_resync(
         }
     }
 
+    // Refresh every linked facility's Elavon/Merchant Account picture --
+    // see `MerchantAccountRefresh`'s own doc comment for why this button
+    // never touched this data before. Always a full overwrite (no
+    // manual-edit protection on this tab, same as
+    // `resync_elavon_data`), so unlike the company/facility loops above
+    // there's no protected-field comparison first.
+    let mut merchant_accounts_refreshed = 0;
+    for (facility_id, refresh) in &merchant_account_refreshes {
+        if let Err(err) = resync_merchant_account_run(
+            &mut tx,
+            *facility_id,
+            &refresh.mapped,
+            &refresh.ps_new_merchant_run_id,
+            refresh.credentials_added_to_qms,
+        )
+        .await
+        {
+            tracing::error!(error = %err, user_id = %user.user_id, facility_id = %facility_id, "resync apply failed to refresh a facility's Merchant Account data");
+            let _ = tx.rollback().await;
+            return match err {
+                IngestMerchantAccountError::Encryption(_) => encryption_not_configured(),
+                IngestMerchantAccountError::Database(_) => {
+                    internal_error("Could not apply the re-sync")
+                }
+            };
+        }
+
+        if let Err(err) =
+            upsert_task_status(&mut tx, *facility_id, "merchant_account", &refresh.tasks).await
+        {
+            tracing::error!(error = %err, user_id = %user.user_id, facility_id = %facility_id, "resync apply failed to refresh a facility's Merchant Account task statuses");
+            let _ = tx.rollback().await;
+            return internal_error("Could not apply the re-sync");
+        }
+
+        merchant_accounts_refreshed += 1;
+    }
+
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit resync apply transaction");
         return internal_error("Could not apply the re-sync");
@@ -730,12 +891,17 @@ pub async fn apply_resync(
             "trigger": "manual_resync",
             "updated_count": updated_count,
             "people_indexed": people_indexed,
+            "merchant_accounts_refreshed": merchant_accounts_refreshed,
             "resolutions_applied": request.resolutions.iter().filter(|r| r.use_fresh).count(),
         }),
     )
     .await;
 
-    Json(ApplyResyncResponse { updated_count }).into_response()
+    Json(ApplyResyncResponse {
+        updated_count,
+        merchant_accounts_refreshed,
+    })
+    .into_response()
 }
 
 #[cfg(test)]
