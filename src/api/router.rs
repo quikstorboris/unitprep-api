@@ -4,7 +4,7 @@ use std::time::Duration;
 use axum::{
     body::Body,
     extract::{DefaultBodyLimit, Request},
-    http::{header, StatusCode},
+    http::{header, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
@@ -20,6 +20,7 @@ use tower_http::request_id::{
 use tower_http::trace::TraceLayer;
 
 use super::health::{health, health_db, whoami};
+use super::route_access::{GatedRouter, RouteAccess};
 use super::{
     acknowledge_group_warnings, analyze, auth_audit_logs, auth_audit_logs_export,
     auth_configuration, auth_invites, auth_login, auth_logout, auth_passkey_reverify,
@@ -28,10 +29,10 @@ use super::{
     clients_companies, clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
     clients_facility_people, clients_facility_policies_edit, clients_filter_options,
     clients_manual_link, clients_onboarding_summary, clients_preview, clients_resync,
-    clients_search, clients_sync, correct, correct_group, dedup,
-    discover, dropbox_browse, dropbox_settings, exclude_group, exclude_groups, exempt, export,
-    group_file_confirm, group_file_upload, process_street_settings, resolve_unit_format,
-    select_group_file, select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
+    clients_search, clients_sync, correct, correct_group, dedup, discover, dropbox_browse,
+    dropbox_settings, exclude_group, exclude_groups, exempt, export, group_file_confirm,
+    group_file_upload, process_street_settings, resolve_unit_format, select_group_file,
+    select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
 };
 use super::{internal_error, ApiErrorBody, AppState};
 
@@ -71,65 +72,34 @@ fn allowed_origins() -> Vec<axum::http::HeaderValue> {
 static REQUEST_ID_HEADER: header::HeaderName = header::HeaderName::from_static("x-request-id");
 
 pub fn router(state: AppState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::list(allowed_origins()))
-        .allow_methods([
-            axum::http::Method::GET,
-            axum::http::Method::POST,
-            axum::http::Method::PUT,
-            axum::http::Method::PATCH,
-            axum::http::Method::DELETE,
-        ])
-        .allow_headers([axum::http::header::CONTENT_TYPE])
-        // The frontend's shared hooks (useSessionPost/useSessionAction)
-        // now send `credentials: "include"` on every request, ahead of
-        // auth actually issuing a session cookie -- per the Fetch/CORS
-        // spec, a credentialed request's response is invisible to the
-        // browser unless the server explicitly echoes this header, even
-        // before any real cookie exists to send. `allow_origin` above is
-        // already a specific list (never `*`), which credentialed CORS
-        // requires regardless.
-        .allow_credentials(true)
-        // Content-Disposition is not a CORS-safelisted response header,
-        // so without this, every file-download endpoint's
-        // `response.headers.get("Content-Disposition")` on the frontend
-        // (dedup/audit-log/user export, tagger apply -- every one of
-        // downloadBlob's callers) silently reads null and falls back to
-        // its hardcoded default filename, even though the real header
-        // is present on the wire. Same class of gap as the PUT/PATCH
-        // CORS fix above: a browser-only restriction with no server-side
-        // symptom, so it's invisible unless a download's real filename
-        // is deliberately checked against something other than its own
-        // fallback.
-        .expose_headers([axum::http::header::CONTENT_DISPOSITION]);
+    with_response_layers(build(state).into_parts().0)
+}
 
-    // Rate limit for the endpoints an anonymous caller can reach without
-    // ever having a valid session: passkey registration (both the
-    // invite-redemption and add-a-second-key paths), passkey login, and
-    // the TOTP fallback login. One shared bucket across all of them,
-    // keyed by peer IP -- deliberately not one bucket per route, so a
-    // script cannot get five times the budget just by spreading its
-    // attempts across five endpoints instead of one.
-    //
+/// Builds the whole route tree via `GatedRouter` -- see `route_access`'s
+/// module doc for why every route below carries an explicit `RouteAccess`
+/// at its call site. Kept separate from `router()`/`with_response_layers`
+/// so tests can call this directly (with a fixture `AppState`) purely to
+/// read back the manifest, without needing to also build the response-
+/// shaping layers below, none of which affect authorization.
+fn build(state: AppState) -> GatedRouter<()> {
     // Ten requests answered immediately, one more every three seconds
-    // after that (~20/min sustained). Generous enough that a real person
-    // retrying a cancelled Windows Hello prompt or fumbling a TOTP code a
-    // few times in a row never notices this exists, while bounding how
-    // fast an anonymous caller can iterate through addresses or guess
-    // codes against these endpoints.
-    //
-    // Keying is by the TCP peer address (`tower_governor`'s default
-    // `PeerIpKeyExtractor`), never a client-supplied header -- this
-    // deliberately does not attempt to trust `X-Forwarded-For`, since no
-    // trusted-reverse-proxy policy exists yet (see the `ip_address` NULL
-    // comments in auth_register.rs / auth_login.rs for the same open
-    // question). Once real client IPs need trusting for any reason, this
-    // and that NULL should be revisited together, not separately -- they
-    // are the same unresolved question in two places. Until then, behind
-    // a reverse proxy that does not preserve the original TCP peer, this
-    // still limits correctly, just coarsely: every client behind that
-    // proxy shares one bucket rather than getting one each, which is
-    // strictly more restrictive than intended, never less.
+    // after that (~20/min sustained) -- generous enough that a real
+    // person retrying a cancelled Windows Hello prompt or fumbling a
+    // TOTP code a few times in a row never notices this exists, while
+    // bounding how fast an anonymous caller can iterate through
+    // addresses or guess codes against these endpoints. Keying is by the
+    // TCP peer address (`tower_governor`'s default `PeerIpKeyExtractor`),
+    // never a client-supplied header -- this deliberately does not
+    // attempt to trust `X-Forwarded-For`, since no trusted-reverse-proxy
+    // policy exists yet (see the `ip_address` NULL comments in
+    // auth_register.rs / auth_login.rs for the same open question). Once
+    // real client IPs need trusting for any reason, this and that NULL
+    // should be revisited together, not separately -- they are the same
+    // unresolved question in two places. Until then, behind a reverse
+    // proxy that does not preserve the original TCP peer, this still
+    // limits correctly, just coarsely: every client behind that proxy
+    // shares one bucket rather than getting one each, which is strictly
+    // more restrictive than intended, never less.
     let auth_rate_limit = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(3)
@@ -150,8 +120,8 @@ pub fn router(state: AppState) -> Router {
     );
 
     // The keyed limiter accumulates one entry per distinct peer IP it has
-    // ever seen and nothing prunes that on its own -- `retain_recent()` is
-    // `governor`'s own answer, and it has to be called from somewhere.
+    // ever seen and nothing prunes that on its own -- `retain_recent()`
+    // is `governor`'s own answer, and it has to be called from somewhere.
     // Mirrors `InMemorySessionStore::start_cleanup_task`: a background
     // tick that must keep running even if one iteration panics, since the
     // alternative is the rate limiter quietly becoming a slow memory leak
@@ -196,403 +166,963 @@ pub fn router(state: AppState) -> Router {
 
     // Split out as their own routers purely so the rate-limit layer
     // applies to exactly these paths and nothing else -- merged back into
-    // the main router below while it is still `Router<AppState>`, since
-    // `.merge` requires matching state types and `.with_state` further
-    // down converts the main chain to `Router<()>`.
-    let auth_routes = Router::new()
-        .route("/auth/register/begin", post(auth_register::register_begin))
-        .route(
+    // the main router below while it is still `GatedRouter<AppState>`,
+    // since `.merge` requires matching state types and `.with_state`
+    // further down converts the main chain to `GatedRouter<()>`.
+    let auth_routes = GatedRouter::new()
+        .gated_route(
+            "/auth/register/begin",
+            post(auth_register::register_begin),
+            [(Method::POST, RouteAccess::AuthCeremony)],
+        )
+        .gated_route(
             "/auth/register/finish",
             post(auth_register::register_finish),
+            [(Method::POST, RouteAccess::AuthCeremony)],
         )
-        .route("/auth/login/begin", post(auth_login::login_begin))
-        .route("/auth/login/finish", post(auth_login::login_finish))
-        .layer(
-            GovernorLayer::new(auth_rate_limit)
-                .error_handler(rate_limit_exceeded_with_audit("auth", state.db.clone())),
-        );
+        .gated_route(
+            "/auth/login/begin",
+            post(auth_login::login_begin),
+            [(Method::POST, RouteAccess::AuthCeremony)],
+        )
+        .gated_route(
+            "/auth/login/finish",
+            post(auth_login::login_finish),
+            [(Method::POST, RouteAccess::AuthCeremony)],
+        )
+        .map_router(|r| {
+            r.layer(
+                GovernorLayer::new(auth_rate_limit)
+                    .error_handler(rate_limit_exceeded_with_audit("auth", state.db.clone())),
+            )
+        });
 
-    let invite_routes = Router::new()
-        // Admin-only. Authorization is the `AuthenticatedUser` extractor in
-        // the handler plus the admin-only RLS policies underneath it, not a
+    let invite_routes = GatedRouter::new()
+        // Admin-only. Authorization is `require_permission` inside the
+        // handler plus the admin-only RLS policies underneath it, not a
         // route-level guard -- there is no middleware layer that could be
         // reordered away from this path.
-        .route("/auth/invites", post(auth_invites::create_invite))
-        // Account recovery shares this bucket rather than the anonymous
-        // auth_routes one above -- same trust level as invite creation
-        // (authenticated admin), same "bound accidental/scripted
-        // hammering by a trusted caller" rationale.
-        .route("/auth/invites/recover", post(auth_invites::recover_account))
-        .layer(
-            GovernorLayer::new(invite_rate_limit)
-                .error_handler(rate_limit_exceeded_with_audit("invite", state.db.clone())),
-        );
+        .gated_route(
+            "/auth/invites",
+            post(auth_invites::create_invite),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["users.manage", "users.manage_roles"],
+                    action: "create_invite",
+                },
+            )],
+        )
+        // Despite the name, this is an admin-only account-recovery action
+        // (revokes and reissues every credential on the target account),
+        // not a self-service "forgot my passkey" flow -- see
+        // THREAT_MODEL.md's actor table: "isn't reachable unauth -- admin
+        // only". Shares this bucket rather than the anonymous
+        // `auth_routes` one above -- same trust level as invite creation.
+        .gated_route(
+            "/auth/invites/recover",
+            post(auth_invites::recover_account),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["users.manage"],
+                    action: "recover_account",
+                },
+            )],
+        )
+        .map_router(|r| {
+            r.layer(
+                GovernorLayer::new(invite_rate_limit)
+                    .error_handler(rate_limit_exceeded_with_audit("invite", state.db.clone())),
+            )
+        });
 
     // Tighter than the router-wide DefaultBodyLimit near the bottom of
     // this function -- see TAGGER_CHECK_BODY_LIMIT_BYTES's own doc
     // comment. Split into its own router purely so the layer applies to
     // this one route, same "split for layer scoping" pattern as
     // auth_routes/invite_routes above.
-    let tagger_check_route = Router::new()
-        .route("/tagger/check", post(tagger::check))
-        .layer(DefaultBodyLimit::max(TAGGER_CHECK_BODY_LIMIT_BYTES));
+    let tagger_check_route = GatedRouter::new()
+        .gated_route(
+            "/tagger/check",
+            post(tagger::check),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .map_router(|r| r.layer(DefaultBodyLimit::max(TAGGER_CHECK_BODY_LIMIT_BYTES)));
 
-    Router::new()
-        .route("/health", get(health))
-        .route("/health/db", get(health_db))
-        .route("/health/whoami", get(whoami))
+    GatedRouter::new()
+        .gated_route("/health", get(health), [(Method::GET, RouteAccess::Public)])
+        .gated_route(
+            "/health/db",
+            get(health_db),
+            [(Method::GET, RouteAccess::Public)],
+        )
         // Deliberately NOT behind the AuthenticatedUser extractor: signing
         // out must succeed with a stale or missing cookie, or the one case
         // where a user most needs to clear it is the case that 401s. See
         // auth_logout's module docs.
+        .gated_route(
+            "/health/whoami",
+            get(whoami),
+            [(Method::GET, RouteAccess::Authenticated)],
+        )
         // TOTP is authenticated-only end to end (the extractor is in every
         // handler below) -- there is no unauthenticated TOTP path any
         // more. See auth_totp.rs's module docs for why: it's a step-up
         // check for an already-signed-in session, not a way to log in.
-        .route("/auth/totp/enroll/begin", post(auth_totp::enroll_begin))
-        .route("/auth/totp/enroll/confirm", post(auth_totp::enroll_confirm))
-        .route("/auth/totp/step-up", post(auth_totp::step_up))
+        .gated_route(
+            "/auth/totp/enroll/begin",
+            post(auth_totp::enroll_begin),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/auth/totp/enroll/confirm",
+            post(auth_totp::enroll_confirm),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/auth/totp/step-up",
+            post(auth_totp::step_up),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
         // Passkey-based step-up gating self-service TOTP re-enrolment --
         // the mirror of TOTP step-up gating add_passkey. See
         // auth_passkey_reverify.rs's module docs.
-        .route(
+        .gated_route(
             "/auth/reverify/begin",
             post(auth_passkey_reverify::reverify_begin),
+            [(Method::POST, RouteAccess::Authenticated)],
         )
-        .route(
+        .gated_route(
             "/auth/reverify/finish",
             post(auth_passkey_reverify::reverify_finish),
+            [(Method::POST, RouteAccess::Authenticated)],
         )
         // Admin-only, read-only -- no dedicated rate limit bucket the way
         // /auth/invites has, since a GET hit by an ordinary page load
         // isn't the "trusted caller hammering a write" case that
         // reasoning exists for.
-        .route("/auth/users", get(auth_users::list_users))
-        .route("/auth/users/export", get(auth_users::export_users))
-        .route(
+        .gated_route(
+            "/auth/users",
+            get(auth_users::list_users),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["users.manage"],
+                    action: "list_users",
+                },
+            )],
+        )
+        .gated_route(
+            "/auth/users/export",
+            get(auth_users::export_users),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["users.manage"],
+                    action: "export_users",
+                },
+            )],
+        )
+        .gated_route(
             "/auth/users/{id}/deactivate",
             post(auth_user_status::deactivate_user),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["users.manage"],
+                    action: "deactivate_user",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/auth/users/{id}/reactivate",
             post(auth_user_status::reactivate_user),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["users.manage"],
+                    action: "reactivate_user",
+                },
+            )],
         )
-        .route("/auth/users/{id}/roles", post(auth_user_role::grant_role))
-        .route(
+        .gated_route(
+            "/auth/users/{id}/roles",
+            post(auth_user_role::grant_role),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["users.manage_roles"],
+                    action: "grant_role",
+                },
+            )],
+        )
+        .gated_route(
             "/auth/users/{id}/roles/{role_key}",
             delete(auth_user_role::revoke_role),
+            [(
+                Method::DELETE,
+                RouteAccess::Permission {
+                    keys: &["users.manage_roles"],
+                    action: "revoke_role",
+                },
+            )],
         )
         // No dedicated rate-limit bucket -- read-only catalog data any
         // authenticated caller can already reach under RLS.
-        .route("/auth/roles", get(auth_roles::list_roles))
-        .route(
+        .gated_route(
+            "/auth/roles",
+            get(auth_roles::list_roles),
+            [(Method::GET, RouteAccess::Authenticated)],
+        )
+        .gated_route(
             "/auth/configuration",
             get(auth_configuration::get_configuration)
                 .put(auth_configuration::update_configuration),
+            [
+                (
+                    Method::GET,
+                    RouteAccess::Permission {
+                        keys: &["security_policies.manage"],
+                        action: "get_configuration",
+                    },
+                ),
+                (
+                    Method::PUT,
+                    RouteAccess::Permission {
+                        keys: &["security_policies.manage"],
+                        action: "update_configuration",
+                    },
+                ),
+            ],
         )
         // Read: any authenticated caller, same reasoning as /auth/roles
         // above. Writes: gated on client_ops.manage_tags inside each
         // handler (admin, onboarding_manager, department_manager all
         // hold it) — see client_ops_qms_tags's module doc.
-        .route(
+        .gated_route(
             "/client-ops/qms-tags",
             get(client_ops_qms_tags::list_qms_tags).post(client_ops_qms_tags::create_qms_tag),
+            [
+                (Method::GET, RouteAccess::Authenticated),
+                (
+                    Method::POST,
+                    RouteAccess::Permission {
+                        keys: &["client_ops.manage_tags"],
+                        action: "create_qms_tag",
+                    },
+                ),
+            ],
         )
-        .route(
+        .gated_route(
             "/client-ops/qms-tags/{tag_key}",
             put(client_ops_qms_tags::update_qms_tag),
+            [(
+                Method::PUT,
+                RouteAccess::Permission {
+                    keys: &["client_ops.manage_tags"],
+                    action: "update_qms_tag",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/client-ops/qms-tags/{tag_key}/deactivate",
             patch(client_ops_qms_tags::deactivate_qms_tag),
+            [(
+                Method::PATCH,
+                RouteAccess::Permission {
+                    keys: &["client_ops.manage_tags"],
+                    action: "deactivate_qms_tag",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/client-ops/qms-tags/{tag_key}/reactivate",
             patch(client_ops_qms_tags::reactivate_qms_tag),
+            [(
+                Method::PATCH,
+                RouteAccess::Permission {
+                    keys: &["client_ops.manage_tags"],
+                    action: "reactivate_qms_tag",
+                },
+            )],
         )
         // Activity Logs -- gated on activity_logs.read inside each handler
         // (admin, onboarding_manager, department_manager all hold it),
-        // same shape as /auth/audit-logs above but backed by
+        // same shape as /auth/audit-logs below but backed by
         // client_ops.audit_log instead of the security audit trail.
-        .route(
+        .gated_route(
             "/client-ops/activity-logs",
             get(client_ops_activity_logs::list_activity_logs),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["activity_logs.read"],
+                    action: "list_activity_logs",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/client-ops/activity-logs/event-types",
             get(client_ops_activity_logs::list_event_types),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["activity_logs.read"],
+                    action: "list_activity_log_event_types",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/client-ops/activity-logs/export",
             post(client_ops_activity_logs_export::export_activity_logs),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["activity_logs.read"],
+                    action: "export_activity_logs",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/client-ops/activity-logs/export/preview",
             post(client_ops_activity_logs_export::preview_activity_logs),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["activity_logs.read"],
+                    action: "preview_activity_logs",
+                },
+            )],
         )
         // Any authenticated caller -- read-only discovery data (facility/
         // person names), same reasoning as the qms-tags read above. See
         // clients_search's own module doc for the two searches this runs.
-        .route("/clients/search", get(clients_search::search_clients))
+        .gated_route(
+            "/clients/search",
+            get(clients_search::search_clients),
+            [(Method::GET, RouteAccess::Authenticated)],
+        )
         // Read-only, no live PS write -- see clients_preview's own module doc.
-        .route("/clients/preview", post(clients_preview::preview_clients))
+        .gated_route(
+            "/clients/preview",
+            post(clients_preview::preview_clients),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
         // GET: any authenticated caller (every client-scoped tool needs
         // this list to navigate). POST: requires client_ops.perform --
         // see clients_companies's and clients_create's own module docs.
-        .route(
+        .gated_route(
             "/clients",
             get(clients_companies::list_companies).post(clients_create::create_client),
+            [
+                (Method::GET, RouteAccess::Authenticated),
+                (
+                    Method::POST,
+                    RouteAccess::Permission {
+                        keys: &["client_ops.perform"],
+                        action: "create_client_from_process_street",
+                    },
+                ),
+            ],
         )
         // Any authenticated caller -- read-only discovery data for the
         // clients-page filter checkboxes, same reasoning as
         // clients_search above. See clients_filter_options's own module doc.
-        .route(
+        .gated_route(
             "/clients/filter-options",
             get(clients_filter_options::get_filter_options),
+            [(Method::GET, RouteAccess::Authenticated)],
         )
         // Requires client_ops.perform -- see clients_companies's own module doc.
-        .route(
+        .gated_route(
             "/clients/{company_id}/archive",
             post(clients_companies::archive_company),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "archive_company",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/unarchive",
             post(clients_companies::unarchive_company),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "unarchive_company",
+                },
+            )],
         )
         // Requires client_ops.perform -- see clients_resync's own module doc.
-        .route(
+        .gated_route(
             "/clients/{company_id}/resync/preview",
             post(clients_resync::preview_resync),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "preview_resync",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/resync/apply",
             post(clients_resync::apply_resync),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "apply_resync",
+                },
+            )],
         )
         // Company page's "Manual Link" button -- requires client_ops.perform,
         // see clients_manual_link's own module doc.
-        .route(
+        .gated_route(
             "/clients/{company_id}/manual-link",
             post(clients_manual_link::manual_link),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "manual_link",
+                },
+            )],
         )
         // GET: any authenticated caller -- see clients_detail's own
         // module doc. DELETE: requires client_ops.perform -- see
         // clients_companies's own module doc (a genuine permanent
         // delete, distinct from archive/unarchive above).
-        .route(
+        .gated_route(
             "/clients/{company_id}",
             get(clients_detail::get_company_detail).delete(clients_companies::delete_company),
+            [
+                (Method::GET, RouteAccess::Authenticated),
+                (
+                    Method::DELETE,
+                    RouteAccess::Permission {
+                        keys: &["client_ops.perform"],
+                        action: "delete_company",
+                    },
+                ),
+            ],
         )
         // Company page's Onboarding Summary tab -- read-only, any
         // authenticated caller, RLS is the real gate (see
         // clients_onboarding_summary's own module doc).
-        .route(
+        .gated_route(
             "/clients/{company_id}/onboarding-summary",
             get(clients_onboarding_summary::get_onboarding_summary),
+            [(Method::GET, RouteAccess::RlsRead)],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}",
             get(clients_detail::get_facility_detail),
+            [(Method::GET, RouteAccess::Authenticated)],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/policies",
             get(clients_detail::get_facility_policies),
+            [(Method::GET, RouteAccess::Authenticated)],
         )
         // Manual edit for each split Facility Policies tab -- no extra
         // permission check, RLS already gates these tables to
         // onboarding_manager/department_manager (see
         // clients_facility_policies_edit's own module doc).
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/policies/fees",
             put(clients_facility_policies_edit::update_fees),
+            [(Method::PUT, RouteAccess::RlsWrite)],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/policies/taxes",
             put(clients_facility_policies_edit::update_taxes),
+            [(Method::PUT, RouteAccess::RlsWrite)],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/policies/delinquency",
             put(clients_facility_policies_edit::update_delinquency),
+            [(Method::PUT, RouteAccess::RlsWrite)],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/policies/coverage",
             put(clients_facility_policies_edit::update_coverage),
+            [(Method::PUT, RouteAccess::RlsWrite)],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/policies/specials",
             put(clients_facility_policies_edit::update_specials),
+            [(Method::PUT, RouteAccess::RlsWrite)],
         )
-        // Read: any authenticated caller. Link/unlink: client_ops.perform
-        // -- see clients_elavon's own module doc.
-        .route(
+        // Read: any authenticated caller. Link/unlink/resync:
+        // client_ops.perform -- see clients_elavon's own module doc.
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/elavon",
             get(clients_elavon::get_facility_elavon),
+            [(Method::GET, RouteAccess::Authenticated)],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/elavon/link",
             post(clients_elavon::link_facility_elavon)
                 .delete(clients_elavon::unlink_facility_elavon),
+            [
+                (
+                    Method::POST,
+                    RouteAccess::Permission {
+                        keys: &["client_ops.perform"],
+                        action: "link_facility_merchant_account",
+                    },
+                ),
+                (
+                    Method::DELETE,
+                    RouteAccess::Permission {
+                        keys: &["client_ops.perform"],
+                        action: "unlink_facility_merchant_account",
+                    },
+                ),
+            ],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/elavon/resync",
             post(clients_elavon::resync_elavon_data),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "resync_elavon_data",
+                },
+            )],
         )
         // DropBox tab -- no extra permission check, RLS is the real
         // gate (see clients_dropbox_folder's own module doc).
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/dropbox-folder",
             put(clients_dropbox_folder::update_facility_dropbox_folder),
+            [(Method::PUT, RouteAccess::RlsWrite)],
         )
         // Users tab -- read and write both just need authentication, RLS
         // is the real gate (see clients_facility_people's own module doc).
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/people",
             get(clients_facility_people::get_facility_people)
                 .post(clients_facility_people::add_facility_person),
+            [
+                (Method::GET, RouteAccess::RlsRead),
+                (Method::POST, RouteAccess::RlsWrite),
+            ],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/people/{person_id}",
             put(clients_facility_people::edit_facility_person)
                 .delete(clients_facility_people::unlink_facility_person),
+            [
+                (Method::PUT, RouteAccess::RlsWrite),
+                (Method::DELETE, RouteAccess::RlsWrite),
+            ],
         )
         // Onboarding Work tab -- read-only, any authenticated caller, RLS
         // is the real gate (see tool_runs's own module doc). DELETE
         // (clearing a mistaken run) requires client_ops.perform.
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/tool-runs",
             get(tool_runs::list_facility_tool_runs),
+            [(Method::GET, RouteAccess::RlsRead)],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}",
             delete(tool_runs::delete_tool_run),
+            [(
+                Method::DELETE,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "delete_tool_run",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/output",
             get(tool_runs::download_tool_run_output),
+            [(Method::GET, RouteAccess::RlsRead)],
         )
-        .route(
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/source",
             get(tool_runs::download_tool_run_source),
+            [(Method::GET, RouteAccess::RlsRead)],
         )
         // Requires client_ops.perform to start; status read is any
         // authenticated caller -- see clients_sync's own module doc.
-        .route("/clients/sync", post(clients_sync::start_sync))
-        .route("/clients/sync/status", get(clients_sync::sync_status))
-        // Read: any authenticated caller. Write: integrations.manage
-        // (admin-only) -- see the 20260909140000/20260909150000
-        // migrations for why this moved off client_ops.perform.
-        .route(
+        .gated_route(
+            "/clients/sync",
+            post(clients_sync::start_sync),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "start_process_street_sync",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/sync/status",
+            get(clients_sync::sync_status),
+            [(Method::GET, RouteAccess::Authenticated)],
+        )
+        // Both GET and PUT require integrations.manage (admin-only) --
+        // corrected 2026-09-23 from a stale "Read: any authenticated
+        // caller" comment here that no longer matched
+        // `process_street_settings::get_settings`, which gates on this
+        // permission too (it returns the live API key). Exactly the kind
+        // of drift the new `permission_gate_tests` module below exists to
+        // catch instead of relying on a comment staying accurate by hand.
+        .gated_route(
             "/integrations/process-street/settings",
             get(process_street_settings::get_settings)
                 .put(process_street_settings::update_settings),
+            [
+                (
+                    Method::GET,
+                    RouteAccess::Permission {
+                        keys: &["integrations.manage"],
+                        action: "get_process_street_settings",
+                    },
+                ),
+                (
+                    Method::PUT,
+                    RouteAccess::Permission {
+                        keys: &["integrations.manage"],
+                        action: "update_process_street_settings",
+                    },
+                ),
+            ],
         )
         // Admin-only (integrations.manage) read and write -- this one
         // holds the Dropbox app's own secrets, so unlike the Process
         // Street settings above, even the read side is gated. See
         // dropbox_settings's own module doc.
-        .route(
+        .gated_route(
             "/integrations/dropbox/settings",
             get(dropbox_settings::get_settings).put(dropbox_settings::update_settings),
+            [
+                (
+                    Method::GET,
+                    RouteAccess::Permission {
+                        keys: &["integrations.manage"],
+                        action: "get_dropbox_settings",
+                    },
+                ),
+                (
+                    Method::PUT,
+                    RouteAccess::Permission {
+                        keys: &["integrations.manage"],
+                        action: "update_dropbox_settings",
+                    },
+                ),
+            ],
         )
         // Any authenticated caller -- folder names only, nothing
         // sensitive, same reasoning as the qms-tags read above. See
         // dropbox_browse's module doc for the root-path enforcement this
         // relies on.
-        .route("/dropbox/list", get(dropbox_browse::list_folder))
+        .gated_route(
+            "/dropbox/list",
+            get(dropbox_browse::list_folder),
+            [(Method::GET, RouteAccess::Authenticated)],
+        )
         // Same reasoning as /dropbox/list above -- see
         // dropbox_browse::search_folders's own doc comment for why no
         // root-boundary check is needed on this one.
-        .route("/dropbox/search", get(dropbox_browse::search_folders))
+        .gated_route(
+            "/dropbox/search",
+            get(dropbox_browse::search_folders),
+            [(Method::GET, RouteAccess::Authenticated)],
+        )
         // Any authenticated caller -- read-only discovery, same reasoning
         // as the two routes above. See dropbox_browse::facility_dropbox_folder's
         // own doc comment for why this takes a facility name (query
         // param), not a facility id path segment.
-        .route(
+        .gated_route(
             "/clients/{company_id}/dropbox-folder",
             get(dropbox_browse::facility_dropbox_folder),
+            [(Method::GET, RouteAccess::Authenticated)],
         )
         // Admin-only, read-only -- same no-dedicated-bucket reasoning as
         // /auth/users above.
-        .route("/auth/audit-logs", get(auth_audit_logs::list_audit_logs))
-        .route(
+        .gated_route(
+            "/auth/audit-logs",
+            get(auth_audit_logs::list_audit_logs),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["audit_logs.read"],
+                    action: "list_audit_logs",
+                },
+            )],
+        )
+        .gated_route(
             "/auth/audit-logs/event-types",
             get(auth_audit_logs::list_event_types),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["audit_logs.read"],
+                    action: "list_event_types",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/auth/audit-logs/export",
             post(auth_audit_logs_export::export_audit_logs),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["audit_logs.read"],
+                    action: "export_audit_logs",
+                },
+            )],
         )
-        .route(
+        .gated_route(
             "/auth/audit-logs/export/preview",
             post(auth_audit_logs_export::preview_audit_logs),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["audit_logs.read"],
+                    action: "preview_audit_logs",
+                },
+            )],
         )
-        .route("/auth/logout", post(auth_logout::logout))
-        .route(
+        .gated_route(
+            "/auth/logout",
+            post(auth_logout::logout),
+            [(Method::POST, RouteAccess::Public)],
+        )
+        .gated_route(
             "/auth/logout/everywhere",
             post(auth_logout::logout_everywhere),
+            [(Method::POST, RouteAccess::Public)],
         )
         .merge(auth_routes)
         .merge(invite_routes)
-        .route("/upload", post(upload::upload))
-        .route("/upload-dropbox", post(upload::import_from_dropbox))
-        .route("/discover", post(discover::discover))
-        .route("/validate", post(validate::validate))
-        .route("/correct", post(correct::correct))
-        .route("/correct-group", post(correct_group::correct_group))
-        .route("/exempt-dimensions", post(exempt::exempt_dimensions))
-        .route("/exclude-group", post(exclude_group::exclude_group))
-        .route("/exclude-groups", post(exclude_groups::exclude_groups))
-        .route(
+        // Tool-session routes below: any authenticated caller may use the
+        // tools, no specific permission required (see THREAT_MODEL.md's
+        // "Known gaps" -- these are intentionally ungated, not an
+        // oversight).
+        .gated_route(
+            "/upload",
+            post(upload::upload),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/upload-dropbox",
+            post(upload::import_from_dropbox),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/discover",
+            post(discover::discover),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/validate",
+            post(validate::validate),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/correct",
+            post(correct::correct),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/correct-group",
+            post(correct_group::correct_group),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/exempt-dimensions",
+            post(exempt::exempt_dimensions),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/exclude-group",
+            post(exclude_group::exclude_group),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/exclude-groups",
+            post(exclude_groups::exclude_groups),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
             "/acknowledge-group-warnings",
             post(acknowledge_group_warnings::acknowledge_group_warnings),
+            [(Method::POST, RouteAccess::Authenticated)],
         )
-        .route("/analyze", post(analyze::analyze))
-        .route("/export", post(export::export))
-        .route("/export/save-location", post(export::save_location))
-        .route("/export/export-dropbox", post(export::export_to_dropbox))
-        .route(
+        .gated_route(
+            "/analyze",
+            post(analyze::analyze),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/export",
+            post(export::export),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/export/save-location",
+            post(export::save_location),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/export/export-dropbox",
+            post(export::export_to_dropbox),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
             "/unit-file/select",
             post(select_unit_file::select_unit_file),
+            [(Method::POST, RouteAccess::Authenticated)],
         )
-        .route(
+        .gated_route(
             "/unit-file/resolve-format",
             post(resolve_unit_format::resolve_unit_format),
+            [(Method::POST, RouteAccess::Authenticated)],
         )
-        .route(
+        .gated_route(
             "/unit-file/upload",
             post(unit_file_upload::upload_unit_file),
+            [(Method::POST, RouteAccess::Authenticated)],
         )
-        .route(
+        .gated_route(
             "/group-file/upload",
             post(group_file_upload::upload_group_file),
+            [(Method::POST, RouteAccess::Authenticated)],
         )
-        .route(
+        .gated_route(
             "/group-file/confirm",
             post(group_file_confirm::confirm_group_file),
+            [(Method::POST, RouteAccess::Authenticated)],
         )
-        .route(
+        .gated_route(
             "/group-file/select",
             post(select_group_file::select_group_file),
+            [(Method::POST, RouteAccess::Authenticated)],
         )
-        .route("/session/cancel", post(cancel_session::cancel_session))
-        .route("/dedup/check", post(dedup::check))
-        .route("/dedup/detect-vendor", post(dedup::detect_vendor_format))
-        .route(
+        .gated_route(
+            "/session/cancel",
+            post(cancel_session::cancel_session),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/dedup/check",
+            post(dedup::check),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/dedup/detect-vendor",
+            post(dedup::detect_vendor_format),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
             "/dedup/detect-vendor-dropbox",
             post(dedup::detect_vendor_format_dropbox),
+            [(Method::POST, RouteAccess::Authenticated)],
         )
-        .route("/dedup/import-dropbox", post(dedup::import_from_dropbox))
-        .route("/dedup/report", post(dedup::report))
-        .route("/dedup/save-location", post(dedup::save_location))
-        .route("/dedup/export", post(dedup::export))
-        .route("/dedup/export-dropbox", post(dedup::export_to_dropbox))
-        .route("/tagger/import-dropbox", post(tagger::import_from_dropbox))
-        .route("/tagger/report", post(tagger::report))
-        .route("/tagger/save-location", post(tagger::save_location))
-        .route("/tagger/apply", post(tagger::apply))
-        .route("/tagger/apply-dropbox", post(tagger::apply_to_dropbox))
+        .gated_route(
+            "/dedup/import-dropbox",
+            post(dedup::import_from_dropbox),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/dedup/report",
+            post(dedup::report),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/dedup/save-location",
+            post(dedup::save_location),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/dedup/export",
+            post(dedup::export),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/dedup/export-dropbox",
+            post(dedup::export_to_dropbox),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/tagger/import-dropbox",
+            post(tagger::import_from_dropbox),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/tagger/report",
+            post(tagger::report),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/tagger/save-location",
+            post(tagger::save_location),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/tagger/apply",
+            post(tagger::apply),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/tagger/apply-dropbox",
+            post(tagger::apply_to_dropbox),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
         .merge(tagger_check_route)
-        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
+        .map_router(|r| r.layer(DefaultBodyLimit::max(100 * 1024 * 1024)))
         .with_state(state)
+}
+
+/// Response-shaping middleware, applied to the state-erased `Router<()>`
+/// -- none of this affects authorization, so it lives outside `build`
+/// and outside the `GatedRouter` manifest entirely.
+fn with_response_layers(router: Router) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::list(allowed_origins()))
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::PUT,
+            axum::http::Method::PATCH,
+            axum::http::Method::DELETE,
+        ])
+        .allow_headers([axum::http::header::CONTENT_TYPE])
+        // The frontend's shared hooks (useSessionPost/useSessionAction)
+        // now send `credentials: "include"` on every request, ahead of
+        // auth actually issuing a session cookie -- per the Fetch/CORS
+        // spec, a credentialed request's response is invisible to the
+        // browser unless the server explicitly echoes this header, even
+        // before any real cookie exists to send. `allow_origin` above is
+        // already a specific list (never `*`), which credentialed CORS
+        // requires regardless.
+        .allow_credentials(true)
+        // Content-Disposition is not a CORS-safelisted response header,
+        // so without this, every file-download endpoint's
+        // `response.headers.get("Content-Disposition")` on the frontend
+        // (dedup/audit-log/user export, tagger apply -- every one of
+        // downloadBlob's callers) silently reads null and falls back to
+        // its hardcoded default filename, even though the real header
+        // is present on the wire. Same class of gap as the PUT/PATCH
+        // CORS fix above: a browser-only restriction with no server-side
+        // symptom, so it's invisible unless a download's real filename
+        // is deliberately checked against something other than its own
+        // fallback.
+        .expose_headers([axum::http::header::CONTENT_DISPOSITION]);
+
+    router
         .layer(cors)
         // A request that never reaches a handler at all -- malformed
         // JSON, the wrong Content-Type, or a body over DefaultBodyLimit
@@ -748,8 +1278,8 @@ fn rate_limit_exceeded_with_audit(
     }
 }
 
-/// See the doc comment on its `.layer(...)` call site in `router` above.
-/// Only rewrites a response that (a) has one of the three status codes
+/// See the doc comment on its `.layer(...)` call site in `with_response_layers`
+/// above. Only rewrites a response that (a) has one of the three status codes
 /// axum's built-in extractors/body-limit actually produce for this
 /// failure class, and (b) isn't already JSON -- a handler's own
 /// legitimately-JSON 400 (e.g. `stage_conflict`, `correct_group`'s
@@ -838,5 +1368,542 @@ mod panic_handler_tests {
     fn handle_panic_returns_a_500_for_an_unrecognized_payload() {
         let response = handle_panic(Box::new(42_i32));
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+}
+
+/// Closes THREAT_MODEL.md's "no formal, automated check that every new
+/// privilege-gated handler actually calls `require_permission`" gap. See
+/// `route_access`'s module doc for the compile-time half (every route
+/// must declare a `RouteAccess`); this is the runtime half -- for every
+/// route `build()` classified as `RouteAccess::Permission`, prove the
+/// exact handler wired up to it actually 403s a caller holding no
+/// permissions, the same `empty_state()`/dummy-argument pattern this
+/// codebase's existing per-handler tests already use (see e.g.
+/// `clients_companies::tests::archiving_refuses_insufficient_permission_without_touching_anything`).
+#[cfg(test)]
+mod permission_gate_tests {
+    use std::future::Future;
+    use std::net::SocketAddr;
+    use std::pin::Pin;
+
+    use axum::extract::{ConnectInfo, Path, Query};
+    use axum::http::{HeaderMap, Method, StatusCode};
+    use axum::response::Response;
+    use axum::Json;
+    use uuid::Uuid;
+
+    use crate::api::clients_companies;
+    use crate::api::route_access::RouteAccess;
+    use crate::api::test_support::{empty_state, test_user};
+    use crate::api::{
+        auth_audit_logs, auth_audit_logs_export, auth_configuration, auth_invites, auth_user_role,
+        auth_user_status, auth_users, client_ops_activity_logs, client_ops_activity_logs_export,
+        client_ops_qms_tags, clients_create, clients_elavon, clients_manual_link, clients_resync,
+        clients_sync, dropbox_settings, process_street_settings, tool_runs,
+    };
+
+    use super::build;
+
+    type BoxFuture = Pin<Box<dyn Future<Output = Response> + Send>>;
+
+    /// `(path, method, assert_denied)` -- one entry per `Permission`-
+    /// classified route, as returned by `permission_route_checks` below.
+    type PermissionRouteCheck = (&'static str, Method, fn() -> BoxFuture);
+
+    fn local_addr() -> ConnectInfo<SocketAddr> {
+        ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0)))
+    }
+
+    /// One entry per `RouteAccess::Permission` route `build()` registers
+    /// below -- calls the exact handler wired up to that (path, method),
+    /// with `test_user()` (a valid session holding zero permissions).
+    /// Adding a `Permission`-classified `gated_route` without a matching
+    /// entry here fails `every_permission_route_is_covered_and_enforced`
+    /// below by construction: the whole point of this list is to make
+    /// that omission loud instead of silent.
+    fn permission_route_checks() -> Vec<PermissionRouteCheck> {
+        vec![
+            (
+                "/auth/invites",
+                Method::POST,
+                (|| {
+                    Box::pin(auth_invites::create_invite(
+                        axum::extract::State(empty_state()),
+                        test_user(),
+                        local_addr(),
+                        HeaderMap::new(),
+                        Json(auth_invites::CreateInviteRequest {
+                            email: "ada@example.com".to_string(),
+                            first_name: "Ada".to_string(),
+                            last_name: "Lovelace".to_string(),
+                            company: "quikstor".to_string(),
+                            job_title: None,
+                            role: "onboarding_manager".to_string(),
+                        }),
+                    ))
+                }) as fn() -> BoxFuture,
+            ),
+            ("/auth/invites/recover", Method::POST, || {
+                Box::pin(auth_invites::recover_account(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Json(auth_invites::RecoverAccountRequest {
+                        email: "someone@example.com".to_string(),
+                    }),
+                ))
+            }),
+            ("/auth/users", Method::GET, || {
+                Box::pin(auth_users::list_users(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            }),
+            ("/auth/users/export", Method::GET, || {
+                Box::pin(auth_users::export_users(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            }),
+            ("/auth/users/{id}/deactivate", Method::POST, || {
+                Box::pin(auth_user_status::deactivate_user(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                ))
+            }),
+            ("/auth/users/{id}/reactivate", Method::POST, || {
+                Box::pin(auth_user_status::reactivate_user(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                ))
+            }),
+            ("/auth/users/{id}/roles", Method::POST, || {
+                Box::pin(auth_user_role::grant_role(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                    Json(auth_user_role::GrantRoleRequest {
+                        role: "onboarding_manager".to_string(),
+                    }),
+                ))
+            }),
+            ("/auth/users/{id}/roles/{role_key}", Method::DELETE, || {
+                Box::pin(auth_user_role::revoke_role(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Path((Uuid::new_v4(), "onboarding_manager".to_string())),
+                ))
+            }),
+            ("/auth/configuration", Method::GET, || {
+                Box::pin(auth_configuration::get_configuration(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            }),
+            ("/auth/configuration", Method::PUT, || {
+                Box::pin(auth_configuration::update_configuration(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Json(auth_configuration::UpdateAuthConfigurationRequest {
+                        step_up_actions: vec![],
+                    }),
+                ))
+            }),
+            ("/client-ops/qms-tags", Method::POST, || {
+                Box::pin(client_ops_qms_tags::create_qms_tag(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Json(client_ops_qms_tags::CreateQmsTagRequest {
+                        tag_key: "e.test".to_string(),
+                        label: "Test".to_string(),
+                        category: "Tenant".to_string(),
+                    }),
+                ))
+            }),
+            ("/client-ops/qms-tags/{tag_key}", Method::PUT, || {
+                Box::pin(client_ops_qms_tags::update_qms_tag(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path("e.test".to_string()),
+                    Json(client_ops_qms_tags::UpdateQmsTagRequest {
+                        label: "Test".to_string(),
+                        category: "Tenant".to_string(),
+                    }),
+                ))
+            }),
+            (
+                "/client-ops/qms-tags/{tag_key}/deactivate",
+                Method::PATCH,
+                || {
+                    Box::pin(client_ops_qms_tags::deactivate_qms_tag(
+                        axum::extract::State(empty_state()),
+                        test_user(),
+                        HeaderMap::new(),
+                        Path("e.test".to_string()),
+                    ))
+                },
+            ),
+            (
+                "/client-ops/qms-tags/{tag_key}/reactivate",
+                Method::PATCH,
+                || {
+                    Box::pin(client_ops_qms_tags::reactivate_qms_tag(
+                        axum::extract::State(empty_state()),
+                        test_user(),
+                        HeaderMap::new(),
+                        Path("e.test".to_string()),
+                    ))
+                },
+            ),
+            ("/client-ops/activity-logs", Method::GET, || {
+                Box::pin(client_ops_activity_logs::list_activity_logs(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Query(client_ops_activity_logs::ActivityLogQuery {
+                        limit: None,
+                        before_id: None,
+                        event_type: None,
+                        entity_type: None,
+                        actor_user_id: None,
+                    }),
+                ))
+            }),
+            ("/client-ops/activity-logs/event-types", Method::GET, || {
+                Box::pin(client_ops_activity_logs::list_event_types(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            }),
+            ("/client-ops/activity-logs/export", Method::POST, || {
+                Box::pin(client_ops_activity_logs_export::export_activity_logs(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Json(client_ops_activity_logs_export::ExportActivityLogsRequest {
+                        date_from: "2026-08-01T00:00:00Z".parse().unwrap(),
+                        date_to: "2026-08-05T00:00:00Z".parse().unwrap(),
+                        event_types: vec![],
+                        entity_types: vec![],
+                        actor_user_ids: vec![],
+                    }),
+                ))
+            }),
+            (
+                "/client-ops/activity-logs/export/preview",
+                Method::POST,
+                || {
+                    Box::pin(client_ops_activity_logs_export::preview_activity_logs(
+                        axum::extract::State(empty_state()),
+                        test_user(),
+                        local_addr(),
+                        Json(client_ops_activity_logs_export::ExportActivityLogsRequest {
+                            date_from: "2026-08-01T00:00:00Z".parse().unwrap(),
+                            date_to: "2026-08-05T00:00:00Z".parse().unwrap(),
+                            event_types: vec![],
+                            entity_types: vec![],
+                            actor_user_ids: vec![],
+                        }),
+                    ))
+                },
+            ),
+            ("/clients", Method::POST, || {
+                Box::pin(clients_create::create_client(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Json(clients_create::CreateClientRequest {
+                        company_intake_run_id: "abc123".to_string(),
+                        company: Default::default(),
+                        facilities: vec![],
+                    }),
+                ))
+            }),
+            ("/clients/{company_id}/archive", Method::POST, || {
+                Box::pin(clients_companies::archive_company(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                ))
+            }),
+            ("/clients/{company_id}/unarchive", Method::POST, || {
+                Box::pin(clients_companies::unarchive_company(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                ))
+            }),
+            ("/clients/{company_id}/resync/preview", Method::POST, || {
+                Box::pin(clients_resync::preview_resync(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Path(Uuid::new_v4()),
+                ))
+            }),
+            ("/clients/{company_id}/resync/apply", Method::POST, || {
+                Box::pin(clients_resync::apply_resync(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Path(Uuid::new_v4()),
+                    Json(clients_resync::ApplyResyncRequest {
+                        resolutions: vec![],
+                    }),
+                ))
+            }),
+            ("/clients/{company_id}/manual-link", Method::POST, || {
+                Box::pin(clients_manual_link::manual_link(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                    Json(clients_manual_link::ManualLinkRequest {
+                        facility_id: Uuid::new_v4(),
+                        workflow: clients_manual_link::ManualLinkWorkflow::Intake,
+                        run_id: "abc123".to_string(),
+                    }),
+                ))
+            }),
+            ("/clients/{company_id}", Method::DELETE, || {
+                Box::pin(clients_companies::delete_company(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                ))
+            }),
+            (
+                "/clients/{company_id}/facilities/{facility_id}/elavon/link",
+                Method::POST,
+                || {
+                    Box::pin(clients_elavon::link_facility_elavon(
+                        axum::extract::State(empty_state()),
+                        test_user(),
+                        HeaderMap::new(),
+                        Path((Uuid::new_v4(), Uuid::new_v4())),
+                        Json(clients_elavon::LinkElavonRequest {
+                            merchant_account_run_id: "abc123".to_string(),
+                        }),
+                    ))
+                },
+            ),
+            (
+                "/clients/{company_id}/facilities/{facility_id}/elavon/link",
+                Method::DELETE,
+                || {
+                    Box::pin(clients_elavon::unlink_facility_elavon(
+                        axum::extract::State(empty_state()),
+                        test_user(),
+                        HeaderMap::new(),
+                        Path((Uuid::new_v4(), Uuid::new_v4())),
+                    ))
+                },
+            ),
+            (
+                "/clients/{company_id}/facilities/{facility_id}/elavon/resync",
+                Method::POST,
+                || {
+                    Box::pin(clients_elavon::resync_elavon_data(
+                        axum::extract::State(empty_state()),
+                        test_user(),
+                        HeaderMap::new(),
+                        Path((Uuid::new_v4(), Uuid::new_v4())),
+                    ))
+                },
+            ),
+            (
+                "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}",
+                Method::DELETE,
+                || {
+                    Box::pin(tool_runs::delete_tool_run(
+                        axum::extract::State(empty_state()),
+                        test_user(),
+                        HeaderMap::new(),
+                        Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
+                    ))
+                },
+            ),
+            ("/clients/sync", Method::POST, || {
+                Box::pin(clients_sync::start_sync(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Query(clients_sync::StartSyncQuery { force: false }),
+                ))
+            }),
+            ("/integrations/process-street/settings", Method::GET, || {
+                Box::pin(process_street_settings::get_settings(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            }),
+            ("/integrations/process-street/settings", Method::PUT, || {
+                Box::pin(process_street_settings::update_settings(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Json(
+                        process_street_settings::UpdateProcessStreetSettingsRequest {
+                            schedule_mode: "interval".to_string(),
+                            sync_interval_hours: 24,
+                            sync_time: None,
+                            sync_timezone: None,
+                            api_key: "test".to_string(),
+                        },
+                    ),
+                ))
+            }),
+            ("/integrations/dropbox/settings", Method::GET, || {
+                Box::pin(dropbox_settings::get_settings(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            }),
+            ("/integrations/dropbox/settings", Method::PUT, || {
+                Box::pin(dropbox_settings::update_settings(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Json(dropbox_settings::UpdateDropboxSettingsRequest {
+                        app_key: "key".to_string(),
+                        app_secret: "secret".to_string(),
+                        refresh_token: "token".to_string(),
+                        root_namespace_id: "ns".to_string(),
+                        root_path: "/".to_string(),
+                    }),
+                ))
+            }),
+            ("/auth/audit-logs", Method::GET, || {
+                Box::pin(auth_audit_logs::list_audit_logs(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Query(auth_audit_logs::AuditLogQuery {
+                        limit: None,
+                        before_id: None,
+                        event_type: None,
+                        user_id: None,
+                    }),
+                ))
+            }),
+            ("/auth/audit-logs/event-types", Method::GET, || {
+                Box::pin(auth_audit_logs::list_event_types(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            }),
+            ("/auth/audit-logs/export", Method::POST, || {
+                Box::pin(auth_audit_logs_export::export_audit_logs(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Json(auth_audit_logs_export::ExportAuditLogsRequest {
+                        date_from: "2026-08-01T00:00:00Z".parse().unwrap(),
+                        date_to: "2026-08-05T00:00:00Z".parse().unwrap(),
+                        event_types: vec![],
+                        user_ids: vec![],
+                        ip_address: None,
+                    }),
+                ))
+            }),
+            ("/auth/audit-logs/export/preview", Method::POST, || {
+                Box::pin(auth_audit_logs_export::preview_audit_logs(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    Json(auth_audit_logs_export::ExportAuditLogsRequest {
+                        date_from: "2026-08-01T00:00:00Z".parse().unwrap(),
+                        date_to: "2026-08-05T00:00:00Z".parse().unwrap(),
+                        event_types: vec![],
+                        user_ids: vec![],
+                        ip_address: None,
+                    }),
+                ))
+            }),
+        ]
+    }
+
+    #[tokio::test]
+    async fn every_permission_route_is_covered_and_enforced() {
+        let (_, manifest) = build(empty_state()).into_parts();
+        let checks = permission_route_checks();
+
+        let permission_entries: Vec<_> = manifest
+            .iter()
+            .filter(|entry| matches!(entry.access, RouteAccess::Permission { .. }))
+            .collect();
+
+        assert!(
+            !permission_entries.is_empty(),
+            "expected at least one RouteAccess::Permission route -- did classification regress?"
+        );
+
+        for entry in permission_entries {
+            let check = checks
+                .iter()
+                .find(|(path, method, _)| *path == entry.path && *method == entry.method);
+
+            let Some((_, _, assert_denied)) = check else {
+                panic!(
+                    "{} {} is classified as RouteAccess::Permission but has no entry in \
+                     permission_route_checks() -- add one so this test can prove the handler \
+                     actually enforces it",
+                    entry.method, entry.path
+                );
+            };
+
+            let response = assert_denied().await;
+
+            assert_eq!(
+                response.status(),
+                StatusCode::FORBIDDEN,
+                "{} {} is classified as requiring a permission, but a caller with none got {} \
+                 instead of 403 -- the handler may never call require_permission",
+                entry.method,
+                entry.path,
+                response.status()
+            );
+        }
+    }
+
+    /// The inverse of the check above: every entry in
+    /// `permission_route_checks()` must actually correspond to a real
+    /// `Permission`-classified route in the manifest -- otherwise a
+    /// stale entry (route renamed/removed) would silently stop proving
+    /// anything.
+    #[tokio::test]
+    async fn every_permission_route_check_matches_a_real_manifest_entry() {
+        let (_, manifest) = build(empty_state()).into_parts();
+
+        for (path, method, _) in permission_route_checks() {
+            let found = manifest.iter().any(|entry| {
+                entry.path == path
+                    && entry.method == method
+                    && matches!(entry.access, RouteAccess::Permission { .. })
+            });
+
+            assert!(
+                found,
+                "permission_route_checks() has an entry for {method} {path}, but build()'s \
+                 manifest has no matching RouteAccess::Permission route -- remove the stale \
+                 check or fix the classification"
+            );
+        }
     }
 }

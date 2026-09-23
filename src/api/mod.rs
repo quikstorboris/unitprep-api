@@ -48,6 +48,7 @@ mod health;
 mod manual_file_upload;
 mod process_street_settings;
 mod resolve_unit_format;
+mod route_access;
 mod router;
 mod select_group_file;
 pub(crate) mod select_unit_file;
