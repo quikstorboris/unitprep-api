@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use unitprep_core::session_store::SessionStore;
 
+use super::clients_resync::ResyncPreviewCache;
 use crate::application::dedup_session_service::DedupSession;
 use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
@@ -89,6 +90,15 @@ pub struct AppState {
     // `Idle` value even when PS isn't configured -- only the endpoints
     // that read/act on it need to also check `process_street`.
     pub sync_progress: SyncProgressHandle,
+
+    // A per-client "Re-sync" preview's own already-fetched Process
+    // Street snapshot, held just long enough for the matching apply to
+    // reuse it instead of re-fetching -- see `api::clients_resync`'s
+    // own module doc for why. Constructed unconditionally, same
+    // reasoning as `sync_progress` above: a harmless empty map even
+    // when PS isn't configured, since `preview_resync` itself already
+    // returns early via `process_street_not_configured()` in that case.
+    pub resync_preview_cache: ResyncPreviewCache,
 
     // Where an integration settings page (Process Street, Dropbox) reads
     // a credential's currently-effective value from when its own

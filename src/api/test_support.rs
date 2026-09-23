@@ -169,6 +169,14 @@ pub(crate) fn test_sync_progress() -> crate::clients::sync::SyncProgressHandle {
     ))
 }
 
+/// An empty resync-preview cache -- nothing in the handler test suite
+/// exercises the preview-then-apply reuse path itself (that's covered
+/// directly in `clients_resync`'s own tests), so this only needs to
+/// exist, same reasoning as `test_sync_progress` above.
+pub(crate) fn test_resync_preview_cache() -> crate::api::clients_resync::ResyncPreviewCache {
+    std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new()))
+}
+
 /// Fixed, obviously-fake caller id shared by `test_user()` and every
 /// session-building fixture below (`uploaded_state`, `validated_state`,
 /// `dedup_state_with_report`, etc.) -- so a test that builds a session
@@ -346,6 +354,7 @@ pub fn empty_state() -> AppState {
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        resync_preview_cache: test_resync_preview_cache(),
         env_source: Arc::new(FakeEnvSource::default()),
     }
 }
@@ -421,6 +430,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        resync_preview_cache: test_resync_preview_cache(),
         env_source: Arc::new(FakeEnvSource::default()),
     }
 }
@@ -497,6 +507,7 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        resync_preview_cache: test_resync_preview_cache(),
         env_source: Arc::new(FakeEnvSource::default()),
     }
 }
@@ -551,6 +562,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        resync_preview_cache: test_resync_preview_cache(),
         env_source: Arc::new(FakeEnvSource::default()),
     }
 }
@@ -615,6 +627,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        resync_preview_cache: test_resync_preview_cache(),
         env_source: Arc::new(FakeEnvSource::default()),
     }
 }
@@ -703,6 +716,7 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
+        resync_preview_cache: test_resync_preview_cache(),
         env_source: Arc::new(FakeEnvSource::default()),
     }
 }

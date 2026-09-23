@@ -64,6 +64,7 @@ pub fn dedup_state_with_source_folder(
         dropbox: crate::api::test_support::test_dropbox_client(),
         process_street: None,
         sync_progress: crate::api::test_support::test_sync_progress(),
+        resync_preview_cache: crate::api::test_support::test_resync_preview_cache(),
         env_source: Arc::new(crate::api::test_support::FakeEnvSource::default()),
     }
 }

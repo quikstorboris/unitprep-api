@@ -296,6 +296,7 @@ async fn main() {
         dropbox: dropbox_client,
         process_street: process_street_client,
         sync_progress,
+        resync_preview_cache: Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new())),
         env_source,
     };
 

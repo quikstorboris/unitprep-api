@@ -19,8 +19,28 @@
 //! conflicts they want to overwrite from Process Street (unlisted or
 //! `use_fresh: false` conflicts keep the manually-set value, same as the
 //! scheduled sync's own default) and writes.
+//!
+//! **`apply_resync` reuses `preview_resync`'s own fetch, not a second
+//! one** (2026-09-23, against Boris's own observation that confirming a
+//! preview -- even choosing to keep every field as-is -- still took as
+//! long as the preview itself). Both phases were independently calling
+//! `load_comparisons`, which does the expensive part twice: every
+//! linked run's fields *and* tasks, fetched live from Process Street,
+//! for the company plus every one of its facilities. `preview_resync`
+//! now stashes its own `load_comparisons` result in
+//! `AppState::resync_preview_cache`, keyed by `company_id`; `apply_resync`
+//! drains that entry (single-use -- a second apply without a fresh
+//! preview falls through to fetching live again, same as a cache miss)
+//! when it's still within `PREVIEW_CACHE_TTL`, and only calls
+//! `load_comparisons` itself when there's nothing usable there. A
+//! missing or stale entry is always a safe fallback to today's
+//! behavior, never a correctness risk -- this is purely cutting a
+//! redundant round trip to Process Street (and the PS API-rate-limit
+//! cost that comes with it) out of the common path.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::{Json, Path, State},
@@ -28,6 +48,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures::future::join_all;
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
@@ -359,19 +380,51 @@ struct FacilityComparison {
     fresh: Option<MappedFacility>,
 }
 
+/// What one `load_comparisons` call produces -- named so the cache
+/// below and `load_comparisons`'s own return type don't each spell out
+/// the same four-tuple.
+type Comparisons = (
+    CompanyComparison,
+    Vec<FacilityComparison>,
+    HashMap<String, Vec<ExtractedPerson>>,
+    HashMap<Uuid, MerchantAccountRefresh>,
+);
+
+/// How long a preview's fetched-from-PS snapshot stays valid for a
+/// follow-up apply to reuse -- long enough to cover "reviewed the
+/// conflicts, picked resolutions, clicked confirm" (a human round
+/// trip, seconds to a couple minutes), short enough that a tab left
+/// open a long time before confirming falls back to a fresh fetch
+/// rather than applying a stale one.
+const PREVIEW_CACHE_TTL: Duration = Duration::from_secs(300);
+
+pub(crate) struct CachedComparisons {
+    computed_at: Instant,
+    comparisons: Comparisons,
+}
+
+/// See this module's own doc comment for why `apply_resync` reuses
+/// `preview_resync`'s fetch instead of repeating it. Keyed by
+/// `company_id` -- only one preview per company is ever worth keeping,
+/// so a second preview for the same company simply overwrites the
+/// first rather than accumulating entries.
+pub type ResyncPreviewCache = Arc<RwLock<HashMap<Uuid, CachedComparisons>>>;
+
+/// `None` for both a missing entry and one older than `PREVIEW_CACHE_TTL`
+/// -- pulled out of `apply_resync` as its own pure function so the TTL
+/// boundary is unit-testable without a database or a live Process
+/// Street client.
+fn usable_cache_entry(entry: Option<CachedComparisons>) -> Option<Comparisons> {
+    entry
+        .filter(|cached| cached.computed_at.elapsed() < PREVIEW_CACHE_TTL)
+        .map(|cached| cached.comparisons)
+}
+
 async fn load_comparisons(
     tx: &mut Transaction<'_, Postgres>,
     client: &crate::process_street::ProcessStreetClient,
     company_id: Uuid,
-) -> Result<
-    Option<(
-        CompanyComparison,
-        Vec<FacilityComparison>,
-        HashMap<String, Vec<ExtractedPerson>>,
-        HashMap<Uuid, MerchantAccountRefresh>,
-    )>,
-    sqlx::Error,
-> {
+) -> Result<Option<Comparisons>, sqlx::Error> {
     let Some((company, facilities)) = fetch_company_and_facilities(tx, company_id).await? else {
         return Ok(None);
     };
@@ -552,7 +605,7 @@ pub async fn preview_resync(
         return internal_error("Could not preview the re-sync");
     }
 
-    let (company, facilities, _people_by_run_id, merchant_account_refreshes) = comparisons;
+    let (company, facilities, people_by_run_id, merchant_account_refreshes) = comparisons;
     let (mut safe_update_count, mut conflicts) = classify_company_diff(&company);
     for facility in &facilities {
         let (facility_safe, facility_conflicts) = classify_facility_diff(facility);
@@ -560,10 +613,24 @@ pub async fn preview_resync(
         conflicts.extend(facility_conflicts);
     }
 
+    let merchant_accounts_to_refresh = merchant_account_refreshes.len();
+
+    // Stashed for `apply_resync` to reuse -- see this module's own doc
+    // comment. Overwrites any still-unused entry from an earlier
+    // preview of this same company, which is exactly right: this is
+    // the freshest fetch, so it's the one a follow-up apply should act on.
+    state.resync_preview_cache.write().insert(
+        company_id,
+        CachedComparisons {
+            computed_at: Instant::now(),
+            comparisons: (company, facilities, people_by_run_id, merchant_account_refreshes),
+        },
+    );
+
     Json(PreviewResyncResponse {
         safe_update_count,
         conflicts,
-        merchant_accounts_to_refresh: merchant_account_refreshes.len(),
+        merchant_accounts_to_refresh,
     })
     .into_response()
 }
@@ -641,15 +708,22 @@ pub async fn apply_resync(
         }
     };
 
-    let (company, facilities, people_by_run_id, merchant_account_refreshes) =
-        match load_comparisons(&mut tx, &client, company_id).await {
+    // Single-use: a hit is consumed here whether or not it's still
+    // fresh enough to use, so a stale leftover never lingers to be
+    // mistaken for a later preview's own result.
+    let cached = usable_cache_entry(state.resync_preview_cache.write().remove(&company_id));
+
+    let (company, facilities, people_by_run_id, merchant_account_refreshes) = match cached {
+        Some(comparisons) => comparisons,
+        None => match load_comparisons(&mut tx, &client, company_id).await {
             Ok(Some(comparisons)) => comparisons,
             Ok(None) => return not_found("company_not_found", "No such company.".to_string()),
             Err(err) => {
                 tracing::error!(error = %err, user_id = %user.user_id, "resync apply query failed");
                 return internal_error("Could not apply the re-sync");
             }
-        };
+        },
+    };
 
     let mut updated_count = 0;
 
@@ -1260,5 +1334,42 @@ mod tests {
         let effective = effective_protected_fields(&stored, &resolutions, "company", id);
 
         assert_eq!(effective, stored);
+    }
+
+    fn fake_comparisons() -> Comparisons {
+        (
+            CompanyComparison {
+                row: company_row("Cached Co", vec![]),
+                fresh: None,
+            },
+            Vec::new(),
+            HashMap::new(),
+            HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn a_freshly_cached_preview_is_reused() {
+        let entry = CachedComparisons {
+            computed_at: Instant::now(),
+            comparisons: fake_comparisons(),
+        };
+
+        assert!(usable_cache_entry(Some(entry)).is_some());
+    }
+
+    #[test]
+    fn a_cached_preview_older_than_the_ttl_is_not_reused() {
+        let entry = CachedComparisons {
+            computed_at: Instant::now() - (PREVIEW_CACHE_TTL + Duration::from_secs(1)),
+            comparisons: fake_comparisons(),
+        };
+
+        assert!(usable_cache_entry(Some(entry)).is_none());
+    }
+
+    #[test]
+    fn no_cached_preview_at_all_is_not_reused() {
+        assert!(usable_cache_entry(None).is_none());
     }
 }
