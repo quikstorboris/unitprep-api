@@ -27,7 +27,8 @@ use super::{
     cancel_session, client_ops_activity_logs, client_ops_activity_logs_export, client_ops_qms_tags,
     clients_companies, clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
     clients_facility_people, clients_facility_policies_edit, clients_filter_options,
-    clients_preview, clients_resync, clients_search, clients_sync, correct, correct_group, dedup,
+    clients_onboarding_summary, clients_preview, clients_resync, clients_search, clients_sync,
+    correct, correct_group, dedup,
     discover, dropbox_browse, dropbox_settings, exclude_group, exclude_groups, exempt, export,
     group_file_confirm, group_file_upload, process_street_settings, resolve_unit_format,
     select_group_file, select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
@@ -374,6 +375,13 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/clients/{company_id}",
             get(clients_detail::get_company_detail).delete(clients_companies::delete_company),
+        )
+        // Company page's Onboarding Summary tab -- read-only, any
+        // authenticated caller, RLS is the real gate (see
+        // clients_onboarding_summary's own module doc).
+        .route(
+            "/clients/{company_id}/onboarding-summary",
+            get(clients_onboarding_summary::get_onboarding_summary),
         )
         .route(
             "/clients/{company_id}/facilities/{facility_id}",

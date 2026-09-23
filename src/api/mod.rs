@@ -25,6 +25,7 @@ mod clients_elavon;
 mod clients_facility_people;
 mod clients_facility_policies_edit;
 mod clients_filter_options;
+mod clients_onboarding_summary;
 mod clients_preview;
 mod clients_resync;
 mod clients_search;
