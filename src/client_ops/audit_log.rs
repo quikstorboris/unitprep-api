@@ -124,6 +124,16 @@ pub mod event {
     /// mistaken run" action, 2026-09-23.
     pub const TOOL_RUN_DELETED: &str = "tool_run_deleted";
 
+    /// A facility's linked Intake run was manually repointed at a
+    /// different run id (`api::clients_manual_link::manual_link`) --
+    /// the Company page's "Manual Link" button, 2026-09-23. Merchant
+    /// Account's own equivalent correction reuses the existing
+    /// `MERCHANT_ACCOUNT_UNLINKED`/`MERCHANT_ACCOUNT_LINKED` pair rather
+    /// than a third event, since that's literally what happens to the
+    /// data; Intake has no separate linked/unlinked state to reuse an
+    /// existing pair for.
+    pub const FACILITY_INTAKE_RELINKED: &str = "facility_intake_relinked";
+
     /// Every event type this module writes, for the Activity Logs admin
     /// filter dropdown -- mirrors `auth::audit_log::event::ALL`'s own
     /// reasoning: straight from this list, so the frontend can never
@@ -154,6 +164,7 @@ pub mod event {
         CLIENT_UNARCHIVED,
         CLIENT_DELETED,
         TOOL_RUN_DELETED,
+        FACILITY_INTAKE_RELINKED,
     ];
 }
 
