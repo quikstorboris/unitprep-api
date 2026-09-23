@@ -79,7 +79,8 @@ use crate::api::{bad_request, internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::company_naming::resolve_company_name;
 use crate::clients::merchant_account_correlation::{
-    correlate_by_title, merchant_account_run_titles, Correlation, IntakeRunTitle,
+    addresses_fuzzy_match, correlate_by_title, merchant_account_run_titles,
+    shares_a_significant_word, Correlation, IntakeRunTitle,
 };
 use crate::clients::merchant_account_mapping::map_merchant_account_fields;
 use crate::clients::search::{search_by_facility_name, search_by_merchant_account_name};
@@ -117,6 +118,23 @@ pub struct DuplicateCandidate {
     /// differs between candidates and helps a user tell which one is
     /// the stale duplicate.
     pub merchant_account_updated_at: DateTime<Utc>,
+    /// This candidate's own masked EIN and business address, when
+    /// answered -- the real disambiguating signals found after the
+    /// Knapp's Self Stor of Milton Freewater / "Milton Self Storage"
+    /// mix-up (2026-09-23), shown so a manager picking between
+    /// candidates has more to go on than which title sounds closer.
+    /// `None` for both on a run that (like "Milton Self Storage") never
+    /// got past its own first form section.
+    pub ein_last_4: Option<String>,
+    pub business_address: Option<String>,
+    /// Whether every candidate in this same group that answered a
+    /// business address agrees with every other one that did (fuzzy --
+    /// see `merchant_account_correlation::addresses_fuzzy_match`).
+    /// `None` when fewer than two candidates have an address to compare
+    /// at all. Identical across every row in the same group -- a
+    /// group-level fact, not a per-candidate one, repeated here since
+    /// each candidate is already its own `FacilityMatch` row.
+    pub addresses_agree: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -168,6 +186,24 @@ pub struct MerchantAccountMatch {
     /// `clients.facility_merchant_accounts.ps_new_merchant_run_id` --
     /// the Merchant Account analog of `FacilityMatch::already_imported`.
     pub already_linked: bool,
+    /// Same disambiguation fields as `DuplicateCandidate` -- see its own
+    /// doc comment. Fetched fresh for every standalone match (this list
+    /// has no other live fetch to piggyback on the way correlated
+    /// candidates do), so only as many as this query actually returned.
+    pub ein_last_4: Option<String>,
+    pub business_address: Option<String>,
+    /// Titles among this search's own `facility_matches` that share a
+    /// significant word with this run's own title but aren't a
+    /// straightforward substring match either way (see
+    /// `merchant_account_correlation::shares_a_significant_word`) --
+    /// the real Knapp's Self Stor of Milton Freewater / "Milton Self
+    /// Storage" shape: similar-sounding, textually unrelated by the
+    /// stricter check, and (confirmed) two different real businesses.
+    /// Empty when nothing in this same search shares any vocabulary
+    /// with this run's own title -- not `None`, since "checked, found
+    /// nothing" and "not checked" both look identical to the frontend
+    /// either way and there's no third state worth modeling.
+    pub similar_facility_names: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -175,6 +211,19 @@ pub struct SearchClientsResponse {
     pub facility_matches: Vec<FacilityMatch>,
     pub merchant_account_matches: Vec<MerchantAccountMatch>,
     pub person_matches: Vec<PersonMatch>,
+}
+
+/// One Merchant Account run's own display info, live-fetched once and
+/// shared by whichever response row(s) it ends up on -- company name
+/// (existing), plus the masked EIN/business address added 2026-09-23.
+/// A failed fetch degrades to every field `None`/empty rather than
+/// failing the whole search; this is a display enrichment, not
+/// something the rest of the response depends on.
+#[derive(Default, Clone)]
+struct MaDisplayInfo {
+    company_name: Option<String>,
+    ein_last_4: Option<String>,
+    business_address: Option<String>,
 }
 
 fn process_street_not_configured() -> Response {
@@ -244,10 +293,10 @@ fn facility_matches_for(
     already_imported: bool,
     last_activity_at: Option<DateTime<Utc>>,
     correlation: Option<&Correlation>,
-    company_names: &HashMap<String, Option<String>>,
+    ma_display: &HashMap<String, MaDisplayInfo>,
     merchant_account_updated_at: &HashMap<String, DateTime<Utc>>,
 ) -> Vec<FacilityMatch> {
-    let company_name_for = |ma_run_id: &str| company_names.get(ma_run_id).cloned().flatten();
+    let display_for = |ma_run_id: &str| ma_display.get(ma_run_id).cloned().unwrap_or_default();
 
     match correlation {
         None => vec![FacilityMatch {
@@ -261,7 +310,7 @@ fn facility_matches_for(
             duplicate: None,
         }],
         Some(Correlation::Unambiguous(ma_run_id)) => vec![FacilityMatch {
-            company_name: company_name_for(ma_run_id),
+            company_name: display_for(ma_run_id).company_name,
             run_id,
             run_name,
             status,
@@ -270,25 +319,77 @@ fn facility_matches_for(
             last_activity_at,
             duplicate: None,
         }],
-        Some(Correlation::Ambiguous(ma_run_ids)) => ma_run_ids
-            .iter()
-            .map(|ma_run_id| FacilityMatch {
-                run_id: run_id.clone(),
-                run_name: run_name.clone(),
-                status: status.clone(),
-                already_imported,
-                matched_via: matched_via.clone(),
-                company_name: company_name_for(ma_run_id),
-                last_activity_at,
-                duplicate: Some(DuplicateCandidate {
-                    merchant_account_run_id: ma_run_id.clone(),
-                    merchant_account_updated_at: *merchant_account_updated_at
-                        .get(ma_run_id)
-                        .expect("every candidate ma_run_id came from merchant_account_run_titles"),
-                }),
-            })
-            .collect(),
+        Some(Correlation::Ambiguous(ma_run_ids)) => {
+            // Whether every candidate that answered a business address
+            // agrees with every other one that did -- `None` when fewer
+            // than two have an address to compare at all. Consistent
+            // addresses across candidates line up with a genuine
+            // duplicate submission of the *same* application
+            // (Carpentersville's own real case); addresses that
+            // disagree line up with two different real businesses that
+            // merely share a similar-sounding title (Knapp's Self Stor
+            // of Milton Freewater's own real case). Decision support
+            // only -- this never resolves the ambiguity on its own, it
+            // just tells the human what to look at.
+            let addresses: Vec<String> = ma_run_ids
+                .iter()
+                .filter_map(|id| display_for(id).business_address)
+                .collect();
+            let addresses_agree = if addresses.len() < 2 {
+                None
+            } else {
+                Some(
+                    addresses
+                        .windows(2)
+                        .all(|pair| addresses_fuzzy_match(&pair[0], &pair[1])),
+                )
+            };
+
+            ma_run_ids
+                .iter()
+                .map(|ma_run_id| {
+                    let display = display_for(ma_run_id);
+                    FacilityMatch {
+                        run_id: run_id.clone(),
+                        run_name: run_name.clone(),
+                        status: status.clone(),
+                        already_imported,
+                        matched_via: matched_via.clone(),
+                        company_name: display.company_name,
+                        last_activity_at,
+                        duplicate: Some(DuplicateCandidate {
+                            addresses_agree,
+                            merchant_account_run_id: ma_run_id.clone(),
+                            merchant_account_updated_at: *merchant_account_updated_at
+                                .get(ma_run_id)
+                                .expect("every candidate ma_run_id came from merchant_account_run_titles"),
+                            ein_last_4: display.ein_last_4,
+                            business_address: display.business_address,
+                        }),
+                    }
+                })
+                .collect()
+        }
     }
+}
+
+/// Every facility title (from this same search's own results) that
+/// shares a significant word with `run_name` -- see
+/// `shares_a_significant_word`'s own doc comment for what that means
+/// and why. Deduplicated (the same real facility can appear more than
+/// once in `facility_titles`, once per `Correlation::Ambiguous`
+/// candidate row) and sorted, so the response is stable rather than
+/// whatever order a `HashSet` happens to iterate in.
+fn similar_facility_names_for(run_name: &str, facility_titles: &[&str]) -> Vec<String> {
+    let mut similar: Vec<String> = facility_titles
+        .iter()
+        .filter(|title| shares_a_significant_word(run_name, title))
+        .map(|title| title.to_string())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    similar.sort();
+    similar
 }
 
 pub async fn search_clients(
@@ -529,21 +630,28 @@ pub async fn search_clients(
     let ma_fetches = distinct_ma_run_ids
         .iter()
         .map(|ma_run_id| async move { (*ma_run_id, client.get_run_form_fields(ma_run_id).await) });
-    let mut company_names: HashMap<String, Option<String>> = HashMap::new();
+    let mut ma_display: HashMap<String, MaDisplayInfo> = HashMap::new();
     for (ma_run_id, result) in futures::future::join_all(ma_fetches).await {
-        let company_name = match result {
-            Ok(fields) => resolve_company_name(None, Some(&map_merchant_account_fields(&fields))),
+        let display = match result {
+            Ok(fields) => {
+                let mapped = map_merchant_account_fields(&fields);
+                MaDisplayInfo {
+                    company_name: resolve_company_name(None, Some(&mapped)),
+                    ein_last_4: mapped.ein_last_4,
+                    business_address: mapped.business_address,
+                }
+            }
             Err(err) => {
                 tracing::warn!(
                     error = %err,
                     user_id = %user.user_id,
                     ma_run_id = %ma_run_id,
-                    "failed to fetch correlated Merchant Account run's fields for company-name display"
+                    "failed to fetch correlated Merchant Account run's fields for display"
                 );
-                None
+                MaDisplayInfo::default()
             }
         };
-        company_names.insert(ma_run_id.to_string(), company_name);
+        ma_display.insert(ma_run_id.to_string(), display);
     }
 
     let mut facility_matches: Vec<FacilityMatch> = facility_results
@@ -557,7 +665,7 @@ pub async fn search_clients(
                 already_imported.contains(&r.run_id),
                 Some(r.updated_at),
                 correlations.get(&r.run_id),
-                &company_names,
+                &ma_display,
                 &merchant_account_updated_at,
             )
         })
@@ -574,20 +682,67 @@ pub async fn search_clients(
                 already_imported.contains(&run_id),
                 last_activity_at,
                 correlations.get(&run_id),
-                &company_names,
+                &ma_display,
                 &merchant_account_updated_at,
             )
         },
     ));
 
+    // Every standalone (uncorrelated) Merchant Account match gets its
+    // own live fetch too -- this list has no other in-flight fetch to
+    // piggyback on the way correlated candidates do above, but it's
+    // exactly the list a real mistake was made from (2026-09-23:
+    // "Milton Self Storage"'s run id, copied from here, manually linked
+    // to a different real facility). Bounded the same way -- typically
+    // a handful of results for one query, not a background job.
+    let standalone_fetches = merchant_account_results
+        .iter()
+        .map(|r| async move { (r.run_id.as_str(), client.get_run_form_fields(&r.run_id).await) });
+    let mut standalone_display: HashMap<String, MaDisplayInfo> = HashMap::new();
+    for (run_id, result) in futures::future::join_all(standalone_fetches).await {
+        let display = match result {
+            Ok(fields) => {
+                let mapped = map_merchant_account_fields(&fields);
+                MaDisplayInfo {
+                    company_name: None,
+                    ein_last_4: mapped.ein_last_4,
+                    business_address: mapped.business_address,
+                }
+            }
+            Err(err) => {
+                tracing::warn!(
+                    error = %err,
+                    user_id = %user.user_id,
+                    ma_run_id = %run_id,
+                    "failed to fetch a standalone Merchant Account match's fields for display"
+                );
+                MaDisplayInfo::default()
+            }
+        };
+        standalone_display.insert(run_id.to_string(), display);
+    }
+
+    // Real facility titles from *this same search*, not the whole
+    // database -- a near-miss warning is only useful against something
+    // the user is actually looking at right now.
+    let facility_titles: Vec<&str> = facility_matches.iter().map(|m| m.run_name.as_str()).collect();
+
     let merchant_account_matches: Vec<MerchantAccountMatch> = merchant_account_results
         .into_iter()
-        .map(|r| MerchantAccountMatch {
-            already_linked: already_linked.contains(&r.run_id),
-            run_id: r.run_id,
-            run_name: r.run_name,
-            status: r.status,
-            updated_at: r.updated_at,
+        .map(|r| {
+            let display = standalone_display.remove(&r.run_id).unwrap_or_default();
+            let similar_facility_names = similar_facility_names_for(&r.run_name, &facility_titles);
+
+            MerchantAccountMatch {
+                already_linked: already_linked.contains(&r.run_id),
+                run_id: r.run_id,
+                run_name: r.run_name,
+                status: r.status,
+                updated_at: r.updated_at,
+                ein_last_4: display.ein_last_4,
+                business_address: display.business_address,
+                similar_facility_names,
+            }
         })
         .collect();
 
@@ -755,8 +910,15 @@ mod tests {
         );
     }
 
+    fn ma_display_with_name(company_name: &str) -> MaDisplayInfo {
+        MaDisplayInfo {
+            company_name: Some(company_name.to_string()),
+            ..Default::default()
+        }
+    }
+
     fn no_correlation_context() -> (
-        HashMap<String, Option<String>>,
+        HashMap<String, MaDisplayInfo>,
         HashMap<String, chrono::DateTime<chrono::Utc>>,
     ) {
         (HashMap::new(), HashMap::new())
@@ -764,7 +926,7 @@ mod tests {
 
     #[test]
     fn no_correlation_produces_one_row_with_no_company_name_or_duplicate() {
-        let (company_names, ma_updated_at) = no_correlation_context();
+        let (ma_display, ma_updated_at) = no_correlation_context();
 
         let matches = facility_matches_for(
             "run-solo".to_string(),
@@ -774,7 +936,7 @@ mod tests {
             false,
             None,
             None,
-            &company_names,
+            &ma_display,
             &ma_updated_at,
         );
 
@@ -785,10 +947,10 @@ mod tests {
 
     #[test]
     fn an_unambiguous_correlation_produces_one_row_with_a_resolved_company_name() {
-        let mut company_names = HashMap::new();
-        company_names.insert(
+        let mut ma_display = HashMap::new();
+        ma_display.insert(
             "ma-highway-20".to_string(),
-            Some("Prairie Enterprises LLC".to_string()),
+            ma_display_with_name("Prairie Enterprises LLC"),
         );
         let ma_updated_at = HashMap::new();
         let correlation = Correlation::Unambiguous("ma-highway-20".to_string());
@@ -801,7 +963,7 @@ mod tests {
             false,
             None,
             Some(&correlation),
-            &company_names,
+            &ma_display,
             &ma_updated_at,
         );
 
@@ -819,14 +981,14 @@ mod tests {
         // The real Carpentersville case: two distinct, identically
         // titled Merchant Account runs, each resolving to its own
         // (possibly differing) suggested company name.
-        let mut company_names = HashMap::new();
-        company_names.insert(
+        let mut ma_display = HashMap::new();
+        ma_display.insert(
             "ma-carpentersville-1".to_string(),
-            Some("Prairie Enterprises LLC".to_string()),
+            ma_display_with_name("Prairie Enterprises LLC"),
         );
-        company_names.insert(
+        ma_display.insert(
             "ma-carpentersville-2".to_string(),
-            Some("Carpentersville Self Storage".to_string()),
+            ma_display_with_name("Carpentersville Self Storage"),
         );
         let mut ma_updated_at = HashMap::new();
         let older = chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
@@ -850,7 +1012,7 @@ mod tests {
             false,
             None,
             Some(&correlation),
-            &company_names,
+            &ma_display,
             &ma_updated_at,
         );
 
@@ -895,6 +1057,226 @@ mod tests {
                 .unwrap()
                 .merchant_account_updated_at,
             older
+        );
+    }
+
+    #[test]
+    fn ambiguous_candidates_with_matching_addresses_report_addresses_agree_true() {
+        // The real Carpentersville shape: a genuine duplicate submission
+        // of the same application, same real address both times.
+        let mut ma_display = HashMap::new();
+        ma_display.insert(
+            "ma-1".to_string(),
+            MaDisplayInfo {
+                business_address: Some("123 Main St, Springfield, IL 62704".to_string()),
+                ..Default::default()
+            },
+        );
+        ma_display.insert(
+            "ma-2".to_string(),
+            MaDisplayInfo {
+                business_address: Some("123 Main Street, Springfield, IL 62704".to_string()),
+                ..Default::default()
+            },
+        );
+        let ma_updated_at = HashMap::from([
+            ("ma-1".to_string(), DateTime::UNIX_EPOCH),
+            ("ma-2".to_string(), DateTime::UNIX_EPOCH),
+        ]);
+        let correlation = Correlation::Ambiguous(vec!["ma-1".to_string(), "ma-2".to_string()]);
+
+        let matches = facility_matches_for(
+            "run-x".to_string(),
+            "Some Facility".to_string(),
+            None,
+            MatchedVia::Name,
+            false,
+            None,
+            Some(&correlation),
+            &ma_display,
+            &ma_updated_at,
+        );
+
+        assert!(matches
+            .iter()
+            .all(|m| m.duplicate.as_ref().unwrap().addresses_agree == Some(true)));
+    }
+
+    #[test]
+    fn ambiguous_candidates_with_different_addresses_report_addresses_agree_false() {
+        // The real Knapp's Self Stor of Milton Freewater / "Milton Self
+        // Storage" shape -- two different real businesses, two
+        // different real addresses.
+        let mut ma_display = HashMap::new();
+        ma_display.insert(
+            "ma-knapps".to_string(),
+            MaDisplayInfo {
+                business_address: Some("84097 Hwy 11, Milton Freewater, OR 97862".to_string()),
+                ..Default::default()
+            },
+        );
+        ma_display.insert(
+            "ma-milton-self-storage".to_string(),
+            MaDisplayInfo {
+                business_address: Some("500 Elm St, Springfield, IL 62704".to_string()),
+                ..Default::default()
+            },
+        );
+        let ma_updated_at = HashMap::from([
+            ("ma-knapps".to_string(), DateTime::UNIX_EPOCH),
+            ("ma-milton-self-storage".to_string(), DateTime::UNIX_EPOCH),
+        ]);
+        let correlation = Correlation::Ambiguous(vec![
+            "ma-knapps".to_string(),
+            "ma-milton-self-storage".to_string(),
+        ]);
+
+        let matches = facility_matches_for(
+            "run-x".to_string(),
+            "Some Facility".to_string(),
+            None,
+            MatchedVia::Name,
+            false,
+            None,
+            Some(&correlation),
+            &ma_display,
+            &ma_updated_at,
+        );
+
+        assert!(matches
+            .iter()
+            .all(|m| m.duplicate.as_ref().unwrap().addresses_agree == Some(false)));
+    }
+
+    #[test]
+    fn ambiguous_candidates_report_no_addresses_agreement_when_fewer_than_two_answered() {
+        let mut ma_display = HashMap::new();
+        ma_display.insert(
+            "ma-1".to_string(),
+            MaDisplayInfo {
+                business_address: Some("123 Main St".to_string()),
+                ..Default::default()
+            },
+        );
+        ma_display.insert("ma-2".to_string(), MaDisplayInfo::default());
+        let ma_updated_at = HashMap::from([
+            ("ma-1".to_string(), DateTime::UNIX_EPOCH),
+            ("ma-2".to_string(), DateTime::UNIX_EPOCH),
+        ]);
+        let correlation = Correlation::Ambiguous(vec!["ma-1".to_string(), "ma-2".to_string()]);
+
+        let matches = facility_matches_for(
+            "run-x".to_string(),
+            "Some Facility".to_string(),
+            None,
+            MatchedVia::Name,
+            false,
+            None,
+            Some(&correlation),
+            &ma_display,
+            &ma_updated_at,
+        );
+
+        assert!(matches
+            .iter()
+            .all(|m| m.duplicate.as_ref().unwrap().addresses_agree.is_none()));
+    }
+
+    #[test]
+    fn ein_last_4_and_business_address_carry_through_to_the_duplicate_candidate() {
+        let mut ma_display = HashMap::new();
+        ma_display.insert(
+            "ma-1".to_string(),
+            MaDisplayInfo {
+                ein_last_4: Some("•••••1111".to_string()),
+                business_address: Some("123 Main St".to_string()),
+                ..Default::default()
+            },
+        );
+        ma_display.insert("ma-2".to_string(), MaDisplayInfo::default());
+        let ma_updated_at = HashMap::from([
+            ("ma-1".to_string(), DateTime::UNIX_EPOCH),
+            ("ma-2".to_string(), DateTime::UNIX_EPOCH),
+        ]);
+        let correlation = Correlation::Ambiguous(vec!["ma-1".to_string(), "ma-2".to_string()]);
+
+        let matches = facility_matches_for(
+            "run-x".to_string(),
+            "Some Facility".to_string(),
+            None,
+            MatchedVia::Name,
+            false,
+            None,
+            Some(&correlation),
+            &ma_display,
+            &ma_updated_at,
+        );
+
+        let candidate_1 = matches
+            .iter()
+            .find(|m| m.duplicate.as_ref().unwrap().merchant_account_run_id == "ma-1")
+            .expect("candidate 1 present");
+        assert_eq!(
+            candidate_1.duplicate.as_ref().unwrap().ein_last_4.as_deref(),
+            Some("•••••1111")
+        );
+        assert_eq!(
+            candidate_1
+                .duplicate
+                .as_ref()
+                .unwrap()
+                .business_address
+                .as_deref(),
+            Some("123 Main St")
+        );
+
+        let candidate_2 = matches
+            .iter()
+            .find(|m| m.duplicate.as_ref().unwrap().merchant_account_run_id == "ma-2")
+            .expect("candidate 2 present");
+        assert_eq!(candidate_2.duplicate.as_ref().unwrap().ein_last_4, None);
+        assert_eq!(
+            candidate_2.duplicate.as_ref().unwrap().business_address,
+            None
+        );
+    }
+
+    #[test]
+    fn similar_facility_names_flags_the_real_milton_mix_up() {
+        let facility_titles = vec!["Knapp's Self Stor of Milton Freewater - QMS Onboarding"];
+
+        let similar = similar_facility_names_for("Milton Self Storage - New Elavon Account", &facility_titles);
+
+        assert_eq!(
+            similar,
+            vec!["Knapp's Self Stor of Milton Freewater - QMS Onboarding".to_string()]
+        );
+    }
+
+    #[test]
+    fn similar_facility_names_is_empty_for_an_unrelated_title() {
+        let facility_titles = vec!["Highway 20 Self Storage - QMS Onboarding"];
+
+        let similar =
+            similar_facility_names_for("Dubuqueland Mini Storage - New Elavon Account", &facility_titles);
+
+        assert!(similar.is_empty());
+    }
+
+    #[test]
+    fn similar_facility_names_deduplicates_a_title_repeated_across_ambiguous_candidate_rows() {
+        // The same real facility appears once per `Correlation::Ambiguous`
+        // candidate row -- must not show up twice in the same warning.
+        let facility_titles = vec![
+            "Knapp's Self Stor of Milton Freewater - QMS Onboarding",
+            "Knapp's Self Stor of Milton Freewater - QMS Onboarding",
+        ];
+
+        let similar = similar_facility_names_for("Milton Self Storage - New Elavon Account", &facility_titles);
+
+        assert_eq!(
+            similar,
+            vec!["Knapp's Self Stor of Milton Freewater - QMS Onboarding".to_string()]
         );
     }
 }

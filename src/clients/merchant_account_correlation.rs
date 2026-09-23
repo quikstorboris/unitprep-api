@@ -160,6 +160,106 @@ fn parenthetical(run_name: &str) -> Option<&str> {
     }
 }
 
+/// A street-type word's real observed variants, mapped to one
+/// canonical short form -- "Av.", "Ave.", and "Avenue" all describe the
+/// same street type but compare unequal as plain text. Not exhaustive,
+/// just the types actually seen in real PS address data plus the
+/// obvious rest; extend as new ones turn up rather than trying to
+/// enumerate the whole USPS suffix list up front.
+const STREET_TYPE_ALIASES: &[(&str, &[&str])] = &[
+    ("ave", &["av", "aven", "avenue", "avenu"]),
+    ("blvd", &["boul", "boulevard"]),
+    ("st", &["str", "street"]),
+    ("dr", &["driv", "drive"]),
+    ("rd", &["road"]),
+    ("ln", &["lane"]),
+    ("ct", &["court"]),
+    ("pl", &["place"]),
+    ("hwy", &["highway"]),
+    ("pkwy", &["pky", "parkway"]),
+    ("cir", &["circle"]),
+    ("ste", &["suite"]),
+    ("apt", &["apartment"]),
+];
+
+/// Normalizes a business address for loose comparison -- lowercases,
+/// drops punctuation, and canonicalizes street-type words via
+/// `STREET_TYPE_ALIASES` (Boris, 2026-09-23: "fuzzy only in case things
+/// don't match exactly, e.g. av. vs. ave. vs. avenue"). Not a real
+/// address-parsing/geocoding normalization -- just enough to stop
+/// formatting noise from registering as a real difference between two
+/// humans typing the same address.
+fn normalize_address(address: &str) -> String {
+    let stripped: String = address
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c.is_whitespace() { c } else { ' ' })
+        .collect();
+
+    stripped
+        .split_whitespace()
+        .map(|word| {
+            let lower = word.to_lowercase();
+            STREET_TYPE_ALIASES
+                .iter()
+                .find(|(canonical, variants)| *canonical == lower || variants.contains(&lower.as_str()))
+                .map(|(canonical, _)| canonical.to_string())
+                .unwrap_or(lower)
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Loosely compares two business addresses -- see `normalize_address`.
+/// Used to tell a manager whether every candidate in a "Potential
+/// Duplicates" group shares one real address (consistent with a genuine
+/// duplicate submission of the same application) or not (consistent
+/// with two different real businesses that merely share similar-looking
+/// titles -- the Knapp's Self Stor of Milton Freewater / "Milton Self
+/// Storage" mix-up). Decision support only -- never used to silently
+/// resolve an `Ambiguous` correlation on its own.
+pub fn addresses_fuzzy_match(a: &str, b: &str) -> bool {
+    normalize_address(a) == normalize_address(b)
+}
+
+/// Generic words that appear in enough real facility/business titles to
+/// be worthless as a "these two might be the same place" signal on
+/// their own -- the same reasoning `is_specific_enough` already applies
+/// to a single short nickname, extended to name-similarity checking.
+const NAME_STOPWORDS: &[&str] = &[
+    "self", "storage", "llc", "inc", "the", "qms", "onboarding", "new", "elavon", "account", "of",
+    "mini", "and", "a", "for",
+];
+
+/// Splits a title into its significant (non-stopword, 2+ character)
+/// lowercase words -- shared vocabulary for both `candidate_keywords`-
+/// style exact matching and the looser near-miss check below.
+fn significant_words(text: &str) -> HashSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.chars().count() >= 2 && !NAME_STOPWORDS.contains(&w.as_str()))
+        .collect()
+}
+
+/// Whether two titles share at least one significant word, without
+/// being the same title (case-insensitive) and without one substring-
+/// containing the other -- a genuine name match or a real substring hit
+/// is `correlate_by_title`'s own job; this exists for the *weaker*
+/// signal one step below that: "these two are talking about different
+/// things, probably, but they share enough vocabulary that a human
+/// should double check before acting" (real case: "Milton Self Storage"
+/// vs. "Knapp's Self Stor of Milton Freewater" -- share "milton", one
+/// is not a substring of the other, and they are two different real
+/// businesses).
+pub fn shares_a_significant_word(a: &str, b: &str) -> bool {
+    let a_lower = a.to_lowercase();
+    let b_lower = b.to_lowercase();
+    if a_lower == b_lower || a_lower.contains(&b_lower) || b_lower.contains(&a_lower) {
+        return false;
+    }
+
+    !significant_words(a).is_disjoint(&significant_words(b))
+}
+
 /// Whether a parenthetical nickname is specific enough to trust as a
 /// correlation signal on its own. **Real bug, 2026-09-10**: Dubuqueland
 /// Mini Storage's own "Main" facility gave a Merchant Account run
@@ -253,6 +353,85 @@ pub fn correlate_by_title(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn addresses_fuzzy_match_despite_street_type_abbreviation_differences() {
+        assert!(addresses_fuzzy_match(
+            "123 Main Av.",
+            "123 Main Avenue"
+        ));
+        assert!(addresses_fuzzy_match("123 Main Ave.", "123 Main Avenue"));
+        assert!(addresses_fuzzy_match(
+            "84097 Hwy 11, Milton Freewater, OR 97862",
+            "84097 Highway 11, Milton Freewater, OR 97862"
+        ));
+    }
+
+    #[test]
+    fn addresses_fuzzy_match_is_case_and_punctuation_insensitive() {
+        assert!(addresses_fuzzy_match(
+            "123 Main St., Suite 4",
+            "123 MAIN STREET STE 4"
+        ));
+    }
+
+    #[test]
+    fn addresses_fuzzy_match_is_false_for_genuinely_different_addresses() {
+        assert!(!addresses_fuzzy_match(
+            "84097 Hwy 11, Milton Freewater, OR 97862",
+            "500 Elm St, Springfield, IL 62704"
+        ));
+    }
+
+    // The real case this exists for: two different real businesses
+    // whose titles both happen to contain "Milton", in different word
+    // order, with neither a substring of the other -- must be flagged
+    // as a near miss, not silently ignored the way a plain substring
+    // check (`correlate_by_title`'s own signal) would.
+    #[test]
+    fn shares_a_significant_word_flags_the_real_milton_mix_up() {
+        assert!(shares_a_significant_word(
+            "Milton Self Storage",
+            "Knapp's Self Stor of Milton Freewater"
+        ));
+    }
+
+    #[test]
+    fn shares_a_significant_word_is_false_for_the_same_title() {
+        assert!(!shares_a_significant_word(
+            "Highway 20 Self Storage",
+            "Highway 20 Self Storage"
+        ));
+    }
+
+    #[test]
+    fn shares_a_significant_word_is_false_when_one_title_contains_the_other() {
+        // A genuine substring relationship is `correlate_by_title`'s own
+        // signal to act on -- not a "these might be different, double
+        // check" near miss.
+        assert!(!shares_a_significant_word(
+            "Prairie Enterprises (Highway 20)",
+            "Highway 20"
+        ));
+    }
+
+    #[test]
+    fn shares_a_significant_word_ignores_common_storage_industry_words() {
+        // "Self" and "Storage" alone must never trigger a near-miss --
+        // half of real client titles contain both.
+        assert!(!shares_a_significant_word(
+            "Highway 20 Self Storage",
+            "Pyott Road Self Storage"
+        ));
+    }
+
+    #[test]
+    fn shares_a_significant_word_is_false_for_genuinely_unrelated_titles() {
+        assert!(!shares_a_significant_word(
+            "Highway 20 Self Storage",
+            "Dubuqueland Mini Storage"
+        ));
+    }
 
     fn intake(run_id: &str, title_text: &str) -> IntakeRunTitle {
         IntakeRunTitle {

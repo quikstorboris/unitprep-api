@@ -378,8 +378,58 @@ pub struct MappedMerchantAccount {
     pub average_electronic_check_amount_raw: Option<String>,
     pub maximum_electronic_check_amount_raw: Option<String>,
     pub parties: Vec<MappedParty>,
+    /// A masked (last-4-only, via `mask_bank_number`) view of this run's
+    /// own `EIN` -- exists purely so two candidate runs matching the
+    /// same fuzzy facility name can be told apart (search results,
+    /// "Potential Duplicates") without widening who can see a real tax
+    /// ID. The unmasked value only ever exists inside `secrets`
+    /// (encrypted at rest); this field is derived independently, not
+    /// unmasked-then-masked, so the raw EIN never even transits through
+    /// this struct's own public surface.
+    pub ein_last_4: Option<String>,
+    /// This run's own business street address (`Business_Address` +
+    /// `City`/`State`/`Zip`, comma-joined onto one line), e.g. "84097
+    /// Hwy 11, Milton Freewater, OR 97862" -- not previously mapped
+    /// anywhere. Added 2026-09-23 alongside `ein_last_4`, for the same
+    /// disambiguation reason: a real address is a much stronger signal
+    /// than the title-text/DBA correlation already uses, confirmed
+    /// against the Knapp's Self Stor of Milton Freewater / "Milton Self
+    /// Storage" mix-up (one had a real filled address, the other had
+    /// none at all).
+    pub business_address: Option<String>,
     pub sanitized_snapshot: Value,
     secrets: FacilitySecrets,
+}
+
+/// Joins a business address's separate PS fields onto one display line,
+/// e.g. `("84097 Hwy 11", "Milton Freewater", "OR", "97862")` ->
+/// `"84097 Hwy 11, Milton Freewater, OR 97862"`. `None` when every part
+/// is missing -- a genuinely blank address (e.g. the "Milton Self
+/// Storage" run) must stay `None`, not become an empty string that
+/// looks like a real (if terse) answer.
+fn combine_address(
+    street: Option<String>,
+    city: Option<String>,
+    state: Option<String>,
+    zip: Option<String>,
+) -> Option<String> {
+    let state_zip = [state, zip].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    let city_state_zip = [city, (!state_zip.is_empty()).then_some(state_zip)]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let parts: Vec<String> = [street, (!city_state_zip.is_empty()).then_some(city_state_zip)]
+        .into_iter()
+        .flatten()
+        .collect();
+
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(", "))
+    }
 }
 
 impl MappedMerchantAccount {
@@ -538,6 +588,13 @@ pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccoun
         average_electronic_check_amount_raw: value_for(fields, "Average_Electronic_Check_Amount"),
         maximum_electronic_check_amount_raw: value_for(fields, "Maximum_Electronic_Check_Amount"),
         parties: map_parties(fields),
+        ein_last_4: value_for(fields, "EIN").as_deref().map(mask_bank_number),
+        business_address: combine_address(
+            value_for(fields, "Business_Address"),
+            value_for(fields, "City"),
+            value_for(fields, "State"),
+            value_for(fields, "Zip"),
+        ),
         sanitized_snapshot: sanitize_fields_for_snapshot(fields),
         secrets: FacilitySecrets::from_fields(fields),
     }
@@ -661,6 +718,57 @@ mod tests {
             Some("Highway 20 self storage")
         );
         assert_eq!(mapped.ownership_type.as_deref(), Some("LLC"));
+    }
+
+    #[test]
+    fn maps_ein_last_4_and_business_address_from_the_real_pre_app_fields() {
+        let mapped = map_merchant_account_fields(&real_fields());
+
+        // Fixture's own fake EIN is "111111111" -- mask_bank_number's
+        // own last-4 rule applies unchanged.
+        assert_eq!(mapped.ein_last_4.as_deref(), Some("•••••1111"));
+        assert_eq!(
+            mapped.business_address.as_deref(),
+            Some("1030 East Grant Highway, Marengo, Il 60152")
+        );
+    }
+
+    #[test]
+    fn ein_last_4_is_none_when_ein_was_never_answered() {
+        let fields: Vec<FormField> = real_fields()
+            .into_iter()
+            .filter(|f| f.key != "EIN")
+            .collect();
+
+        let mapped = map_merchant_account_fields(&fields);
+
+        assert_eq!(mapped.ein_last_4, None);
+    }
+
+    #[test]
+    fn combine_address_is_none_when_every_part_is_missing() {
+        assert_eq!(combine_address(None, None, None, None), None);
+    }
+
+    #[test]
+    fn combine_address_handles_a_street_with_no_city_state_or_zip() {
+        assert_eq!(
+            combine_address(Some("1030 East Grant Highway".to_string()), None, None, None),
+            Some("1030 East Grant Highway".to_string())
+        );
+    }
+
+    #[test]
+    fn combine_address_handles_city_state_zip_with_no_street() {
+        assert_eq!(
+            combine_address(
+                None,
+                Some("Marengo".to_string()),
+                Some("IL".to_string()),
+                Some("60152".to_string())
+            ),
+            Some("Marengo, IL 60152".to_string())
+        );
     }
 
     #[test]
