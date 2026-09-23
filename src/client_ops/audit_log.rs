@@ -119,6 +119,11 @@ pub mod event {
     /// no record at all.
     pub const CLIENT_DELETED: &str = "client_deleted";
 
+    /// A facility's tool run (Onboarding Work tab -- Dedup, so far) was
+    /// deleted (`api::tool_runs::delete_tool_run`) -- the "clear a
+    /// mistaken run" action, 2026-09-23.
+    pub const TOOL_RUN_DELETED: &str = "tool_run_deleted";
+
     /// Every event type this module writes, for the Activity Logs admin
     /// filter dropdown -- mirrors `auth::audit_log::event::ALL`'s own
     /// reasoning: straight from this list, so the frontend can never
@@ -148,6 +153,7 @@ pub mod event {
         CLIENT_ARCHIVED,
         CLIENT_UNARCHIVED,
         CLIENT_DELETED,
+        TOOL_RUN_DELETED,
     ];
 }
 

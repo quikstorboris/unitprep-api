@@ -449,10 +449,15 @@ pub fn router(state: AppState) -> Router {
                 .delete(clients_facility_people::unlink_facility_person),
         )
         // Onboarding Work tab -- read-only, any authenticated caller, RLS
-        // is the real gate (see tool_runs's own module doc).
+        // is the real gate (see tool_runs's own module doc). DELETE
+        // (clearing a mistaken run) requires client_ops.perform.
         .route(
             "/clients/{company_id}/facilities/{facility_id}/tool-runs",
             get(tool_runs::list_facility_tool_runs),
+        )
+        .route(
+            "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}",
+            delete(tool_runs::delete_tool_run),
         )
         .route(
             "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/output",

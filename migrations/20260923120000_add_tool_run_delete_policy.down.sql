@@ -1,0 +1,1 @@
+DROP POLICY tool_runs_delete_client_ops_roles ON client_ops.tool_runs;

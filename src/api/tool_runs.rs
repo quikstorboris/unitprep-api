@@ -1,16 +1,24 @@
 //! Onboarding Work tab's backend -- lists a facility's past tool runs
 //! (`client_ops.tool_runs`, written by `dedup.rs`'s `check`/
 //! `import_from_dropbox`/`export`/`export_to_dropbox`) and serves a run's
-//! stored output file. Read-only: this module never writes to
-//! `tool_runs` itself, see `client_ops::tool_runs` for the writers.
+//! stored output file. Mostly read-only -- the one write, `DELETE`, is
+//! the "clear a mistaken run" action (2026-09-23; the table's own
+//! comment on `20260910120000_create_client_ops_tool_runs` called this
+//! append-only, but a Dedup check run against the wrong facility's data
+//! is a real operational mistake that needs a way out, not a design
+//! this codebase controls the shape of forever).
 //!
-//! Any authenticated caller -- same posture as every other read-only
-//! facility tab (`clients_facility_people`, `clients_elavon`'s GET,
-//! etc.): RLS's own `tool_runs_select_authenticated` policy is the real
-//! backstop, not a permission check here.
+//! GET: any authenticated caller -- same posture as every other
+//! read-only facility tab (`clients_facility_people`, `clients_elavon`'s
+//! GET, etc.): RLS's own `tool_runs_select_authenticated` policy is the
+//! real backstop, not a permission check here. DELETE: requires
+//! `client_ops.perform`, backed by the new
+//! `tool_runs_delete_client_ops_roles` RLS policy -- see that
+//! migration's own comment for why.
 
 use axum::{
     extract::{Path, Query, State},
+    http::HeaderMap,
     response::{IntoResponse, Response},
     Json,
 };
@@ -21,8 +29,16 @@ use uuid::Uuid;
 use crate::api::dedup::file_response;
 use crate::api::{internal_error, not_found, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::client_ops::audit_log;
 
 const DEFAULT_LIMIT: i64 = 20;
+const PERMISSION: &str = "client_ops.perform";
+
+fn request_context(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+}
 const MAX_LIMIT: i64 = 100;
 
 #[derive(Debug, Deserialize)]
@@ -349,6 +365,92 @@ pub async fn download_tool_run_source(
     }
 }
 
+/// Deletes one tool run -- the "clear a mistaken run" action (e.g. a
+/// Dedup check accidentally run against the wrong facility's data).
+/// Permanent: `client_ops.tool_runs` has no `deleted_at`/soft-delete
+/// column, and this row's own `sequence_number` (computed live in
+/// `list_facility_tool_runs`, not stored) recomputes correctly for the
+/// remaining runs the moment this one is gone.
+pub async fn delete_tool_run(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    headers: HeaderMap,
+    Path((company_id, facility_id, run_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Response {
+    let user_agent = request_context(&headers);
+
+    if let Err(response) = user
+        .require_permission(&state.db, PERMISSION, "delete_tool_run", user_agent, None)
+        .await
+    {
+        return response;
+    }
+
+    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for tool run delete");
+            return internal_error("Could not delete this run");
+        }
+    };
+
+    match facility_belongs_to_company(&mut tx, facility_id, company_id).await {
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = tx.commit().await;
+            return not_found("not_found", "No such facility.".to_string());
+        }
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "facility lookup for tool run delete failed");
+            return internal_error("Could not delete this run");
+        }
+    }
+
+    let deleted: Result<Option<(String, String)>, sqlx::Error> = sqlx::query_as(
+        "DELETE FROM client_ops.tool_runs WHERE id = $1 AND facility_id = $2 RETURNING tool, source_file_name",
+    )
+    .bind(run_id)
+    .bind(facility_id)
+    .fetch_optional(&mut *tx)
+    .await;
+
+    let deleted = match deleted {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "tool run delete failed");
+            return internal_error("Could not delete this run");
+        }
+    };
+
+    let Some((tool, source_file_name)) = deleted else {
+        let _ = tx.rollback().await;
+        return not_found("not_found", "No such tool run.".to_string());
+    };
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::TOOL_RUN_DELETED,
+        user.user_id,
+        "tool_run",
+        Some(&run_id.to_string()),
+        audit_log::Change::from_to(
+            serde_json::json!({ "tool": tool, "facility_id": facility_id, "source_file_name": source_file_name }),
+            serde_json::json!(null),
+        ),
+        user_agent,
+        None,
+        serde_json::json!({}),
+    )
+    .await;
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit tool run delete transaction");
+        return internal_error("Could not delete this run");
+    }
+
+    axum::http::StatusCode::NO_CONTENT.into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use axum::http::StatusCode;
@@ -367,6 +469,32 @@ mod tests {
                 before_id: None,
                 limit: None,
             }),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn delete_tool_run_refuses_insufficient_permission_without_touching_anything() {
+        let response = delete_tool_run(
+            State(empty_state()),
+            test_user(),
+            HeaderMap::new(),
+            Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn delete_tool_run_reaches_the_database() {
+        let response = delete_tool_run(
+            State(empty_state()),
+            crate::api::test_support::onboarding_manager_user(),
+            HeaderMap::new(),
+            Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
         )
         .await;
 
