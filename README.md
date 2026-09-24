@@ -74,7 +74,8 @@ deployed frontend origins; defaults to the local dev servers.
 cargo test
 ```
 
-556 tests across the workspace: domain-level unit tests alongside the
+958 tests across the workspace as of 2026-09-24 (`cargo test --workspace`;
+grows over time, don't treat this figure as exact): domain-level unit tests alongside the
 logic they cover (heaviest on Group Prep's fingerprint-matching
 engine, since every false-positive bug this project has hit came from
 two structurally different groups being fuzzy-matched as the same

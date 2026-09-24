@@ -20,7 +20,7 @@ description = "Web API for storage facility unit group analysis, net-new group i
 
 license = "MIT OR Apache-2.0"
 
-repository = "https://github.com/quikstorboris/unitPrep.git"
+repository = "https://github.com/quikstorboris/unitprep-api.git"
 
 [dependencies]
 
