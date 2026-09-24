@@ -189,6 +189,12 @@ pub async fn update_delinquency(
         return internal_error("Could not save delinquency entries");
     }
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit update_delinquency transaction");
+        return internal_error("Could not save delinquency entries");
+    }
+
+    // After the commit, not before -- see fees.rs's update_fees for why.
     audit_log::record(
         &state.db,
         audit_log::event::FACILITY_DELINQUENCY_UPDATED,
@@ -204,11 +210,6 @@ pub async fn update_delinquency(
         serde_json::json!({}),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit update_delinquency transaction");
-        return internal_error("Could not save delinquency entries");
-    }
 
     StatusCode::NO_CONTENT.into_response()
 }

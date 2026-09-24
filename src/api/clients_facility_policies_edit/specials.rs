@@ -88,6 +88,12 @@ pub async fn update_specials(
         return internal_error("Could not save specials");
     }
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit update_specials transaction");
+        return internal_error("Could not save specials");
+    }
+
+    // After the commit, not before -- see fees.rs's update_fees for why.
     audit_log::record(
         &state.db,
         audit_log::event::FACILITY_SPECIALS_UPDATED,
@@ -103,11 +109,6 @@ pub async fn update_specials(
         serde_json::json!({}),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit update_specials transaction");
-        return internal_error("Could not save specials");
-    }
 
     StatusCode::NO_CONTENT.into_response()
 }

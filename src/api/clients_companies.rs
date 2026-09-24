@@ -414,6 +414,12 @@ async fn set_archived(
             .into_response();
     };
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit company archive toggle");
+        return internal_error("Could not update this client");
+    }
+
+    // After the commit, not before -- see fees.rs's update_fees for why.
     audit_log::record(
         &state.db,
         if archive {
@@ -430,11 +436,6 @@ async fn set_archived(
         serde_json::json!({ "legal_name": legal_name }),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit company archive toggle");
-        return internal_error("Could not update this client");
-    }
 
     tracing::info!(user_id = %user.user_id, company_id = %company_id, archive, "user toggled a client's archived state");
 
@@ -523,6 +524,12 @@ pub async fn delete_company(
             .into_response();
     };
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit company delete");
+        return internal_error("Could not delete this client");
+    }
+
+    // After the commit, not before -- see fees.rs's update_fees for why.
     audit_log::record(
         &state.db,
         audit_log::event::CLIENT_DELETED,
@@ -538,11 +545,6 @@ pub async fn delete_company(
         serde_json::json!({}),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit company delete");
-        return internal_error("Could not delete this client");
-    }
 
     tracing::info!(user_id = %user.user_id, company_id = %company_id, "user permanently deleted a client");
 

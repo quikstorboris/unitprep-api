@@ -97,6 +97,12 @@ pub async fn update_facility_dropbox_folder(
         return internal_error("Could not update this facility's Dropbox folder");
     }
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit dropbox folder update transaction");
+        return internal_error("Could not update this facility's Dropbox folder");
+    }
+
+    // After the commit, not before -- see fees.rs's update_fees for why.
     audit_log::record(
         &state.db,
         audit_log::event::FACILITY_DROPBOX_FOLDER_CHANGED,
@@ -112,11 +118,6 @@ pub async fn update_facility_dropbox_folder(
         serde_json::json!({}),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit dropbox folder update transaction");
-        return internal_error("Could not update this facility's Dropbox folder");
-    }
 
     StatusCode::NO_CONTENT.into_response()
 }

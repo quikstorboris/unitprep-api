@@ -149,6 +149,12 @@ pub async fn update_taxes(
         return internal_error("Could not save taxes");
     }
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit update_taxes transaction");
+        return internal_error("Could not save taxes");
+    }
+
+    // After the commit, not before -- see fees.rs's update_fees for why.
     audit_log::record(
         &state.db,
         audit_log::event::FACILITY_TAXES_UPDATED,
@@ -164,11 +170,6 @@ pub async fn update_taxes(
         serde_json::json!({}),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit update_taxes transaction");
-        return internal_error("Could not save taxes");
-    }
 
     StatusCode::NO_CONTENT.into_response()
 }

@@ -342,6 +342,12 @@ pub async fn add_facility_person(
         return internal_error("Could not add this person");
     }
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit add facility person transaction");
+        return internal_error("Could not add this person");
+    }
+
+    // After the commit, not before -- see fees.rs's update_fees for why.
     audit_log::record(
         &state.db,
         audit_log::event::FACILITY_PERSON_ADDED,
@@ -363,11 +369,6 @@ pub async fn add_facility_person(
         serde_json::json!({}),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit add facility person transaction");
-        return internal_error("Could not add this person");
-    }
 
     StatusCode::NO_CONTENT.into_response()
 }
@@ -483,6 +484,12 @@ pub async fn edit_facility_person(
         }
     }
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit edit facility person transaction");
+        return internal_error("Could not save this person");
+    }
+
+    // After the commit, not before -- see fees.rs's update_fees for why.
     audit_log::record(
         &state.db,
         audit_log::event::FACILITY_PERSON_UPDATED,
@@ -505,11 +512,6 @@ pub async fn edit_facility_person(
         serde_json::json!({ "facility_id": facility_id }),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit edit facility person transaction");
-        return internal_error("Could not save this person");
-    }
 
     StatusCode::NO_CONTENT.into_response()
 }
@@ -590,6 +592,12 @@ pub async fn unlink_facility_person(
         return internal_error("Could not remove this person");
     }
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit unlink facility person transaction");
+        return internal_error("Could not remove this person");
+    }
+
+    // After the commit, not before -- see fees.rs's update_fees for why.
     audit_log::record(
         &state.db,
         audit_log::event::FACILITY_PERSON_UNLINKED,
@@ -607,11 +615,6 @@ pub async fn unlink_facility_person(
         serde_json::json!({ "facility_id": facility_id }),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit unlink facility person transaction");
-        return internal_error("Could not remove this person");
-    }
 
     StatusCode::NO_CONTENT.into_response()
 }

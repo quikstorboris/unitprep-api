@@ -427,6 +427,12 @@ pub async fn delete_tool_run(
         return not_found("not_found", "No such tool run.".to_string());
     };
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit tool run delete transaction");
+        return internal_error("Could not delete this run");
+    }
+
+    // After the commit, not before -- see fees.rs's update_fees for why.
     audit_log::record(
         &state.db,
         audit_log::event::TOOL_RUN_DELETED,
@@ -442,11 +448,6 @@ pub async fn delete_tool_run(
         serde_json::json!({}),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit tool run delete transaction");
-        return internal_error("Could not delete this run");
-    }
 
     axum::http::StatusCode::NO_CONTENT.into_response()
 }

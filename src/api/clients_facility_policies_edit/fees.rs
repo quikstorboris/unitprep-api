@@ -127,6 +127,15 @@ pub async fn update_fees(
         return internal_error("Could not save fees");
     }
 
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit update_fees transaction");
+        return internal_error("Could not save fees");
+    }
+
+    // After the commit, not before: audit_log::record writes on its own
+    // connection (state.db), independent of tx -- recording it first
+    // would leave a permanent "fees updated" row even if the commit
+    // itself then failed and the change never actually landed.
     audit_log::record(
         &state.db,
         audit_log::event::FACILITY_FEES_UPDATED,
@@ -142,11 +151,6 @@ pub async fn update_fees(
         serde_json::json!({}),
     )
     .await;
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit update_fees transaction");
-        return internal_error("Could not save fees");
-    }
 
     StatusCode::NO_CONTENT.into_response()
 }
