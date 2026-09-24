@@ -6,6 +6,16 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.39] - 2026-09-24
+
+A durable session store, closing the sharpest P1 finding from an external code review: Group Prep/Dedup/Template Tagger sessions and WebAuthn passkey ceremonies were purely in-memory, so a restart or crash mid-upload (or mid-enrollment) silently stranded the user with no way to recover short of starting over.
+
+### Added
+- **`DurableSessionStore<S>`** (`core/src/durable_session_store.rs`) — a write-through wrapper around the existing `InMemorySessionStore<S>`. `get_handle` keeps returning the same shared `Arc<RwLock<S>>` for in-process concurrent callers (required by `SessionStore`'s own locking contract — a naive "deserialize fresh from Postgres on every call" implementation would silently let concurrent handles diverge); `save()` writes through to a new `auth.durable_sessions` Postgres table; a `get_handle` miss cold-hydrates from that table before falling back to normal `InMemorySessionStore` behavior. A second, independent periodic sweep expires stale Postgres rows, since the in-memory store's own sweep has no way to call back into the wrapper. Payload is bincode, not JSON — several of these session types carry raw `Vec<u8>` fields (WebAuthn ceremony state, Tagger's uploaded file bytes) that JSON has no compact representation for.
+- **One shared, kind-discriminated table** (`auth.durable_sessions`, migration `20260924160000`) backs every session type this store holds, keyed by `(kind, id)` — not one table per kind, since every kind shares the exact same shape (an id, `SessionMetadata`'s small envelope, an opaque payload).
+- **Applied to all four session types**: WebAuthn `RegistrationCeremony`/`AuthenticationCeremony`, and — after making each serializable through its full type graph — `unit_group_session::Session` (Group Prep), `DedupSession`, and `TaggerSession`. Group Prep's was the hardest: `SessionData` holds `Arc<Vec<CsvDocument>>`/`Arc<AnalysisResults>`, needing serde's "rc" feature; Dedup and Tagger's session types turned out to already be plain, easily-serializable data with no blockers.
+- **Real-DB integration tests** for all four session types, each proving a session survives a simulated process restart: save it, drop the store, build a fresh one against the same pool, confirm `get_handle` rehydrates every field correctly.
+
 ## [1.9.38] - 2026-09-24
 
 A standing modularity law and three fixes triggered by a follow-up codebase audit that caught the previous session's own `router.rs` growing to 1909 lines.
