@@ -4,13 +4,13 @@
 //! the 2026-07-14 revision: `CompanyName` has its own category, split
 //! out from `name`).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// A contact-info category a tenant group can disagree on. Declared in
 /// the exact priority order the reference script uses to pick which
 /// note to show when multiple categories differ at once (first match
 /// in this order wins).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FieldCategory {
     Phone,
     Email,
@@ -55,7 +55,7 @@ pub enum FieldKind {
 /// values are populated. `TenantRecord` still stores the raw values
 /// (`phone_number_prefix`/`alt_contact_phone_number_prefix`) for
 /// export passthrough — this enum only governs what's compared.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FieldName {
     PhoneNumber,
     Email,

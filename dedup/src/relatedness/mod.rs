@@ -27,7 +27,7 @@ mod household;
 
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use household::{group_into_households, RawEvidence};
 
@@ -54,7 +54,7 @@ const MAX_CLUSTER_SIZE: usize = 3;
 /// check, not a second normalization pass.
 const MIN_PHONE_DIGITS: usize = 10;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RelatednessSignal {
     SharedPhone,
     SharedEmail,
@@ -70,7 +70,7 @@ pub enum RelatednessSignal {
 /// (signal, value) pair — not one per pair of tenants, since three
 /// tenants sharing one phone number is one piece of evidence, not
 /// three.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelatedTenantEvidence {
     pub signal: RelatednessSignal,
     pub shared_value: String,
@@ -85,7 +85,7 @@ pub struct RelatedTenantEvidence {
 /// every other member directly, only transitively through the chain.
 /// `note` is one composed account of every piece of evidence, not one
 /// note per signal — see `note_composer::compose_relatedness_note`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelatedTenantCandidate {
     pub group_keys: Vec<String>,
     pub evidence: Vec<RelatedTenantEvidence>,

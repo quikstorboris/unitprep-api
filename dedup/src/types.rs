@@ -4,7 +4,7 @@
 //! separable concept from the record/result types below, split out
 //! once this file crossed the project's 250-line flag point.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 mod fields;
 pub use fields::{
@@ -16,7 +16,7 @@ pub use fields::{
 /// needed for the eventual export artifact is an API/export-layer
 /// concern, not this crate's (see project memory: output format is an
 /// unresolved product decision).
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TenantRecord {
     /// Row identity, not used in matching logic itself — carried through
     /// for display and for the future "re-check two pulls over time"
@@ -142,7 +142,7 @@ fn title_case_word(word: &str) -> String {
 /// normalized) values are kept here specifically so a human — or,
 /// later, an automated note composer — can say *what* differs
 /// ("dcravalho@CHPMAUI.COM vs. blank"), not just *that* something does.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldValueMismatch {
     pub field: FieldName,
     /// Distinct raw values seen across the group for this field, in
@@ -153,7 +153,7 @@ pub struct FieldValueMismatch {
 
 /// A category that differed within a group, and which specific fields
 /// under it differed (for the detail lines under a flagged group).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldMismatch {
     pub category: FieldCategory,
     pub fields: Vec<FieldValueMismatch>,
@@ -161,7 +161,7 @@ pub struct FieldMismatch {
 
 /// A tenant's records grouped by exact `FirtLast` match (pass 1). Only
 /// groups with 2+ records are ever produced downstream.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TenantGroup {
     pub key: String,
     pub records: Vec<TenantRecord>,
@@ -169,7 +169,7 @@ pub struct TenantGroup {
 
 /// A multi-unit group with at least one contact-info disagreement —
 /// the output of pass 2/3 (comparison + note assignment).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlaggedGroup {
     pub group: TenantGroup,
     pub mismatches: Vec<FieldMismatch>,
@@ -182,7 +182,7 @@ pub struct FlaggedGroup {
 /// surfacing threshold is reported here for human confirmation — none
 /// are merged automatically, regardless of how high the ratio is
 /// (unlike the reference script, which auto-merges ratio >= 0.90).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypoVariantCandidate {
     pub key_a: String,
     pub key_b: String,

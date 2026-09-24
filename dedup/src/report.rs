@@ -4,7 +4,7 @@
 //! printing — this crate returns structured data; presentation is an
 //! API/UI-layer concern.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::comparison::find_differing_categories;
 use crate::grouping::{group_records, multi_unit_groups};
@@ -14,7 +14,7 @@ use crate::similarity::find_typo_variant_candidates;
 use crate::types::{FlaggedGroup, TenantGroup, TenantRecord, TypoVariantCandidate};
 
 /// Full result of a duplicate-tenant check run.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DedupReport {
     pub total_rows: usize,
     pub unique_tenants: usize,
