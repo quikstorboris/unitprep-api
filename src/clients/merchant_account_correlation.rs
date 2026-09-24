@@ -192,7 +192,13 @@ const STREET_TYPE_ALIASES: &[(&str, &[&str])] = &[
 fn normalize_address(address: &str) -> String {
     let stripped: String = address
         .chars()
-        .map(|c| if c.is_alphanumeric() || c.is_whitespace() { c } else { ' ' })
+        .map(|c| {
+            if c.is_alphanumeric() || c.is_whitespace() {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect();
 
     stripped
@@ -201,7 +207,9 @@ fn normalize_address(address: &str) -> String {
             let lower = word.to_lowercase();
             STREET_TYPE_ALIASES
                 .iter()
-                .find(|(canonical, variants)| *canonical == lower || variants.contains(&lower.as_str()))
+                .find(|(canonical, variants)| {
+                    *canonical == lower || variants.contains(&lower.as_str())
+                })
                 .map(|(canonical, _)| canonical.to_string())
                 .unwrap_or(lower)
         })
@@ -226,8 +234,21 @@ pub fn addresses_fuzzy_match(a: &str, b: &str) -> bool {
 /// their own -- the same reasoning `is_specific_enough` already applies
 /// to a single short nickname, extended to name-similarity checking.
 const NAME_STOPWORDS: &[&str] = &[
-    "self", "storage", "llc", "inc", "the", "qms", "onboarding", "new", "elavon", "account", "of",
-    "mini", "and", "a", "for",
+    "self",
+    "storage",
+    "llc",
+    "inc",
+    "the",
+    "qms",
+    "onboarding",
+    "new",
+    "elavon",
+    "account",
+    "of",
+    "mini",
+    "and",
+    "a",
+    "for",
 ];
 
 /// Splits a title into its significant (non-stopword, 2+ character)
@@ -356,10 +377,7 @@ mod tests {
 
     #[test]
     fn addresses_fuzzy_match_despite_street_type_abbreviation_differences() {
-        assert!(addresses_fuzzy_match(
-            "123 Main Av.",
-            "123 Main Avenue"
-        ));
+        assert!(addresses_fuzzy_match("123 Main Av.", "123 Main Avenue"));
         assert!(addresses_fuzzy_match("123 Main Ave.", "123 Main Avenue"));
         assert!(addresses_fuzzy_match(
             "84097 Hwy 11, Milton Freewater, OR 97862",

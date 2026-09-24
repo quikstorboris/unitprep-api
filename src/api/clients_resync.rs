@@ -301,13 +301,15 @@ async fn fetch_fresh_merchant_account_data(
     client: &crate::process_street::ProcessStreetClient,
     run_ids_by_facility: HashMap<Uuid, String>,
 ) -> HashMap<Uuid, MerchantAccountRefresh> {
-    let fetches = run_ids_by_facility.into_iter().map(|(facility_id, run_id)| async move {
-        let (fields_result, tasks_result) = tokio::join!(
-            client.get_run_form_fields(&run_id),
-            client.get_run_tasks(&run_id)
-        );
-        (facility_id, run_id, fields_result, tasks_result)
-    });
+    let fetches = run_ids_by_facility
+        .into_iter()
+        .map(|(facility_id, run_id)| async move {
+            let (fields_result, tasks_result) = tokio::join!(
+                client.get_run_form_fields(&run_id),
+                client.get_run_tasks(&run_id)
+            );
+            (facility_id, run_id, fields_result, tasks_result)
+        });
 
     let mut refreshes = HashMap::new();
     for (facility_id, run_id, fields_result, tasks_result) in join_all(fetches).await {
@@ -623,7 +625,12 @@ pub async fn preview_resync(
         company_id,
         CachedComparisons {
             computed_at: Instant::now(),
-            comparisons: (company, facilities, people_by_run_id, merchant_account_refreshes),
+            comparisons: (
+                company,
+                facilities,
+                people_by_run_id,
+                merchant_account_refreshes,
+            ),
         },
     );
 

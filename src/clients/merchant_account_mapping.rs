@@ -413,17 +413,24 @@ fn combine_address(
     state: Option<String>,
     zip: Option<String>,
 ) -> Option<String> {
-    let state_zip = [state, zip].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    let state_zip = [state, zip]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
     let city_state_zip = [city, (!state_zip.is_empty()).then_some(state_zip)]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
         .join(", ");
 
-    let parts: Vec<String> = [street, (!city_state_zip.is_empty()).then_some(city_state_zip)]
-        .into_iter()
-        .flatten()
-        .collect();
+    let parts: Vec<String> = [
+        street,
+        (!city_state_zip.is_empty()).then_some(city_state_zip),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
 
     if parts.is_empty() {
         None
@@ -753,7 +760,12 @@ mod tests {
     #[test]
     fn combine_address_handles_a_street_with_no_city_state_or_zip() {
         assert_eq!(
-            combine_address(Some("1030 East Grant Highway".to_string()), None, None, None),
+            combine_address(
+                Some("1030 East Grant Highway".to_string()),
+                None,
+                None,
+                None
+            ),
             Some("1030 East Grant Highway".to_string())
         );
     }

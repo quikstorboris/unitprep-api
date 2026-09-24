@@ -695,9 +695,12 @@ pub async fn search_clients(
     // "Milton Self Storage"'s run id, copied from here, manually linked
     // to a different real facility). Bounded the same way -- typically
     // a handful of results for one query, not a background job.
-    let standalone_fetches = merchant_account_results
-        .iter()
-        .map(|r| async move { (r.run_id.as_str(), client.get_run_form_fields(&r.run_id).await) });
+    let standalone_fetches = merchant_account_results.iter().map(|r| async move {
+        (
+            r.run_id.as_str(),
+            client.get_run_form_fields(&r.run_id).await,
+        )
+    });
     let mut standalone_display: HashMap<String, MaDisplayInfo> = HashMap::new();
     for (run_id, result) in futures::future::join_all(standalone_fetches).await {
         let display = match result {
@@ -725,7 +728,10 @@ pub async fn search_clients(
     // Real facility titles from *this same search*, not the whole
     // database -- a near-miss warning is only useful against something
     // the user is actually looking at right now.
-    let facility_titles: Vec<&str> = facility_matches.iter().map(|m| m.run_name.as_str()).collect();
+    let facility_titles: Vec<&str> = facility_matches
+        .iter()
+        .map(|m| m.run_name.as_str())
+        .collect();
 
     let merchant_account_matches: Vec<MerchantAccountMatch> = merchant_account_results
         .into_iter()
@@ -1217,7 +1223,12 @@ mod tests {
             .find(|m| m.duplicate.as_ref().unwrap().merchant_account_run_id == "ma-1")
             .expect("candidate 1 present");
         assert_eq!(
-            candidate_1.duplicate.as_ref().unwrap().ein_last_4.as_deref(),
+            candidate_1
+                .duplicate
+                .as_ref()
+                .unwrap()
+                .ein_last_4
+                .as_deref(),
             Some("•••••1111")
         );
         assert_eq!(
@@ -1245,7 +1256,10 @@ mod tests {
     fn similar_facility_names_flags_the_real_milton_mix_up() {
         let facility_titles = vec!["Knapp's Self Stor of Milton Freewater - QMS Onboarding"];
 
-        let similar = similar_facility_names_for("Milton Self Storage - New Elavon Account", &facility_titles);
+        let similar = similar_facility_names_for(
+            "Milton Self Storage - New Elavon Account",
+            &facility_titles,
+        );
 
         assert_eq!(
             similar,
@@ -1257,8 +1271,10 @@ mod tests {
     fn similar_facility_names_is_empty_for_an_unrelated_title() {
         let facility_titles = vec!["Highway 20 Self Storage - QMS Onboarding"];
 
-        let similar =
-            similar_facility_names_for("Dubuqueland Mini Storage - New Elavon Account", &facility_titles);
+        let similar = similar_facility_names_for(
+            "Dubuqueland Mini Storage - New Elavon Account",
+            &facility_titles,
+        );
 
         assert!(similar.is_empty());
     }
@@ -1272,7 +1288,10 @@ mod tests {
             "Knapp's Self Stor of Milton Freewater - QMS Onboarding",
         ];
 
-        let similar = similar_facility_names_for("Milton Self Storage - New Elavon Account", &facility_titles);
+        let similar = similar_facility_names_for(
+            "Milton Self Storage - New Elavon Account",
+            &facility_titles,
+        );
 
         assert_eq!(
             similar,

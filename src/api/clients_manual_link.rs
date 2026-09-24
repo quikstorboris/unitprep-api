@@ -51,7 +51,9 @@ use crate::clients::merchant_account_mapping::{
     credentials_added_to_qms_from_tasks, map_merchant_account_fields,
 };
 use crate::clients::person_index::extract_intake_people;
-use crate::clients::repository::{ingest_merchant_account_run, upsert_task_status, IngestMerchantAccountError};
+use crate::clients::repository::{
+    ingest_merchant_account_run, upsert_task_status, IngestMerchantAccountError,
+};
 use crate::clients::sync::apply_facility_refresh;
 
 const PERMISSION: &str = "client_ops.perform";
@@ -187,10 +189,26 @@ pub async fn manual_link(
 
     match request.workflow {
         ManualLinkWorkflow::MerchantAccount => {
-            manual_link_merchant_account(&state, &user, user_agent, &client, request.facility_id, &run_id).await
+            manual_link_merchant_account(
+                &state,
+                &user,
+                user_agent,
+                &client,
+                request.facility_id,
+                &run_id,
+            )
+            .await
         }
         ManualLinkWorkflow::Intake => {
-            manual_link_intake(&state, &user, user_agent, &client, request.facility_id, &run_id).await
+            manual_link_intake(
+                &state,
+                &user,
+                user_agent,
+                &client,
+                request.facility_id,
+                &run_id,
+            )
+            .await
         }
     }
 }
@@ -206,8 +224,10 @@ async fn manual_link_merchant_account(
     // Live Process Street round trip first, deliberately with no open
     // transaction -- same reasoning as `link_facility_elavon`'s own
     // Phase 2.
-    let (fields_result, tasks_result) =
-        tokio::join!(client.get_run_form_fields(run_id), client.get_run_tasks(run_id));
+    let (fields_result, tasks_result) = tokio::join!(
+        client.get_run_form_fields(run_id),
+        client.get_run_tasks(run_id)
+    );
 
     let fields = match fields_result {
         Ok(fields) => fields,
@@ -267,8 +287,14 @@ async fn manual_link_merchant_account(
         }
     }
 
-    if let Err(err) =
-        ingest_merchant_account_run(&mut tx, facility_id, &mapped, run_id, credentials_added_to_qms).await
+    if let Err(err) = ingest_merchant_account_run(
+        &mut tx,
+        facility_id,
+        &mapped,
+        run_id,
+        credentials_added_to_qms,
+    )
+    .await
     {
         let _ = tx.rollback().await;
         tracing::error!(error = %err, user_id = %user.user_id, run_id, "failed to ingest a manually-relinked Merchant Account run");
@@ -354,19 +380,20 @@ async fn manual_link_intake(
         }
     };
 
-    let previous_run_id: Option<(Option<String>,)> =
-        match sqlx::query_as("SELECT ps_intake_run_id FROM clients.facilities WHERE id = $1")
-            .bind(facility_id)
-            .fetch_optional(&mut *tx)
-            .await
-        {
-            Ok(row) => row,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "existing-link lookup for manual intake link failed");
-                let _ = tx.rollback().await;
-                return internal_error("Could not link this run");
-            }
-        };
+    let previous_run_id: Option<(Option<String>,)> = match sqlx::query_as(
+        "SELECT ps_intake_run_id FROM clients.facilities WHERE id = $1",
+    )
+    .bind(facility_id)
+    .fetch_optional(&mut *tx)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "existing-link lookup for manual intake link failed");
+            let _ = tx.rollback().await;
+            return internal_error("Could not link this run");
+        }
+    };
 
     let result = sqlx::query(
         "UPDATE clients.facilities SET name = $1, street_address = $2, city = $3, state = $4, \
@@ -407,10 +434,12 @@ async fn manual_link_intake(
     // Same rebuild-wholesale, delete-then-insert shape `apply_resync`
     // already uses for `ps_person_index` -- this facility's Users tab
     // candidates should come from the newly-linked run, not the old one.
-    if let Err(err) = sqlx::query("DELETE FROM clients.ps_person_index WHERE workflow = 'intake' AND ps_run_id = $1")
-        .bind(run_id)
-        .execute(&mut *tx)
-        .await
+    if let Err(err) = sqlx::query(
+        "DELETE FROM clients.ps_person_index WHERE workflow = 'intake' AND ps_run_id = $1",
+    )
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await
     {
         tracing::error!(error = %err, user_id = %user.user_id, run_id, "failed to clear ps_person_index during a manual Intake relink");
         let _ = tx.rollback().await;

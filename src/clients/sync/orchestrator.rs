@@ -249,15 +249,8 @@ async fn sync_runs_within(
         } else {
             existing.get(&run.id).copied()
         };
-        let outcome = sync_one_run(
-            tx,
-            client,
-            workflow_key,
-            run,
-            previously_synced_at,
-            extract,
-        )
-        .await?;
+        let outcome =
+            sync_one_run(tx, client, workflow_key, run, previously_synced_at, extract).await?;
         if outcome.person_index_refreshed {
             runs_changed += 1;
             people_indexed += outcome.people_indexed;
@@ -338,18 +331,11 @@ pub async fn run_all_workflows_with_progress(
                 }
             };
 
-        let stats_result = sync_runs_within(
-            &mut tx,
-            client,
-            workflow_key,
-            runs,
-            *extract,
-            force,
-            || {
+        let stats_result =
+            sync_runs_within(&mut tx, client, workflow_key, runs, *extract, force, || {
                 progress.write().processed_runs += 1;
-            },
-        )
-        .await;
+            })
+            .await;
 
         let stats = match stats_result {
             Ok(stats) => stats,

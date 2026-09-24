@@ -290,7 +290,12 @@ pub async fn update_settings(
                 }
             };
 
-            let timezone = request.sync_timezone.as_deref().unwrap_or("").trim().to_string();
+            let timezone = request
+                .sync_timezone
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if !ALLOWED_TIMEZONES.contains(&timezone.as_str()) {
                 tracing::warn!(
                     user_id = %user.user_id,
