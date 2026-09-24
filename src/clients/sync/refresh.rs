@@ -673,6 +673,188 @@ mod tests {
         assert_eq!(refreshed.name.as_deref(), Some("Updated Facility Name"));
     }
 
+    /// Every field name serde reports for `value` -- read from the type's
+    /// own `Serialize` impl rather than hand-listed, so a field added to
+    /// `MappedCompany`/`MappedFacility` shows up here automatically. This
+    /// is what makes the parity tests below actually catch field-list
+    /// drift instead of just re-asserting a second hand-maintained copy
+    /// of the same list the code under test already has.
+    fn field_names<T: serde::Serialize>(value: &T) -> Vec<String> {
+        serde_json::to_value(value)
+            .expect("test fixture must serialize")
+            .as_object()
+            .expect("must serialize to a JSON object")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// Closes the gap named in the vault's Dev Principles audit: nothing
+    /// stops a new `MappedCompany` field from being forgotten in
+    /// `company_field_value`'s match arms. Unlike `apply_company_refresh`
+    /// (a full struct literal -- the compiler already refuses to build if
+    /// a field is missing there), `company_field_value` is a `match
+    /// field: &str` with a catch-all `_ => None`, so a forgotten arm
+    /// compiles fine and just silently returns `None` forever. `company()`
+    /// sets every field to `Some(..)`, so any field this function doesn't
+    /// recognize shows up as a `None` here.
+    #[test]
+    fn company_field_value_has_an_arm_for_every_mappedcompany_field() {
+        let company = company("Test LLC");
+
+        for field in field_names(&company) {
+            assert!(
+                company_field_value(&company, &field).is_some(),
+                "company_field_value has no arm for MappedCompany field `{field}` (or it \
+                 doesn't return the field's real value) -- it was likely added to the struct \
+                 but forgotten here",
+            );
+        }
+    }
+
+    /// `diff_company_fields` (`clients::create`) is `company_field_value`'s
+    /// sibling for the same drift risk -- a per-field `if a != b` list
+    /// with no catch-all to fail loudly, so a forgotten field silently
+    /// never reports as "changed" instead of erroring.
+    #[test]
+    fn diff_company_fields_reports_every_mappedcompany_field_that_actually_changed() {
+        let reviewed = company("Reviewed LLC");
+        // A second value differing in *every* field -- constructed by
+        // appending to every string field rather than hand-writing 14
+        // distinct literals, so this stays correct if a field's content
+        // changes without needing to be hand-updated in lockstep.
+        let fresh = MappedCompany {
+            legal_name: reviewed.legal_name.clone().map(|v| format!("{v} (fresh)")),
+            corporate_email: reviewed
+                .corporate_email
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            corporate_phone: reviewed
+                .corporate_phone
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            corporate_address_street: reviewed
+                .corporate_address_street
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            corporate_address_city: reviewed
+                .corporate_address_city
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            corporate_address_state: reviewed
+                .corporate_address_state
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            corporate_address_zip: reviewed
+                .corporate_address_zip
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            subdomain: reviewed.subdomain.clone().map(|v| format!("{v} (fresh)")),
+            accepted_payment_methods: reviewed
+                .accepted_payment_methods
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            accounting_basis: reviewed
+                .accounting_basis
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            payment_scheme: reviewed
+                .payment_scheme
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            offers_tenant_insurance_raw: reviewed
+                .offers_tenant_insurance_raw
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            insurance_provider: reviewed
+                .insurance_provider
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            website_url: reviewed.website_url.clone().map(|v| format!("{v} (fresh)")),
+        };
+
+        let changed = crate::clients::create::diff_company_fields(&fresh, &reviewed);
+
+        for field in field_names(&reviewed) {
+            assert!(
+                changed.contains(&field.as_str()),
+                "diff_company_fields did not report `{field}` as changed even though this \
+                 test set it to a different value on both sides -- it was likely added to \
+                 MappedCompany but forgotten here",
+            );
+        }
+    }
+
+    /// `MappedFacility`'s counterpart to the two tests above.
+    /// `go_live_date` is deliberately excluded, same reasoning as
+    /// `facility_field_value`'s and `facility_fields_that_differ`'s own
+    /// doc comments: nothing but the original PS mapping ever sets it.
+    const FACILITY_FIELD_NOT_COVERED_BY_REFRESH: &str = "go_live_date";
+
+    #[test]
+    fn facility_field_value_has_an_arm_for_every_mappedfacility_field() {
+        let facility = fully_mapped_facility();
+
+        for field in field_names(&facility) {
+            if field == FACILITY_FIELD_NOT_COVERED_BY_REFRESH {
+                continue;
+            }
+            assert!(
+                facility_field_value(&facility, &field).is_some(),
+                "facility_field_value has no arm for MappedFacility field `{field}` (or it \
+                 doesn't return the field's real value) -- it was likely added to the struct \
+                 but forgotten here",
+            );
+        }
+    }
+
+    #[test]
+    fn facility_fields_that_differ_reports_every_mappedfacility_field_that_actually_changed() {
+        let a = fully_mapped_facility();
+        let b = MappedFacility {
+            name: a.name.clone().map(|v| format!("{v} (fresh)")),
+            street_address: a.street_address.clone().map(|v| format!("{v} (fresh)")),
+            city: a.city.clone().map(|v| format!("{v} (fresh)")),
+            state: a.state.clone().map(|v| format!("{v} (fresh)")),
+            zip: a.zip.clone().map(|v| format!("{v} (fresh)")),
+            phone: a.phone.clone().map(|v| format!("{v} (fresh)")),
+            email: a.email.clone().map(|v| format!("{v} (fresh)")),
+            units_count: a.units_count.map(|v| v + 1),
+            primary_storage_offering: a
+                .primary_storage_offering
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            previous_pms: a.previous_pms.clone().map(|v| format!("{v} (fresh)")),
+            access_control_system: a
+                .access_control_system
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            go_live_date: a.go_live_date,
+            dropbox_folder_url: a.dropbox_folder_url.clone().map(|v| format!("{v} (fresh)")),
+            subdomain: a.subdomain.clone().map(|v| format!("{v} (fresh)")),
+            subdomain_exists_in_qms_raw: a
+                .subdomain_exists_in_qms_raw
+                .clone()
+                .map(|v| format!("{v} (fresh)")),
+            system_email: a.system_email.clone().map(|v| format!("{v} (fresh)")),
+            website_url: a.website_url.clone().map(|v| format!("{v} (fresh)")),
+        };
+
+        let changed = facility_fields_that_differ(&a, &b);
+
+        for field in field_names(&a) {
+            if field == FACILITY_FIELD_NOT_COVERED_BY_REFRESH {
+                continue;
+            }
+            assert!(
+                changed.contains(&field.as_str()),
+                "facility_fields_that_differ did not report `{field}` as changed even though \
+                 this test set it to a different value on both sides -- it was likely added \
+                 to MappedFacility but forgotten here",
+            );
+        }
+    }
+
     fn fully_mapped_facility() -> MappedFacility {
         MappedFacility {
             name: Some("Example Facility".to_string()),
