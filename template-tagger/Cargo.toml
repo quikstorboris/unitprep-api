@@ -4,3 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+
+# TagValue/Candidate/LabelProximityPattern/PrecedingAnchor/LabelPosition
+# derive Serialize/Deserialize so unitprep-tagger-pipeline's
+# RegionCandidate (built from these types) can round-trip through
+# unitprep_core::durable_session_store::DurableSessionStore as part of
+# TaggerSession.
+serde = { version = "1", features = ["derive"] }

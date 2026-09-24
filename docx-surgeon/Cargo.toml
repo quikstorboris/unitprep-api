@@ -7,3 +7,9 @@ description = "Surgical, minimal-diff text edits inside a .docx -- replace exact
 [dependencies]
 quick-xml = "0.41"
 zip = "2"
+
+# RegionRef derives Serialize/Deserialize so unitprep-tagger-pipeline's
+# RegionCandidate (which embeds it) can round-trip through
+# unitprep_core::durable_session_store::DurableSessionStore as part of
+# TaggerSession.
+serde = { version = "1", features = ["derive"] }

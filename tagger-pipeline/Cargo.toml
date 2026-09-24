@@ -6,3 +6,8 @@ edition = "2021"
 [dependencies]
 docx-surgeon = { path = "../docx-surgeon" }
 unitprep-template-tagger = { path = "../template-tagger" }
+
+# ConfidenceTier/RegionCandidate derive Serialize/Deserialize so
+# TaggerSession (src/application/tagger_session_service.rs) can round-trip
+# through unitprep_core::durable_session_store::DurableSessionStore.
+serde = { version = "1", features = ["derive"] }

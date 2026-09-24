@@ -4,7 +4,7 @@ use crate::detect::{find_word_bounded_matches, Candidate};
 /// loaded by the caller -- this crate has no DB access of its own,
 /// matching [`crate::detect_candidates`]'s own "pure text matching, no
 /// I/O" scope.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LabelProximityPattern {
     pub tag_key: String,
     pub label: String,
@@ -24,7 +24,7 @@ pub struct LabelProximityPattern {
 }
 
 /// See [`LabelProximityPattern::requires_preceding_anchor`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PrecedingAnchor {
     pub text: String,
     pub within_chars: usize,
@@ -39,7 +39,7 @@ pub struct PrecedingAnchor {
 /// corpus but not yet implemented -- deliberately not a variant here,
 /// so a pattern authored for that shape has nothing to match against
 /// yet rather than silently matching the wrong thing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LabelPosition {
     Before,
     After,

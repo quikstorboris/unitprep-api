@@ -820,6 +820,7 @@ name = "docx-surgeon"
 version = "0.1.0"
 dependencies = [
  "quick-xml",
+ "serde",
  "zip 2.4.2",
 ]
 
@@ -3790,12 +3791,16 @@ name = "unitprep-tagger-pipeline"
 version = "0.1.0"
 dependencies = [
  "docx-surgeon",
+ "serde",
  "unitprep-template-tagger",
 ]
 
 [[package]]
 name = "unitprep-template-tagger"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "unitprep-unit-group"

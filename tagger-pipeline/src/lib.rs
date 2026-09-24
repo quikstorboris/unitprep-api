@@ -31,7 +31,7 @@ use unitprep_template_tagger::{
 /// tier-2/tier-3 split. Tier 3 ("no match, leave alone") is never a
 /// value here -- it's the absence of any [`RegionCandidate`] for a
 /// span, not something this type represents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ConfidenceTier {
     /// Exactly one candidate was found for this exact `(region, start,
     /// end)` span -- nothing else competes for it, so it's safe to
@@ -48,7 +48,7 @@ pub enum ConfidenceTier {
 /// -- a candidate's `start`/`end` are meaningless without knowing which
 /// region's text they're relative to -- plus its computed
 /// [`ConfidenceTier`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RegionCandidate {
     pub region: RegionRef,
     pub candidate: Candidate,

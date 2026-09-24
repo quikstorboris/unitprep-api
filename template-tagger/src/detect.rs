@@ -2,7 +2,7 @@
 /// should become if found literally in the document. The caller (not
 /// this crate) is responsible for resolving which `client_ops.qms_tag`
 /// rows are safe to pass in -- see the module doc's scope note.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TagValue {
     pub tag_key: String,
     pub value: String,
@@ -11,7 +11,7 @@ pub struct TagValue {
 /// One literal occurrence of a [`TagValue`]'s value found in the
 /// document, proposed for substitution -- never applied by this crate
 /// itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Candidate {
     pub tag_key: String,
     /// The exact text found in the document -- kept alongside the
