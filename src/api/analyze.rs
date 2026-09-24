@@ -34,7 +34,8 @@ pub struct AnalyzeRequest {
     pub session_id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct AnalyzeResponse {
     pub facilities: usize,
     pub global_groups: usize,

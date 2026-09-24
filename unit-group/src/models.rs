@@ -16,21 +16,24 @@ pub struct Facility {
     pub groups: HashMap<String, usize>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct AdvisoryIssue {
     pub source: String,
     pub issue: String,
     pub severity: Severity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub enum Severity {
     Info,
     Warning,
     Error,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SimilarityMatch {
     pub facility_group: String,
     pub reference_group: String,
@@ -50,7 +53,8 @@ pub struct AnalysisResults {
 /// pre-fill suggestion in the manual-mapping UI — always fully resolved
 /// (both sides present), unlike the mapping the user actually submits,
 /// where a target can be left unmapped.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct FieldMappingEntry {
     pub target: String,
     pub source: String,
@@ -62,9 +66,16 @@ pub struct FieldMappingEntry {
 /// (when the browser sent one) specifically so the UI can help a user
 /// pick the right file when a folder contains more than one candidate,
 /// e.g. several dated re-pulls of the same facility's export.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct UnitFileCandidate {
     pub file_name: String,
+    // ts-rs defaults i64 to `bigint` (safe for the full range), but this
+    // is always a JS `Date.now()`-scale epoch-millis value from the
+    // browser -- well within f64's safe integer range for centuries to
+    // come, and the frontend already treats it as a plain `number`
+    // (Math.floor, template interpolation, etc.), not a bigint.
+    #[ts(type = "number | null")]
     pub modified_at: Option<i64>,
     pub detected_vendor: String,
 }
@@ -158,13 +169,15 @@ pub struct ValidationResult {
 /// successfully checked. This should never look like a clean/absent
 /// result: a file landing here means validation never actually ran on
 /// it, which `ready` must reflect (see `run_validation`).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct FileValidationError {
     pub file_name: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export, rename = "ValidationIssue")]
 pub struct ValidationIssueSummary {
     pub file_name: String,
     pub severity: Severity,

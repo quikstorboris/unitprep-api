@@ -6,6 +6,11 @@
 /results/
 /tmp/
 
+# ts-rs's default export directory (any crate) -- the real destination is
+# unitprep-ui/types/generated/, set via TS_RS_EXPORT_DIR (see `npm run
+# generate-types` there). This only fills if that env var is forgotten.
+bindings/
+
 # Sample/customer data
 /sampleData/
 

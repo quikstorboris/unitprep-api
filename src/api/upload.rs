@@ -23,7 +23,8 @@ use unitprep_core::uploaded_file::UploadedFile;
 /// multipart file parts have no metadata slot beyond filename/content-type.
 const MODIFIED_TIMES_FIELD: &str = "file_modified_times";
 
-#[derive(Serialize)]
+#[derive(Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct UploadResponse {
     pub session_id: String,
     pub files_uploaded: usize,
