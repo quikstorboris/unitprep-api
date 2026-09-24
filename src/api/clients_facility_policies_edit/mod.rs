@@ -53,6 +53,37 @@ pub(super) fn bad_request(message: String) -> Response {
     crate::api::bad_request("invalid_request", message)
 }
 
+/// Shared first half of every list-shaped category's "replace this
+/// category's data wholesale" write (fees/taxes/delinquency entries, and
+/// coverage's own two tables) -- count what's there now (so the caller
+/// can tell `mark_exempt_if_qsx_and_was_empty` whether this facility was
+/// genuinely empty before this write), then delete it all, ready for the
+/// caller's own insert loop. `table` is always one of this module's own
+/// hardcoded `clients.policy_*` names, never a caller/request-supplied
+/// value, so building the query with `format!` (sqlx has no way to bind
+/// a table name as a parameter) carries no injection risk.
+pub(super) async fn count_and_delete_existing(
+    tx: &mut Transaction<'_, Postgres>,
+    table: &str,
+    facility_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let count: (i64,) = sqlx::query_as(&format!(
+        "SELECT count(*) FROM {table} WHERE facility_policies_id = $1"
+    ))
+    .bind(facility_id)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    sqlx::query(&format!(
+        "DELETE FROM {table} WHERE facility_policies_id = $1"
+    ))
+    .bind(facility_id)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(count.0 == 0)
+}
+
 pub(super) async fn ensure_facility_and_policies_row(
     tx: &mut Transaction<'_, Postgres>,
     company_id: Uuid,

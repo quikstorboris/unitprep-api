@@ -11,7 +11,10 @@ use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::policy_exemption::{mark_exempt_if_qsx_and_was_empty, PolicyCategory};
 
-use super::{bad_request, ensure_facility_and_policies_row, not_found, request_context};
+use super::{
+    bad_request, count_and_delete_existing, ensure_facility_and_policies_row, not_found,
+    request_context,
+};
 
 const STEP_TYPES: &[&str] = &[
     "late_fee", "pre_lien", "lien", "cut_lock", "auction", "notice", "other",
@@ -125,33 +128,20 @@ pub async fn update_delinquency(
         }
     }
 
-    let was_empty: (i64,) = match sqlx::query_as(
-        "SELECT count(*) FROM clients.policy_delinquency_entries WHERE facility_policies_id = $1",
+    let was_empty = match count_and_delete_existing(
+        &mut tx,
+        "clients.policy_delinquency_entries",
+        facility_id,
     )
-    .bind(facility_id)
-    .fetch_one(&mut *tx)
     .await
     {
-        Ok(row) => row,
+        Ok(was_empty) => was_empty,
         Err(err) => {
             let _ = tx.rollback().await;
-            tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_entries count failed");
+            tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_entries count/delete failed");
             return internal_error("Could not save delinquency entries");
         }
     };
-    let was_empty = was_empty.0 == 0;
-
-    if let Err(err) = sqlx::query(
-        "DELETE FROM clients.policy_delinquency_entries WHERE facility_policies_id = $1",
-    )
-    .bind(facility_id)
-    .execute(&mut *tx)
-    .await
-    {
-        let _ = tx.rollback().await;
-        tracing::error!(error = %err, user_id = %user.user_id, "policy_delinquency_entries delete failed");
-        return internal_error("Could not save delinquency entries");
-    }
 
     for (index, entry) in request.entries.iter().enumerate() {
         if let Err(err) = sqlx::query(

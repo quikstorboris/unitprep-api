@@ -11,7 +11,9 @@ use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::policy_exemption::{mark_exempt_if_qsx_and_was_empty, PolicyCategory};
 
-use super::{ensure_facility_and_policies_row, not_found, request_context};
+use super::{
+    count_and_delete_existing, ensure_facility_and_policies_row, not_found, request_context,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CoverageTierInput {
@@ -67,46 +69,20 @@ pub async fn update_coverage(
         }
     }
 
-    let tiers_count: (i64,) = match sqlx::query_as(
-        "SELECT count(*) FROM clients.policy_coverage_tiers WHERE facility_policies_id = $1",
+    let tiers_was_empty = match count_and_delete_existing(
+        &mut tx,
+        "clients.policy_coverage_tiers",
+        facility_id,
     )
-    .bind(facility_id)
-    .fetch_one(&mut *tx)
     .await
     {
-        Ok(row) => row,
+        Ok(was_empty) => was_empty,
         Err(err) => {
             let _ = tx.rollback().await;
-            tracing::error!(error = %err, user_id = %user.user_id, "policy_coverage_tiers count failed");
+            tracing::error!(error = %err, user_id = %user.user_id, "policy_coverage_tiers count/delete failed");
             return internal_error("Could not save coverage");
         }
     };
-    let commission_exists: Option<(Uuid,)> = match sqlx::query_as(
-        "SELECT facility_policies_id FROM clients.policy_commission WHERE facility_policies_id = $1",
-    )
-    .bind(facility_id)
-    .fetch_optional(&mut *tx)
-    .await
-    {
-        Ok(row) => row,
-        Err(err) => {
-            let _ = tx.rollback().await;
-            tracing::error!(error = %err, user_id = %user.user_id, "policy_commission existence check failed");
-            return internal_error("Could not save coverage");
-        }
-    };
-    let was_empty = tiers_count.0 == 0 && commission_exists.is_none();
-
-    if let Err(err) =
-        sqlx::query("DELETE FROM clients.policy_coverage_tiers WHERE facility_policies_id = $1")
-            .bind(facility_id)
-            .execute(&mut *tx)
-            .await
-    {
-        let _ = tx.rollback().await;
-        tracing::error!(error = %err, user_id = %user.user_id, "policy_coverage_tiers delete failed");
-        return internal_error("Could not save coverage");
-    }
 
     for tier in &request.tiers {
         if let Err(err) = sqlx::query(
@@ -127,16 +103,21 @@ pub async fn update_coverage(
         }
     }
 
-    if let Err(err) =
-        sqlx::query("DELETE FROM clients.policy_commission WHERE facility_policies_id = $1")
-            .bind(facility_id)
-            .execute(&mut *tx)
-            .await
+    let commission_was_empty = match count_and_delete_existing(
+        &mut tx,
+        "clients.policy_commission",
+        facility_id,
+    )
+    .await
     {
-        let _ = tx.rollback().await;
-        tracing::error!(error = %err, user_id = %user.user_id, "policy_commission delete failed");
-        return internal_error("Could not save coverage");
-    }
+        Ok(was_empty) => was_empty,
+        Err(err) => {
+            let _ = tx.rollback().await;
+            tracing::error!(error = %err, user_id = %user.user_id, "policy_commission count/delete failed");
+            return internal_error("Could not save coverage");
+        }
+    };
+    let was_empty = tiers_was_empty && commission_was_empty;
 
     if let Some(commission) = &request.commission {
         if let Err(err) = sqlx::query(

@@ -11,7 +11,10 @@ use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::policy_exemption::{mark_exempt_if_qsx_and_was_empty, PolicyCategory};
 
-use super::{bad_request, ensure_facility_and_policies_row, not_found, request_context};
+use super::{
+    bad_request, count_and_delete_existing, ensure_facility_and_policies_row, not_found,
+    request_context,
+};
 
 const FEE_TYPES: &[&str] = &[
     "security_deposit",
@@ -75,31 +78,16 @@ pub async fn update_fees(
         }
     }
 
-    let was_empty: (i64,) = match sqlx::query_as(
-        "SELECT count(*) FROM clients.policy_fees WHERE facility_policies_id = $1",
-    )
-    .bind(facility_id)
-    .fetch_one(&mut *tx)
-    .await
+    let was_empty = match count_and_delete_existing(&mut tx, "clients.policy_fees", facility_id)
+        .await
     {
-        Ok(row) => row,
+        Ok(was_empty) => was_empty,
         Err(err) => {
             let _ = tx.rollback().await;
-            tracing::error!(error = %err, user_id = %user.user_id, "policy_fees count failed");
+            tracing::error!(error = %err, user_id = %user.user_id, "policy_fees count/delete failed");
             return internal_error("Could not save fees");
         }
     };
-    let was_empty = was_empty.0 == 0;
-
-    if let Err(err) = sqlx::query("DELETE FROM clients.policy_fees WHERE facility_policies_id = $1")
-        .bind(facility_id)
-        .execute(&mut *tx)
-        .await
-    {
-        let _ = tx.rollback().await;
-        tracing::error!(error = %err, user_id = %user.user_id, "policy_fees delete failed");
-        return internal_error("Could not save fees");
-    }
 
     for fee in &request.fees {
         if let Err(err) = sqlx::query(
