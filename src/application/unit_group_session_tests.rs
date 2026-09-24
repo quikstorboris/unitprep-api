@@ -376,3 +376,256 @@ fn effective_documents_prefers_a_stored_resolution_over_auto_detection() {
     assert_eq!(effective.len(), 1);
     assert_eq!(effective[0].headers, vec!["Number".to_string()]);
 }
+
+/// Integration test for Group Prep's `Session` surviving a process
+/// restart via `DurableSessionStore<Session>` -- the same real-DB
+/// pattern `registration_ceremony.rs`'s own
+/// `a_registration_ceremony_survives_a_simulated_process_restart_durability`
+/// test uses (see that test's doc comment for the full rationale: this
+/// project verifies durability empirically against a real database, not
+/// just by reading the `#[derive(Serialize, Deserialize)]` list and
+/// assuming it round-trips).
+///
+/// Unlike the WebAuthn ceremony, `Session` is a much larger struct with
+/// real nested collections (documents, discovery/validation/analysis
+/// results, corrections, exemptions, acknowledgments, a vendor
+/// snapshot) -- the point of building a reasonably full one here, not a
+/// bare `Session::new`, is to prove every one of those fields actually
+/// makes it through a real bincode round trip via Postgres, not just
+/// the struct's shallow-empty-default shape.
+///
+/// `metadata.owner_id` is left `None` for the same reason the WebAuthn
+/// test leaves it `None` -- see that test's own doc comment (no
+/// `auth.users` DELETE policy exists to clean up a throwaway row
+/// afterward, and the column's value is opaque to durability itself).
+///
+/// Run explicitly with `cargo test -- --ignored durability`.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
+async fn a_group_prep_session_survives_a_simulated_process_restart_durability() {
+    use std::collections::{HashMap, HashSet};
+    use std::time::Duration;
+
+    use unitprep_core::durable_session_store::DurableSessionStore;
+    use unitprep_core::session_store::SessionStore;
+
+    let _ = dotenvy::from_filename(".env.local");
+
+    let db = crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+
+    // A unique kind per test run -- keeps this test's row fully isolated
+    // from anything a concurrently-running real server instance (or a
+    // concurrently-running copy of this very test) might be persisting
+    // under the real "unit_group_session" kind main.rs will use.
+    let kind = format!("test_unit_group_session_{}", Uuid::new_v4());
+    let session_id = format!("test-session-{}", Uuid::new_v4());
+
+    let mut session = Session::new(session_id.clone(), None);
+
+    // Two real, differently-shaped documents -- a unit file with actual
+    // rows and a group (master) file -- rather than the empty-rows
+    // `document()` fixture the other tests above use, since the point
+    // here is proving real row data round-trips, not just headers.
+    session.data.documents = Arc::new(vec![
+        CsvDocument {
+            file_name: "units.csv".to_string(),
+            headers: vec![
+                "Number".to_string(),
+                "UnitGroup".to_string(),
+                "Width".to_string(),
+            ],
+            rows: vec![
+                vec![
+                    "A01".to_string(),
+                    "10x10 Inside Climate".to_string(),
+                    "10".to_string(),
+                ],
+                vec![
+                    "A02".to_string(),
+                    "10x10 Inside Climate".to_string(),
+                    "10".to_string(),
+                ],
+                vec![
+                    "B01".to_string(),
+                    "10x20 Outside".to_string(),
+                    "10".to_string(),
+                ],
+            ],
+            modified_at: Some(1_700_000_000_000),
+        },
+        CsvDocument {
+            file_name: "groups.csv".to_string(),
+            headers: vec!["Name".to_string()],
+            rows: vec![
+                vec!["10x10 Inside Climate".to_string()],
+                vec!["10x20 Outside".to_string()],
+            ],
+            modified_at: None,
+        },
+    ]);
+
+    session.data.unit_vendors = vec![door_swap_vendor()];
+
+    session.complete_discovery(discovery_result());
+    session.complete_validation(validation_result());
+    session.complete_analysis(Arc::new(analysis_results()));
+
+    session.add_correction(
+        unitprep_unit_group::CorrectionKey {
+            file_name: "units.csv".to_string(),
+            unit_number: "A01".to_string(),
+            field: "width".to_string(),
+        },
+        "12".to_string(),
+    );
+
+    session.add_dimension_exemption(unitprep_unit_group::DimensionExemptionKey {
+        file_name: "units.csv".to_string(),
+        unit_number: "B01".to_string(),
+    });
+
+    session.data.format_resolutions.insert(
+        "units.csv".to_string(),
+        vec![
+            ("Number".to_string(), Some("Number".to_string())),
+            ("UnitGroup".to_string(), Some("UnitGroup".to_string())),
+        ],
+    );
+
+    session.data.group_file_confirmed = true;
+
+    session.exclude_group("Excluded Group".to_string());
+
+    session.acknowledge_group_check("Odd UnitGroup values".to_string(), "Office".to_string());
+
+    session.data.source_dropbox_folder_path = Some("/Facilities/Test Facility".to_string());
+
+    // Snapshot everything before it moves into the store, to compare
+    // against what comes back out after the simulated restart.
+    let original_workflow = session.workflow;
+    let original_data_generation = session.data_generation();
+    let original_documents: Vec<CsvDocument> = session.data.documents.as_ref().clone();
+    let original_discovery = session.data.discovery.clone();
+    let original_validation = session.data.validation.clone();
+    let original_analysis = session.data.analysis.clone();
+    let original_corrections: HashMap<_, _> = session.data.corrections.clone();
+    let original_dimension_exemptions: HashSet<_> = session.data.dimension_exemptions.clone();
+    let original_format_resolutions = session.data.format_resolutions.clone();
+    let original_group_file_confirmed = session.data.group_file_confirmed;
+    let original_excluded_groups: HashSet<_> = session.data.excluded_groups.clone();
+    let original_group_check_acknowledgments: HashSet<_> =
+        session.data.group_check_acknowledgments.clone();
+    let original_unit_vendors_len = session.data.unit_vendors.len();
+    let original_source_dropbox_folder_path = session.data.source_dropbox_folder_path.clone();
+
+    let store_before_restart = DurableSessionStore::<Session>::with_timeout(
+        db.clone(),
+        kind.clone(),
+        Duration::from_secs(5 * 60),
+    );
+
+    store_before_restart.save(session);
+
+    // save()'s Postgres write is fire-and-forget (see
+    // DurableSessionStore::persist's own doc comment) -- poll briefly
+    // for the row to actually land before simulating a restart, same as
+    // the WebAuthn ceremony's own version of this test.
+    let mut persisted = false;
+
+    for _ in 0..20 {
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM auth.durable_sessions WHERE kind = $1 AND id = $2",
+        )
+        .bind(&kind)
+        .bind(&session_id)
+        .fetch_one(&db)
+        .await
+        .expect("querying auth.durable_sessions must not fail");
+
+        if count == 1 {
+            persisted = true;
+            break;
+        }
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    assert!(
+        persisted,
+        "save() must write a row to auth.durable_sessions within ~2 seconds"
+    );
+
+    // Simulate a process restart: drop the store entirely (its
+    // in-memory layer, and every handle into it, goes with it) and
+    // build a brand new one against the SAME underlying Postgres
+    // connection pool.
+    drop(store_before_restart);
+
+    let store_after_restart = DurableSessionStore::<Session>::with_timeout(
+        db.clone(),
+        kind.clone(),
+        Duration::from_secs(5 * 60),
+    );
+
+    let handle = store_after_restart
+        .get_handle(&session_id)
+        .expect("get_handle must rehydrate the session from Postgres after a simulated restart");
+
+    {
+        let rehydrated = handle.read();
+
+        assert_eq!(rehydrated.metadata.id, session_id);
+        assert_eq!(rehydrated.metadata.owner_id, None);
+        assert!(!rehydrated.metadata.cancelled);
+
+        assert_eq!(rehydrated.workflow, original_workflow);
+        assert_eq!(rehydrated.data_generation(), original_data_generation);
+
+        assert_eq!(
+            rehydrated.data.documents.as_ref().clone(),
+            original_documents
+        );
+        assert_eq!(rehydrated.data.discovery, original_discovery);
+        assert_eq!(rehydrated.data.validation, original_validation);
+        assert_eq!(
+            rehydrated
+                .data
+                .analysis
+                .as_ref()
+                .map(|a| a.as_ref().clone()),
+            original_analysis.as_ref().map(|a| a.as_ref().clone())
+        );
+        assert_eq!(rehydrated.data.corrections, original_corrections);
+        assert_eq!(
+            rehydrated.data.dimension_exemptions,
+            original_dimension_exemptions
+        );
+        assert_eq!(
+            rehydrated.data.format_resolutions,
+            original_format_resolutions
+        );
+        assert_eq!(
+            rehydrated.data.group_file_confirmed,
+            original_group_file_confirmed
+        );
+        assert_eq!(rehydrated.data.excluded_groups, original_excluded_groups);
+        assert_eq!(
+            rehydrated.data.group_check_acknowledgments,
+            original_group_check_acknowledgments
+        );
+        assert_eq!(
+            rehydrated.data.unit_vendors.len(),
+            original_unit_vendors_len
+        );
+        assert_eq!(rehydrated.data.unit_vendors[0].name, "DoorSwap");
+        assert_eq!(
+            rehydrated.data.source_dropbox_folder_path,
+            original_source_dropbox_folder_path
+        );
+    }
+
+    // Clean up -- leave no row behind for the next run.
+    store_after_restart.delete(&session_id);
+
+    tokio::time::sleep(Duration::from_millis(300)).await;
+}

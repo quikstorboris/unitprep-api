@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 use unitprep_core::csv_document::CsvDocument;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct CorrectionKey {
     pub file_name: String,
     pub unit_number: String,
@@ -21,7 +21,7 @@ pub struct CorrectionKey {
 /// an owner's apartment, etc.), where a blank Width/Length is correct,
 /// not a data problem. Distinct from `CorrectionKey`: this isn't a
 /// corrected value, it's an instruction to stop checking a value at all.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct DimensionExemptionKey {
     pub file_name: String,
     pub unit_number: String,
@@ -35,7 +35,7 @@ pub struct DimensionExemptionKey {
 /// unit; this suppresses one group-level check for a whole group, with
 /// no effect on any *other* check the same group might also be flagged
 /// under.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct GroupCheckAcknowledgmentKey {
     pub check: String,
     pub group_name: String,

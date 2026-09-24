@@ -21,7 +21,9 @@ use unitprep_unit_group::{
     FieldMapping, GroupCheckAcknowledgmentKey, ValidationResult,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum WorkflowStage {
     Uploaded,
     Discovered,
@@ -30,7 +32,7 @@ pub enum WorkflowStage {
     Exported,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct SessionData {
     pub documents: Arc<Vec<CsvDocument>>,
     pub discovery: Option<DiscoveryResult>,
@@ -110,7 +112,7 @@ pub struct SessionData {
     pub source_dropbox_folder_path: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Session {
     pub metadata: SessionMetadata,
     pub data: SessionData,

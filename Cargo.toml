@@ -57,8 +57,14 @@ anyhow = "1"
 # unitprep-core now; this is a distinct, still-legitimate direct use.
 csv = "1"
 
-# Serialization
-serde = { version = "1", features = ["derive"] }
+# Serialization. "rc" lets `Arc<T>`/`Rc<T>` fields derive
+# Serialize/Deserialize by allocating a fresh Arc on deserialize --
+# needed by Group Prep's `SessionData` (Arc<Vec<CsvDocument>>,
+# Arc<AnalysisResults>), which now derives Serialize/Deserialize so
+# `Session` can round-trip through `DurableSessionStore`. A rehydrated
+# session doesn't need to share the original Arc's identity with
+# anything else, just its contents, so a fresh allocation is fine.
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 
 # Date/time support

@@ -23,7 +23,7 @@ use crate::csv_document::CsvDocument;
 /// matched anywhere outside loading/display code — a third value later
 /// (a third tool, or a new export kind) is a data fact, not a reason to
 /// touch recognition logic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ContentType {
     Units,
     Tenants,
@@ -51,7 +51,7 @@ impl ContentType {
 /// the `&'static str` an earlier, unit-group-only version of this type
 /// used), since every row now comes from the same DB-loaded `Vec` —
 /// there's no compile-time-const tier anymore to justify borrowing.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct VendorFormat {
     pub name: String,
     pub content_type: ContentType,

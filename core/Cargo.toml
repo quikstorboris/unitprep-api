@@ -7,7 +7,14 @@ edition = "2021"
 anyhow = "1"
 csv = "1"
 tracing = "0.1"
-serde = { version = "1", features = ["derive"] }
+# "rc" lets `Arc<T>`/`Rc<T>` fields derive Serialize/Deserialize by
+# allocating a fresh Arc on deserialize -- needed by the binary crate's
+# `SessionData` (Arc<Vec<CsvDocument>>, Arc<AnalysisResults>), which
+# derives Serialize/Deserialize for DurableSessionStore. Declared here
+# too (not just in the root Cargo.toml) so this crate's own use of
+# `serde`'s derive macros doesn't depend on the feature merely being
+# unified in from elsewhere in the workspace graph.
+serde = { version = "1", features = ["derive", "rc"] }
 
 # CSV encoding fallback -- real facility exports are frequently
 # Windows-1252 (Excel's default "CSV" save format), not true UTF-8. Already

@@ -1,22 +1,22 @@
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BatchRun {
     pub facilities: Vec<Facility>,
     pub global_groups: HashMap<String, usize>,
     pub advisory_issues: Vec<AdvisoryIssue>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Facility {
     pub name: String,
     pub source_files: Vec<String>,
     pub groups: HashMap<String, usize>,
 }
 
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct AdvisoryIssue {
     pub source: String,
@@ -24,7 +24,7 @@ pub struct AdvisoryIssue {
     pub severity: Severity,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub enum Severity {
     Info,
@@ -32,7 +32,7 @@ pub enum Severity {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct SimilarityMatch {
     pub facility_group: String,
@@ -41,7 +41,7 @@ pub struct SimilarityMatch {
     pub difference: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AnalysisResults {
     pub batch_run: BatchRun,
     pub reference_groups: Option<Vec<String>>,
@@ -53,7 +53,7 @@ pub struct AnalysisResults {
 /// pre-fill suggestion in the manual-mapping UI — always fully resolved
 /// (both sides present), unlike the mapping the user actually submits,
 /// where a target can be left unmapped.
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct FieldMappingEntry {
     pub target: String,
@@ -66,7 +66,7 @@ pub struct FieldMappingEntry {
 /// (when the browser sent one) specifically so the UI can help a user
 /// pick the right file when a folder contains more than one candidate,
 /// e.g. several dated re-pulls of the same facility's export.
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct UnitFileCandidate {
     pub file_name: String,
@@ -97,7 +97,7 @@ pub struct UnitFileCandidate {
 /// globally — so discovery's job is to let the user confirm *which*
 /// subset of candidates to process (defaulting to all of them), not to
 /// force a single winner the way an earlier version of this struct did.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiscoveryResult {
     /// The unit files that will actually be validated/analyzed —
     /// always equal to `selected_unit_file_names`, exposed under its own
@@ -151,7 +151,7 @@ pub struct DiscoveryResult {
 /// Also brought forward from the binary's session-state type, same
 /// reasoning as `DiscoveryResult` above — pure result data for the
 /// validation stage, not stage-machine mechanics.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ValidationResult {
     pub files_checked: usize,
     pub issue_count: usize,
@@ -169,14 +169,14 @@ pub struct ValidationResult {
 /// successfully checked. This should never look like a clean/absent
 /// result: a file landing here means validation never actually ran on
 /// it, which `ready` must reflect (see `run_validation`).
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export)]
 pub struct FileValidationError {
     pub file_name: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ts_rs::TS)]
 #[ts(export, rename = "ValidationIssue")]
 pub struct ValidationIssueSummary {
     pub file_name: String,

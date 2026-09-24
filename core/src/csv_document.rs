@@ -11,7 +11,7 @@
 // will be normalized into CsvDocument before entering the processing pipeline,
 // keeping all business logic source-agnostic.
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CsvDocument {
     /// The originating file name, preserved for error messages and output naming.
     pub file_name: String,

@@ -11,8 +11,11 @@ unitprep-core = { path = "../core" }
 anyhow = "1"
 
 # Result types cross the API boundary directly (same convention as
-# unitprep-dedup's domain types).
-serde = { version = "1", features = ["derive"] }
+# unitprep-dedup's domain types). "rc" lets `Arc<T>`/`Rc<T>` fields
+# derive Serialize/Deserialize -- needed transitively by the binary
+# crate's `SessionData` (Arc<AnalysisResults>, a type defined in this
+# crate), which derives Serialize/Deserialize for DurableSessionStore.
+serde = { version = "1", features = ["derive", "rc"] }
 
 # Fingerprint matching (net-new/similar group analysis) — moved here
 # from the root Cargo.toml, since these were only ever used by this
