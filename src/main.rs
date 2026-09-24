@@ -15,7 +15,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use unitprep_core::durable_session_store::DurableSessionStore;
-use unitprep_core::in_memory_session_store::InMemorySessionStore;
 
 use crate::api::AppState;
 use crate::application::dedup_session_service::DedupSession;
@@ -101,33 +100,51 @@ async fn main() {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(60 * 10);
 
-    let session_store = Arc::new(InMemorySessionStore::<Session>::with_timeout(
+    // See db.rs -- deliberately non-blocking (connect_lazy), since most
+    // existing endpoints do not touch Postgres at all yet. Constructed
+    // here (moved up from below the three tool session stores) because
+    // all three now need a pool handle to persist through; nothing
+    // between here and its old location actually depended on that
+    // ordering.
+    let db_pool = db::connect().unwrap_or_else(|err| {
+        panic!("Failed to configure the database pool: {err}");
+    });
+
+    // Durable (2026-09-24), not plain InMemorySessionStore -- same
+    // reasoning as the WebAuthn ceremony stores below: a restart or
+    // crash mid-upload used to silently strand a Group Prep session,
+    // with no way to recover it short of starting over. Cloning
+    // db_pool here is cheap -- sqlx::PgPool is an Arc-backed handle to
+    // the same underlying pool `state.db` gets below, not a second
+    // pool.
+    let session_store = Arc::new(DurableSessionStore::<Session>::with_timeout(
+        db_pool.clone(),
+        "unit_group_session",
         std::time::Duration::from_secs(session_timeout_secs),
     ));
 
     session_store.start_cleanup_task();
 
-    // Same timeout policy as unit_group_sessions — no reason for the
-    // two tools' sessions to expire on different schedules today.
-    let dedup_session_store = Arc::new(InMemorySessionStore::<DedupSession>::with_timeout(
+    // Same timeout policy and durability reasoning as unit_group_sessions
+    // above — no reason for the two tools' sessions to expire (or
+    // survive a restart) on different schedules today.
+    let dedup_session_store = Arc::new(DurableSessionStore::<DedupSession>::with_timeout(
+        db_pool.clone(),
+        "dedup_session",
         std::time::Duration::from_secs(session_timeout_secs),
     ));
 
     dedup_session_store.start_cleanup_task();
 
-    // Same timeout policy again -- the QMS Template Tagging Assistant's
-    // own session store.
-    let tagger_session_store = Arc::new(InMemorySessionStore::<TaggerSession>::with_timeout(
+    // Same timeout policy and durability reasoning again -- the QMS
+    // Template Tagging Assistant's own session store.
+    let tagger_session_store = Arc::new(DurableSessionStore::<TaggerSession>::with_timeout(
+        db_pool.clone(),
+        "tagger_session",
         std::time::Duration::from_secs(session_timeout_secs),
     ));
 
     tagger_session_store.start_cleanup_task();
-
-    // See db.rs -- deliberately non-blocking (connect_lazy), since most
-    // existing endpoints do not touch Postgres at all yet.
-    let db_pool = db::connect().unwrap_or_else(|err| {
-        panic!("Failed to configure the database pool: {err}");
-    });
 
     // See src/dropbox for the full scope/namespace caveats (Full Dropbox
     // access, app-level-only path enforcement, Team Space namespace).
