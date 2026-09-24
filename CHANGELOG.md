@@ -6,6 +6,419 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.38] - 2026-09-24
+
+A standing modularity law and three fixes triggered by a follow-up codebase audit that caught the previous session's own `router.rs` growing to 1909 lines.
+
+### Added
+- **A standing modularity/file-size law in both repos' `CLAUDE.md`** — "check file size and concern-mixing after finishing a task, not only when starting one." The vault's own 250-line-module rule existed but was only reachable via on-demand recall and didn't re-trigger once a task's design work was done; the previous session's `GatedRouter` work had grown `router.rs` to 1909 lines with nothing catching it until this session's own audit.
+- **Field-parity tests for `refresh.rs`** — `company_field_value`/`facility_field_value`/`facility_fields_that_differ`/`clients::create::diff_company_fields` are each a hand-written per-field list with no catch-all, so a field added to `MappedCompany`/`MappedFacility` but forgotten in one of them compiled fine and silently went unrecognized. New tests read the struct's own field names via `serde_json` instead of hand-listing them a second time, so they actually catch drift (`go_live_date` deliberately excluded, matching the module's existing doc comments).
+
+### Changed
+- **`router.rs` split, 1909 → 3 files**: `router/routes.rs` (the route table), `router/permission_gate_tests.rs` (the `#[cfg(test)]` proof the table is enforced), `router/mod.rs` (the public entry point, response-shaping middleware, rate-limit error handling) — pure reorganization, `build()`'s behavior unchanged.
+- **Policy-edit handlers DRY'd up**: `fees.rs`/`taxes.rs`/`delinquency.rs`/`coverage.rs` (tiers and commission) each hand-wrote the same "count existing rows, then delete them all" pair before their own insert loop; factored into one shared `count_and_delete_existing(tx, table, facility_id)` helper. `specials.rs` was left alone — it's a single-row `ON CONFLICT` upsert, not the delete-then-reinsert shape the others share.
+
+## [1.9.37] - 2026-09-24
+
+### Added
+- **`GatedRouter`**, closing a gap `THREAT_MODEL.md` had named explicitly: once roles/permissions moved off the closed `Role` enum onto data-driven tables, the compiler could no longer catch a new handler that forgot to call `require_permission`. `GatedRouter` wraps `axum::Router` and never re-exposes `.route()` — every route must declare its `RouteAccess` (`Public | AuthCeremony | Authenticated | RlsRead | RlsWrite | Permission { keys, action }`) at the call site. A new `permission_gate_tests` module calls the real handler behind every `Permission`-classified route with a zero-permission caller and asserts 403, so a handler that declares `Permission` but forgets the real check fails a test, not just a manifest check. Classifying all 106 routes against real handler source (not `router.rs`'s own comments) found one stale comment (`/integrations/process-street/settings` GET was documented as open but actually gates on `integrations.manage`) and a genuine pre-existing test gap (`auth_configuration.rs`'s two handlers had zero tests of any kind).
+- **`ts-rs`-generated frontend types** for the four core tool-session response families (`UploadResponse`, `DiscoverResponse`, `ValidateResponse`, `AnalyzeResponse` plus their transitive dependencies, 11 types total) — replacing hand-mirrored TypeScript that had already drifted silently once (an `output_path` field removal broke at runtime with nothing catching it). `npm run generate-types` regenerates the file; `i64` fields default to `bigint` except where overridden (`UnitFileCandidate.modified_at`, a real epoch-millis `number`, tagged `#[ts(type = "number | null")]`).
+
+### Fixed
+- **Client-ops audit log recorded before commit, not after, in 13 handlers** (`fees.rs`/`taxes.rs`/`delinquency.rs`/`coverage.rs`/`specials.rs`, 3× `clients_facility_people.rs`, 2× `clients_companies.rs`, `clients_dropbox_folder.rs`, `tool_runs.rs`) — `client_ops::audit_log::record` writes on a separate connection from the handler's own RLS transaction, so recording before `tx.commit()` meant a commit failure after a successful audit write left a permanent "X updated" row for a change that never landed. Reordered to commit-then-audit, matching the pattern `clients_elavon.rs`/`clients_manual_link.rs` already used correctly.
+
+## [1.9.36] - 2026-09-23
+
+### Added
+- **Onboarding Summary tab** on the Company page — one row per facility showing Elavon Status (the next outstanding step in that facility's Merchant Account workflow, walking `clients.ps_task_status` up to and including "Add Credentials to QMS," with everything after that step ignored as PS-internal follow-up) and a Duplicate Checks count linking to the facility's own Onboarding Work tab.
+- **Delete action for a mistaken Onboarding Work tool run** — `client_ops.tool_runs` shipped append-only with no way to clear a run logged by mistake (e.g. a Dedup check run against the wrong facility's uploaded data); new `DELETE /clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}`, gated by a new role-scoped RLS policy, writes a `tool_run_deleted` audit row.
+- **Manual Link action** on the Company page — relinks a facility's Intake or Merchant Account record to a different Process Street run in place, including *over* an already-linked run (unlike the Elavon tab's own "Link Manually," which only ever handled the unlinked case). Built after a real client (Knapp's Self Stor of Milton Freewater) was found linked to a completely unrelated business's Merchant Account application, copied by hand from an undisambiguated search result.
+- **EIN and address disambiguation on Merchant Account search results** — `MappedMerchantAccount` gained masked `ein_last_4` and a combined `business_address`; a new fuzzy address-matching helper canonicalizes street-type abbreviations. "Potential Duplicates" groups now show a per-group `addresses_agree` signal, and a new near-miss check flags a Merchant Account match whose title shares real vocabulary with a facility match without being an outright substring match, surfaced as a "Similar name to…" warning. Decision-support only — nothing auto-resolves a correlation.
+
+### Changed
+- **Resync `apply` no longer re-fetches Process Street from scratch after `preview`** — both phases independently called the same live-fetching comparison function, so confirming a resync (even a no-op "keep everything") cost as much as the preview itself. `preview_resync` now caches its own fetch (5-minute TTL, keyed by company); `apply_resync` drains it when still fresh, falling back to a live fetch only when the cache has nothing usable.
+
+## [1.9.35] - 2026-09-22
+
+### Fixed
+- **Per-client Re-sync never refreshed Elavon/Merchant Account data** — `clients.facility_merchant_accounts` and `clients.ps_task_status` for the `merchant_account` workflow previously only refreshed via the Elavon tab's own dedicated "Resync Elavon Data" button, so a step unchecked in Process Street after a facility's last Elavon-specific resync stayed stale in OO indefinitely. `apply_resync` now also looks up every facility's linked Merchant Account run and refreshes it, concurrently with the Intake fetches it already made.
+
+## [1.9.34] - 2026-09-22
+
+### Added
+- **Daily-time Process Street sync schedule** — `schedule_mode`/`sync_time`/`sync_timezone` (a closed IANA-timezone list, DST-aware), alongside the existing interval-based schedule.
+
+### Fixed
+- **Vendor-format registry's background refresh widened from 5 minutes to 4 hours** — root-caused a Neon free-tier compute-usage alert to this loop's 300-second poll colliding almost exactly with Neon's Free-plan default 300-second idle-suspend timeout, so a running server's compute never got a real idle window to suspend in. Process Street's own sync was ruled out as a cause first (its production branch showed zero compute time for the whole period).
+
+## [1.9.33] - 2026-09-22
+
+### Fixed
+- **Dedup vendor-detection parse failures now logged, and non-UTF-8 CSVs tolerated** rather than failing silently or erroring outright.
+
+### Added
+- **`ps_person_index` refreshed during per-client Re-sync** — the Re-sync button previously only refreshed `clients.companies`/`clients.facilities` row fields, never the person-search index the Users tab's "Add User" candidate chips are sourced from, so a person added in Process Street after a facility's initial import never appeared as a candidate until the next scheduled sync.
+
+## [1.9.32] - 2026-09-18
+
+### Added
+- **`Business_DBA` as a second Merchant Account correlation signal**, additive alongside the existing run-title parenthetical — real Process Street data has a second, plain naming convention (`"<name> - New Elavon Account"`, no parenthetical at all) that the original title-matching path could never correlate.
+- **Force mode for the manual sync trigger** (`?force=true`) — bypasses the delta check entirely, treating every run as never-synced. Built to backfill the new `business_dba` column onto ~363 already-indexed rows; the actual backfill run was deliberately deferred as not worth the Process Street API budget against no active problem.
+
+## [1.9.31] - 2026-09-15
+
+### Changed
+- **Dedup exports now use facility-scoped, versioned filenames.**
+
+## [1.9.30] - 2026-09-15
+
+### Added
+- **Merchant Account run titles searched alongside Intake** in the Add-from-Process-Street flow.
+
+## [1.9.29] - 2026-09-15
+
+### Added
+- **Implementation Manager / Sales Rep company assignments.**
+
+### Changed
+- **State filter values normalized.**
+- Applied `cargo fmt` across the workspace.
+
+## [1.9.28] - 2026-09-11
+
+### Added
+- **Onboarding Work tab backend**: `client_ops.tool_runs`, a durable, queryable per-facility record of every tool run (Dedup first; `unit_groups`/`template_tagger` to follow once those tools are wired up the same way). `facility_id` is `NOT NULL` — a run cannot exist unrelated to a facility. The source file's own bytes are stored alongside its Dropbox path, since a Dropbox-sourced file can be moved or deleted out from under a stored path. Distinct from `client_ops.audit_log`, which stays a generic, facility-blind event trail. Dedup/Unit Groups/Template Tagger routes moved from client-scoped to facility-scoped URLs to match.
+
+### Fixed
+- **`attach_output_bytes`/`attach_output_dropbox` silently updated zero rows** — both ran their UPDATE against the raw connection pool with no RLS GUCs set, and Postgres requires an updated row to satisfy both the UPDATE policy and the table's own SELECT policy; without `app.current_user_id` set, every UPDATE silently affected nothing, so a run's output was never attached after export, with no visible error. Fixed by moving both onto `begin_rls_transaction`, matching every other write in the codebase.
+
+## [1.9.27] - 2026-09-10
+
+### Fixed
+- **A short, single-word parenthetical nickname could false-match an unrelated client's Merchant Account run** — a facility named `"...(Main)"` matched an entirely unrelated new client whose own Intake title happened to contain the plain word "main," and nothing about the match was ambiguous enough to be rejected. `is_specific_enough(keyword)` now requires a nickname to be either multi-word or 6+ characters to be trusted as a candidate at all; a nickname too short is excluded entirely, the same treatment as no parenthetical existing.
+
+## [1.9.26] - 2026-09-10
+
+### Added
+- **A `developer` system role**: full `client_ops`/integrations access, no security-config/security-log access unless `admin` is also assigned, plus everything `onboarding_manager` has. Since this codebase's RLS policies hardcode role checks directly rather than checking permissions, granting `developer` the right permissions alone would have passed the app-layer check and then silently failed at the database — closed by introducing one shared `auth.current_user_is_client_ops_role()` function and repointing all 69 existing role-gated policies (across 23 tables) at it, so extending the club is now a one-line change instead of a 69-policy sweep.
+
+## [1.9.25] - 2026-09-10
+
+### Added
+- **QMS Credentials / Pin Pad Credentials** section on the Elavon tab — 4 fields (Account ID, PIN/Password, Pinpad User ID, QSS API Pin) that were already being fetched and encrypted into `facility_merchant_accounts.encrypted_secrets` since the original Elavon tab shipped, just never decrypted back out for display.
+- **CLAUDE.md warning against Windows/Dropbox/OneDrive clones** of either repo — this codebase exists only in WSL.
+
+### Changed
+- **The Elavon tab's credentials-only resync redesigned into one full-tab resync.** The narrow "Resync Credentials" button shipped a day earlier deliberately never touched `credentials_added_to_qms` (fetched via a separate call), so there was no way to refresh that field short of a destructive unlink/relink. Replaced entirely with one "Resync Elavon Data" button that refreshes rate, status, `credentials_added_to_qms`, financials, credentials, and parties together — safe as a full overwrite since nothing in Merchant Account data has a manual-edit UI in OO to clobber.
+
+## [1.9.24] - 2026-09-09
+
+Closes out the admin-only Integrations settings work from earlier the same day, plus an independently-verified follow-through on an external codebase review: 5 refactors (2 god-file splits, a shared response-helper consolidation) and a full README rewrite.
+
+### Added
+- **Admin-only Integrations section**: a new `integrations.manage` permission (admin-only — `admin` deliberately never holds `client_ops.perform`, the permission Process Street settings had been gated on, so the two couldn't share a gate). A companion RLS migration moved Process Street settings' write policy off `onboarding_manager`/`department_manager` onto `admin` too, since the app-layer permission check alone isn't the real gate. Real behavior change: `onboarding_manager`/`department_manager` lose the Process Street settings access they previously had.
+- **Editable, encrypted Dropbox settings**: the five `DROPBOX_*` env vars became a singleton `client_ops.dropbox_configuration` table, admin-only at the RLS layer. `app_secret`/`refresh_token` are ChaCha20-Poly1305-encrypted under their own dedicated key, never `CLIENT_PII_ENCRYPTION_KEY` or `TOTP_ENCRYPTION_KEY`. The API never returns decrypted secrets, only `has_app_secret`/`has_refresh_token` booleans. `main.rs` tries the DB row first, falling back to env vars — not live-reloaded, a saved change takes effect on the next restart.
+- **Audit logging on facility-person and client-archive actions.**
+
+### Changed
+- **Response-helper consolidation**: 14 files' worth of hand-rolled `bad_request`/`not_found`/`conflict` literals collapsed into 3 shared functions in `api::mod`.
+- **`clients_facility_policies_edit.rs` split** (965 → 5 files, one per policy category) and **`clients/sync.rs` split** (1422 → `progress.rs`/`refresh.rs`/`orchestrator.rs`).
+- **`README.md` rewritten** to reflect the current platform — the prior version still described a two-tool, no-auth early product; the real system has enforced passkey/TOTP auth, RBAC, and a Process Street-sourced client platform. `dedup/RULES.md`'s stale `relatedness.rs` module pointer (now a directory) corrected.
+- Two claims from the external review that prompted this pass didn't hold up on independent verification and were corrected rather than acted on as given: only 3 of a claimed 8 files actually shared the same editing/saving/error state machine, and `repository.rs`'s 1404 lines were ~50% test code, not a real god-file.
+
+## [1.9.23] - 2026-09-08
+
+### Fixed
+- **CORS never allowed `DELETE`** — `CorsLayer::allow_methods` listed only `GET/POST/PUT/PATCH`, so every cross-origin DELETE request (not just the new client-delete endpoint below — every existing DELETE route, including facility-person unlink, Elavon unlink, and role revocation) was silently refused at the browser's own preflight step, indistinguishable from the server being down. Added `DELETE` to the allowed list, plus a real HTTP-level regression test confirmed to fail without the fix.
+
+## [1.9.22] - 2026-09-08
+
+### Added
+- **`DELETE /clients/{company_id}`** — permanent client delete, distinct from the existing archive action, cascading to every facility/policy/link row via existing FK `ON DELETE CASCADE` declarations. Never touches `clients.people` itself, since a person can be linked under other companies too.
+
+## [1.9.21] - 2026-09-08
+
+### Fixed
+- **Person identity was keyed on email alone**, silently collapsing distinct people who share one inbox — a real family case had several genuinely different owners sharing one inbox address, so only the first owner's insert into a given `(facility, person, role)` succeeded and every later same-email owner's insert was silently dropped by `ON CONFLICT DO NOTHING`. `clients.people` identity is now `(email, full_name)`, both case-insensitive. New `heal_person_in_place(tx, person_id, full_name, phone)` corrects a known roster row directly by its own id, splitting "resolve identity for a new Add" from "correct a name that's already wrong" — the two needed opposite matching behavior to both be right at once.
+
+## [1.9.20] - 2026-09-08
+
+### Fixed
+- **Company legal name wasn't resolved when a Merchant Account form answered "Same as Business DBA"** — Process Street never asks for the legal name in that case, so the old resolution logic fell straight through to Intake's own (often blank, for a non-first-time sister facility) legal name. Added an explicit branch that uses the facility's `Business_DBA` value instead.
+
+## [1.9.19] - 2026-09-08
+
+### Added
+- **DropBox tab**: lets a manager relink a facility to a different Dropbox folder (or clear it), audit-logged the same way as a Merchant Account relink, and protected from re-sync overwrite via the existing `manually_edited_fields` mechanism.
+
+## [1.9.18] - 2026-09-08
+
+### Added
+- **Source tracking, manual add, and full editing for facility people.** `clients.facility_people` gained a `source` column (`process_street` | `manual`); a manually-added person is permanently exempt from the Users tab's self-heal pass. Every roster row became directly editable, with a `protect_from_resync` checkbox that flips a Process-Street-sourced person to `manual` so an edit survives the next self-heal instead of being silently reverted.
+
+## [1.9.17] - 2026-09-08
+
+### Added
+- **Structured Taxes and Delinquency data**, replacing free text: `clients.policy_tax_entries` (name/description/flat amount/attribute-payable percent/recurring flag) and `clients.policy_delinquency_entries` (a dollar amount, an optional days-after count, and a trigger referencing either the facility's Paid Through Date or another entry on the same schedule by category). Old free-text tables weren't dropped or auto-migrated — real historical data needs a human's judgment to convert, so both tabs show legacy data alongside the new structured entries when a facility has it.
+
+## [1.9.16] - 2026-09-04
+
+### Changed
+- **Facility Policies split into 5 editable tabs** (Fees / Taxes / Delinquency / Coverage / Specials).
+
+### Added
+- **QSX sync exemption** for Facility Policies.
+
+## [1.9.15] - 2026-09-04
+
+### Added
+- **Unlink for facility people**, plus self-heal now runs on page load instead of only on click.
+
+## [1.9.14] - 2026-09-04
+
+### Added
+- **Facility Users tab**: roster plus Process Street candidate chips for adding a person.
+
+## [1.9.13] - 2026-09-04
+
+### Fixed
+- **Client-ops audit log FK violation on system-triggered events.**
+
+## [1.9.12] - 2026-09-04
+
+### Added
+- **Dropbox import/save pattern extended to Unit Groups (Group Prep).**
+
+## [1.9.11] - 2026-09-04
+
+### Added
+- **Dropbox import/save pattern extended to the Template Tagger.**
+
+## [1.9.10] - 2026-09-04
+
+### Fixed
+- **A facility's Dropbox folder is now resolved from its own captured link** rather than guessed.
+
+## [1.9.9] - 2026-09-04
+
+### Fixed
+- **Dedup no longer guesses a facility's Dropbox folder from a single search candidate.**
+
+## [1.9.8] - 2026-09-04
+
+### Added
+- **Dedup's Dropbox folders default to the client's real folder**, and its save-to-Dropbox flow defaults to a Duplicate Check subfolder next to the source.
+
+## [1.9.7] - 2026-09-04
+
+### Added
+- **The Add-to-OO confirmation screen can assign facility People from a shared pool** instead of only per-facility.
+
+## [1.9.6] - 2026-09-03
+
+### Fixed
+- **Facility search now shows every facility's own people**, not just ones matching the query text.
+
+## [1.9.5] - 2026-09-03
+
+### Fixed
+- **Person-name search fixed for a dash-separated name/contact Process Street format.**
+
+## [1.9.4] - 2026-09-03
+
+### Added
+- **`website_url`**, threaded through mapping, create, and re-sync.
+
+## [1.9.3] - 2026-09-03
+
+### Added
+- **Unlink action for a facility's Merchant Account link.**
+
+## [1.9.2] - 2026-09-03
+
+### Added
+- **Each Intake run's "first time" answer surfaced** for company-source picking.
+
+## [1.9.1] - 2026-09-03
+
+### Added
+- **EIN, masked bank routing/account, and revenue/volume shown on the Elavon tab.**
+
+## [1.9.0] - 2026-09-03
+
+Phases 3-5 of the Process Street integration: the Add-to-OO confirmation screen, a hybrid two-phase re-sync with a new Activity Logs feature, and the first read-only pass of the client record UI (Company page, facility rail, Elavon tab, Facility Policies).
+
+### Added
+- **Add-to-OO confirmation screen**: Company section plus one section per selected facility, pencil-edit-in-place per field, `POST /clients` on Create. Company is its own section, not a role a facility switches into — every selected Process Street run becomes its own facility row, including whichever one also seeds the Company section's data (reversing an earlier either/or design that didn't match a real client's actual shape). Create latency fixed by batching and concurrently fetching every needed Process Street run instead of sequentially, cutting an ~18s Create down substantially.
+- **Re-sync with hybrid conflict resolution**: a configurable background scheduled sync plus a manual Re-sync button, both landing through a two-phase preview/apply flow — `preview_resync` classifies each changed field as a safe auto-apply or a conflict against a new `manually_edited_fields` tracking column, `apply_resync` takes the caller's per-field resolution for each conflict.
+- **Activity Logs** (`client_ops.audit_log`, `/admin/activity-logs`), a new user-action trail distinct from the renamed **Security Logs** (was Audit Logs) — captures every sync run including failures, plus other user actions, gated on its own `activity_logs.read` permission.
+- **Client record UI, read-only pass**: Company page (Company Information, Financial Information, Owner(s) Information with per-party PII decryption), a facility rail, and a facility's General/Elavon/Facility Policies tabs (Users/DropBox tabs shown as placeholders). The Elavon tab includes an auto-suggested Merchant Account candidate via title correlation, with a deliberate manual "Confirm this link" step — never auto-accepted.
+
+### Fixed
+- **Elavon data was never actually being written** — the Merchant Account run id resolved during search preview was silently dropped before Create, so `ingest_merchant_account_run`/`insert_party` (built in Phase 1) were never invoked for anything created through the confirmation screen.
+- **Page "blink" on facility switching** — `get_company_detail` (4 sequential round trips) and `get_facility_policies` (up to 7) now run their queries concurrently in separate short-lived RLS transactions instead of one shared sequential transaction; the frontend stopped re-fetching company detail on every facility click via a new `CompanyDetailContext`.
+- **Dropbox link replaced with a single "Go to DropBox" button** opening the web share link in a new tab — there is no local filesystem path in this data for a desktop-Explorer button to use.
+
+## [1.8.21] - 2026-08-31
+
+### Added
+- **Add-to-OO backend foundation** (Phase 3): `clients::company_naming::resolve_company_name` (Merchant Account's typed Legal Name, then "same as DBA," then Intake's own legal name, with a constructed `"<Owner> DBA <Business_DBA>"` form for a sole proprietor), `clients::create::create_company_and_facilities` — the real trigger behind `POST /clients`. `clients::repository` split into reusable `insert_company`/`insert_facility`/`insert_facility_policies_and_people` building blocks.
+- **Facility search narrowed to Intake runs only**, with `already_imported` flagging per match — Merchant Account existing or not isn't a reliable thing to search by, since not every client uses Elavon.
+- **Merchant Account's Legal Name / DBA / Ownership Type fields captured** from the Facility Information (Pre-App) step.
+
+## [1.8.20] - 2026-08-31
+
+### Added
+- **Manual "Sync Now" trigger** with live progress, plus a real configurable schedule (replacing an earlier fixed-daily-time design).
+
+## [1.8.19] - 2026-08-31
+
+### Added
+- **QMS subdomain and system-email columns** on companies/facilities, mapped and written from Intake.
+
+## [1.8.18] - 2026-08-31
+
+### Added
+- **A real `ProcessStreetClient` wired into the running app**, gated on config, plus the combined `/clients/search` endpoint over both facility-name and person-name search paths.
+
+## [1.8.17] - 2026-08-31
+
+### Fixed
+- **`Signer_Name` pointing at an existing owner is not a second role** — no longer double-counted.
+
+## [1.8.16] - 2026-08-31
+
+### Added
+- **Delta-aware background sync feeding a Process Street person-search index** — `clients.ps_sync_state`/`clients.ps_person_index`, since Process Street has no server-side search over form-field values. Tracks Process Street's own run-update timestamp per run to decide when to re-index, rather than re-pulling every run on every cycle.
+
+## [1.8.15] - 2026-08-31
+
+### Added
+- **Server-side company/facility-name search** across all three Process Street workflows, using Process Street's own real (if undocumented) `name` filter — no pre-sync/cache needed for this half of search. Narrowed to Intake-only later the same day (see v1.8.18) once it became clear searching Merchant Account/Contract Order too made "no match there" look like "doesn't exist."
+
+## [1.8.14] - 2026-08-31
+
+### Added
+- **`ingest_facility` proven against the live Process Street API**, not just fixtures.
+
+## [1.8.13] - 2026-08-31
+
+### Added
+- **Contract Order Process Street workflow mapping** (`migrating_from_system`, the one field flagged as operationally important — the rest of that workflow's ~99 fields stay recoverable from the raw snapshot). Wired into the repository and ingestion trigger.
+
+### Fixed
+- **`list_workflow_runs` only ever searched `status=Active` runs** — Contract Order runs are marked `Completed` once processed, so the original search silently found none of them for either of the two real clients used to build this mapping. Now queries Active + Completed + Archived and merges the results; this also revealed a Contract Order run for a facility an earlier, narrower search had missed entirely.
+
+## [1.8.12] - 2026-08-31
+
+### Added
+- **Field-level encryption for Process Street's sensitive Merchant Account data** — pulling that workflow's full field list (not just the handful of fields first checked) surfaced real SSNs, DOBs, home addresses, EINs, and bank routing/account numbers for real client owners. `facility_merchant_accounts.encrypted_secrets` and a new `facility_merchant_account_parties` table (signer + up to 4 owners + up to 4 intermediary businesses), encrypted the same way `auth::totp` already is: ChaCha20-Poly1305, a version-prefixed blob, with the AEAD's additional-authenticated-data binding each ciphertext to the specific row it belongs to. Both new/touched tables' SELECT RLS tightened to `onboarding_manager`/`department_manager` only, not the blanket "any authenticated" every other `clients` table uses. The raw snapshot column excludes every sensitive key outright, not just the ones re-encrypted elsewhere.
+- **Process Street field mapping for the Intake/Progress and New Merchant Account workflows**, plus the `clients` schema's repository layer and a full per-facility ingestion trigger (`clients::ingest::ingest_facility`).
+
+### Fixed
+- **Missing sequence grants for `app_service` on the `clients` schema** — `GRANT ... ON ALL TABLES` doesn't cover a sequence, a separate grantable object; found via a real end-to-end integration test round-tripping a golden fixture through real Postgres.
+
+## [1.8.11] - 2026-08-28
+
+### Added
+- **A read-only Process Street API client** (`src/process_street/`), mirroring the existing Dropbox client's shape — pagination-following helpers for `/workflows`, `/workflow-runs`, tasks, and form-fields. No write methods exist, by design; Process Street access is a live ops system the onboarding team depends on daily.
+
+## [1.8.10] - 2026-08-28
+
+### Added
+- **A new `clients` schema** for the Process Street integration — companies, facilities, facility policies (Fees/Taxes/Delinquency/Coverage/Commission/Specials, each owned 1:1 by exactly one facility, shared across sister facilities only via an explicit per-category copy action, not an implicit database relationship), people, merchant accounts, contract orders, and generic Process-Street task-status tracking. Kept separate from `client_ops` (tool-support/reference data) since this is a much larger, faster-growing domain that will need its own access-control boundary once client-scoped visibility ships. RLS scoped the same way `client_ops` already is: any-authenticated read, `onboarding_manager`/`department_manager` write — verified live, not just by policy count.
+
+## [1.8.9] - 2026-08-17
+
+A broad batch spanning a generalized vendor-format registry, a colleague cross-check's follow-on dedup fixes, and the first Dropbox integration.
+
+### Added
+- **`client_ops.vendor_format`**, a shared DB-backed registry generalizing what had been hardcoded, per-tool vendor recognition (QSX/Storage Commander/DoorSwap for units, QSX for tenants) into one module read by both Group Prep and dedup — built to onboard a real Easy Storage Solutions tenant export. Cached in `AppState` with a 5-minute background refresh, never queried per HTTP request. A new "prefer data over hardcoding" design principle recorded in both repos' `CLAUDE.md`.
+- **`POST /dedup/detect-vendor`** — a pre-Run-Check gate showing the detected vendor with a confirm checkbox, mirroring Group Prep's existing recognize-then-confirm flow.
+- **Dropbox integration for the QMS Onboarding folder** — folder search, sorted `/dropbox/list` results, a folder-picker that filters out files, and real Dropbox read/write wired into Dedup.
+- `first_name`/`last_name` now returned from `/auth/whoami`.
+- A manual unit-file upload override for unrecognized vendor formats, and QMS registered as a recognized units vendor format in its own right.
+
+### Fixed
+- **A regressed "None"-style placeholder bug**: a placeholder value (`"None"`, `"N/A"`, ...) was no longer being treated as blank in flagged-group comparisons — found by a colleague's independent skill review of a real Westpark run. Rescoped to `FieldKind::Plain` fields only, preserving the existing rule that a garbage Phone/Address value still counts as a real mismatch against blank.
+- **Typo-variant candidates now name which categories actually differ**, instead of a bare matches/differs boolean.
+- **Dedup XLSX export formatting**: the 255-character column-width blowout, no wrap/freeze/autofilter, and unmerged section-banner rows were all fixed; a CSV-injection mitigation that produced a visible artifact with zero security value in a real `.xlsx` (which carries its own type metadata) was removed from the XLSX writer, kept unchanged for the CSV writer where it's genuinely needed.
+
+### Backend logging/observability sweep.
+
+## [1.8.8] - 2026-08-14
+
+### Fixed
+- **Duplicate `e.zip` tag_key removed** from the QMS tag catalog.
+
+### Added
+- **Label-adjacent value recognition in already-filled documents**, and label patterns seeded from a real filled rent late-notice letter.
+
+## [1.8.7] - 2026-08-14
+
+Milestone 8 (final) of a third CTO-grade audit's fix plan — the remaining low-severity polish items.
+
+### Fixed
+- A stale doc-comment dead link, a shadowed closure parameter, an avoidable clone on every row in `RowScan::group_fingerprint`, and a redundant re-fetch-and-clone right after `DedupSessionService::create_session`.
+- **Audit-log PDF rendering wrapped in `spawn_blocking`** — the synchronous, CPU-bound render was blocking the async runtime.
+- **`login_begin`/`register_begin` now capture IP on their audit-log rows** — a prior "no ConnectInfo on this leg" decision was deliberately reversed, for better probing-attempt correlation.
+- Documented, rather than mitigated, `login_begin`'s residual timing side-channel (real WebAuthn-challenge work happens only when a login candidate resolves) — the timing delta is small relative to the DB round trip every branch already pays, and there's no cheap no-op challenge to build instead.
+
+## [1.8.6] - 2026-08-14
+
+### Fixed
+- **Capture IP on `/begin` handlers' audit-log rows.**
+
+## [1.8.5] - 2026-08-14
+
+Milestone 7 of the third audit's fix plan — closing two remaining test-coverage gaps.
+
+### Added
+- Round-trip and missing-column tests for dedup's `ingest.rs`, and direct tests for `tagger.rs::check`'s two DB-free branches.
+
+### Fixed
+- A stale doc-comment reference, a shadowed closure parameter, and an unnecessary clone in `DedupSessionService::create_session`'s caller.
+
+## [1.8.4] - 2026-08-14
+
+Milestone 6 of the third audit's fix plan — 10 large files split along genuine seams (6 backend, 4 frontend), following Milestone 5's DRY pass.
+
+### Changed
+- **Backend**: `docx-surgeon/src/edit.rs` (665 lines) → `edit/{mod,fragment,run_xml,overlap}.rs`; `src/api/mod.rs` + `auth_audit_logs.rs` split together into `state.rs`/`router.rs`/`health.rs`/`auth_audit_logs_export.rs` (a real cross-file dependency forced these two into one commit); `resolve_unit_format.rs`'s confirm/manual-mapping logic moved into `discover/format_resolution.rs`; `audit_log_pdf.rs` → `layout.rs` + `render.rs`; `dedup/src/relatedness.rs`'s union-find household grouping split into `relatedness/household.rs`.
+- **Frontend**: `lib/auth.ts` (694 lines) split into 5 focused modules (`auth-shared`/`auth-session`/`auth-users`/`auth-audit`/`auth-config`); `admin/users/page.tsx` (805 lines) split into `page.tsx`/`InviteUserForm.tsx`/`UserRow.tsx`/`useUsersAdmin.ts`/`styles.ts`; `MasterGroupFileSection.tsx`'s manual-upload flow extracted into its own hook; `WarningsSection.tsx`'s per-reason-card JSX extracted into `WarningReasonCard.tsx`.
+
+## [1.8.3] - 2026-08-14
+
+Milestone 5 of the third audit's fix plan — DRY consolidation across both repos.
+
+### Changed
+- Shared `session_lifetime_hours()`, `request_context()`/`user_agent_from()` helpers (used across ~17 call sites), and shared audit-log filter-building functions.
+- **`assign_tiers` rewritten from an O(n²) nested scan to a single-pass `HashMap` count**, plus a new 2000-candidate hard cap and a tagger-specific 10MB body-size cap.
+- Shared `blank_aware_key`/`blank_last_sort_key` helpers in dedup's `comparison.rs`, reused by `phrasing.rs`.
+- Frontend: a shared `useFileUploadAction` hook (adopted by 3 upload pages, 2 of which previously had no session-expiry handling at all), a shared `useAuditLogFilterData` hook, and a previously-silently-swallowed QMS tag catalog fetch failure now surfaced as a real banner.
+
+## [1.8.2] - 2026-08-13
+
+Milestone 2 of the third audit's fix plan.
+
+### Added
+- **Passkey-based step-up gating self-service TOTP re-enrolment** — the real gap the audit's TOTP finding pointed at (admin-driven onboarding TOTP setup was never the issue; self-service re-registration having zero re-authentication was). Modeled directly on TOTP's own existing step-up mechanism, reusing the same WebAuthn ceremony machinery, as its own bespoke mechanism rather than folded into the existing TOTP-specific step-up config.
+
+### Fixed
+- **Invite-time role assignment now requires `users.manage_roles`**, not just `users.manage`, closing a latent privilege-escalation seam.
+- **TOTP re-enrollment's wrong-code branch now respects lockout**, matching step-up's existing lockout behavior.
+- **A manual group-file upload's hand-rolled fetch now treats a 401 the same as a 404** (session-expired), instead of surfacing a raw error.
+
+## [1.8.1] - 2026-08-13
+
+Milestone 1 of a third CTO-grade audit's fix plan — the audit's 4 highest-risk findings.
+
+### Fixed
+- **Session-ownership IDOR**: every session-touching handler switched from the unowned `with_session`/`with_session_mut` to the already-correct-but-unused `with_owned_session`/`with_owned_session_mut` — including `tagger.rs`'s report/apply handlers, a second real instance the original audit's own agent-scoping had missed entirely.
+- **`docx-surgeon`'s `quick-xml` CVE**: bumped 0.36 → 0.41, closing 2 RustSec advisories reachable via uploaded `.docx` files. Required rewriting `<w:t>` text extraction from a single-event read to a loop, since 0.41 splits entity/character references out of `Event::Text` into a new `Event::GeneralRef` — a real API-shape change, not a drop-in patch.
+- **Last-active-admin concurrency race**: the check-then-act admin-count guard had no row lock; a plain `FOR UPDATE` on the count query wouldn't have actually closed it either (two callers excluding different admins never lock the same row) — fixed by locking the shared `admin` role row itself, which genuinely serializes both callers.
+- **Frontend admin-redirect race**: `app/(app)/layout.tsx`'s loading guard never accounted for `checked` still being `false`, so `RequirePermission.tsx` could mount with `user=null` on every fresh load and silently bounce a legitimate admin hitting an admin URL directly.
+
 ## [1.8.0] - 2026-08-11
 
 Continued growing the QMS tag catalog from real-world evidence, and
