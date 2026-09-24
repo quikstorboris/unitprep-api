@@ -1,5 +1,6 @@
 use std::time::SystemTime;
 
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// The part of a session every UnitPrep tool needs, and the only part the
@@ -7,7 +8,16 @@ use uuid::Uuid;
 /// timestamps, and who created it. Tool-specific state (stages, parsed
 /// documents, analysis results, etc.) lives entirely outside this struct,
 /// in each tool's own session type.
-#[derive(Debug, Clone)]
+///
+/// `Serialize`/`Deserialize` are derived so any `S: HasSessionMetadata`
+/// can round-trip through `DurableSessionStore` (see
+/// `durable_session_store.rs`) just by deriving them itself -- this
+/// struct's own fields (a `String`, two `SystemTime`s serde already knows
+/// how to encode, an `Option<Uuid>`, and a `bool`) need no custom
+/// (de)serialization logic. `InMemorySessionStore<S>` itself stays
+/// unconstrained by this -- it never requires `S: Serialize +
+/// DeserializeOwned`, only `DurableSessionStore<S>` does.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetadata {
     pub id: String,
     pub created_at: SystemTime,

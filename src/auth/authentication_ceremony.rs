@@ -21,6 +21,19 @@ use unitprep_core::session::{HasSessionMetadata, SessionMetadata};
 ///      the ceremony's lifetime (the user revokes a passkey in another
 ///      tab), and verifying against a stale copy is exactly the kind of
 ///      check that appears to work while having stopped meaning anything.
+///
+/// UPDATE 2026-09-24: this ceremony's own doc comment used to say it
+/// "must not survive a process restart"; that's no longer true --
+/// `main.rs` now wires this store to `unitprep_core::
+/// durable_session_store::DurableSessionStore`, the same durability fix
+/// applied to `RegistrationCeremony` (see that type's own doc comment
+/// for the full reasoning). Only the storage backend changed: still
+/// looked up by this exact id, still gone once `finish` deletes it.
+///
+/// `Serialize`/`Deserialize` are derived so this type can round-trip
+/// through that store -- `webauthn_state` is a plain `Vec<u8>`, which
+/// serde already knows how to (de)serialize with no special handling.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct AuthenticationCeremony {
     pub metadata: SessionMetadata,
     pub user_id: Uuid,

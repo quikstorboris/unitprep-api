@@ -14,6 +14,7 @@ mod process_street;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use unitprep_core::durable_session_store::DurableSessionStore;
 use unitprep_core::in_memory_session_store::InMemorySessionStore;
 
 use crate::api::AppState;
@@ -265,18 +266,36 @@ async fn main() {
     // through the browser's own navigator.credentials.create(), not a
     // tunable operational parameter the way a login session's lifetime
     // is.
+    //
+    // Durable (2026-09-24), not plain InMemorySessionStore -- a deploy
+    // landing in the ~5-minute window between /begin and /finish used to
+    // silently strand the browser with an inexplicable "ceremony
+    // expired" error, since the in-memory state backing it vanished with
+    // the old process. DurableSessionStore write-through-persists to
+    // `auth.durable_sessions` (see that migration and
+    // unitprep_core::durable_session_store's own doc comments) while
+    // keeping the exact same hot-path behavior for the overwhelmingly
+    // common case where the process never restarts mid-ceremony. Cloning
+    // db_pool here is cheap -- sqlx::PgPool is an Arc-backed handle to
+    // the same underlying pool `state.db` gets below, not a second pool.
     let registration_ceremonies = Arc::new(
-        InMemorySessionStore::<auth::RegistrationCeremony>::with_timeout(
+        DurableSessionStore::<auth::RegistrationCeremony>::with_timeout(
+            db_pool.clone(),
+            "webauthn_registration_ceremony",
             std::time::Duration::from_secs(5 * 60),
         ),
     );
 
     registration_ceremonies.start_cleanup_task();
 
-    // Same fixed TTL and same reasoning as the registration ceremonies
-    // above -- one browser round trip, not a tunable operational value.
+    // Same fixed TTL, same durability reasoning, and the same "own kind"
+    // discriminator pattern as the registration ceremonies above -- see
+    // auth.durable_sessions's own doc comment for why (kind, id), not id
+    // alone, is that table's primary key.
     let authentication_ceremonies = Arc::new(
-        InMemorySessionStore::<auth::AuthenticationCeremony>::with_timeout(
+        DurableSessionStore::<auth::AuthenticationCeremony>::with_timeout(
+            db_pool.clone(),
+            "webauthn_authentication_ceremony",
             std::time::Duration::from_secs(5 * 60),
         ),
     );

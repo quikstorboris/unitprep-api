@@ -16,8 +16,12 @@ serde = { version = "1", features = ["derive"] }
 encoding_rs = "0.8"
 
 # Async runtime — the background session-cleanup task (tokio::spawn +
-# tokio::time::interval only, not a full runtime feature set)
-tokio = { version = "1", features = ["rt", "time"] }
+# tokio::time::interval), plus (as of DurableSessionStore)
+# tokio::task::block_in_place for the rare cold-start rehydration path --
+# that fn only exists when built with "rt-multi-thread", hence that
+# feature being listed explicitly here rather than relying on it being
+# unified in transitively from the binary crate's own "full" feature set.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
 
 # Session locking — panicking while a lock is held releases it instead of
 # poisoning it, so a bug in one request can never permanently wedge session
@@ -25,8 +29,10 @@ tokio = { version = "1", features = ["rt", "time"] }
 parking_lot = "0.12"
 
 # SessionMetadata::owner_id -- the same uuid crate (with the same "v4"
-# feature) the binary crate already uses for session IDs.
-uuid = { version = "1", features = ["v4"] }
+# feature) the binary crate already uses for session IDs. "serde" added
+# for DurableSessionStore -- SessionMetadata now derives Serialize/
+# Deserialize, and owner_id is an Option<Uuid> field of it.
+uuid = { version = "1", features = ["v4", "serde"] }
 
 # Excel support. "dates" enables ExcelDateTime::as_datetime() — without it,
 # date/datetime-typed cells silently stringify to their raw serial-number
@@ -45,8 +51,26 @@ chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 # reads.
 quick-xml = "0.41"
 
+# DurableSessionStore's Postgres write-through/rehydration path. Same
+# major version and TLS/runtime feature choice as the binary crate's own
+# sqlx dependency (see root Cargo.toml and src/db.rs) -- "uuid" is needed
+# to bind SessionMetadata::owner_id directly; deliberately no "chrono" (or
+# "time") feature -- see durable_session_store.rs's own doc comment for
+# why timestamps cross the SQL boundary as plain epoch-second floats
+# instead.
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
+
+# DurableSessionStore's on-disk session encoding -- see that module's doc
+# comment for why bincode was chosen over serde_json.
+bincode = "1"
+
 [dev-dependencies]
 zip = "2"
+
+# "macros" (for #[tokio::test]) is test-only -- the "rt"/"rt-multi-thread"/
+# "time" features it needs beyond that are already pulled in additively
+# from the main [dependencies] tokio entry above.
+tokio = { version = "1", features = ["macros"] }
 
 # Property-based/fuzz-style testing for the file parsers (csv, excel,
 # spreadsheetml) -- these read arbitrary user-uploaded bytes, so generated

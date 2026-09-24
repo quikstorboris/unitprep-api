@@ -4,6 +4,7 @@
 //! back on a tool-specific crate.
 
 pub mod csv_document;
+pub mod durable_session_store;
 pub mod in_memory_session_store;
 pub mod parsing;
 pub mod session;
