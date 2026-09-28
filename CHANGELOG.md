@@ -6,6 +6,18 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.42] - 2026-09-28
+
+The two Tier-0 tooling gaps the CI/CD framework doc flagged as "next, not urgent" — `cargo-audit` and `gitleaks` — installed and wired into `preflight.sh`, plus the one real vulnerability the first `cargo audit` run against this codebase actually found.
+
+### Added
+- **`cargo audit` as preflight step 4/7** — blocks a push on a real RUSTSEC vulnerability, but not on advisory-grade `unmaintained`/`yanked` warnings (those print, don't fail the script).
+- **`gitleaks` as preflight step 5/7**, diff-scoped to `merge-base(origin/main, HEAD)..HEAD` — the real secrets scanner the existing grep-based step was always meant to be backed up by, not replaced by; the grep step stays in place as a second layer.
+- **`.gitleaks.toml`** — allowlists 6 confirmed false positives in `src/clients/testdata/highway20_*.json` (synthetic Process Street workflow/task IDs sitting next to a `"key"` field trip the `generic-api-key` entropy rule; verified against the sanitized fixture's actual content, scoped to just those two files rather than the whole testdata directory).
+
+### Fixed
+- **`RUSTSEC-2026-0285`** (`rustls` TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries) — a real, medium-severity vulnerability. `rustls` is a transitive dependency (via `reqwest`/`sqlx`, not pinned directly in any `Cargo.toml`), so `cargo update -p rustls` (0.23.42 → 0.23.45) was enough; no manifest edit needed. Full workspace test suite reconfirmed green after the bump.
+
 ## [1.9.41] - 2026-09-28
 
 A generated schema reference doc (replacing a proposed migration squash — see the vault's Key Decisions for why), the 3 remaining pre-existing clippy warnings fixed, and Tier 0 of a new CI/CD framework.
