@@ -16,8 +16,8 @@ happens — and what to do — when the process restarts or crashes.
 | `CORS_ALLOWED_ORIGINS` | No (defaults to the two frontend dev origins) | Comma-separated. Set to the real deployed frontend origin(s) in any non-dev deployment. |
 
 **Dropbox and Process Street are DB-first, env-fallback** — the admin
-Integrations settings page (`client_ops.dropbox_configuration` /
-`process_street_settings`) is the real source of truth once configured
+Integrations settings page (`integrations.dropbox_configuration` /
+`integrations.process_street_settings`) is the real source of truth once configured
 there; `DROPBOX_APP_KEY`/`DROPBOX_APP_SECRET`/`DROPBOX_REFRESH_TOKEN`/
 `DROPBOX_ROOT_NAMESPACE_ID`/`DROPBOX_ROOT_PATH` and
 `PROCESS_STREET_API_KEY` are only the fallback for a deployment that
