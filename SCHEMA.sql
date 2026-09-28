@@ -1,0 +1,3909 @@
+-- Current cumulative schema, generated from the real dev DB via
+-- `pg_dump --schema-only --no-owner --no-privileges`. Read-only
+-- reference, not applied by sqlx and not part of the migrations/
+-- directory -- the 86 incremental migrations under migrations/ remain
+-- the actual source of truth and the real "how did we get here"
+-- history (see brain/Key Decisions.md and this repo's own CHANGELOG.md
+-- in the vault for the narrative behind the load-bearing changes).
+-- This file exists purely so a newcomer (human or AI) can see current
+-- table/column/RLS/index shape in one place without reading 86 files
+-- in order -- the readability problem a full migration squash was
+-- originally proposed to solve, without any of that approach's real
+-- risk (squashing would mean reconciling this dev DB's already-applied
+-- migration history against a new, incompatible set of files).
+--
+-- STALE BY DESIGN -- this is a point-in-time snapshot, not
+-- live-synced. Regenerate after any schema-changing migration lands,
+-- or whenever it has visibly drifted:
+--   pg_dump "$NEON_DEV_DATABASE_URL_DIRECT" --schema-only --no-owner --no-privileges -f SCHEMA.sql
+-- Generated 2026-09-28.
+
+--
+-- PostgreSQL database dump
+--
+
+\restrict hBXJvFWnDlHkPhYMsj0iJ01wnqZWcbA9qPJJZrw97wFrTGsfiEyRgeTUJQTVklC
+
+-- Dumped from database version 18.6 (6569466)
+-- Dumped by pg_dump version 18.6 (Ubuntu 18.6-0ubuntu0.26.04.1)
+
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET transaction_timeout = 0;
+SET client_encoding = 'UTF8';
+SET standard_conforming_strings = on;
+SELECT pg_catalog.set_config('search_path', '', false);
+SET check_function_bodies = false;
+SET xmloption = content;
+SET client_min_messages = warning;
+SET row_security = off;
+
+--
+-- Name: auth; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA auth;
+
+
+--
+-- Name: client_ops; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA client_ops;
+
+
+--
+-- Name: clients; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA clients;
+
+
+--
+-- Name: integrations; Type: SCHEMA; Schema: -; Owner: -
+--
+
+CREATE SCHEMA integrations;
+
+
+--
+-- Name: citext; Type: EXTENSION; Schema: -; Owner: -
+--
+
+CREATE EXTENSION IF NOT EXISTS citext WITH SCHEMA public;
+
+
+--
+-- Name: EXTENSION citext; Type: COMMENT; Schema: -; Owner: -
+--
+
+COMMENT ON EXTENSION citext IS 'data type for case-insensitive character strings';
+
+
+--
+-- Name: user_company; Type: TYPE; Schema: auth; Owner: -
+--
+
+CREATE TYPE auth.user_company AS ENUM (
+    'trojan',
+    'cobre',
+    'quikstor'
+);
+
+
+--
+-- Name: user_deletion_reason; Type: TYPE; Schema: auth; Owner: -
+--
+
+CREATE TYPE auth.user_deletion_reason AS ENUM (
+    'offboarding',
+    'emergency'
+);
+
+
+--
+-- Name: user_status; Type: TYPE; Schema: auth; Owner: -
+--
+
+CREATE TYPE auth.user_status AS ENUM (
+    'invited',
+    'active',
+    'deactivated'
+);
+
+
+--
+-- Name: check_session_expired(bytea, integer); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.check_session_expired(p_token_hash bytea, p_idle_minutes integer) RETURNS TABLE(user_id uuid)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+    SELECT s.user_id
+      FROM auth.sessions s
+     WHERE s.token_hash = p_token_hash
+       AND s.revoked_at IS NULL
+       AND (
+           s.expires_at <= now()
+           OR s.last_seen_at <= now() - make_interval(mins => p_idle_minutes)
+       )
+     LIMIT 1;
+$$;
+
+
+--
+-- Name: consume_invite(bytea); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.consume_invite(p_token_hash bytea) RETURNS uuid
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+DECLARE
+    resolved_user_id UUID;
+BEGIN
+    UPDATE user_invites
+    SET used_at = now()
+    WHERE token_hash = p_token_hash
+      AND used_at IS NULL
+      AND expires_at > now()
+    RETURNING user_id INTO resolved_user_id;
+
+    IF resolved_user_id IS NOT NULL THEN
+        UPDATE users SET status = 'active' WHERE id = resolved_user_id AND status = 'invited';
+    END IF;
+
+    RETURN resolved_user_id;
+END;
+$$;
+
+
+--
+-- Name: create_session(uuid, bytea, timestamp with time zone, inet, text, boolean); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.create_session(p_user_id uuid, p_token_hash bytea, p_expires_at timestamp with time zone, p_ip_address inet, p_user_agent text, p_requires_step_up boolean) RETURNS uuid
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+DECLARE
+    new_id UUID;
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM auth.users
+        WHERE id = p_user_id AND deleted_at IS NULL AND status = 'active'
+    ) THEN
+        RAISE EXCEPTION 'cannot create session for inactive or unknown user';
+    END IF;
+
+    INSERT INTO auth.sessions (user_id, token_hash, expires_at, ip_address, user_agent, requires_step_up)
+    VALUES (p_user_id, p_token_hash, p_expires_at, p_ip_address, p_user_agent, p_requires_step_up)
+    RETURNING id INTO new_id;
+
+    RETURN new_id;
+END;
+$$;
+
+
+--
+-- Name: current_user_has_role(text); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.current_user_has_role(p_role_key text) RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT p_role_key = ANY(
+        string_to_array(current_setting('app.current_user_roles', true), ',')
+    );
+$$;
+
+
+--
+-- Name: current_user_is_client_ops_role(); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.current_user_is_client_ops_role() RETURNS boolean
+    LANGUAGE sql STABLE
+    AS $$
+    SELECT auth.current_user_has_role('onboarding_manager')
+        OR auth.current_user_has_role('department_manager')
+        OR auth.current_user_has_role('developer');
+$$;
+
+
+--
+-- Name: list_users_for_admin(); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.list_users_for_admin() RETURNS TABLE(id uuid, email text, first_name text, last_name text, company text, job_title text, role_keys text[], status text, created_at timestamp with time zone, credential_count bigint, totp_enrolled boolean, last_seen_at timestamp with time zone)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+BEGIN
+    IF NOT auth.current_user_has_role('admin') THEN
+        RAISE EXCEPTION 'list_users_for_admin requires an admin caller';
+    END IF;
+
+    RETURN QUERY
+    SELECT u.id,
+           u.email::text,
+           u.first_name,
+           u.last_name,
+           u.company::text,
+           u.job_title,
+           (SELECT array_agg(r.key ORDER BY r.key)
+              FROM auth.user_roles ur
+              JOIN auth.roles r ON r.id = ur.role_id
+             WHERE ur.user_id = u.id),
+           u.status::text,
+           u.created_at,
+           (SELECT count(*) FROM auth.webauthn_credentials c WHERE c.user_id = u.id),
+           EXISTS (
+               SELECT 1 FROM auth.totp_credentials t
+                WHERE t.user_id = u.id AND t.confirmed_at IS NOT NULL
+           ),
+           (SELECT max(s.last_seen_at) FROM auth.sessions s WHERE s.user_id = u.id)
+      FROM auth.users u
+     WHERE u.deleted_at IS NULL
+     ORDER BY u.created_at;
+END;
+$$;
+
+
+--
+-- Name: prevent_audit_log_mutation(); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.prevent_audit_log_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    RAISE EXCEPTION 'auth_audit_logs is append-only: % not permitted', TG_OP;
+END;
+$$;
+
+
+--
+-- Name: record_passkey_reverify(bytea, integer); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.record_passkey_reverify(p_token_hash bytea, p_minutes integer) RETURNS boolean
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+DECLARE
+    v_row_count INTEGER;
+BEGIN
+    UPDATE auth.sessions
+       SET passkey_reverified_until = now() + make_interval(mins => p_minutes)
+     WHERE token_hash = p_token_hash
+       AND revoked_at IS NULL
+       AND expires_at > now();
+
+    GET DIAGNOSTICS v_row_count = ROW_COUNT;
+    RETURN v_row_count > 0;
+END;
+$$;
+
+
+--
+-- Name: record_step_up(bytea, integer); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.record_step_up(p_token_hash bytea, p_minutes integer) RETURNS boolean
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+DECLARE
+    v_row_count INTEGER;
+BEGIN
+    UPDATE auth.sessions
+       SET elevated_until = now() + make_interval(mins => p_minutes),
+           requires_step_up = false
+     WHERE token_hash = p_token_hash
+       AND revoked_at IS NULL
+       AND expires_at > now();
+
+    GET DIAGNOSTICS v_row_count = ROW_COUNT;
+    RETURN v_row_count > 0;
+END;
+$$;
+
+
+--
+-- Name: record_totp_failure(uuid); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.record_totp_failure(p_user_id uuid) RETURNS integer
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+DECLARE
+    attempts INTEGER;
+BEGIN
+    UPDATE auth.totp_credentials
+       SET failed_attempts = failed_attempts + 1,
+           locked_until = CASE
+               WHEN failed_attempts + 1 >= 5 THEN now() + interval '15 minutes'
+               ELSE locked_until
+           END
+     WHERE user_id = p_user_id
+    RETURNING failed_attempts INTO attempts;
+
+    RETURN coalesce(attempts, 0);
+END;
+$$;
+
+
+--
+-- Name: record_totp_success(uuid, bigint); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.record_totp_success(p_user_id uuid, p_step bigint) RETURNS void
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+    UPDATE auth.totp_credentials
+       SET failed_attempts = 0,
+           locked_until = NULL,
+           last_used_at = now(),
+           last_used_step = p_step
+     WHERE user_id = p_user_id;
+$$;
+
+
+--
+-- Name: resolve_invite(bytea); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.resolve_invite(p_token_hash bytea) RETURNS TABLE(invite_id uuid, user_id uuid)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+    SELECT ui.id, ui.user_id
+    FROM user_invites ui
+    WHERE ui.token_hash = p_token_hash
+      AND ui.used_at IS NULL
+      AND ui.expires_at > now();
+$$;
+
+
+--
+-- Name: resolve_invite_registration(bytea); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.resolve_invite_registration(p_token_hash bytea) RETURNS TABLE(user_id uuid, email text, first_name text, last_name text)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+    SELECT u.id, u.email::text, u.first_name, u.last_name
+    FROM auth.user_invites ui
+    JOIN auth.users u ON u.id = ui.user_id
+    WHERE ui.token_hash = p_token_hash
+      AND ui.used_at IS NULL
+      AND ui.expires_at > now()
+      AND u.status = 'invited'
+      AND u.deleted_at IS NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM auth.webauthn_credentials wc WHERE wc.user_id = u.id
+      );
+$$;
+
+
+--
+-- Name: resolve_login_candidate(public.citext); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.resolve_login_candidate(p_email public.citext) RETURNS TABLE(user_id uuid, credential_id bytea, passkey_data jsonb)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+    SELECT wc.user_id, wc.credential_id, wc.passkey_data
+    FROM auth.users u
+    JOIN auth.webauthn_credentials wc ON wc.user_id = u.id
+    WHERE u.email = p_email
+      AND u.status = 'active'
+      AND u.deleted_at IS NULL;
+$$;
+
+
+--
+-- Name: resolve_session(bytea, integer); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.resolve_session(p_token_hash bytea, p_idle_minutes integer) RETURNS TABLE(user_id uuid, role_keys text[], permission_keys text[], elevated_until timestamp with time zone, requires_step_up boolean, passkey_reverified_until timestamp with time zone)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+    UPDATE auth.sessions s
+    SET last_seen_at = now()
+    FROM auth.users u
+    WHERE s.token_hash = p_token_hash
+      AND s.revoked_at IS NULL
+      AND s.expires_at > now()
+      AND s.last_seen_at > now() - make_interval(mins => p_idle_minutes)
+      AND u.id = s.user_id
+      AND u.deleted_at IS NULL
+      AND u.status = 'active'
+    RETURNING
+        u.id,
+        (SELECT array_agg(DISTINCT r.key ORDER BY r.key)
+           FROM auth.user_roles ur
+           JOIN auth.roles r ON r.id = ur.role_id
+          WHERE ur.user_id = u.id),
+        (SELECT array_agg(DISTINCT rp.permission_key ORDER BY rp.permission_key)
+           FROM auth.user_roles ur
+           JOIN auth.role_permissions rp ON rp.role_id = ur.role_id
+          WHERE ur.user_id = u.id),
+        s.elevated_until,
+        s.requires_step_up,
+        s.passkey_reverified_until;
+$$;
+
+
+--
+-- Name: resolve_totp_candidate(public.citext); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.resolve_totp_candidate(p_email public.citext) RETURNS TABLE(user_id uuid, secret_encrypted bytea, is_locked boolean)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+    SELECT u.id,
+           t.secret_encrypted,
+           (t.locked_until IS NOT NULL AND t.locked_until > now())
+      FROM auth.users u
+      JOIN auth.totp_credentials t ON t.user_id = u.id
+     WHERE u.email = p_email
+       AND u.status = 'active'
+       AND u.deleted_at IS NULL
+       AND t.confirmed_at IS NOT NULL;
+$$;
+
+
+--
+-- Name: revoke_access_paths_on_deactivation(); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.revoke_access_paths_on_deactivation() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+BEGIN
+    DELETE FROM auth.webauthn_credentials WHERE user_id = NEW.id;
+    DELETE FROM auth.totp_credentials WHERE user_id = NEW.id;
+
+    UPDATE auth.user_invites
+       SET used_at = now()
+     WHERE user_id = NEW.id
+       AND used_at IS NULL;
+
+    -- Same one-way property as the task 10 functions: the literal now(),
+    -- guarded by `revoked_at IS NULL`, so this can only ever move a session
+    -- from live to revoked and never back, and never rewrites an existing
+    -- revocation timestamp.
+    UPDATE auth.sessions
+       SET revoked_at = now()
+     WHERE user_id = NEW.id
+       AND revoked_at IS NULL;
+
+    RETURN NULL;
+END;
+$$;
+
+
+--
+-- Name: revoke_all_sessions_for_token(bytea); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.revoke_all_sessions_for_token(p_token_hash bytea) RETURNS TABLE(user_id uuid, revoked_count integer)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+DECLARE
+    resolved UUID;
+    affected INTEGER;
+BEGIN
+    SELECT s.user_id INTO resolved
+      FROM auth.sessions s
+     WHERE s.token_hash = p_token_hash
+       AND s.revoked_at IS NULL
+       AND s.expires_at > now();
+
+    IF resolved IS NULL THEN
+        RETURN QUERY SELECT NULL::UUID, 0;
+        RETURN;
+    END IF;
+
+    WITH revoked AS (
+        UPDATE auth.sessions s
+           SET revoked_at = now()
+         WHERE s.user_id = resolved
+           AND s.revoked_at IS NULL
+        RETURNING 1
+    )
+    SELECT count(*)::INTEGER INTO affected FROM revoked;
+
+    RETURN QUERY SELECT resolved, affected;
+END;
+$$;
+
+
+--
+-- Name: revoke_session(bytea); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.revoke_session(p_token_hash bytea) RETURNS TABLE(user_id uuid, revoked_count integer)
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+DECLARE
+    resolved UUID;
+BEGIN
+    UPDATE auth.sessions s
+       SET revoked_at = now()
+     WHERE s.token_hash = p_token_hash
+       AND s.revoked_at IS NULL
+    RETURNING s.user_id INTO resolved;
+
+    IF resolved IS NULL THEN
+        RETURN QUERY SELECT NULL::UUID, 0;
+    ELSE
+        RETURN QUERY SELECT resolved, 1;
+    END IF;
+END;
+$$;
+
+
+--
+-- Name: set_updated_at(); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.set_updated_at() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$;
+
+
+--
+-- Name: set_user_status(uuid, auth.user_status); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.set_user_status(p_user_id uuid, p_status auth.user_status) RETURNS boolean
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+DECLARE
+    v_row_count INTEGER;
+BEGIN
+    IF NOT auth.current_user_has_role('admin') THEN
+        RAISE EXCEPTION 'set_user_status requires an admin caller';
+    END IF;
+
+    UPDATE auth.users
+       SET status = p_status
+     WHERE id = p_user_id
+       AND deleted_at IS NULL;
+
+    GET DIAGNOSTICS v_row_count = ROW_COUNT;
+    RETURN v_row_count > 0;
+END;
+$$;
+
+
+--
+-- Name: staff_directory(); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.staff_directory() RETURNS TABLE(id uuid, email text, first_name text, last_name text)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+    SELECT u.id, u.email::text, u.first_name, u.last_name
+      FROM auth.users u
+     WHERE u.deleted_at IS NULL
+       AND NULLIF(current_setting('app.current_user_id', true), '') IS NOT NULL;
+$$;
+
+
+SET default_tablespace = '';
+
+SET default_table_access_method = heap;
+
+--
+-- Name: auth_audit_logs; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.auth_audit_logs (
+    id bigint NOT NULL,
+    event_type text NOT NULL,
+    actor_user_id uuid,
+    target_user_id uuid,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    before_state jsonb,
+    after_state jsonb,
+    ip_address inet,
+    user_agent text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: auth_audit_logs_id_seq; Type: SEQUENCE; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.auth_audit_logs ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME auth.auth_audit_logs_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
+-- Name: auth_configuration; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.auth_configuration (
+    id smallint DEFAULT 1 NOT NULL,
+    allowed_factors jsonb DEFAULT '["webauthn"]'::jsonb NOT NULL,
+    step_up_actions jsonb DEFAULT '[]'::jsonb NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_by uuid,
+    CONSTRAINT auth_configuration_id_check CHECK ((id = 1))
+);
+
+
+--
+-- Name: durable_sessions; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.durable_sessions (
+    id text NOT NULL,
+    kind text NOT NULL,
+    owner_id uuid,
+    created_at timestamp with time zone NOT NULL,
+    last_accessed timestamp with time zone NOT NULL,
+    cancelled boolean DEFAULT false NOT NULL,
+    payload bytea NOT NULL
+);
+
+
+--
+-- Name: permissions; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.permissions (
+    key text NOT NULL,
+    label text NOT NULL,
+    description text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: role_permissions; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.role_permissions (
+    role_id uuid NOT NULL,
+    permission_key text NOT NULL
+);
+
+
+--
+-- Name: roles; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.roles (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    key text NOT NULL,
+    label text NOT NULL,
+    description text,
+    is_system boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: sessions; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.sessions (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
+    token_hash bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    revoked_at timestamp with time zone,
+    ip_address inet,
+    user_agent text,
+    elevated_until timestamp with time zone,
+    requires_step_up boolean DEFAULT false NOT NULL,
+    passkey_reverified_until timestamp with time zone
+);
+
+
+--
+-- Name: COLUMN sessions.requires_step_up; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.sessions.requires_step_up IS 'Set at login when the account has TOTP confirmed and this login looked anomalous (new IP or new user_agent for this account, with at least one prior session to compare against). Cleared by auth.record_step_up once the caller proves a fresh TOTP code. While true, AuthenticatedUser refuses every route except the small set needed to clear it (step-up itself, sign-out, whoami) -- see src/auth/authenticated_user.rs.';
+
+
+--
+-- Name: totp_credentials; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.totp_credentials (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
+    secret_encrypted bytea,
+    confirmed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_used_at timestamp with time zone,
+    failed_attempts integer DEFAULT 0 NOT NULL,
+    locked_until timestamp with time zone,
+    last_used_step bigint,
+    pending_secret_encrypted bytea
+);
+
+
+--
+-- Name: COLUMN totp_credentials.failed_attempts; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.totp_credentials.failed_attempts IS 'Consecutive failed verifications. Reset to 0 on success. Never a reason to refuse on its own -- locked_until is the gate.';
+
+
+--
+-- Name: COLUMN totp_credentials.locked_until; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.totp_credentials.locked_until IS 'Set when failed_attempts crosses the threshold; verification is refused until it passes. Time-bounded on purpose: see the migration that added it.';
+
+
+--
+-- Name: COLUMN totp_credentials.last_used_step; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.totp_credentials.last_used_step IS 'TOTP time-step (unix_time / 30) last accepted for this credential. A submitted code matching this step or earlier is a replay and must be refused even if it is otherwise a valid code for the current window.';
+
+
+--
+-- Name: COLUMN totp_credentials.pending_secret_encrypted; Type: COMMENT; Schema: auth; Owner: -
+--
+
+COMMENT ON COLUMN auth.totp_credentials.pending_secret_encrypted IS 'Candidate secret written by /auth/totp/enroll/begin, promoted to secret_encrypted only once /auth/totp/enroll/confirm verifies a code against it. Keeps the existing confirmed secret (if any) working for the entire re-enrollment window rather than only until begin is called.';
+
+
+--
+-- Name: user_invites; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.user_invites (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
+    token_hash bytea NOT NULL,
+    created_by uuid DEFAULT (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid,
+    expires_at timestamp with time zone NOT NULL,
+    used_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: user_roles; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.user_roles (
+    user_id uuid NOT NULL,
+    role_id uuid NOT NULL,
+    granted_at timestamp with time zone DEFAULT now() NOT NULL,
+    granted_by uuid
+);
+
+
+--
+-- Name: users; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.users (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    email public.citext NOT NULL,
+    first_name text NOT NULL,
+    last_name text NOT NULL,
+    job_title text,
+    company auth.user_company NOT NULL,
+    status auth.user_status DEFAULT 'invited'::auth.user_status NOT NULL,
+    deleted_at timestamp with time zone,
+    deletion_reason auth.user_deletion_reason,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT deletion_reason_matches_deleted_at CHECK (((deleted_at IS NULL) = (deletion_reason IS NULL)))
+);
+
+
+--
+-- Name: webauthn_credentials; Type: TABLE; Schema: auth; Owner: -
+--
+
+CREATE TABLE auth.webauthn_credentials (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    user_id uuid NOT NULL,
+    credential_id bytea NOT NULL,
+    transports text[],
+    device_bound boolean DEFAULT true NOT NULL,
+    nickname text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_used_at timestamp with time zone,
+    passkey_data jsonb NOT NULL
+);
+
+
+--
+-- Name: audit_log; Type: TABLE; Schema: client_ops; Owner: -
+--
+
+CREATE TABLE client_ops.audit_log (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    event_type text NOT NULL,
+    actor_user_id uuid,
+    entity_type text NOT NULL,
+    entity_id text,
+    before_state jsonb,
+    after_state jsonb,
+    user_agent text,
+    ip_address inet,
+    metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: qms_tag; Type: TABLE; Schema: client_ops; Owner: -
+--
+
+CREATE TABLE client_ops.qms_tag (
+    tag_key text NOT NULL,
+    label text NOT NULL,
+    category text NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    value_shape text,
+    CONSTRAINT qms_tag_value_shape_check CHECK ((value_shape = ANY (ARRAY['phone'::text, 'email'::text, 'zip'::text])))
+);
+
+
+--
+-- Name: tag_pattern; Type: TABLE; Schema: client_ops; Owner: -
+--
+
+CREATE TABLE client_ops.tag_pattern (
+    id bigint NOT NULL,
+    tag_key text NOT NULL,
+    kind text NOT NULL,
+    pattern jsonb NOT NULL,
+    requires_rewrite boolean DEFAULT false NOT NULL,
+    is_active boolean DEFAULT true NOT NULL,
+    notes text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT tag_pattern_kind_check CHECK ((kind = ANY (ARRAY['label_proximity'::text, 'sentence_pattern'::text])))
+);
+
+
+--
+-- Name: tag_pattern_id_seq; Type: SEQUENCE; Schema: client_ops; Owner: -
+--
+
+CREATE SEQUENCE client_ops.tag_pattern_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: tag_pattern_id_seq; Type: SEQUENCE OWNED BY; Schema: client_ops; Owner: -
+--
+
+ALTER SEQUENCE client_ops.tag_pattern_id_seq OWNED BY client_ops.tag_pattern.id;
+
+
+--
+-- Name: tool_runs; Type: TABLE; Schema: client_ops; Owner: -
+--
+
+CREATE TABLE client_ops.tool_runs (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    tool text NOT NULL,
+    facility_id uuid NOT NULL,
+    session_id text NOT NULL,
+    actor_user_id uuid,
+    source_file_name text NOT NULL,
+    source_dropbox_path text,
+    report_summary jsonb NOT NULL,
+    output_bytes bytea,
+    output_content_type text,
+    output_file_name text,
+    output_dropbox_path text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    source_bytes bytea,
+    source_content_type text,
+    CONSTRAINT tool_runs_output_bytes_fields_together CHECK ((((output_bytes IS NULL) = (output_content_type IS NULL)) AND ((output_bytes IS NULL) = (output_file_name IS NULL)))),
+    CONSTRAINT tool_runs_output_mutually_exclusive CHECK ((NOT ((output_bytes IS NOT NULL) AND (output_dropbox_path IS NOT NULL)))),
+    CONSTRAINT tool_runs_source_bytes_fields_together CHECK (((source_bytes IS NULL) = (source_content_type IS NULL))),
+    CONSTRAINT tool_runs_tool_check CHECK ((tool = 'dedup'::text))
+);
+
+
+--
+-- Name: vendor_format; Type: TABLE; Schema: client_ops; Owner: -
+--
+
+CREATE TABLE client_ops.vendor_format (
+    id bigint NOT NULL,
+    name text NOT NULL,
+    content_type text NOT NULL,
+    signature_headers text[] NOT NULL,
+    field_mapping jsonb NOT NULL,
+    transform_key text,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: vendor_format_id_seq; Type: SEQUENCE; Schema: client_ops; Owner: -
+--
+
+CREATE SEQUENCE client_ops.vendor_format_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: vendor_format_id_seq; Type: SEQUENCE OWNED BY; Schema: client_ops; Owner: -
+--
+
+ALTER SEQUENCE client_ops.vendor_format_id_seq OWNED BY client_ops.vendor_format.id;
+
+
+--
+-- Name: companies; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.companies (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    legal_name text NOT NULL,
+    dba_name text,
+    corporate_email text,
+    corporate_phone text,
+    corporate_address_street text,
+    corporate_address_city text,
+    corporate_address_state text,
+    corporate_address_zip text,
+    source text NOT NULL,
+    ps_intake_run_id text,
+    raw_ps_snapshot jsonb,
+    last_synced_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    subdomain text,
+    archived_at timestamp with time zone,
+    manually_edited_fields text[] DEFAULT '{}'::text[] NOT NULL,
+    accepted_payment_methods text,
+    accounting_basis text,
+    payment_scheme text,
+    offers_tenant_insurance_raw text,
+    insurance_provider text,
+    website_url text,
+    implementation_manager_user_id uuid,
+    sales_rep_user_id uuid,
+    CONSTRAINT companies_source_check CHECK ((source = ANY (ARRAY['process_street'::text, 'manual'::text])))
+);
+
+
+--
+-- Name: facilities; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.facilities (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    company_id uuid NOT NULL,
+    name text NOT NULL,
+    street_address text,
+    city text,
+    state text,
+    zip text,
+    phone text,
+    email text,
+    units_count integer,
+    primary_storage_offering text,
+    previous_pms text,
+    access_control_system text,
+    go_live_date date,
+    dropbox_folder_url text,
+    source text NOT NULL,
+    ps_intake_run_id text,
+    raw_ps_snapshot jsonb,
+    last_synced_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    subdomain text,
+    subdomain_exists_in_qms_raw text,
+    system_email text,
+    manually_edited_fields text[] DEFAULT '{}'::text[] NOT NULL,
+    website_url text,
+    dedup_export_sequence integer DEFAULT 0 NOT NULL,
+    CONSTRAINT facilities_source_check CHECK ((source = ANY (ARRAY['process_street'::text, 'manual'::text])))
+);
+
+
+--
+-- Name: facility_contract_orders; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.facility_contract_orders (
+    facility_id uuid NOT NULL,
+    migrating_from_system text,
+    source text NOT NULL,
+    ps_contract_order_run_id text,
+    raw_ps_snapshot jsonb,
+    last_synced_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT facility_contract_orders_source_check CHECK ((source = ANY (ARRAY['process_street'::text, 'manual'::text])))
+);
+
+
+--
+-- Name: facility_merchant_account_parties; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.facility_merchant_account_parties (
+    id bigint NOT NULL,
+    facility_id uuid NOT NULL,
+    party_role text NOT NULL,
+    party_index integer NOT NULL,
+    display_name text,
+    title text,
+    ownership_percent numeric,
+    email text,
+    phone text,
+    country_of_citizenship text,
+    country text,
+    encrypted_pii bytea,
+    source text NOT NULL,
+    ps_new_merchant_run_id text,
+    last_synced_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT facility_merchant_account_parties_party_role_check CHECK ((party_role = ANY (ARRAY['signer'::text, 'owner'::text, 'intermediary_business'::text]))),
+    CONSTRAINT facility_merchant_account_parties_source_check CHECK ((source = ANY (ARRAY['process_street'::text, 'manual'::text])))
+);
+
+
+--
+-- Name: facility_merchant_account_parties_id_seq; Type: SEQUENCE; Schema: clients; Owner: -
+--
+
+CREATE SEQUENCE clients.facility_merchant_account_parties_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: facility_merchant_account_parties_id_seq; Type: SEQUENCE OWNED BY; Schema: clients; Owner: -
+--
+
+ALTER SEQUENCE clients.facility_merchant_account_parties_id_seq OWNED BY clients.facility_merchant_account_parties.id;
+
+
+--
+-- Name: facility_merchant_accounts; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.facility_merchant_accounts (
+    facility_id uuid NOT NULL,
+    rate_provided text,
+    application_status text,
+    credentials_added_to_qms boolean DEFAULT false NOT NULL,
+    source text NOT NULL,
+    ps_new_merchant_run_id text,
+    raw_ps_snapshot jsonb,
+    last_synced_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    encrypted_secrets bytea,
+    total_annual_business_revenue_raw text,
+    total_monthly_sales_raw text,
+    average_credit_card_payment_amount_raw text,
+    highest_credit_card_payment_amount_raw text,
+    high_cc_payment_times_per_year_raw text,
+    offers_ach_raw text,
+    annual_electronic_check_volume_raw text,
+    average_electronic_check_amount_raw text,
+    maximum_electronic_check_amount_raw text,
+    CONSTRAINT facility_merchant_accounts_source_check CHECK ((source = ANY (ARRAY['process_street'::text, 'manual'::text])))
+);
+
+
+--
+-- Name: facility_people; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.facility_people (
+    facility_id uuid NOT NULL,
+    person_id uuid NOT NULL,
+    role text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    source text DEFAULT 'process_street'::text NOT NULL,
+    CONSTRAINT facility_people_role_check CHECK ((role = ANY (ARRAY['owner'::text, 'district_manager'::text, 'manager'::text, 'signer'::text, 'order_placer'::text, 'poc'::text]))),
+    CONSTRAINT facility_people_source_check CHECK ((source = ANY (ARRAY['process_street'::text, 'manual'::text])))
+);
+
+
+--
+-- Name: facility_policies; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.facility_policies (
+    facility_id uuid NOT NULL,
+    raw_ps_snapshot jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    fees_manually_exempt boolean DEFAULT false NOT NULL,
+    taxes_manually_exempt boolean DEFAULT false NOT NULL,
+    delinquency_manually_exempt boolean DEFAULT false NOT NULL,
+    coverage_manually_exempt boolean DEFAULT false NOT NULL,
+    specials_manually_exempt boolean DEFAULT false NOT NULL
+);
+
+
+--
+-- Name: people; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.people (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    full_name text NOT NULL,
+    email public.citext,
+    phone text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: policy_commission; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.policy_commission (
+    facility_policies_id uuid NOT NULL,
+    commission_type_raw text,
+    dollar_amount_raw text,
+    percent_amount_raw text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: policy_coverage_tiers; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.policy_coverage_tiers (
+    id bigint NOT NULL,
+    facility_policies_id uuid NOT NULL,
+    tier_number integer NOT NULL,
+    total_coverage_amount_raw text,
+    cost_to_tenant_raw text
+);
+
+
+--
+-- Name: policy_coverage_tiers_id_seq; Type: SEQUENCE; Schema: clients; Owner: -
+--
+
+CREATE SEQUENCE clients.policy_coverage_tiers_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: policy_coverage_tiers_id_seq; Type: SEQUENCE OWNED BY; Schema: clients; Owner: -
+--
+
+ALTER SEQUENCE clients.policy_coverage_tiers_id_seq OWNED BY clients.policy_coverage_tiers.id;
+
+
+--
+-- Name: policy_delinquency_entries; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.policy_delinquency_entries (
+    id bigint NOT NULL,
+    facility_policies_id uuid NOT NULL,
+    category text NOT NULL,
+    name text NOT NULL,
+    amount numeric NOT NULL,
+    days_after integer,
+    trigger_type text DEFAULT 'paid_through_date'::text NOT NULL,
+    trigger_category text,
+    sort_order integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT policy_delinquency_entries_category_check CHECK ((category = ANY (ARRAY['late_fee'::text, 'pre_lien'::text, 'lien'::text, 'cut_lock'::text, 'auction'::text, 'notice'::text, 'other'::text]))),
+    CONSTRAINT policy_delinquency_entries_check CHECK ((((trigger_type = 'paid_through_date'::text) AND (trigger_category IS NULL)) OR ((trigger_type = 'step_category'::text) AND (trigger_category IS NOT NULL)))),
+    CONSTRAINT policy_delinquency_entries_trigger_category_check CHECK (((trigger_category IS NULL) OR (trigger_category = ANY (ARRAY['late_fee'::text, 'pre_lien'::text, 'lien'::text, 'cut_lock'::text, 'auction'::text, 'notice'::text, 'other'::text])))),
+    CONSTRAINT policy_delinquency_entries_trigger_type_check CHECK ((trigger_type = ANY (ARRAY['paid_through_date'::text, 'step_category'::text])))
+);
+
+
+--
+-- Name: policy_delinquency_entries_id_seq; Type: SEQUENCE; Schema: clients; Owner: -
+--
+
+CREATE SEQUENCE clients.policy_delinquency_entries_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: policy_delinquency_entries_id_seq; Type: SEQUENCE OWNED BY; Schema: clients; Owner: -
+--
+
+ALTER SEQUENCE clients.policy_delinquency_entries_id_seq OWNED BY clients.policy_delinquency_entries.id;
+
+
+--
+-- Name: policy_delinquency_steps; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.policy_delinquency_steps (
+    id bigint NOT NULL,
+    facility_policies_id uuid NOT NULL,
+    step_order integer NOT NULL,
+    step_type text NOT NULL,
+    raw_value text NOT NULL,
+    is_recurring boolean,
+    notice_channel text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT policy_delinquency_steps_notice_channel_check CHECK (((notice_channel IS NULL) OR (notice_channel = ANY (ARRAY['document'::text, 'email'::text, 'sms'::text, 'combination'::text, 'unknown'::text])))),
+    CONSTRAINT policy_delinquency_steps_step_type_check CHECK ((step_type = ANY (ARRAY['late_fee'::text, 'pre_lien'::text, 'lien'::text, 'cut_lock'::text, 'auction'::text, 'notice'::text, 'other'::text])))
+);
+
+
+--
+-- Name: policy_delinquency_steps_id_seq; Type: SEQUENCE; Schema: clients; Owner: -
+--
+
+CREATE SEQUENCE clients.policy_delinquency_steps_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: policy_delinquency_steps_id_seq; Type: SEQUENCE OWNED BY; Schema: clients; Owner: -
+--
+
+ALTER SEQUENCE clients.policy_delinquency_steps_id_seq OWNED BY clients.policy_delinquency_steps.id;
+
+
+--
+-- Name: policy_fees; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.policy_fees (
+    id bigint NOT NULL,
+    facility_policies_id uuid NOT NULL,
+    fee_type text NOT NULL,
+    label text,
+    raw_value text NOT NULL,
+    is_recurring boolean,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT policy_fees_fee_type_check CHECK ((fee_type = ANY (ARRAY['security_deposit'::text, 'nsf_chargeback'::text, 'move_in_admin'::text, 'transfer'::text, 'cleaning'::text, 'other'::text])))
+);
+
+
+--
+-- Name: policy_fees_id_seq; Type: SEQUENCE; Schema: clients; Owner: -
+--
+
+CREATE SEQUENCE clients.policy_fees_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: policy_fees_id_seq; Type: SEQUENCE OWNED BY; Schema: clients; Owner: -
+--
+
+ALTER SEQUENCE clients.policy_fees_id_seq OWNED BY clients.policy_fees.id;
+
+
+--
+-- Name: policy_specials; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.policy_specials (
+    facility_policies_id uuid NOT NULL,
+    raw_text text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: policy_tax_entries; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.policy_tax_entries (
+    id bigint NOT NULL,
+    facility_policies_id uuid NOT NULL,
+    tax_type text DEFAULT 'fixed'::text NOT NULL,
+    tax_name text NOT NULL,
+    description text,
+    flat_amount numeric,
+    attribute_payable_percent numeric,
+    is_recurring boolean DEFAULT false NOT NULL,
+    sort_order integer NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT policy_tax_entries_tax_name_check CHECK ((tax_name = ANY (ARRAY['sales'::text, 'rental'::text]))),
+    CONSTRAINT policy_tax_entries_tax_type_check CHECK ((tax_type = ANY (ARRAY['fixed'::text, 'marginal'::text, 'percentage'::text])))
+);
+
+
+--
+-- Name: policy_tax_entries_id_seq; Type: SEQUENCE; Schema: clients; Owner: -
+--
+
+CREATE SEQUENCE clients.policy_tax_entries_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: policy_tax_entries_id_seq; Type: SEQUENCE OWNED BY; Schema: clients; Owner: -
+--
+
+ALTER SEQUENCE clients.policy_tax_entries_id_seq OWNED BY clients.policy_tax_entries.id;
+
+
+--
+-- Name: policy_taxes; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.policy_taxes (
+    facility_policies_id uuid NOT NULL,
+    sales_tax_applies_raw text,
+    sales_tax_rate_raw text,
+    rent_tax_applies_raw text,
+    rent_tax_rate_raw text,
+    rent_tax_applies_to_all_units_raw text,
+    other_one_time_taxes_raw text,
+    other_recurring_taxes_raw text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: ps_person_index; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.ps_person_index (
+    id bigint NOT NULL,
+    workflow text NOT NULL,
+    ps_run_id text NOT NULL,
+    run_name text NOT NULL,
+    full_name text NOT NULL,
+    email text,
+    phone text,
+    role text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ps_person_index_role_check CHECK ((role = ANY (ARRAY['owner'::text, 'district_manager'::text, 'manager'::text, 'signer'::text, 'onboarding_poc'::text, 'website_poc'::text, 'integration_poc'::text]))),
+    CONSTRAINT ps_person_index_workflow_check CHECK ((workflow = ANY (ARRAY['intake'::text, 'merchant_account'::text, 'contract_order'::text])))
+);
+
+
+--
+-- Name: ps_person_index_id_seq; Type: SEQUENCE; Schema: clients; Owner: -
+--
+
+CREATE SEQUENCE clients.ps_person_index_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: ps_person_index_id_seq; Type: SEQUENCE OWNED BY; Schema: clients; Owner: -
+--
+
+ALTER SEQUENCE clients.ps_person_index_id_seq OWNED BY clients.ps_person_index.id;
+
+
+--
+-- Name: ps_sync_state; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.ps_sync_state (
+    workflow text NOT NULL,
+    ps_run_id text NOT NULL,
+    run_name text NOT NULL,
+    ps_updated_at timestamp with time zone NOT NULL,
+    last_synced_at timestamp with time zone DEFAULT now() NOT NULL,
+    business_dba text,
+    CONSTRAINT ps_sync_state_workflow_check CHECK ((workflow = ANY (ARRAY['intake'::text, 'merchant_account'::text, 'contract_order'::text])))
+);
+
+
+--
+-- Name: ps_task_status; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.ps_task_status (
+    id bigint NOT NULL,
+    facility_id uuid NOT NULL,
+    workflow text NOT NULL,
+    ps_task_id text NOT NULL,
+    task_name text NOT NULL,
+    status text NOT NULL,
+    last_synced_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ps_task_status_workflow_check CHECK ((workflow = ANY (ARRAY['intake'::text, 'merchant_account'::text, 'contract_order'::text])))
+);
+
+
+--
+-- Name: ps_task_status_id_seq; Type: SEQUENCE; Schema: clients; Owner: -
+--
+
+CREATE SEQUENCE clients.ps_task_status_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: ps_task_status_id_seq; Type: SEQUENCE OWNED BY; Schema: clients; Owner: -
+--
+
+ALTER SEQUENCE clients.ps_task_status_id_seq OWNED BY clients.ps_task_status.id;
+
+
+--
+-- Name: staff_identity_alias; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.staff_identity_alias (
+    id bigint NOT NULL,
+    raw_identifier text NOT NULL,
+    resolved_user_id uuid NOT NULL,
+    note text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: staff_identity_alias_id_seq; Type: SEQUENCE; Schema: clients; Owner: -
+--
+
+CREATE SEQUENCE clients.staff_identity_alias_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: staff_identity_alias_id_seq; Type: SEQUENCE OWNED BY; Schema: clients; Owner: -
+--
+
+ALTER SEQUENCE clients.staff_identity_alias_id_seq OWNED BY clients.staff_identity_alias.id;
+
+
+--
+-- Name: dropbox_configuration; Type: TABLE; Schema: integrations; Owner: -
+--
+
+CREATE TABLE integrations.dropbox_configuration (
+    id smallint DEFAULT 1 NOT NULL,
+    app_key text,
+    app_secret_ciphertext bytea,
+    refresh_token_ciphertext bytea,
+    root_namespace_id text,
+    root_path text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_by uuid,
+    CONSTRAINT dropbox_configuration_id_check CHECK ((id = 1))
+);
+
+
+--
+-- Name: process_street_settings; Type: TABLE; Schema: integrations; Owner: -
+--
+
+CREATE TABLE integrations.process_street_settings (
+    id smallint DEFAULT 1 NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_by uuid,
+    sync_interval_hours smallint DEFAULT 24 NOT NULL,
+    api_key_ciphertext bytea,
+    schedule_mode text DEFAULT 'interval'::text NOT NULL,
+    sync_time time without time zone,
+    sync_timezone text,
+    CONSTRAINT process_street_settings_daily_time_requires_time_and_zone CHECK (((schedule_mode <> 'daily_time'::text) OR ((sync_time IS NOT NULL) AND (sync_timezone IS NOT NULL)))),
+    CONSTRAINT process_street_settings_id_check CHECK ((id = 1)),
+    CONSTRAINT process_street_settings_schedule_mode_check CHECK ((schedule_mode = ANY (ARRAY['interval'::text, 'daily_time'::text]))),
+    CONSTRAINT process_street_settings_sync_interval_hours_check CHECK (((sync_interval_hours >= 1) AND (sync_interval_hours <= 168))),
+    CONSTRAINT process_street_settings_sync_timezone_check CHECK (((sync_timezone IS NULL) OR (sync_timezone = ANY (ARRAY['America/Los_Angeles'::text, 'America/Denver'::text, 'America/Chicago'::text, 'America/New_York'::text, 'UTC'::text, 'Europe/Belgrade'::text]))))
+);
+
+
+--
+-- Name: _sqlx_migrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public._sqlx_migrations (
+    version bigint NOT NULL,
+    description text NOT NULL,
+    installed_on timestamp with time zone DEFAULT now() NOT NULL,
+    success boolean NOT NULL,
+    checksum bytea NOT NULL,
+    execution_time bigint NOT NULL
+);
+
+
+--
+-- Name: tag_pattern id; Type: DEFAULT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.tag_pattern ALTER COLUMN id SET DEFAULT nextval('client_ops.tag_pattern_id_seq'::regclass);
+
+
+--
+-- Name: vendor_format id; Type: DEFAULT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.vendor_format ALTER COLUMN id SET DEFAULT nextval('client_ops.vendor_format_id_seq'::regclass);
+
+
+--
+-- Name: facility_merchant_account_parties id; Type: DEFAULT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_merchant_account_parties ALTER COLUMN id SET DEFAULT nextval('clients.facility_merchant_account_parties_id_seq'::regclass);
+
+
+--
+-- Name: policy_coverage_tiers id; Type: DEFAULT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_coverage_tiers ALTER COLUMN id SET DEFAULT nextval('clients.policy_coverage_tiers_id_seq'::regclass);
+
+
+--
+-- Name: policy_delinquency_entries id; Type: DEFAULT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_delinquency_entries ALTER COLUMN id SET DEFAULT nextval('clients.policy_delinquency_entries_id_seq'::regclass);
+
+
+--
+-- Name: policy_delinquency_steps id; Type: DEFAULT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_delinquency_steps ALTER COLUMN id SET DEFAULT nextval('clients.policy_delinquency_steps_id_seq'::regclass);
+
+
+--
+-- Name: policy_fees id; Type: DEFAULT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_fees ALTER COLUMN id SET DEFAULT nextval('clients.policy_fees_id_seq'::regclass);
+
+
+--
+-- Name: policy_tax_entries id; Type: DEFAULT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_tax_entries ALTER COLUMN id SET DEFAULT nextval('clients.policy_tax_entries_id_seq'::regclass);
+
+
+--
+-- Name: ps_person_index id; Type: DEFAULT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.ps_person_index ALTER COLUMN id SET DEFAULT nextval('clients.ps_person_index_id_seq'::regclass);
+
+
+--
+-- Name: ps_task_status id; Type: DEFAULT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.ps_task_status ALTER COLUMN id SET DEFAULT nextval('clients.ps_task_status_id_seq'::regclass);
+
+
+--
+-- Name: staff_identity_alias id; Type: DEFAULT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.staff_identity_alias ALTER COLUMN id SET DEFAULT nextval('clients.staff_identity_alias_id_seq'::regclass);
+
+
+--
+-- Name: auth_audit_logs auth_audit_logs_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.auth_audit_logs
+    ADD CONSTRAINT auth_audit_logs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: auth_configuration auth_configuration_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.auth_configuration
+    ADD CONSTRAINT auth_configuration_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: durable_sessions durable_sessions_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.durable_sessions
+    ADD CONSTRAINT durable_sessions_pkey PRIMARY KEY (kind, id);
+
+
+--
+-- Name: permissions permissions_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.permissions
+    ADD CONSTRAINT permissions_pkey PRIMARY KEY (key);
+
+
+--
+-- Name: role_permissions role_permissions_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.role_permissions
+    ADD CONSTRAINT role_permissions_pkey PRIMARY KEY (role_id, permission_key);
+
+
+--
+-- Name: roles roles_key_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.roles
+    ADD CONSTRAINT roles_key_key UNIQUE (key);
+
+
+--
+-- Name: roles roles_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.roles
+    ADD CONSTRAINT roles_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sessions sessions_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sessions
+    ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: sessions sessions_token_hash_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sessions
+    ADD CONSTRAINT sessions_token_hash_key UNIQUE (token_hash);
+
+
+--
+-- Name: totp_credentials totp_credentials_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.totp_credentials
+    ADD CONSTRAINT totp_credentials_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: totp_credentials totp_credentials_user_id_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.totp_credentials
+    ADD CONSTRAINT totp_credentials_user_id_key UNIQUE (user_id);
+
+
+--
+-- Name: user_invites user_invites_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.user_invites
+    ADD CONSTRAINT user_invites_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: user_invites user_invites_token_hash_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.user_invites
+    ADD CONSTRAINT user_invites_token_hash_key UNIQUE (token_hash);
+
+
+--
+-- Name: user_roles user_roles_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.user_roles
+    ADD CONSTRAINT user_roles_pkey PRIMARY KEY (user_id, role_id);
+
+
+--
+-- Name: users users_email_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.users
+    ADD CONSTRAINT users_email_key UNIQUE (email);
+
+
+--
+-- Name: users users_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.users
+    ADD CONSTRAINT users_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: webauthn_credentials webauthn_credentials_credential_id_key; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.webauthn_credentials
+    ADD CONSTRAINT webauthn_credentials_credential_id_key UNIQUE (credential_id);
+
+
+--
+-- Name: webauthn_credentials webauthn_credentials_pkey; Type: CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.webauthn_credentials
+    ADD CONSTRAINT webauthn_credentials_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: audit_log audit_log_pkey; Type: CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.audit_log
+    ADD CONSTRAINT audit_log_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: qms_tag qms_tag_pkey; Type: CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.qms_tag
+    ADD CONSTRAINT qms_tag_pkey PRIMARY KEY (tag_key);
+
+
+--
+-- Name: tag_pattern tag_pattern_pkey; Type: CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.tag_pattern
+    ADD CONSTRAINT tag_pattern_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: tool_runs tool_runs_pkey; Type: CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.tool_runs
+    ADD CONSTRAINT tool_runs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: vendor_format vendor_format_content_type_name_key; Type: CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.vendor_format
+    ADD CONSTRAINT vendor_format_content_type_name_key UNIQUE (content_type, name);
+
+
+--
+-- Name: vendor_format vendor_format_pkey; Type: CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.vendor_format
+    ADD CONSTRAINT vendor_format_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: companies companies_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.companies
+    ADD CONSTRAINT companies_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: facilities facilities_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facilities
+    ADD CONSTRAINT facilities_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: facility_contract_orders facility_contract_orders_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_contract_orders
+    ADD CONSTRAINT facility_contract_orders_pkey PRIMARY KEY (facility_id);
+
+
+--
+-- Name: facility_merchant_account_parties facility_merchant_account_par_facility_id_party_role_party__key; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_merchant_account_parties
+    ADD CONSTRAINT facility_merchant_account_par_facility_id_party_role_party__key UNIQUE (facility_id, party_role, party_index);
+
+
+--
+-- Name: facility_merchant_account_parties facility_merchant_account_parties_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_merchant_account_parties
+    ADD CONSTRAINT facility_merchant_account_parties_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: facility_merchant_accounts facility_merchant_accounts_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_merchant_accounts
+    ADD CONSTRAINT facility_merchant_accounts_pkey PRIMARY KEY (facility_id);
+
+
+--
+-- Name: facility_people facility_people_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_people
+    ADD CONSTRAINT facility_people_pkey PRIMARY KEY (facility_id, person_id, role);
+
+
+--
+-- Name: facility_policies facility_policies_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_policies
+    ADD CONSTRAINT facility_policies_pkey PRIMARY KEY (facility_id);
+
+
+--
+-- Name: people people_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.people
+    ADD CONSTRAINT people_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: policy_commission policy_commission_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_commission
+    ADD CONSTRAINT policy_commission_pkey PRIMARY KEY (facility_policies_id);
+
+
+--
+-- Name: policy_coverage_tiers policy_coverage_tiers_facility_policies_id_tier_number_key; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_coverage_tiers
+    ADD CONSTRAINT policy_coverage_tiers_facility_policies_id_tier_number_key UNIQUE (facility_policies_id, tier_number);
+
+
+--
+-- Name: policy_coverage_tiers policy_coverage_tiers_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_coverage_tiers
+    ADD CONSTRAINT policy_coverage_tiers_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: policy_delinquency_entries policy_delinquency_entries_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_delinquency_entries
+    ADD CONSTRAINT policy_delinquency_entries_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: policy_delinquency_steps policy_delinquency_steps_facility_policies_id_step_order_key; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_delinquency_steps
+    ADD CONSTRAINT policy_delinquency_steps_facility_policies_id_step_order_key UNIQUE (facility_policies_id, step_order);
+
+
+--
+-- Name: policy_delinquency_steps policy_delinquency_steps_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_delinquency_steps
+    ADD CONSTRAINT policy_delinquency_steps_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: policy_fees policy_fees_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_fees
+    ADD CONSTRAINT policy_fees_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: policy_specials policy_specials_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_specials
+    ADD CONSTRAINT policy_specials_pkey PRIMARY KEY (facility_policies_id);
+
+
+--
+-- Name: policy_tax_entries policy_tax_entries_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_tax_entries
+    ADD CONSTRAINT policy_tax_entries_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: policy_taxes policy_taxes_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_taxes
+    ADD CONSTRAINT policy_taxes_pkey PRIMARY KEY (facility_policies_id);
+
+
+--
+-- Name: ps_person_index ps_person_index_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.ps_person_index
+    ADD CONSTRAINT ps_person_index_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: ps_sync_state ps_sync_state_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.ps_sync_state
+    ADD CONSTRAINT ps_sync_state_pkey PRIMARY KEY (workflow, ps_run_id);
+
+
+--
+-- Name: ps_task_status ps_task_status_facility_id_workflow_ps_task_id_key; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.ps_task_status
+    ADD CONSTRAINT ps_task_status_facility_id_workflow_ps_task_id_key UNIQUE (facility_id, workflow, ps_task_id);
+
+
+--
+-- Name: ps_task_status ps_task_status_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.ps_task_status
+    ADD CONSTRAINT ps_task_status_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: staff_identity_alias staff_identity_alias_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.staff_identity_alias
+    ADD CONSTRAINT staff_identity_alias_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: staff_identity_alias staff_identity_alias_raw_identifier_key; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.staff_identity_alias
+    ADD CONSTRAINT staff_identity_alias_raw_identifier_key UNIQUE (raw_identifier);
+
+
+--
+-- Name: dropbox_configuration dropbox_configuration_pkey; Type: CONSTRAINT; Schema: integrations; Owner: -
+--
+
+ALTER TABLE ONLY integrations.dropbox_configuration
+    ADD CONSTRAINT dropbox_configuration_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: process_street_settings process_street_settings_pkey; Type: CONSTRAINT; Schema: integrations; Owner: -
+--
+
+ALTER TABLE ONLY integrations.process_street_settings
+    ADD CONSTRAINT process_street_settings_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: _sqlx_migrations _sqlx_migrations_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public._sqlx_migrations
+    ADD CONSTRAINT _sqlx_migrations_pkey PRIMARY KEY (version);
+
+
+--
+-- Name: auth_audit_logs_actor_user_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX auth_audit_logs_actor_user_id_idx ON auth.auth_audit_logs USING btree (actor_user_id);
+
+
+--
+-- Name: auth_audit_logs_created_at_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX auth_audit_logs_created_at_idx ON auth.auth_audit_logs USING btree (created_at);
+
+
+--
+-- Name: auth_audit_logs_target_user_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX auth_audit_logs_target_user_id_idx ON auth.auth_audit_logs USING btree (target_user_id);
+
+
+--
+-- Name: durable_sessions_kind_last_accessed_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX durable_sessions_kind_last_accessed_idx ON auth.durable_sessions USING btree (kind, last_accessed);
+
+
+--
+-- Name: idx_user_roles_role_id; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX idx_user_roles_role_id ON auth.user_roles USING btree (role_id);
+
+
+--
+-- Name: sessions_active_expires_at_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX sessions_active_expires_at_idx ON auth.sessions USING btree (expires_at) WHERE (revoked_at IS NULL);
+
+
+--
+-- Name: sessions_user_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX sessions_user_id_idx ON auth.sessions USING btree (user_id);
+
+
+--
+-- Name: user_invites_user_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX user_invites_user_id_idx ON auth.user_invites USING btree (user_id);
+
+
+--
+-- Name: webauthn_credentials_user_id_idx; Type: INDEX; Schema: auth; Owner: -
+--
+
+CREATE INDEX webauthn_credentials_user_id_idx ON auth.webauthn_credentials USING btree (user_id);
+
+
+--
+-- Name: idx_client_ops_audit_log_created_at; Type: INDEX; Schema: client_ops; Owner: -
+--
+
+CREATE INDEX idx_client_ops_audit_log_created_at ON client_ops.audit_log USING btree (created_at);
+
+
+--
+-- Name: idx_client_ops_audit_log_entity; Type: INDEX; Schema: client_ops; Owner: -
+--
+
+CREATE INDEX idx_client_ops_audit_log_entity ON client_ops.audit_log USING btree (entity_type, entity_id);
+
+
+--
+-- Name: tool_runs_facility_tool_created_idx; Type: INDEX; Schema: client_ops; Owner: -
+--
+
+CREATE INDEX tool_runs_facility_tool_created_idx ON client_ops.tool_runs USING btree (facility_id, tool, created_at DESC);
+
+
+--
+-- Name: tool_runs_session_id_idx; Type: INDEX; Schema: client_ops; Owner: -
+--
+
+CREATE UNIQUE INDEX tool_runs_session_id_idx ON client_ops.tool_runs USING btree (session_id);
+
+
+--
+-- Name: companies_active_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX companies_active_idx ON clients.companies USING btree (legal_name) WHERE (archived_at IS NULL);
+
+
+--
+-- Name: facilities_company_id_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX facilities_company_id_idx ON clients.facilities USING btree (company_id);
+
+
+--
+-- Name: facility_merchant_account_parties_facility_id_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX facility_merchant_account_parties_facility_id_idx ON clients.facility_merchant_account_parties USING btree (facility_id);
+
+
+--
+-- Name: facility_people_person_id_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX facility_people_person_id_idx ON clients.facility_people USING btree (person_id);
+
+
+--
+-- Name: people_email_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX people_email_idx ON clients.people USING btree (email) WHERE (email IS NOT NULL);
+
+
+--
+-- Name: policy_coverage_tiers_facility_policies_id_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX policy_coverage_tiers_facility_policies_id_idx ON clients.policy_coverage_tiers USING btree (facility_policies_id);
+
+
+--
+-- Name: policy_delinquency_entries_facility_policies_id_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX policy_delinquency_entries_facility_policies_id_idx ON clients.policy_delinquency_entries USING btree (facility_policies_id);
+
+
+--
+-- Name: policy_delinquency_steps_facility_policies_id_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX policy_delinquency_steps_facility_policies_id_idx ON clients.policy_delinquency_steps USING btree (facility_policies_id);
+
+
+--
+-- Name: policy_fees_facility_policies_id_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX policy_fees_facility_policies_id_idx ON clients.policy_fees USING btree (facility_policies_id);
+
+
+--
+-- Name: policy_tax_entries_facility_policies_id_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX policy_tax_entries_facility_policies_id_idx ON clients.policy_tax_entries USING btree (facility_policies_id);
+
+
+--
+-- Name: ps_person_index_email_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX ps_person_index_email_idx ON clients.ps_person_index USING btree (lower(email)) WHERE (email IS NOT NULL);
+
+
+--
+-- Name: ps_person_index_full_name_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX ps_person_index_full_name_idx ON clients.ps_person_index USING btree (lower(full_name));
+
+
+--
+-- Name: ps_person_index_run_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX ps_person_index_run_idx ON clients.ps_person_index USING btree (workflow, ps_run_id);
+
+
+--
+-- Name: ps_task_status_facility_id_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX ps_task_status_facility_id_idx ON clients.ps_task_status USING btree (facility_id);
+
+
+--
+-- Name: auth_audit_logs auth_audit_logs_no_delete; Type: TRIGGER; Schema: auth; Owner: -
+--
+
+CREATE TRIGGER auth_audit_logs_no_delete BEFORE DELETE ON auth.auth_audit_logs FOR EACH ROW EXECUTE FUNCTION auth.prevent_audit_log_mutation();
+
+
+--
+-- Name: auth_audit_logs auth_audit_logs_no_update; Type: TRIGGER; Schema: auth; Owner: -
+--
+
+CREATE TRIGGER auth_audit_logs_no_update BEFORE UPDATE ON auth.auth_audit_logs FOR EACH ROW EXECUTE FUNCTION auth.prevent_audit_log_mutation();
+
+
+--
+-- Name: auth_configuration auth_configuration_set_updated_at; Type: TRIGGER; Schema: auth; Owner: -
+--
+
+CREATE TRIGGER auth_configuration_set_updated_at BEFORE UPDATE ON auth.auth_configuration FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: users users_revoke_access_paths_on_deactivation; Type: TRIGGER; Schema: auth; Owner: -
+--
+
+CREATE TRIGGER users_revoke_access_paths_on_deactivation AFTER UPDATE ON auth.users FOR EACH ROW WHEN ((((new.status = 'deactivated'::auth.user_status) AND (old.status IS DISTINCT FROM 'deactivated'::auth.user_status)) OR ((new.deleted_at IS NOT NULL) AND (old.deleted_at IS NULL)))) EXECUTE FUNCTION auth.revoke_access_paths_on_deactivation();
+
+
+--
+-- Name: users users_set_updated_at; Type: TRIGGER; Schema: auth; Owner: -
+--
+
+CREATE TRIGGER users_set_updated_at BEFORE UPDATE ON auth.users FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: companies companies_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER companies_set_updated_at BEFORE UPDATE ON clients.companies FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: facilities facilities_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER facilities_set_updated_at BEFORE UPDATE ON clients.facilities FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: facility_contract_orders facility_contract_orders_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER facility_contract_orders_set_updated_at BEFORE UPDATE ON clients.facility_contract_orders FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: facility_merchant_account_parties facility_merchant_account_parties_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER facility_merchant_account_parties_set_updated_at BEFORE UPDATE ON clients.facility_merchant_account_parties FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: facility_merchant_accounts facility_merchant_accounts_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER facility_merchant_accounts_set_updated_at BEFORE UPDATE ON clients.facility_merchant_accounts FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: facility_policies facility_policies_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER facility_policies_set_updated_at BEFORE UPDATE ON clients.facility_policies FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: people people_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER people_set_updated_at BEFORE UPDATE ON clients.people FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: policy_commission policy_commission_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER policy_commission_set_updated_at BEFORE UPDATE ON clients.policy_commission FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: policy_delinquency_entries policy_delinquency_entries_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER policy_delinquency_entries_set_updated_at BEFORE UPDATE ON clients.policy_delinquency_entries FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: policy_specials policy_specials_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER policy_specials_set_updated_at BEFORE UPDATE ON clients.policy_specials FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: policy_tax_entries policy_tax_entries_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER policy_tax_entries_set_updated_at BEFORE UPDATE ON clients.policy_tax_entries FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: policy_taxes policy_taxes_set_updated_at; Type: TRIGGER; Schema: clients; Owner: -
+--
+
+CREATE TRIGGER policy_taxes_set_updated_at BEFORE UPDATE ON clients.policy_taxes FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: dropbox_configuration dropbox_configuration_set_updated_at; Type: TRIGGER; Schema: integrations; Owner: -
+--
+
+CREATE TRIGGER dropbox_configuration_set_updated_at BEFORE UPDATE ON integrations.dropbox_configuration FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: process_street_settings process_street_settings_set_updated_at; Type: TRIGGER; Schema: integrations; Owner: -
+--
+
+CREATE TRIGGER process_street_settings_set_updated_at BEFORE UPDATE ON integrations.process_street_settings FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: auth_audit_logs auth_audit_logs_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.auth_audit_logs
+    ADD CONSTRAINT auth_audit_logs_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES auth.users(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: auth_audit_logs auth_audit_logs_target_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.auth_audit_logs
+    ADD CONSTRAINT auth_audit_logs_target_user_id_fkey FOREIGN KEY (target_user_id) REFERENCES auth.users(id) ON DELETE RESTRICT;
+
+
+--
+-- Name: auth_configuration auth_configuration_updated_by_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.auth_configuration
+    ADD CONSTRAINT auth_configuration_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: durable_sessions durable_sessions_owner_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.durable_sessions
+    ADD CONSTRAINT durable_sessions_owner_id_fkey FOREIGN KEY (owner_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: role_permissions role_permissions_permission_key_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.role_permissions
+    ADD CONSTRAINT role_permissions_permission_key_fkey FOREIGN KEY (permission_key) REFERENCES auth.permissions(key) ON DELETE CASCADE;
+
+
+--
+-- Name: role_permissions role_permissions_role_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.role_permissions
+    ADD CONSTRAINT role_permissions_role_id_fkey FOREIGN KEY (role_id) REFERENCES auth.roles(id) ON DELETE CASCADE;
+
+
+--
+-- Name: sessions sessions_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.sessions
+    ADD CONSTRAINT sessions_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: totp_credentials totp_credentials_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.totp_credentials
+    ADD CONSTRAINT totp_credentials_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_invites user_invites_created_by_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.user_invites
+    ADD CONSTRAINT user_invites_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: user_invites user_invites_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.user_invites
+    ADD CONSTRAINT user_invites_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_roles user_roles_granted_by_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.user_roles
+    ADD CONSTRAINT user_roles_granted_by_fkey FOREIGN KEY (granted_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: user_roles user_roles_role_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.user_roles
+    ADD CONSTRAINT user_roles_role_id_fkey FOREIGN KEY (role_id) REFERENCES auth.roles(id) ON DELETE CASCADE;
+
+
+--
+-- Name: user_roles user_roles_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.user_roles
+    ADD CONSTRAINT user_roles_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: webauthn_credentials webauthn_credentials_user_id_fkey; Type: FK CONSTRAINT; Schema: auth; Owner: -
+--
+
+ALTER TABLE ONLY auth.webauthn_credentials
+    ADD CONSTRAINT webauthn_credentials_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id) ON DELETE CASCADE;
+
+
+--
+-- Name: audit_log audit_log_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.audit_log
+    ADD CONSTRAINT audit_log_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: tag_pattern tag_pattern_tag_key_fkey; Type: FK CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.tag_pattern
+    ADD CONSTRAINT tag_pattern_tag_key_fkey FOREIGN KEY (tag_key) REFERENCES client_ops.qms_tag(tag_key);
+
+
+--
+-- Name: tool_runs tool_runs_actor_user_id_fkey; Type: FK CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.tool_runs
+    ADD CONSTRAINT tool_runs_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: tool_runs tool_runs_facility_id_fkey; Type: FK CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.tool_runs
+    ADD CONSTRAINT tool_runs_facility_id_fkey FOREIGN KEY (facility_id) REFERENCES clients.facilities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: vendor_format vendor_format_created_by_fkey; Type: FK CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.vendor_format
+    ADD CONSTRAINT vendor_format_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: companies companies_implementation_manager_user_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.companies
+    ADD CONSTRAINT companies_implementation_manager_user_id_fkey FOREIGN KEY (implementation_manager_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: companies companies_sales_rep_user_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.companies
+    ADD CONSTRAINT companies_sales_rep_user_id_fkey FOREIGN KEY (sales_rep_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: facilities facilities_company_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facilities
+    ADD CONSTRAINT facilities_company_id_fkey FOREIGN KEY (company_id) REFERENCES clients.companies(id) ON DELETE CASCADE;
+
+
+--
+-- Name: facility_contract_orders facility_contract_orders_facility_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_contract_orders
+    ADD CONSTRAINT facility_contract_orders_facility_id_fkey FOREIGN KEY (facility_id) REFERENCES clients.facilities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: facility_merchant_account_parties facility_merchant_account_parties_facility_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_merchant_account_parties
+    ADD CONSTRAINT facility_merchant_account_parties_facility_id_fkey FOREIGN KEY (facility_id) REFERENCES clients.facilities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: facility_merchant_accounts facility_merchant_accounts_facility_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_merchant_accounts
+    ADD CONSTRAINT facility_merchant_accounts_facility_id_fkey FOREIGN KEY (facility_id) REFERENCES clients.facilities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: facility_people facility_people_facility_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_people
+    ADD CONSTRAINT facility_people_facility_id_fkey FOREIGN KEY (facility_id) REFERENCES clients.facilities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: facility_people facility_people_person_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_people
+    ADD CONSTRAINT facility_people_person_id_fkey FOREIGN KEY (person_id) REFERENCES clients.people(id) ON DELETE CASCADE;
+
+
+--
+-- Name: facility_policies facility_policies_facility_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.facility_policies
+    ADD CONSTRAINT facility_policies_facility_id_fkey FOREIGN KEY (facility_id) REFERENCES clients.facilities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: policy_commission policy_commission_facility_policies_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_commission
+    ADD CONSTRAINT policy_commission_facility_policies_id_fkey FOREIGN KEY (facility_policies_id) REFERENCES clients.facility_policies(facility_id) ON DELETE CASCADE;
+
+
+--
+-- Name: policy_coverage_tiers policy_coverage_tiers_facility_policies_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_coverage_tiers
+    ADD CONSTRAINT policy_coverage_tiers_facility_policies_id_fkey FOREIGN KEY (facility_policies_id) REFERENCES clients.facility_policies(facility_id) ON DELETE CASCADE;
+
+
+--
+-- Name: policy_delinquency_entries policy_delinquency_entries_facility_policies_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_delinquency_entries
+    ADD CONSTRAINT policy_delinquency_entries_facility_policies_id_fkey FOREIGN KEY (facility_policies_id) REFERENCES clients.facility_policies(facility_id) ON DELETE CASCADE;
+
+
+--
+-- Name: policy_delinquency_steps policy_delinquency_steps_facility_policies_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_delinquency_steps
+    ADD CONSTRAINT policy_delinquency_steps_facility_policies_id_fkey FOREIGN KEY (facility_policies_id) REFERENCES clients.facility_policies(facility_id) ON DELETE CASCADE;
+
+
+--
+-- Name: policy_fees policy_fees_facility_policies_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_fees
+    ADD CONSTRAINT policy_fees_facility_policies_id_fkey FOREIGN KEY (facility_policies_id) REFERENCES clients.facility_policies(facility_id) ON DELETE CASCADE;
+
+
+--
+-- Name: policy_specials policy_specials_facility_policies_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_specials
+    ADD CONSTRAINT policy_specials_facility_policies_id_fkey FOREIGN KEY (facility_policies_id) REFERENCES clients.facility_policies(facility_id) ON DELETE CASCADE;
+
+
+--
+-- Name: policy_tax_entries policy_tax_entries_facility_policies_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_tax_entries
+    ADD CONSTRAINT policy_tax_entries_facility_policies_id_fkey FOREIGN KEY (facility_policies_id) REFERENCES clients.facility_policies(facility_id) ON DELETE CASCADE;
+
+
+--
+-- Name: policy_taxes policy_taxes_facility_policies_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.policy_taxes
+    ADD CONSTRAINT policy_taxes_facility_policies_id_fkey FOREIGN KEY (facility_policies_id) REFERENCES clients.facility_policies(facility_id) ON DELETE CASCADE;
+
+
+--
+-- Name: ps_task_status ps_task_status_facility_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.ps_task_status
+    ADD CONSTRAINT ps_task_status_facility_id_fkey FOREIGN KEY (facility_id) REFERENCES clients.facilities(id) ON DELETE CASCADE;
+
+
+--
+-- Name: staff_identity_alias staff_identity_alias_resolved_user_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.staff_identity_alias
+    ADD CONSTRAINT staff_identity_alias_resolved_user_id_fkey FOREIGN KEY (resolved_user_id) REFERENCES auth.users(id);
+
+
+--
+-- Name: dropbox_configuration dropbox_configuration_updated_by_fkey; Type: FK CONSTRAINT; Schema: integrations; Owner: -
+--
+
+ALTER TABLE ONLY integrations.dropbox_configuration
+    ADD CONSTRAINT dropbox_configuration_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: process_street_settings process_street_settings_updated_by_fkey; Type: FK CONSTRAINT; Schema: integrations; Owner: -
+--
+
+ALTER TABLE ONLY integrations.process_street_settings
+    ADD CONSTRAINT process_street_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: auth_audit_logs; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.auth_audit_logs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: auth_audit_logs auth_audit_logs_insert_always; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY auth_audit_logs_insert_always ON auth.auth_audit_logs FOR INSERT WITH CHECK (true);
+
+
+--
+-- Name: auth_audit_logs auth_audit_logs_select_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY auth_audit_logs_select_admin_only ON auth.auth_audit_logs FOR SELECT USING (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: auth_configuration; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.auth_configuration ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: auth_configuration auth_configuration_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY auth_configuration_admin_only ON auth.auth_configuration USING (auth.current_user_has_role('admin'::text)) WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: auth_configuration auth_configuration_select_any_authenticated; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY auth_configuration_select_any_authenticated ON auth.auth_configuration FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: durable_sessions; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.durable_sessions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: durable_sessions durable_sessions_delete_unconditional; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY durable_sessions_delete_unconditional ON auth.durable_sessions FOR DELETE USING (true);
+
+
+--
+-- Name: durable_sessions durable_sessions_insert_unconditional; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY durable_sessions_insert_unconditional ON auth.durable_sessions FOR INSERT WITH CHECK (true);
+
+
+--
+-- Name: durable_sessions durable_sessions_select_unconditional; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY durable_sessions_select_unconditional ON auth.durable_sessions FOR SELECT USING (true);
+
+
+--
+-- Name: durable_sessions durable_sessions_update_unconditional; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY durable_sessions_update_unconditional ON auth.durable_sessions FOR UPDATE USING (true) WITH CHECK (true);
+
+
+--
+-- Name: permissions; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.permissions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: permissions permissions_delete_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY permissions_delete_admin_only ON auth.permissions FOR DELETE USING (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: permissions permissions_insert_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY permissions_insert_admin_only ON auth.permissions FOR INSERT WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: permissions permissions_select_authenticated; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY permissions_select_authenticated ON auth.permissions FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: permissions permissions_update_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY permissions_update_admin_only ON auth.permissions FOR UPDATE USING (auth.current_user_has_role('admin'::text)) WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: role_permissions; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.role_permissions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: role_permissions role_permissions_delete_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY role_permissions_delete_admin_only ON auth.role_permissions FOR DELETE USING (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: role_permissions role_permissions_insert_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY role_permissions_insert_admin_only ON auth.role_permissions FOR INSERT WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: role_permissions role_permissions_select_authenticated; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY role_permissions_select_authenticated ON auth.role_permissions FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: roles; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.roles ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: roles roles_delete_admin_only_non_system; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY roles_delete_admin_only_non_system ON auth.roles FOR DELETE USING ((auth.current_user_has_role('admin'::text) AND (is_system = false)));
+
+
+--
+-- Name: roles roles_insert_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY roles_insert_admin_only ON auth.roles FOR INSERT WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: roles roles_select_authenticated; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY roles_select_authenticated ON auth.roles FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: roles roles_update_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY roles_update_admin_only ON auth.roles FOR UPDATE USING (auth.current_user_has_role('admin'::text)) WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: sessions; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.sessions ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: sessions sessions_insert_blocked; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY sessions_insert_blocked ON auth.sessions FOR INSERT WITH CHECK (false);
+
+
+--
+-- Name: sessions sessions_select_own_or_admin; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY sessions_select_own_or_admin ON auth.sessions FOR SELECT USING (((user_id = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid) OR auth.current_user_has_role('admin'::text)));
+
+
+--
+-- Name: sessions sessions_update_own_or_admin; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY sessions_update_own_or_admin ON auth.sessions FOR UPDATE USING (((user_id = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid) OR auth.current_user_has_role('admin'::text)));
+
+
+--
+-- Name: totp_credentials; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.totp_credentials ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: totp_credentials totp_credentials_owner_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY totp_credentials_owner_only ON auth.totp_credentials USING ((user_id = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid)) WITH CHECK ((user_id = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid));
+
+
+--
+-- Name: user_invites; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.user_invites ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_invites user_invites_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY user_invites_admin_only ON auth.user_invites USING (auth.current_user_has_role('admin'::text)) WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: user_roles; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.user_roles ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: user_roles user_roles_delete_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY user_roles_delete_admin_only ON auth.user_roles FOR DELETE USING ((auth.current_user_has_role('admin'::text) AND (user_id <> (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid)));
+
+
+--
+-- Name: user_roles user_roles_insert_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY user_roles_insert_admin_only ON auth.user_roles FOR INSERT WITH CHECK ((auth.current_user_has_role('admin'::text) AND (user_id <> (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid)));
+
+
+--
+-- Name: user_roles user_roles_select_own_or_admin; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY user_roles_select_own_or_admin ON auth.user_roles FOR SELECT USING (((user_id = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid) OR auth.current_user_has_role('admin'::text)));
+
+
+--
+-- Name: users; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.users ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: users users_delete_blocked; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY users_delete_blocked ON auth.users FOR DELETE USING (false);
+
+
+--
+-- Name: users users_insert_admin_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY users_insert_admin_only ON auth.users FOR INSERT WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: users users_select_own_or_admin; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY users_select_own_or_admin ON auth.users FOR SELECT USING (((id = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid) OR auth.current_user_has_role('admin'::text)));
+
+
+--
+-- Name: users users_update_own_or_admin; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY users_update_own_or_admin ON auth.users FOR UPDATE USING (((id = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid) OR auth.current_user_has_role('admin'::text)));
+
+
+--
+-- Name: webauthn_credentials; Type: ROW SECURITY; Schema: auth; Owner: -
+--
+
+ALTER TABLE auth.webauthn_credentials ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: webauthn_credentials webauthn_credentials_owner_only; Type: POLICY; Schema: auth; Owner: -
+--
+
+CREATE POLICY webauthn_credentials_owner_only ON auth.webauthn_credentials USING ((user_id = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid)) WITH CHECK ((user_id = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid));
+
+
+--
+-- Name: audit_log; Type: ROW SECURITY; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE client_ops.audit_log ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: audit_log client_ops_audit_log_insert_unconditional; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY client_ops_audit_log_insert_unconditional ON client_ops.audit_log FOR INSERT WITH CHECK (true);
+
+
+--
+-- Name: audit_log client_ops_audit_log_select_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY client_ops_audit_log_select_client_ops_roles ON client_ops.audit_log FOR SELECT USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: qms_tag; Type: ROW SECURITY; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE client_ops.qms_tag ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: qms_tag qms_tag_delete_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY qms_tag_delete_client_ops_roles ON client_ops.qms_tag FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: qms_tag qms_tag_insert_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY qms_tag_insert_client_ops_roles ON client_ops.qms_tag FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: qms_tag qms_tag_select_authenticated; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY qms_tag_select_authenticated ON client_ops.qms_tag FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: qms_tag qms_tag_update_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY qms_tag_update_client_ops_roles ON client_ops.qms_tag FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: tag_pattern; Type: ROW SECURITY; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE client_ops.tag_pattern ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: tag_pattern tag_pattern_delete_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY tag_pattern_delete_client_ops_roles ON client_ops.tag_pattern FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: tag_pattern tag_pattern_insert_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY tag_pattern_insert_client_ops_roles ON client_ops.tag_pattern FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: tag_pattern tag_pattern_select_authenticated; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY tag_pattern_select_authenticated ON client_ops.tag_pattern FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: tag_pattern tag_pattern_update_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY tag_pattern_update_client_ops_roles ON client_ops.tag_pattern FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: tool_runs; Type: ROW SECURITY; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE client_ops.tool_runs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: tool_runs tool_runs_delete_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY tool_runs_delete_client_ops_roles ON client_ops.tool_runs FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: tool_runs tool_runs_insert_unconditional; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY tool_runs_insert_unconditional ON client_ops.tool_runs FOR INSERT WITH CHECK (true);
+
+
+--
+-- Name: tool_runs tool_runs_select_authenticated; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY tool_runs_select_authenticated ON client_ops.tool_runs FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: tool_runs tool_runs_update_unconditional; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY tool_runs_update_unconditional ON client_ops.tool_runs FOR UPDATE USING (true) WITH CHECK (true);
+
+
+--
+-- Name: vendor_format; Type: ROW SECURITY; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE client_ops.vendor_format ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: vendor_format vendor_format_delete_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY vendor_format_delete_client_ops_roles ON client_ops.vendor_format FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: vendor_format vendor_format_insert_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY vendor_format_insert_client_ops_roles ON client_ops.vendor_format FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: vendor_format vendor_format_select_authenticated; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY vendor_format_select_authenticated ON client_ops.vendor_format FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: vendor_format vendor_format_update_client_ops_roles; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY vendor_format_update_client_ops_roles ON client_ops.vendor_format FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: companies; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.companies ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: companies companies_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY companies_delete_client_ops_roles ON clients.companies FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: companies companies_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY companies_insert_client_ops_roles ON clients.companies FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: companies companies_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY companies_select_authenticated ON clients.companies FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: companies companies_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY companies_update_client_ops_roles ON clients.companies FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facilities; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.facilities ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: facilities facilities_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facilities_delete_client_ops_roles ON clients.facilities FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facilities facilities_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facilities_insert_client_ops_roles ON clients.facilities FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facilities facilities_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facilities_select_authenticated ON clients.facilities FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: facilities facilities_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facilities_update_client_ops_roles ON clients.facilities FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_contract_orders; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.facility_contract_orders ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: facility_contract_orders facility_contract_orders_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_contract_orders_delete_client_ops_roles ON clients.facility_contract_orders FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_contract_orders facility_contract_orders_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_contract_orders_insert_client_ops_roles ON clients.facility_contract_orders FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_contract_orders facility_contract_orders_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_contract_orders_select_authenticated ON clients.facility_contract_orders FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: facility_contract_orders facility_contract_orders_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_contract_orders_update_client_ops_roles ON clients.facility_contract_orders FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_merchant_account_parties; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.facility_merchant_account_parties ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: facility_merchant_account_parties facility_merchant_account_parties_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_merchant_account_parties_delete_client_ops_roles ON clients.facility_merchant_account_parties FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_merchant_account_parties facility_merchant_account_parties_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_merchant_account_parties_insert_client_ops_roles ON clients.facility_merchant_account_parties FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_merchant_account_parties facility_merchant_account_parties_select_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_merchant_account_parties_select_client_ops_roles ON clients.facility_merchant_account_parties FOR SELECT USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_merchant_account_parties facility_merchant_account_parties_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_merchant_account_parties_update_client_ops_roles ON clients.facility_merchant_account_parties FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_merchant_accounts; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.facility_merchant_accounts ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: facility_merchant_accounts facility_merchant_accounts_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_merchant_accounts_delete_client_ops_roles ON clients.facility_merchant_accounts FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_merchant_accounts facility_merchant_accounts_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_merchant_accounts_insert_client_ops_roles ON clients.facility_merchant_accounts FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_merchant_accounts facility_merchant_accounts_select_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_merchant_accounts_select_client_ops_roles ON clients.facility_merchant_accounts FOR SELECT USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_merchant_accounts facility_merchant_accounts_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_merchant_accounts_update_client_ops_roles ON clients.facility_merchant_accounts FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_people; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.facility_people ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: facility_people facility_people_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_people_delete_client_ops_roles ON clients.facility_people FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_people facility_people_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_people_insert_client_ops_roles ON clients.facility_people FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_people facility_people_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_people_select_authenticated ON clients.facility_people FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: facility_people facility_people_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_people_update_client_ops_roles ON clients.facility_people FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_policies; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.facility_policies ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: facility_policies facility_policies_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_policies_delete_client_ops_roles ON clients.facility_policies FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_policies facility_policies_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_policies_insert_client_ops_roles ON clients.facility_policies FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: facility_policies facility_policies_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_policies_select_authenticated ON clients.facility_policies FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: facility_policies facility_policies_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY facility_policies_update_client_ops_roles ON clients.facility_policies FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: people; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.people ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: people people_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY people_delete_client_ops_roles ON clients.people FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: people people_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY people_insert_client_ops_roles ON clients.people FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: people people_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY people_select_authenticated ON clients.people FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: people people_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY people_update_client_ops_roles ON clients.people FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_commission; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.policy_commission ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: policy_commission policy_commission_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_commission_delete_client_ops_roles ON clients.policy_commission FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_commission policy_commission_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_commission_insert_client_ops_roles ON clients.policy_commission FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_commission policy_commission_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_commission_select_authenticated ON clients.policy_commission FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: policy_commission policy_commission_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_commission_update_client_ops_roles ON clients.policy_commission FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_coverage_tiers; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.policy_coverage_tiers ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: policy_coverage_tiers policy_coverage_tiers_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_coverage_tiers_delete_client_ops_roles ON clients.policy_coverage_tiers FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_coverage_tiers policy_coverage_tiers_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_coverage_tiers_insert_client_ops_roles ON clients.policy_coverage_tiers FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_coverage_tiers policy_coverage_tiers_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_coverage_tiers_select_authenticated ON clients.policy_coverage_tiers FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: policy_coverage_tiers policy_coverage_tiers_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_coverage_tiers_update_client_ops_roles ON clients.policy_coverage_tiers FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_delinquency_entries; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.policy_delinquency_entries ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: policy_delinquency_entries policy_delinquency_entries_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_delinquency_entries_delete_client_ops_roles ON clients.policy_delinquency_entries FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_delinquency_entries policy_delinquency_entries_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_delinquency_entries_insert_client_ops_roles ON clients.policy_delinquency_entries FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_delinquency_entries policy_delinquency_entries_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_delinquency_entries_select_authenticated ON clients.policy_delinquency_entries FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: policy_delinquency_entries policy_delinquency_entries_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_delinquency_entries_update_client_ops_roles ON clients.policy_delinquency_entries FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_delinquency_steps; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.policy_delinquency_steps ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: policy_delinquency_steps policy_delinquency_steps_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_delinquency_steps_delete_client_ops_roles ON clients.policy_delinquency_steps FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_delinquency_steps policy_delinquency_steps_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_delinquency_steps_insert_client_ops_roles ON clients.policy_delinquency_steps FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_delinquency_steps policy_delinquency_steps_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_delinquency_steps_select_authenticated ON clients.policy_delinquency_steps FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: policy_delinquency_steps policy_delinquency_steps_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_delinquency_steps_update_client_ops_roles ON clients.policy_delinquency_steps FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_fees; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.policy_fees ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: policy_fees policy_fees_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_fees_delete_client_ops_roles ON clients.policy_fees FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_fees policy_fees_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_fees_insert_client_ops_roles ON clients.policy_fees FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_fees policy_fees_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_fees_select_authenticated ON clients.policy_fees FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: policy_fees policy_fees_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_fees_update_client_ops_roles ON clients.policy_fees FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_specials; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.policy_specials ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: policy_specials policy_specials_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_specials_delete_client_ops_roles ON clients.policy_specials FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_specials policy_specials_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_specials_insert_client_ops_roles ON clients.policy_specials FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_specials policy_specials_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_specials_select_authenticated ON clients.policy_specials FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: policy_specials policy_specials_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_specials_update_client_ops_roles ON clients.policy_specials FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_tax_entries; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.policy_tax_entries ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: policy_tax_entries policy_tax_entries_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_tax_entries_delete_client_ops_roles ON clients.policy_tax_entries FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_tax_entries policy_tax_entries_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_tax_entries_insert_client_ops_roles ON clients.policy_tax_entries FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_tax_entries policy_tax_entries_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_tax_entries_select_authenticated ON clients.policy_tax_entries FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: policy_tax_entries policy_tax_entries_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_tax_entries_update_client_ops_roles ON clients.policy_tax_entries FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_taxes; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.policy_taxes ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: policy_taxes policy_taxes_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_taxes_delete_client_ops_roles ON clients.policy_taxes FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_taxes policy_taxes_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_taxes_insert_client_ops_roles ON clients.policy_taxes FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: policy_taxes policy_taxes_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_taxes_select_authenticated ON clients.policy_taxes FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: policy_taxes policy_taxes_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY policy_taxes_update_client_ops_roles ON clients.policy_taxes FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: ps_person_index; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.ps_person_index ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: ps_person_index ps_person_index_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_person_index_delete_client_ops_roles ON clients.ps_person_index FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: ps_person_index ps_person_index_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_person_index_insert_client_ops_roles ON clients.ps_person_index FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: ps_person_index ps_person_index_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_person_index_select_authenticated ON clients.ps_person_index FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: ps_person_index ps_person_index_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_person_index_update_client_ops_roles ON clients.ps_person_index FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: ps_sync_state; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.ps_sync_state ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: ps_sync_state ps_sync_state_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_sync_state_delete_client_ops_roles ON clients.ps_sync_state FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: ps_sync_state ps_sync_state_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_sync_state_insert_client_ops_roles ON clients.ps_sync_state FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: ps_sync_state ps_sync_state_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_sync_state_select_authenticated ON clients.ps_sync_state FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: ps_sync_state ps_sync_state_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_sync_state_update_client_ops_roles ON clients.ps_sync_state FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: ps_task_status; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.ps_task_status ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: ps_task_status ps_task_status_delete_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_task_status_delete_client_ops_roles ON clients.ps_task_status FOR DELETE USING (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: ps_task_status ps_task_status_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_task_status_insert_client_ops_roles ON clients.ps_task_status FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: ps_task_status ps_task_status_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_task_status_select_authenticated ON clients.ps_task_status FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: ps_task_status ps_task_status_update_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY ps_task_status_update_client_ops_roles ON clients.ps_task_status FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: staff_identity_alias; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.staff_identity_alias ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: staff_identity_alias staff_identity_alias_delete_admin_only; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY staff_identity_alias_delete_admin_only ON clients.staff_identity_alias FOR DELETE USING (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: staff_identity_alias staff_identity_alias_insert_admin_only; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY staff_identity_alias_insert_admin_only ON clients.staff_identity_alias FOR INSERT WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: staff_identity_alias staff_identity_alias_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY staff_identity_alias_select_authenticated ON clients.staff_identity_alias FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: staff_identity_alias staff_identity_alias_update_admin_only; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY staff_identity_alias_update_admin_only ON clients.staff_identity_alias FOR UPDATE USING (auth.current_user_has_role('admin'::text)) WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: dropbox_configuration; Type: ROW SECURITY; Schema: integrations; Owner: -
+--
+
+ALTER TABLE integrations.dropbox_configuration ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: dropbox_configuration dropbox_configuration_admin_only; Type: POLICY; Schema: integrations; Owner: -
+--
+
+CREATE POLICY dropbox_configuration_admin_only ON integrations.dropbox_configuration FOR SELECT USING ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text)));
+
+
+--
+-- Name: dropbox_configuration dropbox_configuration_update_admin_only; Type: POLICY; Schema: integrations; Owner: -
+--
+
+CREATE POLICY dropbox_configuration_update_admin_only ON integrations.dropbox_configuration FOR UPDATE USING ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text))) WITH CHECK ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text)));
+
+
+--
+-- Name: process_street_settings; Type: ROW SECURITY; Schema: integrations; Owner: -
+--
+
+ALTER TABLE integrations.process_street_settings ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: process_street_settings process_street_settings_select_authenticated; Type: POLICY; Schema: integrations; Owner: -
+--
+
+CREATE POLICY process_street_settings_select_authenticated ON integrations.process_street_settings FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: process_street_settings process_street_settings_update_admin_only; Type: POLICY; Schema: integrations; Owner: -
+--
+
+CREATE POLICY process_street_settings_update_admin_only ON integrations.process_street_settings FOR UPDATE USING ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text))) WITH CHECK ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text)));
+
+
+--
+-- PostgreSQL database dump complete
+--
+
+\unrestrict hBXJvFWnDlHkPhYMsj0iJ01wnqZWcbA9qPJJZrw97wFrTGsfiEyRgeTUJQTVklC
+
