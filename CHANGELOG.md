@@ -6,6 +6,16 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.43] - 2026-09-28
+
+Docker Phase 1 of the CI/CD framework's containerization plan.
+
+### Added
+- **`docker-compose.yml`** — a single `postgres:18` service (`test-db`, gated behind a `test` compose profile) for local ephemeral test-DB isolation, matching the real Neon dev branch's Postgres version (18.6). No named volume for the data directory (tmpfs instead) so it cannot outlive the container. Bound to `127.0.0.1:5433`, not `5432` — this machine already has a native Postgres listening there. Verified empirically end to end: brings up healthy in ~3s, `psql` confirms PostgreSQL 18.6, tearing down leaves zero volumes behind.
+
+### Fixed (during verification, not shipped as a bug)
+- Mounting tmpfs at the traditional `/var/lib/postgresql/data` crashed the container on startup — the `postgres:18+` image switched to a `pg_ctlcluster`-style layout expecting the parent `/var/lib/postgresql` instead. Caught by actually running it, not assumed from the older convention.
+
 ## [1.9.42] - 2026-09-28
 
 The two Tier-0 tooling gaps the CI/CD framework doc flagged as "next, not urgent" — `cargo-audit` and `gitleaks` — installed and wired into `preflight.sh`, plus the one real vulnerability the first `cargo audit` run against this codebase actually found.
