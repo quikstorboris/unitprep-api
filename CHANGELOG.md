@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.41] - 2026-09-28
+
+A generated schema reference doc (replacing a proposed migration squash — see the vault's Key Decisions for why), the 3 remaining pre-existing clippy warnings fixed, and Tier 0 of a new CI/CD framework.
+
+### Added
+- **`SCHEMA.sql`** — a `pg_dump --schema-only` snapshot of the current dev DB, checked in as a point-in-time reference. Not applied by `sqlx`, not part of `migrations/`; regenerate by hand after schema-changing migrations. Solves the "86 migrations is a lot to read to understand current shape" problem a full squash would have solved, without that approach's real risk of reconciling an already-applied migration history against a new file set.
+- **`scripts/preflight.sh`** — Tier 0 of a new tiered CI/CD framework (`fmt`/`clippy`/`test`/version-consistency/secret-pattern-scan, run before pushing, never runs `#[ignore]`d real-DB tests so it never spends Neon compute). Full design in the vault's `reference/UnitPrep CI-CD Framework.md`.
+
+### Fixed
+- **The 3 pre-existing clippy warnings** (`sort_by`→`sort_by_key` ×2 in `dropbox_browse.rs`, an `#[allow(clippy::too_many_arguments)]` with justification on `edit_person_and_facility_link`'s genuinely-8-field form-edit signature) — the only things keeping `preflight.sh` from passing cleanly.
+
 ## [1.9.40] - 2026-09-28
 
 An operations runbook, and the first step of a `client_ops` schema-modularity pass (prompted by a review finding the schema had accreted concerns beyond its own stated scope).
