@@ -1,0 +1,61 @@
+# Docker Phase 1 of the UnitPrep CI/CD framework -- see the vault's
+# reference/UnitPrep CI-CD Framework.md and UnitPrep Docker Standards.md
+# for the full design and why every choice below is made this way.
+#
+# A single postgres:18 service for local ephemeral test-DB isolation:
+# spin up fresh, point real-DB tests at it, throw it away. Version
+# matches the real Neon dev branch (18.6, confirmed via pg_dump's own
+# header) -- not "latest", which would silently drift from it.
+#
+# Gated behind the "test" profile (not started by a bare
+# `docker compose up`) so this file stays safe to extend with a "dev"
+# profile later (Docker phases 2-3, the unitprep-api/unitprep-ui dev
+# containers) without the two ever starting together by accident.
+#
+# Run:   docker compose --profile test up -d
+# Check: docker compose --profile test ps
+# Stop:  docker compose --profile test down
+#
+# Mission-critical isolation (see the framework doc's isolation-controls
+# section): this service must never be configured anywhere near a real
+# Neon credential. No NEON_DEV_DATABASE_URL*/NEON_PROD_DATABASE_URL*
+# anywhere in this file, ever -- local Docker gets the same guarantee
+# as CI.
+
+services:
+  test-db:
+    image: postgres:18
+    profiles: ["test"]
+    environment:
+      # Throwaway, localhost-only credentials for an ephemeral
+      # container -- not a real secret, so not a ".env.local only"
+      # violation (see Docker Standards' secrets-in-compose rule).
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: unitprep_test
+    ports:
+      # 5433, not 5432 -- this machine already has a native Postgres
+      # listening on 5432; a distinct port means a connection string
+      # can never accidentally reach the wrong one. Bound to
+      # 127.0.0.1 only, never the whole network.
+      - "127.0.0.1:5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+    # No named volume for the data directory -- deliberately. tmpfs
+    # keeps it in memory only, so it cannot outlive the container even
+    # if something forgets to `down` it. Being thrown away is the
+    # entire point of the isolation guarantee this container exists
+    # for; a named volume here would be a real, if subtle, violation
+    # of it.
+    #
+    # Mount point is /var/lib/postgresql (not .../data) -- the
+    # postgres:18+ image switched to a pg_ctlcluster-style layout that
+    # expects the parent directory, not the old major-version-agnostic
+    # .../data path every prior major version's image used. Verified
+    # empirically: mounting .../data crashes the container on startup
+    # with an explicit error naming this exact change.
+    tmpfs:
+      - /var/lib/postgresql
