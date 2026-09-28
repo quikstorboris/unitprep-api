@@ -6,6 +6,16 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.40] - 2026-09-28
+
+An operations runbook, and the first step of a `client_ops` schema-modularity pass (prompted by a review finding the schema had accreted concerns beyond its own stated scope).
+
+### Added
+- **`RUNBOOK.md`** — required configuration, the four distinct session lifetimes and which are durable across a restart as of `v1.9.39`, the single-instance deployment assumption, and basic stuck-deploy recovery steps.
+
+### Changed
+- **`dropbox_configuration`/`process_street_settings` moved from `client_ops` to a new `integrations` schema.** Both have been gated by the `integrations.manage` permission (not `client_ops.perform`) since `20260909150000_admin_only_integrations_settings`, but their schema namespace never followed. `client_ops`'s own module doc comment defines that domain as "tooling an Onboarding Manager uses day to day" — `audit_log`, `tool_runs`, `vendor_format`, `qms_tag`, and `tag_pattern` all genuinely belong there by that definition and were left in place; this was a 2-table fix, not the sprawling reorganization it looked like from the outside. `ALTER TABLE ... SET SCHEMA` preserved RLS policies/triggers/indexes/FKs unchanged; `scripts/setup_app_service_role.sql` gained the matching schema-USAGE grant block.
+
 ## [1.9.39] - 2026-09-24
 
 A durable session store, closing the sharpest P1 finding from an external code review: Group Prep/Dedup/Template Tagger sessions and WebAuthn passkey ceremonies were purely in-memory, so a restart or crash mid-upload (or mid-enrollment) silently stranded the user with no way to recover short of starting over.
