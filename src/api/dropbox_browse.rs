@@ -152,7 +152,7 @@ pub async fn list_folder(
             // rather than leaving the frontend to do it, so every
             // consumer of this endpoint gets a consistently ordered list
             // for free.
-            entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            entries.sort_by_key(|a| a.name.to_lowercase());
 
             // User info belongs here, not inside DropboxClient itself:
             // this handler knows *who* asked, the client below only
@@ -218,7 +218,7 @@ pub async fn search_folders(
 
     match state.dropbox.search_folders(q).await {
         Ok(mut entries) => {
-            entries.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            entries.sort_by_key(|a| a.name.to_lowercase());
 
             tracing::info!(
                 user_id = %user.user_id,

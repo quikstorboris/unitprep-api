@@ -505,6 +505,10 @@ pub async fn unlink_person_from_facility(
 /// losing the edit on the next self-heal pass. Returns the row's
 /// `source` *before* this call, so the caller can decide whether that
 /// choice needed presenting at all.
+// 8 real, independent fields of a human-edited form submission, not
+// accidental parameter sprawl -- bundling into a struct would move the
+// complexity rather than remove it, for 3 call sites (1 real, 2 test).
+#[allow(clippy::too_many_arguments)]
 pub async fn edit_person_and_facility_link(
     tx: &mut Transaction<'_, Postgres>,
     facility_id: Uuid,
