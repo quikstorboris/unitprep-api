@@ -19,25 +19,50 @@ step() {
     echo "==> $1"
 }
 
-step "1/5 cargo fmt --check"
+step "1/7 cargo fmt --check"
 if ! cargo fmt --check; then
     echo "FAILED: run 'cargo fmt' to fix."
     fail=1
 fi
 
-step "2/5 cargo clippy --workspace --all-targets -- -D warnings"
+step "2/7 cargo clippy --workspace --all-targets -- -D warnings"
 if ! cargo clippy --workspace --all-targets -- -D warnings; then
     echo "FAILED: fix the clippy warnings above."
     fail=1
 fi
 
-step "3/5 cargo test --workspace (fast suite only -- #[ignore]'d real-DB tests are skipped by design)"
+step "3/7 cargo test --workspace (fast suite only -- #[ignore]'d real-DB tests are skipped by design)"
 if ! cargo test --workspace; then
     echo "FAILED: fix the failing tests above."
     fail=1
 fi
 
-step "4/5 version/tag consistency (advisory, does not block a push)"
+step "4/7 cargo audit (dependency vulnerability scan)"
+# Exits non-zero only for actual vulnerabilities, not for
+# unmaintained/yanked advisory-grade warnings -- those print but don't
+# block a push. Bump the offending crate (or its dependent) to clear a
+# real hit; see the vault's CI-CD Framework doc for why this stays
+# blocking rather than advisory.
+if ! cargo audit; then
+    echo "FAILED: a real vulnerability was found above -- upgrade the affected crate before pushing."
+    fail=1
+fi
+
+step "5/7 gitleaks (real secret scan, diff-scoped)"
+# Only scans commits about to be pushed, not the whole history --
+# matches the grep backstop below's scope. Known false positives go in
+# .gitleaks.toml's allowlist, never a blanket disable.
+gitleaks_range="$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)"
+if command -v gitleaks >/dev/null 2>&1; then
+    if ! gitleaks git --log-opts="${gitleaks_range}..HEAD"; then
+        echo "FAILED: gitleaks found a likely secret above -- review before pushing."
+        fail=1
+    fi
+else
+    echo "SKIPPED: gitleaks not installed -- see the vault's CI-CD Framework doc for the install step."
+fi
+
+step "6/7 version/tag consistency (advisory, does not block a push)"
 current_version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
 latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
 if [ -n "$latest_tag" ]; then
@@ -54,7 +79,7 @@ else
     echo "No tags found yet -- skipping."
 fi
 
-step "5/5 secret-pattern scan (grep-based backstop, not a substitute for a real secrets scanner)"
+step "7/7 secret-pattern scan (grep-based backstop, redundant with gitleaks above by design)"
 # Deliberately narrow and low-false-positive: private key headers, a
 # handful of well-known cloud-provider key prefixes, and an assignment
 # to something that looks like a password/secret/api key with a

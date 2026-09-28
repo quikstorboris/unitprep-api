@@ -1,0 +1,11 @@
+title = "gitleaks config for unitprep-api"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Sanitized Process Street test fixtures -- opaque workflow/task IDs that sit next to a \"key\" field trip the generic-api-key entropy heuristic. Verified 2026-09-28: these are synthetic IDs in files explicitly named *_sanitized.json, not real credentials."
+paths = [
+  '''src/clients/testdata/highway20_intake_fields\.json''',
+  '''src/clients/testdata/highway20_merchant_account_fields_sanitized\.json''',
+]
