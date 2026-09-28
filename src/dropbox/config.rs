@@ -21,7 +21,7 @@ pub struct DropboxConfig {
     pub root_path: String,
 }
 
-/// Binds every `client_ops.dropbox_configuration` ciphertext to this one
+/// Binds every `integrations.dropbox_configuration` ciphertext to this one
 /// singleton row -- see `integrations::secrets`'s own doc comment on why
 /// AAD is per-integration, not per-key. A fixed value is correct here
 /// (unlike `clients::encryption`'s per-row AAD, which binds to a
@@ -44,7 +44,7 @@ impl DropboxConfig {
         })
     }
 
-    /// Loads configuration from `client_ops.dropbox_configuration`,
+    /// Loads configuration from `integrations.dropbox_configuration`,
     /// decrypting `app_secret`/`refresh_token`. Returns `Ok(None)` --
     /// not an error -- when the row is missing required fields (not yet
     /// filled in via the admin settings page) or the query itself fails
@@ -64,7 +64,7 @@ impl DropboxConfig {
             Option<String>,
         )> = sqlx::query_as(
             "SELECT app_key, app_secret_ciphertext, refresh_token_ciphertext, root_namespace_id, root_path
-               FROM client_ops.dropbox_configuration WHERE id = 1",
+               FROM integrations.dropbox_configuration WHERE id = 1",
         )
         .fetch_optional(pool)
         .await

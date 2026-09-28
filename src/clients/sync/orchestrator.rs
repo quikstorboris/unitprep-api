@@ -30,7 +30,7 @@ use super::refresh::{refresh_matching_company, refresh_matching_facility};
 const SYSTEM_USER_ID: Uuid = Uuid::nil();
 const SYSTEM_ROLE: &str = "onboarding_manager";
 
-/// Fallback only -- used when `client_ops.process_street_settings`
+/// Fallback only -- used when `integrations.process_street_settings`
 /// can't be read at all (a transient DB error), never as the normal
 /// path. The settings row itself defaults to the same value.
 fn default_sync_interval_hours() -> i16 {
@@ -427,7 +427,7 @@ fn default_schedule_config() -> ScheduleConfig {
     }
 }
 
-/// Reads the whole schedule config off `client_ops.process_street_settings`
+/// Reads the whole schedule config off `integrations.process_street_settings`
 /// on the same system role/RLS pattern as everything else in this
 /// module. Falls back to `default_schedule_config()` (never a panic,
 /// never blocking the loop forever) on any read failure -- a transient
@@ -438,7 +438,7 @@ async fn fetch_schedule_config(db: &PgPool) -> ScheduleConfig {
         let mut tx = begin_rls_transaction(db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()]).await?;
         let row = sqlx::query_as(
             "SELECT schedule_mode, sync_interval_hours, sync_time, sync_timezone
-               FROM client_ops.process_street_settings WHERE id = 1",
+               FROM integrations.process_street_settings WHERE id = 1",
         )
         .fetch_one(&mut *tx)
         .await?;
@@ -559,7 +559,7 @@ async fn sleep_until_next_scheduled_sync(db: &PgPool) {
 }
 
 /// Spawns the scheduled sync loop -- runs every configured
-/// `sync_interval_hours` (`client_ops.process_street_settings`, default
+/// `sync_interval_hours` (`integrations.process_street_settings`, default
 /// 24) or when `api::clients_sync::start_sync` triggers one manually.
 /// Deliberately does NOT also fire immediately on startup the
 /// way `client_ops::vendor_format::start_refresh_task` does -- that

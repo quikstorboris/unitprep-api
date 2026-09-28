@@ -11,7 +11,7 @@ pub struct ProcessStreetConfig {
     pub api_key: String,
 }
 
-/// Binds `client_ops.process_street_settings.api_key_ciphertext` to this
+/// Binds `integrations.process_street_settings.api_key_ciphertext` to this
 /// one singleton row -- see `integrations::secrets`'s own doc comment
 /// and `dropbox::config::AAD`'s identical reasoning.
 const AAD: &[u8] = b"process_street_settings:1";
@@ -24,7 +24,7 @@ impl ProcessStreetConfig {
         })
     }
 
-    /// Loads configuration from `client_ops.process_street_settings`,
+    /// Loads configuration from `integrations.process_street_settings`,
     /// decrypting `api_key`. Returns `Ok(None)` -- not an error -- when
     /// the row has no key saved yet or the query itself fails, so the
     /// caller can fall back to `from_env()` exactly the way this
@@ -32,7 +32,7 @@ impl ProcessStreetConfig {
     /// `dropbox::config::DropboxConfig::from_db`'s identical reasoning.
     pub async fn from_db(pool: &sqlx::PgPool) -> Result<Option<Self>, String> {
         let ciphertext: Option<Vec<u8>> = sqlx::query_scalar(
-            "SELECT api_key_ciphertext FROM client_ops.process_street_settings WHERE id = 1",
+            "SELECT api_key_ciphertext FROM integrations.process_street_settings WHERE id = 1",
         )
         .fetch_optional(pool)
         .await

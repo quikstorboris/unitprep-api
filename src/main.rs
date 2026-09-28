@@ -149,7 +149,7 @@ async fn main() {
     // See src/dropbox for the full scope/namespace caveats (Full Dropbox
     // access, app-level-only path enforcement, Team Space namespace).
     //
-    // DB-first, env-fallback (2026-09-09): `client_ops.dropbox_configuration`
+    // DB-first, env-fallback (2026-09-09): `integrations.dropbox_configuration`
     // is now the admin settings page's source of truth (see
     // `api::dropbox_settings`); `DROPBOX_*` env vars remain the fallback
     // for a deployment that hasn't configured it there yet, or hit before

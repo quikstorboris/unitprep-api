@@ -1,6 +1,6 @@
 //! Encrypts a credential for storage in an integration's own settings
-//! table (`client_ops.dropbox_configuration.app_secret_ciphertext`/
-//! `.refresh_token_ciphertext`, `client_ops.process_street_settings.
+//! table (`integrations.dropbox_configuration.app_secret_ciphertext`/
+//! `.refresh_token_ciphertext`, `integrations.process_street_settings.
 //! api_key_ciphertext`). One key, `INTEGRATION_SECRETS_ENCRYPTION_KEY`,
 //! shared across every integration's settings page -- these are all the
 //! same credential class (a third-party integration's own app-wide

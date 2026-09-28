@@ -114,6 +114,27 @@ BEGIN
 END
 $$;
 
+-- integrations: admin-only integration credentials/settings
+-- (dropbox_configuration, process_street_settings), moved out of
+-- client_ops 2026-09-28 -- see migration
+-- 20260928120000_move_integrations_settings_out_of_client_ops for why.
+-- Same guarded-grant shape as every schema above. Both tables are
+-- singleton rows (SMALLINT id CHECKed to 1, no SERIAL/BIGSERIAL), so
+-- unlike the `clients` block below there is no sequence to grant.
+DO
+$$
+BEGIN
+    IF EXISTS (SELECT FROM pg_catalog.pg_namespace WHERE nspname = 'integrations') THEN
+        EXECUTE 'GRANT USAGE ON SCHEMA integrations TO app_service';
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA integrations TO app_service';
+        EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA integrations '
+                'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+    ELSE
+        RAISE NOTICE 'schema "integrations" not present yet -- skipping its grants. Re-run this file after `sqlx migrate run`.';
+    END IF;
+END
+$$;
+
 -- clients: the OO x Process Street client/facility data (companies,
 -- facilities, Facility Policies, people, merchant accounts, contract
 -- orders, PS task status) -- see migration

@@ -1,6 +1,6 @@
 //! Settings for the Dropbox integration -- the app-wide credentials
 //! `dropbox::DropboxConfig` loads at startup, previously exclusively
-//! from `DROPBOX_*` env vars, now from `client_ops.dropbox_configuration`
+//! from `DROPBOX_*` env vars, now from `integrations.dropbox_configuration`
 //! first (see `dropbox::config::DropboxConfig::from_db`), falling back
 //! to env vars when that row isn't fully configured. A saved change here
 //! takes effect on the next server start, same as editing `.env.local`
@@ -169,7 +169,7 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
         "SELECT app_key, app_secret_ciphertext, refresh_token_ciphertext, root_namespace_id, root_path, updated_at, updated_by
-           FROM client_ops.dropbox_configuration WHERE id = 1",
+           FROM integrations.dropbox_configuration WHERE id = 1",
     )
     .fetch_one(&mut *tx)
     .await;
@@ -268,7 +268,7 @@ pub async fn update_settings(
     };
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
-        "UPDATE client_ops.dropbox_configuration
+        "UPDATE integrations.dropbox_configuration
             SET app_key = $1, app_secret_ciphertext = $2, refresh_token_ciphertext = $3,
                 root_namespace_id = $4, root_path = $5, updated_by = $6
           WHERE id = 1

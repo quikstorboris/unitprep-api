@@ -5,7 +5,7 @@
 //! reads this same row on a system role to decide how long to sleep
 //! before its next run, see that module's own doc comment) and the
 //! integration's own API key (`api_key`, added 2026-09-09 alongside
-//! `client_ops.dropbox_configuration`'s equivalent fields).
+//! `integrations.dropbox_configuration`'s equivalent fields).
 //!
 //! **Two schedule modes as of 2026-09-21** (`schedule_mode`): the plain
 //! hourly interval added 2026-09-02 (once it was clear the sync's own
@@ -52,7 +52,7 @@ use crate::integrations::secrets;
 /// US zones plus UTC plus Serbia's own zone. Real IANA names (not fixed
 /// UTC offsets) so Daylight Saving Time is handled automatically rather
 /// than needing to be flipped by hand twice a year. Matches the CHECK
-/// constraint on `client_ops.process_street_settings.sync_timezone` --
+/// constraint on `integrations.process_street_settings.sync_timezone` --
 /// validated again here so a bad value gets a clear 400 instead of an
 /// opaque database constraint-violation error, same reasoning as
 /// `MIN_INTERVAL_HOURS`/`MAX_INTERVAL_HOURS` below.
@@ -77,7 +77,7 @@ const PERMISSION: &str = "integrations.manage";
 const AAD: &[u8] = b"process_street_settings:1";
 
 /// Matches the `CHECK (sync_interval_hours BETWEEN 1 AND 168)` constraint
-/// on `client_ops.process_street_settings` -- validated here too so a bad
+/// on `integrations.process_street_settings` -- validated here too so a bad
 /// value gets a clear 400 instead of surfacing as an opaque database
 /// constraint-violation error.
 const MIN_INTERVAL_HOURS: i16 = 1;
@@ -173,7 +173,7 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
         "SELECT schedule_mode, sync_interval_hours, sync_time, sync_timezone,
                 api_key_ciphertext, updated_at, updated_by
-           FROM client_ops.process_street_settings WHERE id = 1",
+           FROM integrations.process_street_settings WHERE id = 1",
     )
     .fetch_one(&mut *tx)
     .await;
@@ -337,7 +337,7 @@ pub async fn update_settings(
     };
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
-        "UPDATE client_ops.process_street_settings
+        "UPDATE integrations.process_street_settings
             SET schedule_mode = $1, sync_interval_hours = $2, sync_time = $3,
                 sync_timezone = $4, api_key_ciphertext = $5, updated_by = $6
           WHERE id = 1
