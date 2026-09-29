@@ -1,0 +1,13 @@
+# Keeps the Docker build context small and fast, and keeps anything
+# secret out of an image layer entirely (a layer is exactly as
+# permanent and exactly as easy to leak as a git commit -- see the
+# vault's Gotchas note on the real leaked-credential incident this
+# rule exists because of).
+target/
+.git/
+.env.local
+*.log
+
+# Not needed inside any image -- these are host/editor-side only.
+.vscode/
+.idea/

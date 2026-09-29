@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1
+# Docker Phase 2 of the UnitPrep CI/CD framework -- the unitprep-api
+# dev container. See the vault's UnitPrep Docker Standards.md for the
+# full LAW-level detail this follows.
+#
+# NOT rebuilt per code change -- source is bind-mounted at runtime
+# (see docker-compose.yml), never COPY'd in here. This image only
+# needs the toolchain installed; built once, rebuilt rarely (only
+# when this file or rust-toolchain.toml changes).
+#
+# Deliberately skips cargo-chef's dependency pre-baking (the general
+# Rust caching stack Docker Standards otherwise mandates) -- see that
+# doc's Amendments section for why: docker-compose.yml mounts named
+# volumes for ~/.cargo/registry and target/ at these same paths, which
+# would shadow anything cargo-chef pre-built into the image at build
+# time. The volumes are what actually provide caching here, across
+# restarts and rebuilds alike; cargo-chef's value is real for phase 4's
+# production image (no volumes there to shadow it), not this one.
+FROM rust:1.96.0-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    libssl-dev \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# cargo-watch isn't part of the base image. A BuildKit cache mount
+# speeds up re-installing it on the rare occasion this image does
+# rebuild (toolchain bump, etc.) -- safe here, unlike a full
+# cargo-chef dependency bake, since a build-time cache mount never
+# persists into or conflicts with the runtime volumes above.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo install cargo-watch --locked
+
+WORKDIR /app
+
+# Auto-runs the full workspace test suite on every save -- never the
+# #[ignore]'d real-DB tests, which cargo test excludes by default (see
+# the vault's CI-CD Framework doc for why that stays true here too).
+# To run those deliberately: docker compose exec api-dev cargo test
+# -- --ignored <name>, with TEST_DATABASE_URL already pointed at the
+# test-db service (see docker-compose.yml). To manually run the live
+# server for browser testing: docker compose exec api-dev cargo run --
+# kept separate from this auto-loop on purpose, so an unrelated file
+# edit never yanks the server out from under a manual testing session.
+CMD ["cargo", "watch", "-x", "test --workspace"]

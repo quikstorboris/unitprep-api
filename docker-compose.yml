@@ -1,23 +1,29 @@
-# Docker Phase 1 of the UnitPrep CI/CD framework -- see the vault's
+# Docker Phases 1-2 of the UnitPrep CI/CD framework -- see the vault's
 # reference/UnitPrep CI-CD Framework.md and UnitPrep Docker Standards.md
 # for the full design and why every choice below is made this way.
 #
-# A single postgres:18 service for local ephemeral test-DB isolation:
-# spin up fresh, point real-DB tests at it, throw it away. Version
-# matches the real Neon dev branch (18.6, confirmed via pg_dump's own
-# header) -- not "latest", which would silently drift from it.
+# test-db (phase 1): a single postgres:18 service for local ephemeral
+# test-DB isolation -- spin up fresh, point real-DB tests at it, throw
+# it away. Version matches the real Neon dev branch (18.6, confirmed
+# via pg_dump's own header) -- not "latest", which would silently
+# drift from it.
 #
-# Gated behind the "test" profile (not started by a bare
-# `docker compose up`) so this file stays safe to extend with a "dev"
-# profile later (Docker phases 2-3, the unitprep-api/unitprep-ui dev
-# containers) without the two ever starting together by accident.
+# api-dev (phase 2): a long-lived unitprep-api dev container, source
+# bind-mounted, never rebuilt per code change. Auto-runs the full
+# workspace test suite on every save.
 #
-# Run:   docker compose --profile test up -d
-# Check: docker compose --profile test ps
-# Stop:  docker compose --profile test down
+# Gated behind "test"/"dev" profiles (not started by a bare
+# `docker compose up`) so this file stays safe to extend with
+# unitprep-ui's own dev container later (Docker phase 3) without
+# anything starting together by accident.
+#
+# Run:   docker compose --profile dev up -d      (starts both -- api-dev depends on test-db)
+# Watch: docker compose logs -f api-dev
+# Shell: docker compose exec api-dev bash
+# Stop:  docker compose --profile dev down
 #
 # Mission-critical isolation (see the framework doc's isolation-controls
-# section): this service must never be configured anywhere near a real
+# section): neither service may ever be configured anywhere near a real
 # Neon credential. No NEON_DEV_DATABASE_URL*/NEON_PROD_DATABASE_URL*
 # anywhere in this file, ever -- local Docker gets the same guarantee
 # as CI.
@@ -25,7 +31,11 @@
 services:
   test-db:
     image: postgres:18
-    profiles: ["test"]
+    # Both "test" and "dev" -- api-dev (below) depends on this service,
+    # and Compose only auto-starts a dependency's own profile if that
+    # profile is also requested; this makes `--profile dev` alone
+    # enough to bring both up together.
+    profiles: ["test", "dev"]
     environment:
       # Throwaway, localhost-only credentials for an ephemeral
       # container -- not a real secret, so not a ".env.local only"
@@ -59,3 +69,63 @@ services:
     # with an explicit error naming this exact change.
     tmpfs:
       - /var/lib/postgresql
+
+  # Docker Phase 2 -- the long-lived unitprep-api dev container. Not
+  # rebuilt per code change: source is bind-mounted below, never
+  # baked into the image (see Dockerfile.dev). Left running all day,
+  # same mental model as a persistent terminal tab with the right
+  # toolchain pre-installed.
+  api-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    profiles: ["dev"]
+    working_dir: /app
+    volumes:
+      # Bind mount: live, no-copy window into the same files you edit
+      # on the host. Named volumes: cargo's registry/git caches and
+      # the compiled target/ dir persist across container restarts and
+      # rebuilds, which is what actually makes this fast (not anything
+      # baked into the image -- see Dockerfile.dev's own note on why
+      # cargo-chef is skipped here).
+      - .:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - api-target:/app/target
+      # rustup's own component store (RUSTUP_HOME) -- rust-toolchain.toml
+      # declares rustfmt/clippy, and rustup installs whatever's missing
+      # on first use against the bind-mounted project. Without this
+      # volume, that download would silently repeat on every container
+      # recreation (down+up, not just an image rebuild) since anything
+      # outside a volume lives in the container's disposable writable
+      # layer. Found empirically: the first `up` re-downloaded clippy.
+      - cargo-rustup:/usr/local/rustup
+    ports:
+      # 8080, matching the app's own PORT default -- forwarded so
+      # `cargo run` (started manually, see Dockerfile.dev) is reachable
+      # at localhost:8080 exactly like running it directly on the host.
+      - "127.0.0.1:8080:8080"
+    environment:
+      PORT: "8080"
+      # For manually running the #[ignore]'d real-DB integration tests
+      # (docker compose exec api-dev cargo test -- --ignored <name>) --
+      # never read by the auto-run loop above, which cargo test
+      # excludes #[ignore]'d tests from by default. Points only at the
+      # local ephemeral test-db, on the internal Docker network (its
+      # own internal port 5432, not the host-mapped 5433) -- never
+      # anything resembling NEON_DEV_DATABASE_URL*/NEON_PROD_DATABASE_URL*.
+      TEST_DATABASE_URL: postgres://postgres:postgres@test-db:5432/unitprep_test
+    depends_on:
+      test-db:
+        condition: service_healthy
+    # No HEALTHCHECK here -- deliberately. The main process is the
+    # test-watch loop, not the app server, so there's usually nothing
+    # listening on 8080 to health-check against (see Dockerfile.dev).
+    # A HEALTHCHECK hitting /health would just be wrong most of the
+    # time under normal operation, not merely unused.
+
+volumes:
+  cargo-registry:
+  cargo-git:
+  cargo-rustup:
+  api-target:
