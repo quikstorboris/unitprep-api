@@ -118,6 +118,19 @@ services:
       # the request was reaching the server (visible in its own logs),
       # the browser was just refusing to hand the response to the page.
       CORS_ALLOWED_ORIGINS: "http://localhost:3001,http://localhost:3000"
+      # Same root cause as CORS above, different mechanism: WebAuthn
+      # (passkey) ceremonies cryptographically bind the browser's
+      # actual origin into the request, verified server-side against
+      # this single value -- unlike CORS, there's no list/multi-value
+      # support here, so pick the one origin the browser will actually
+      # present. Defaults to http://localhost:3000 (see main.rs); set
+      # explicitly to ui-dev's real port so passkey login/registration
+      # actually works against the dev containers. Found the hard way:
+      # a passkey ceremony failed with "The clients relying party
+      # origin does not match our servers information" -- a real
+      # WebAuthn security check doing exactly what it's supposed to,
+      # not a bug, just misconfigured for this port.
+      WEBAUTHN_RP_ORIGIN: "http://localhost:3001"
       # For manually running the #[ignore]'d real-DB integration tests
       # (docker compose exec api-dev cargo test -- --ignored <name>) --
       # never read by the auto-run loop above, which cargo test
