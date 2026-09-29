@@ -107,6 +107,17 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       PORT: "8080"
+      # Defaults to just http://localhost:3000/:5173 (see
+      # allowed_origins() in src/api/router/mod.rs) -- unitprep-ui's own
+      # dev container runs on host port 3001, not 3000, because this
+      # machine already has a native `next dev` listening on 3000 (see
+      # unitprep-ui's docker-compose.yml). Both are listed so either one
+      # works, whichever the browser is actually pointed at. Found the
+      # hard way: the frontend's own "could not reach the API" error was
+      # the browser's CORS block, not a real connectivity problem --
+      # the request was reaching the server (visible in its own logs),
+      # the browser was just refusing to hand the response to the page.
+      CORS_ALLOWED_ORIGINS: "http://localhost:3001,http://localhost:3000"
       # For manually running the #[ignore]'d real-DB integration tests
       # (docker compose exec api-dev cargo test -- --ignored <name>) --
       # never read by the auto-run loop above, which cargo test
