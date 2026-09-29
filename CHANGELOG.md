@@ -6,6 +6,11 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.46] - 2026-09-29
+
+### Fixed
+- **Passkey login/registration failed against the dev containers** (`"The clients relying party origin does not match our servers information"`) — same root cause as `v1.9.45`'s CORS fix, different mechanism: WebAuthn ceremonies validate the browser's origin cryptographically against a single `WEBAUTHN_RP_ORIGIN` value (no list support, unlike CORS), which still defaulted to `localhost:3000` while `ui-dev` runs on `3001`. Set explicitly in `api-dev`'s compose environment.
+
 ## [1.9.45] - 2026-09-29
 
 Two fixes found live-testing Docker Phase 2/3 together for the first time.
