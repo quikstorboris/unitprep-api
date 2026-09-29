@@ -17,6 +17,16 @@
 # Order matters and is non-obvious -- see
 # scripts/setup_app_service_role.sql's own header comment for why the
 # role script has to run both before AND after migrations.
+#
+# Also sets a real (but throwaway, local-only) password on app_service
+# -- the shared role-setup script deliberately never does this itself
+# ("a role with no password set cannot authenticate at all, which is
+# intentional" -- correct for real Neon branches, where a human sets
+# the real password by hand). Without this, TEST_DATABASE_URL has no
+# way to authenticate as app_service and ends up connecting as the
+# postgres superuser instead, which silently bypasses every row-level-
+# security policy -- found via an external review, 2026-09-29: tests
+# were passing without actually proving RLS held at all.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -42,10 +52,18 @@ PGPASSWORD=postgres psql -h 127.0.0.1 -p 5433 -U postgres -d unitprep_test \
 echo "==> 2/3 applying migrations"
 DATABASE_URL="$TEST_DB_URL" sqlx migrate run
 
-echo "==> 3/3 applying app_service grants (schemas now exist)"
+echo "==> 3/4 applying app_service grants (schemas now exist)"
 PGPASSWORD=postgres psql -h 127.0.0.1 -p 5433 -U postgres -d unitprep_test \
     -f scripts/setup_app_service_role.sql
 
+echo "==> 4/4 setting a local-only password on app_service"
+# Throwaway, localhost-only -- not a real secret, same reasoning as
+# test-db's own postgres/postgres credentials. Idempotent: safe to
+# re-run against an already-configured role.
+PGPASSWORD=postgres psql -h 127.0.0.1 -p 5433 -U postgres -d unitprep_test \
+    -c "ALTER ROLE app_service PASSWORD 'app_service';"
+
 echo
 echo "test-db ready. Run an #[ignore]'d test with, e.g.:"
-echo "  docker compose exec -e DATABASE_URL='postgres://postgres:postgres@test-db:5432/unitprep_test' api-dev cargo test -- --ignored <name>"
+echo "  docker compose exec api-dev cargo test -- --ignored <name>"
+echo "(TEST_DATABASE_URL is already set in docker-compose.yml, connecting as app_service -- RLS applies, same as production.)"

@@ -134,11 +134,21 @@ services:
       # For manually running the #[ignore]'d real-DB integration tests
       # (docker compose exec api-dev cargo test -- --ignored <name>) --
       # never read by the auto-run loop above, which cargo test
-      # excludes #[ignore]'d tests from by default. Points only at the
-      # local ephemeral test-db, on the internal Docker network (its
-      # own internal port 5432, not the host-mapped 5433) -- never
+      # excludes #[ignore]'d tests from by default (see src/db.rs's
+      # connect_test(), which reads this var specifically, hard-fails
+      # if unset, and refuses to touch anything with a .neon.tech host
+      # even if this were ever pointed at one by mistake). Points only
+      # at the local ephemeral test-db, on the internal Docker network
+      # (its own internal port 5432, not the host-mapped 5433) -- never
       # anything resembling NEON_DEV_DATABASE_URL*/NEON_PROD_DATABASE_URL*.
-      TEST_DATABASE_URL: postgres://postgres:postgres@test-db:5432/unitprep_test
+      #
+      # Connects as app_service, NOT the postgres superuser -- found via
+      # external review, 2026-09-29: a superuser/table-owner connection
+      # bypasses every row-level-security policy silently, so tests run
+      # this way pass without actually proving RLS holds. app_service's
+      # password here is set by scripts/bootstrap_test_db.sh, which
+      # must run first against any freshly-recreated test-db.
+      TEST_DATABASE_URL: postgres://app_service:app_service@test-db:5432/unitprep_test
     depends_on:
       test-db:
         condition: service_healthy

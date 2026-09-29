@@ -39,8 +39,20 @@ WORKDIR /app
 # the vault's CI-CD Framework doc for why that stays true here too).
 # To run those deliberately: docker compose exec api-dev cargo test
 # -- --ignored <name>, with TEST_DATABASE_URL already pointed at the
-# test-db service (see docker-compose.yml). To manually run the live
-# server for browser testing: docker compose exec api-dev cargo run --
-# kept separate from this auto-loop on purpose, so an unrelated file
-# edit never yanks the server out from under a manual testing session.
+# test-db service (see docker-compose.yml), connecting as app_service
+# so row-level security actually applies (see src/db.rs's
+# connect_test()).
+#
+# To manually run the live server for browser testing: docker compose
+# exec api-dev cargo run -- kept separate from this auto-loop on
+# purpose, so an unrelated file edit never yanks the server out from
+# under a manual testing session. This deliberately still uses
+# DATABASE_URL from the bind-mounted .env.local, same as running it
+# directly on the host -- i.e. it talks to the real Neon dev branch, on
+# purpose, same as it always has. That's a human, deliberately clicking
+# around to test something, not an automated process; the mission-
+# critical "never touch Neon automatically" rule is about the latter
+# (see the CI-CD Framework doc's isolation controls), not this. If you
+# ever want cargo run itself to use the local test-db instead, pass
+# DATABASE_URL explicitly: docker compose exec -e DATABASE_URL=... .
 CMD ["cargo", "watch", "-x", "test --workspace"]
