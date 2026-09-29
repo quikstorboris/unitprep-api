@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.47] - 2026-09-29
+
+Closes the `TEST_DATABASE_URL` isolation-control gap and an RLS-bypass regression, both found via an external (Grok) review of the Docker setup.
+
+### Added
+- **`db::connect_test()`** — implements the CI/CD framework's isolation control #2/#3 for real: a distinct connection path for `#[ignore]`'d real-DB tests, reading `TEST_DATABASE_URL` only (never `DATABASE_URL`), hard-failing if unset or malformed, and aborting loudly if the resolved host looks like a Neon endpoint. 24 call sites across 12 files updated to use it; `main.rs`'s real application startup is unchanged.
+
+### Fixed
+- **`TEST_DATABASE_URL` connected as the `postgres` superuser**, which bypasses row-level security entirely — tests were passing without actually proving RLS held. Now connects as `app_service` (a real, local-only password set by `bootstrap_test_db.sh`), matching how the real application connects.
+- **A real bug in `scripts/setup_app_service_role.sql`**: each schema's grants were bundled into the same `DO` block as an `ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner` statement that always fails on a non-Neon Postgres — and an uncaught exception anywhere in a `DO` block silently rolls back the *entire* block, not just the failing statement. `app_service` ended up with no access to `auth` (or `client_ops`, `integrations`, `clients`) at all. Fixed by wrapping just that one statement in its own nested exception handler per schema (5 occurrences); behavior against real Neon is unchanged (the exception never fires there).
+
 ## [1.9.46] - 2026-09-29
 
 ### Fixed
