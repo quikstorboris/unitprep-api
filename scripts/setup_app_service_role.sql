@@ -89,8 +89,22 @@ BEGIN
     IF EXISTS (SELECT FROM pg_catalog.pg_namespace WHERE nspname = 'auth') THEN
         EXECUTE 'GRANT USAGE ON SCHEMA auth TO app_service';
         EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA auth TO app_service';
-        EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA auth '
-                'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+        -- Nested block deliberately: an uncaught exception anywhere in
+        -- this DO block aborts the WHOLE block, silently rolling back
+        -- the two grants just above along with it -- not just this one
+        -- statement. Found for real 2026-09-29 running this on a local
+        -- (non-Neon) Postgres: app_service ended up with NO access to
+        -- `auth` at all, not just missing future-table defaults, and it
+        -- looked like an unrelated, already-understood, harmless error
+        -- until a query actually failed with "permission denied for
+        -- schema auth". On real Neon this exception never fires
+        -- (neondb_owner exists there), so this changes nothing there.
+        BEGIN
+            EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA auth '
+                    'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+        EXCEPTION WHEN undefined_object THEN
+            RAISE NOTICE 'role "neondb_owner" does not exist (not running on Neon) -- skipping default-privileges grant for future tables in schema auth; existing tables already granted above';
+        END;
     ELSE
         RAISE NOTICE 'schema "auth" not present yet -- skipping its grants. Re-run this file after `sqlx migrate run`.';
     END IF;
@@ -106,8 +120,14 @@ BEGIN
     IF EXISTS (SELECT FROM pg_catalog.pg_namespace WHERE nspname = 'client_ops') THEN
         EXECUTE 'GRANT USAGE ON SCHEMA client_ops TO app_service';
         EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA client_ops TO app_service';
-        EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA client_ops '
-                'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+        -- Nested block: see the auth block above for why this can't be
+        -- a plain EXECUTE in the same DO block as the two grants above.
+        BEGIN
+            EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA client_ops '
+                    'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+        EXCEPTION WHEN undefined_object THEN
+            RAISE NOTICE 'role "neondb_owner" does not exist (not running on Neon) -- skipping default-privileges grant for future tables in schema client_ops; existing tables already granted above';
+        END;
     ELSE
         RAISE NOTICE 'schema "client_ops" not present yet -- skipping its grants. Re-run this file after `sqlx migrate run`.';
     END IF;
@@ -127,8 +147,14 @@ BEGIN
     IF EXISTS (SELECT FROM pg_catalog.pg_namespace WHERE nspname = 'integrations') THEN
         EXECUTE 'GRANT USAGE ON SCHEMA integrations TO app_service';
         EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA integrations TO app_service';
-        EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA integrations '
-                'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+        -- Nested block: see the auth block above for why this can't be
+        -- a plain EXECUTE in the same DO block as the two grants above.
+        BEGIN
+            EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA integrations '
+                    'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+        EXCEPTION WHEN undefined_object THEN
+            RAISE NOTICE 'role "neondb_owner" does not exist (not running on Neon) -- skipping default-privileges grant for future tables in schema integrations; existing tables already granted above';
+        END;
     ELSE
         RAISE NOTICE 'schema "integrations" not present yet -- skipping its grants. Re-run this file after `sqlx migrate run`.';
     END IF;
@@ -147,8 +173,14 @@ BEGIN
     IF EXISTS (SELECT FROM pg_catalog.pg_namespace WHERE nspname = 'clients') THEN
         EXECUTE 'GRANT USAGE ON SCHEMA clients TO app_service';
         EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA clients TO app_service';
-        EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA clients '
-                'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+        -- Nested block: see the auth block above for why this can't be
+        -- a plain EXECUTE in the same DO block as the two grants above.
+        BEGIN
+            EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA clients '
+                    'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO app_service';
+        EXCEPTION WHEN undefined_object THEN
+            RAISE NOTICE 'role "neondb_owner" does not exist (not running on Neon) -- skipping default-privileges grant for future tables in schema clients; existing tables already granted above';
+        END;
         -- Several tables here (policy_fees, policy_delinquency_steps,
         -- policy_coverage_tiers, facility_merchant_account_parties,
         -- ps_task_status) use BIGSERIAL primary keys. A table grant
@@ -163,8 +195,14 @@ BEGIN
         -- separately, since this script never granted sequence access
         -- anywhere before now.
         EXECUTE 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA clients TO app_service';
-        EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA clients '
-                'GRANT USAGE, SELECT ON SEQUENCES TO app_service';
+        -- Nested block: see the auth block above for why this can't be
+        -- a plain EXECUTE alongside the sequence grant just above.
+        BEGIN
+            EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE neondb_owner IN SCHEMA clients '
+                    'GRANT USAGE, SELECT ON SEQUENCES TO app_service';
+        EXCEPTION WHEN undefined_object THEN
+            RAISE NOTICE 'role "neondb_owner" does not exist (not running on Neon) -- skipping default-privileges grant for future sequences in schema clients; existing ones already granted above';
+        END;
     ELSE
         RAISE NOTICE 'schema "clients" not present yet -- skipping its grants. Re-run this file after `sqlx migrate run`.';
     END IF;
