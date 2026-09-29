@@ -359,7 +359,7 @@ async fn main() {
         Ok(listener) => listener,
         Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => {
             eprintln!(
-                "Failed to start: {addr} is already in use — another unitprep instance is likely still running.\nFind it with `ss -ltnp | grep :{port}` (or `lsof -i :{port}`) and stop it before starting a new one."
+                "Failed to start: {addr} is already in use — another unitprep instance is likely still running.\nOn the host: find it with `ss -ltnp | grep :{port}` (or `lsof -i :{port}`) and stop it before starting a new one.\nRunning inside the api-dev Docker container? Host-level tools won't see it -- the other instance is almost always still alive inside this SAME container (e.g. a previous `cargo run` left running). Clear it with: `docker compose up -d --force-recreate api-dev`."
             );
 
             std::process::exit(1);
