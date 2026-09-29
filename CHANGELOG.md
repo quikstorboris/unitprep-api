@@ -6,6 +6,18 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.44] - 2026-09-29
+
+Docker Phase 2 of the CI/CD framework's containerization plan.
+
+### Added
+- **`Dockerfile.dev` + `docker-compose.yml`'s `api-dev` service** — a long-lived `unitprep-api` dev container, source bind-mounted (never rebuilt per code change), auto-running `cargo watch -x "test --workspace"` continuously. Four named volumes (`cargo-registry`, `cargo-git`, `cargo-rustup`, `api-target`) provide the actual caching, since cargo-chef's build-time dependency pre-baking would just get shadowed by volumes mounted at the same paths — deliberately skipped here, see `UnitPrep Docker Standards.md`'s Amendments section. Port `8080` forwarded for on-demand manual testing (`docker compose exec api-dev cargo run`, kept separate from the auto-loop so an unrelated edit never disrupts a manual testing session).
+- **`scripts/bootstrap_test_db.sh`** — makes a freshly-recreated `test-db` (genuinely ephemeral by design) actually usable for `#[ignore]`d real-DB tests in one idempotent command, instead of a fragile manual multi-step sequence.
+
+### Fixed (during verification, not shipped as bugs)
+- `rustup`'s component store wasn't in a named volume, so `rustfmt`/`clippy` were silently re-downloading on every container recreation, not just image rebuilds.
+- The first attempt at running an `#[ignore]`d test against a freshly-recreated `test-db` failed (`relation "auth.roles" does not exist`) — not a bug, just the ephemeral design working as intended; `bootstrap_test_db.sh` closes the gap.
+
 ## [1.9.43] - 2026-09-28
 
 Docker Phase 1 of the CI/CD framework's containerization plan.
