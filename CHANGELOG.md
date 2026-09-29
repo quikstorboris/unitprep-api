@@ -6,6 +6,16 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.45] - 2026-09-29
+
+Two fixes found live-testing Docker Phase 2/3 together for the first time.
+
+### Fixed
+- **CORS blocked `unitprep-ui`'s dev container from reaching the API** — `CORS_ALLOWED_ORIGINS` only defaulted to `localhost:3000`/`:5173`, but `ui-dev` runs on `3001` (remapped due to a port collision with a native `next dev`). Added both origins to `api-dev`'s compose environment. The frontend's "could not reach the API" error was misleading — the request was reaching the server the whole time; the browser was silently discarding the response on CORS grounds.
+
+### Added
+- **Docker-aware guidance in the "port already in use" startup error** — the existing `ss`/`lsof` advice only helps when the other instance is on the host; inside `api-dev`, a leftover process lives in the container's own network namespace, invisible to host-level tools. Added a line pointing at `docker compose up -d --force-recreate api-dev` instead.
+
 ## [1.9.44] - 2026-09-29
 
 Docker Phase 2 of the CI/CD framework's containerization plan.
