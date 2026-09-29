@@ -69,3 +69,48 @@ pub fn connect() -> Result<PgPool, sqlx::Error> {
         .max_connections(20)
         .connect_lazy_with(connect_options))
 }
+
+/// Builds a database connection pool for `#[ignore]`'d real-DB tests
+/// only -- never used by the running application, which always uses
+/// [`connect`] above.
+///
+/// Deliberately reads a distinct env var (`TEST_DATABASE_URL`), never
+/// `DATABASE_URL`, and never falls back to it -- see the vault's CI-CD
+/// Framework doc's isolation controls. A test calling this can't
+/// silently pick up a real Neon connection string left over from a
+/// bind-mounted `.env.local` or a forgotten env override: it hard-fails
+/// if `TEST_DATABASE_URL` is unset, and aborts loudly if the resolved
+/// host looks like a Neon endpoint at all, as a second, independent
+/// backstop against the same mistake (defense in depth, not just
+/// discipline -- the same posture this project already applies to
+/// auth).
+///
+/// Point this at the local ephemeral `test-db` Docker service (see
+/// docker-compose.yml), connecting as `app_service`, never the
+/// superuser -- connecting as the table owner bypasses every
+/// row-level-security policy silently, which would make these tests
+/// pass without actually proving RLS holds.
+#[cfg(test)]
+pub fn connect_test() -> PgPool {
+    let database_url = std::env::var("TEST_DATABASE_URL").expect(
+        "TEST_DATABASE_URL must be set -- point it at the local ephemeral test-db \
+         Docker service (see docker-compose.yml), never at Neon. This is deliberately \
+         a different variable from DATABASE_URL so a test can never silently connect \
+         to a real database.",
+    );
+
+    let connect_options: PgConnectOptions = database_url
+        .parse()
+        .expect("TEST_DATABASE_URL must be a well-formed Postgres connection string");
+
+    let host = connect_options.get_host();
+    assert!(
+        !host.ends_with(".neon.tech"),
+        "TEST_DATABASE_URL resolves to a Neon host ({host}) -- this must never point \
+         at Neon, dev or prod. Point it at the local ephemeral test-db instead."
+    );
+
+    PgPoolOptions::new()
+        .max_connections(5)
+        .connect_lazy_with(connect_options)
+}

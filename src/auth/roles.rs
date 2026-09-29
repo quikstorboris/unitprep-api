@@ -136,7 +136,7 @@ mod tests {
     #[ignore = "needs a real, reachable Postgres -- see doc comment"]
     async fn remaining_active_admins_excluding_serializes_concurrent_callers() {
         let _ = dotenvy::from_filename(".env.local");
-        let db = crate::db::connect().expect("DATABASE_URL must be set -- see .env.local");
+        let db = crate::db::connect_test();
 
         const HOLD: Duration = Duration::from_millis(400);
         // FOR UPDATE on auth.roles is governed by its SELECT policy AND

@@ -209,8 +209,7 @@ mod live_tests {
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
     async fn a_qsx_facilitys_empty_category_gets_permanently_exempt() {
         let _ = dotenvy::from_filename(".env.local");
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let mut tx = crate::auth::begin_rls_transaction(
             &db,
             Uuid::new_v4(),
@@ -237,8 +236,7 @@ mod live_tests {
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
     async fn a_qsx_facilitys_already_populated_category_never_becomes_exempt() {
         let _ = dotenvy::from_filename(".env.local");
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let mut tx = crate::auth::begin_rls_transaction(
             &db,
             Uuid::new_v4(),
@@ -268,8 +266,7 @@ mod live_tests {
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
     async fn a_non_qsx_facilitys_empty_category_never_becomes_exempt() {
         let _ = dotenvy::from_filename(".env.local");
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let mut tx = crate::auth::begin_rls_transaction(
             &db,
             Uuid::new_v4(),

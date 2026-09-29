@@ -576,8 +576,7 @@ mod tests {
     async fn query_sessions_own_sql_is_valid_against_the_real_schema() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let db = crate::db::connect()
-            .expect("DATABASE_URL must be a well-formed connection string -- see .env.local");
+        let db = crate::db::connect_test();
 
         let (_, token_hash) = crate::auth::generate_token();
 

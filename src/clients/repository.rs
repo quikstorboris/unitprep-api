@@ -877,8 +877,7 @@ mod integration_tests {
         let _ = dotenvy::from_filename(".env.local");
         set_test_key();
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let user_id = Uuid::new_v4();
         let mut tx =
             crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
@@ -1136,8 +1135,7 @@ mod integration_tests {
     ) {
         let _ = dotenvy::from_filename(".env.local");
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let user_id = Uuid::new_v4();
         let mut tx =
             crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
@@ -1228,8 +1226,7 @@ mod integration_tests {
     async fn upsert_person_and_link_to_facility_keeps_distinct_names_separate_on_a_shared_email() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let user_id = Uuid::new_v4();
         let mut tx =
             crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
@@ -1308,8 +1305,7 @@ mod integration_tests {
     async fn heal_person_in_place_corrects_a_known_persons_own_name_and_phone() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let user_id = Uuid::new_v4();
         let mut tx =
             crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])
@@ -1401,8 +1397,7 @@ mod integration_tests {
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
     async fn policy_delinquency_entries_trigger_check_matches_the_apps_own_validation() {
         let _ = dotenvy::from_filename(".env.local");
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let mut tx = crate::auth::begin_rls_transaction(
             &db,
             Uuid::new_v4(),
@@ -1485,8 +1480,7 @@ mod integration_tests {
     #[ignore = "needs a real, reachable Postgres with migrations applied -- see doc comment"]
     async fn edit_person_and_facility_link_flips_source_to_manual_only_when_protected() {
         let _ = dotenvy::from_filename(".env.local");
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let mut tx = crate::auth::begin_rls_transaction(
             &db,
             Uuid::new_v4(),

@@ -203,8 +203,7 @@ mod live_tests {
             .expect("PROCESS_STREET_API_KEY must be set in .env.local");
         let client = ProcessStreetClient::new(ps_config);
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let user_id = Uuid::new_v4();
         let mut tx =
             crate::auth::begin_rls_transaction(&db, user_id, &["onboarding_manager".to_string()])

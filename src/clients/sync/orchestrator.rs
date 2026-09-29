@@ -760,8 +760,7 @@ mod live_tests {
             .find(|r| r.name == "Highway 20 Self Storage - QMS Onboarding")
             .expect("Highway 20's Intake run must be found");
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let mut tx = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
             .await
             .expect("beginning an RLS transaction must succeed");
@@ -844,8 +843,7 @@ mod live_tests {
             .find(|r| r.name == "Prairie Enterprises (Highway 20)")
             .expect("Highway 20's own Merchant Account run must be found");
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let mut tx = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
             .await
             .expect("beginning an RLS transaction must succeed");
@@ -900,8 +898,7 @@ mod live_tests {
             .expect("PROCESS_STREET_API_KEY must be set in .env.local");
         let client = ProcessStreetClient::new(ps_config);
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
         let mut tx = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
             .await
             .expect("beginning an RLS transaction must succeed");

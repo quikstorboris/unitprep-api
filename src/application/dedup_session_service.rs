@@ -201,8 +201,7 @@ mod tests {
     async fn a_dedup_session_survives_a_simulated_process_restart_durability() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
 
         // A unique kind per test run -- keeps this test's row fully
         // isolated from a concurrently-running real server instance

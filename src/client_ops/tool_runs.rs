@@ -209,8 +209,7 @@ mod tests {
     async fn attach_output_bytes_runs_cleanly_against_the_real_schema() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
 
         attach_output_bytes(
             &db,
@@ -233,8 +232,7 @@ mod tests {
     async fn attach_output_dropbox_runs_cleanly_against_the_real_schema() {
         let _ = dotenvy::from_filename(".env.local");
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
 
         attach_output_dropbox(
             &db,

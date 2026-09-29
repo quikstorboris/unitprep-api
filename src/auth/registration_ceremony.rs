@@ -187,8 +187,7 @@ mod tests {
 
         let _ = dotenvy::from_filename(".env.local");
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
 
         // A unique kind per test run, not the real
         // "webauthn_registration_ceremony" main.rs actually uses --

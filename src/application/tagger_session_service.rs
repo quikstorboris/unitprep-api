@@ -148,8 +148,7 @@ mod tests {
 
         let _ = dotenvy::from_filename(".env.local");
 
-        let db =
-            crate::db::connect().expect("DATABASE_URL must be a well-formed connection string");
+        let db = crate::db::connect_test();
 
         // A unique kind per test run -- keeps this test's row fully
         // isolated from anything a concurrently-running real server
