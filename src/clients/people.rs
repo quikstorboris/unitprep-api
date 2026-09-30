@@ -1,7 +1,7 @@
 //! Parses Process Street's free-text "Owner/District Manager/Manager
 //! Level Users" blocks into individual records.
 //!
-//! Real production data uses at least three genuinely different
+//! Real production data uses at least four genuinely different
 //! formats, all confirmed this session:
 //! - **Comma-separated, one line per person** (Beau Ryan's facilities):
 //!   `"Beau Ryan, beau@rockspring.com, 832-978-3228"`, one such line per
@@ -27,6 +27,14 @@
 //!   digits?) rather than assuming a fixed position, specifically so
 //!   this kind of per-person order flip within the same field doesn't
 //!   need a fourth special case.
+//!
+//! - **Space-separated, one line per person, no commas or dashes** (LG
+//!   Squared RV & Ministorage): `"Name email@x.com 555-010-0101"`, one
+//!   such line per person. `parse_space_line` below; a chunk uses this
+//!   format only if EVERY line parses as one, so a multi-line record's
+//!   bare name/email/phone lines can never be mistaken for it. Before
+//!   this existed the block fell into the multi-line path and came out
+//!   as one garbled person (the whole first line as a "name").
 //!
 //! Boris's own framing: "I would comb through a healthy sample of PS's
 //! various clients' forms to establish a pattern" -- this is that
@@ -173,11 +181,66 @@ fn parse_multiline_record(lines: &[&str]) -> Option<ParsedPerson> {
     })
 }
 
+/// One line of `"Name email phone"` separated by spaces only -- no
+/// commas, no dash (LG Squared RV & Ministorage's Intake run, six owners
+/// in one block). The name is everything before the first token that is
+/// an email (`@`) or starts like a phone number (digit, `(` or `+`);
+/// the email is the `@` token; the phone is whatever non-email tokens
+/// follow the name, re-joined with single spaces so `"(555) 010 0102"`
+/// survives, and kept only if it has at least 7 digits. Either contact
+/// order works.
+///
+/// Returns `None` unless there's a non-empty name AND at least one
+/// contact value. That's deliberate: it's what lets
+/// `parse_people_block` use "every line parses" as its detector for this
+/// format, since a line in a multi-line record (a bare name, a bare
+/// email, a bare phone, `"Primary: x@y"`) fails one way or another.
+fn parse_space_line(line: &str) -> Option<ParsedPerson> {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let starts_a_phone =
+        |t: &str| t.starts_with(|c: char| c.is_ascii_digit() || c == '(' || c == '+');
+    let name_end = tokens
+        .iter()
+        .position(|t| t.contains('@') || starts_a_phone(t))?;
+    if name_end == 0 {
+        return None;
+    }
+
+    let contact = &tokens[name_end..];
+    let email = contact.iter().find(|t| t.contains('@')).map(|t| {
+        t.trim_matches(|c: char| c == ';' || c == '<' || c == '>')
+            .to_string()
+    });
+    let phone_text = contact
+        .iter()
+        .filter(|t| !t.contains('@'))
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let phone =
+        (phone_text.chars().filter(char::is_ascii_digit).count() >= 7).then_some(phone_text);
+
+    if email.is_none() && phone.is_none() {
+        return None;
+    }
+    Some(ParsedPerson {
+        full_name: tokens[..name_end].join(" "),
+        email,
+        phone,
+    })
+}
+
 pub fn parse_people_block(raw: &str) -> Vec<ParsedPerson> {
     let mut people = Vec::new();
     for chunk in split_into_chunks(raw) {
         if chunk.iter().all(|line| line.contains(',')) {
             people.extend(chunk.iter().filter_map(|line| parse_comma_line(line)));
+        } else if let Some(space_separated) = chunk
+            .iter()
+            .map(|line| parse_space_line(line))
+            .collect::<Option<Vec<_>>>()
+        {
+            people.extend(space_separated);
         } else if let Some(person) = parse_multiline_record(&chunk) {
             people.push(person);
         }
@@ -255,6 +318,52 @@ mod tests {
             Some("chchenpropertymgmtteam1@gmail.com")
         );
         assert_eq!(people[1].phone.as_deref(), Some("(423) 314-2096"));
+    }
+
+    #[test]
+    fn parses_a_space_separated_one_person_per_line_block() {
+        // LG Squared RV & Ministorage's Intake run: one person per line,
+        // "Name email phone" separated by spaces only -- no commas, no
+        // dashes, no blank lines. Previously fell through to the
+        // multi-line path, which made the whole first line the "name"
+        // and yielded ONE garbled person instead of several. Synthetic
+        // data standing in for the real shape (this repo is public).
+        let raw = "Pat Sample pat.sample@example.com 555-010-0101\n\
+                   Sam Example sam.example@example.com 555-010-0102\n\
+                   Alex Placeholder alex.p@example.com 555-010-0103";
+        let people = parse_people_block(raw);
+        assert_eq!(people.len(), 3, "one person per line, not one per block");
+        assert_eq!(people[0].full_name, "Pat Sample");
+        assert_eq!(people[0].email.as_deref(), Some("pat.sample@example.com"));
+        assert_eq!(people[0].phone.as_deref(), Some("555-010-0101"));
+        assert_eq!(people[2].full_name, "Alex Placeholder");
+        assert_eq!(people[2].phone.as_deref(), Some("555-010-0103"));
+    }
+
+    #[test]
+    fn space_separated_lines_tolerate_either_contact_order_and_spaced_phones() {
+        let raw = "Pat Sample 555-010-0101 pat.sample@example.com\n\
+                   Sam Q. Example (555) 010 0102 sam@example.com\n\
+                   Alex Placeholder alex.p@example.com\n\
+                   Robin Phoneonly 555-010-0104";
+        let people = parse_people_block(raw);
+        assert_eq!(people.len(), 4);
+        assert_eq!(people[0].full_name, "Pat Sample");
+        assert_eq!(people[0].email.as_deref(), Some("pat.sample@example.com"));
+        assert_eq!(people[0].phone.as_deref(), Some("555-010-0101"));
+        assert_eq!(people[1].full_name, "Sam Q. Example");
+        assert_eq!(people[1].phone.as_deref(), Some("(555) 010 0102"));
+        assert_eq!(people[2].phone, None);
+        assert_eq!(people[3].full_name, "Robin Phoneonly");
+        assert_eq!(people[3].email, None);
+        assert_eq!(people[3].phone.as_deref(), Some("555-010-0104"));
+    }
+
+    #[test]
+    fn a_single_space_separated_line_is_one_person() {
+        let people = parse_people_block("Pat Sample pat.sample@example.com 555-010-0101");
+        assert_eq!(people.len(), 1);
+        assert_eq!(people[0].full_name, "Pat Sample");
     }
 
     #[test]
