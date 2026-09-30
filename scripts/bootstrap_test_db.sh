@@ -25,43 +25,57 @@
 # the real password by hand). Without this, TEST_DATABASE_URL has no
 # way to authenticate as app_service and ends up connecting as the
 # postgres superuser instead, which silently bypasses every row-level-
-# security policy -- found via an external review, 2026-09-29: tests
-# were passing without actually proving RLS held at all.
+# security policy -- tests were passing without actually proving RLS
+# held at all.
+#
+# Host/port/credentials are all overridable (env vars below, each with
+# the Docker Phase 1 default) rather than hardcoded, specifically so
+# this same script also works unchanged against GitHub Actions' service
+# containers (a different host/port), not just the local test-db --
+# one script, two callers, instead of near-duplicate logic in two
+# places.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-TEST_DB_URL="postgres://postgres:postgres@127.0.0.1:5433/unitprep_test"
+PGHOST="${TEST_DB_HOST:-127.0.0.1}"
+PGPORT="${TEST_DB_PORT:-5433}"
+PGSUPERUSER="${TEST_DB_SUPERUSER:-postgres}"
+PGSUPERPASS="${TEST_DB_SUPERUSER_PASSWORD:-postgres}"
+APP_SERVICE_PASSWORD="${TEST_DB_APP_SERVICE_PASSWORD:-app_service}"
+DBNAME="${TEST_DB_NAME:-unitprep_test}"
 
-echo "==> Waiting for test-db to be reachable..."
+TEST_DB_URL="postgres://${PGSUPERUSER}:${PGSUPERPASS}@${PGHOST}:${PGPORT}/${DBNAME}"
+
+echo "==> Waiting for test-db to be reachable at ${PGHOST}:${PGPORT}..."
 for _ in $(seq 1 30); do
-    if PGPASSWORD=postgres psql -h 127.0.0.1 -p 5433 -U postgres -d unitprep_test -c 'SELECT 1' > /dev/null 2>&1; then
+    if PGPASSWORD="$PGSUPERPASS" psql -h "$PGHOST" -p "$PGPORT" -U "$PGSUPERUSER" -d "$DBNAME" -c 'SELECT 1' > /dev/null 2>&1; then
         break
     fi
     sleep 1
 done
 
-echo "==> 1/3 creating app_service role (if missing)"
+echo "==> 1/4 creating app_service role (if missing)"
 # A "role neondb_owner does not exist" error here is expected and
 # harmless on a local (non-Neon) Postgres -- see this script's own
 # note above. Anything else printed is real; this step intentionally
 # doesn't hide output or swallow its exit code.
-PGPASSWORD=postgres psql -h 127.0.0.1 -p 5433 -U postgres -d unitprep_test \
+PGPASSWORD="$PGSUPERPASS" psql -h "$PGHOST" -p "$PGPORT" -U "$PGSUPERUSER" -d "$DBNAME" \
     -f scripts/setup_app_service_role.sql
 
-echo "==> 2/3 applying migrations"
+echo "==> 2/4 applying migrations"
 DATABASE_URL="$TEST_DB_URL" sqlx migrate run
 
 echo "==> 3/4 applying app_service grants (schemas now exist)"
-PGPASSWORD=postgres psql -h 127.0.0.1 -p 5433 -U postgres -d unitprep_test \
+PGPASSWORD="$PGSUPERPASS" psql -h "$PGHOST" -p "$PGPORT" -U "$PGSUPERUSER" -d "$DBNAME" \
     -f scripts/setup_app_service_role.sql
 
 echo "==> 4/4 setting a local-only password on app_service"
-# Throwaway, localhost-only -- not a real secret, same reasoning as
-# test-db's own postgres/postgres credentials. Idempotent: safe to
-# re-run against an already-configured role.
-PGPASSWORD=postgres psql -h 127.0.0.1 -p 5433 -U postgres -d unitprep_test \
-    -c "ALTER ROLE app_service PASSWORD 'app_service';"
+# Throwaway -- not a real secret, same reasoning as test-db's own
+# postgres/postgres credentials. Idempotent: safe to re-run against an
+# already-configured role.
+PGPASSWORD="$PGSUPERPASS" psql -h "$PGHOST" -p "$PGPORT" -U "$PGSUPERUSER" -d "$DBNAME" \
+    -c "ALTER ROLE app_service PASSWORD '${APP_SERVICE_PASSWORD}';"
 
 echo
 echo "test-db ready. Run an #[ignore]'d test with, e.g.:"
