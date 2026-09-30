@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Runs scripts/preflight.sh before branch commits are pushed (Tier 0 of
+# the UnitPrep CI/CD framework -- see the vault's
+# reference/UnitPrep CI-CD Framework.md). Tag-only pushes and branch
+# deletions skip it: a tag points at commits that already passed when
+# they were pushed.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+# Bypass in an emergency: git push --no-verify
+set -euo pipefail
+
+# git feeds one "<local ref> <local sha> <remote ref> <remote sha>" line
+# per ref being pushed. Only a non-deleted refs/heads/* ref needs a check.
+needs_check=0
+zero="0000000000000000000000000000000000000000"
+while read -r local_ref local_sha _remote_ref _remote_sha; do
+    if [[ "$local_ref" == refs/heads/* && "$local_sha" != "$zero" ]]; then
+        needs_check=1
+    fi
+done
+
+if [ "$needs_check" -eq 0 ]; then
+    exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)"
+
+# A push from a GUI or IDE terminal may not have loaded the login
+# profile, so make the tools preflight needs reachable explicitly.
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+echo "pre-push: running scripts/preflight.sh (bypass with --no-verify)..."
+if ! ./scripts/preflight.sh; then
+    echo
+    echo "pre-push: preflight failed -- push aborted. Fix the issues above, or bypass with: git push --no-verify"
+    exit 1
+fi
