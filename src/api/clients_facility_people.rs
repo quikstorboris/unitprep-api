@@ -63,6 +63,7 @@ use uuid::Uuid;
 use crate::api::{bad_request, internal_error, not_found, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
+use crate::clients::legal_owner::{legal_owner_flags, OwnerIdentity, RosterIdentity};
 use crate::clients::people::PersonAssignment;
 use crate::clients::repository::{
     edit_person_and_facility_link, heal_person_in_place, unlink_person_from_facility,
@@ -83,8 +84,16 @@ pub struct FacilityPerson {
     pub full_name: String,
     pub email: Option<String>,
     pub phone: Option<String>,
+    /// Access level (owner / district_manager / manager) -- what this
+    /// person can do inside QMS, from the Intake form's user-level
+    /// fields. NOT legal ownership; see `legal_owner` below.
     pub role: String,
     pub source: String,
+    /// True when this person is also listed as an owner on the Merchant
+    /// Account Pre-App -- see `clients::legal_owner`. Computed on read,
+    /// never stored (hence `skip`: it isn't a column in the roster query).
+    #[sqlx(skip)]
+    pub legal_owner: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -246,6 +255,46 @@ pub async fn get_facility_people(
 
         person.full_name = candidate.full_name.clone();
         person.phone = candidate.phone.clone();
+    }
+
+    // "Legal Owner" column: owners listed on the Merchant Account
+    // Pre-App, matched against the (now self-healed) roster. The party
+    // table's RLS SELECT policy is narrower than this tab's, so a viewer
+    // without that access just sees no checkmarks rather than an error.
+    let owners: Vec<(Option<String>, Option<String>)> = match sqlx::query_as(
+        "SELECT display_name, email
+           FROM clients.facility_merchant_account_parties
+          WHERE facility_id = $1 AND party_role = 'owner'",
+    )
+    .bind(facility_id)
+    .fetch_all(&mut *tx)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "merchant account owner lookup failed");
+            return internal_error("Could not load this facility's Users tab");
+        }
+    };
+    let owners: Vec<OwnerIdentity> = owners
+        .into_iter()
+        .map(|(display_name, email)| OwnerIdentity {
+            display_name,
+            email,
+        })
+        .collect();
+    let flags = legal_owner_flags(
+        &roster
+            .iter()
+            .map(|p| RosterIdentity {
+                full_name: &p.full_name,
+                email: p.email.as_deref(),
+            })
+            .collect::<Vec<_>>(),
+        &owners,
+    );
+    for (person, is_legal_owner) in roster.iter_mut().zip(flags) {
+        person.legal_owner = is_legal_owner;
     }
 
     if let Err(err) = tx.commit().await {

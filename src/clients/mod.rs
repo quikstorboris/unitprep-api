@@ -19,6 +19,7 @@ pub mod fields;
 pub mod ingest;
 pub mod intake_mapping;
 pub mod known_workflows;
+pub mod legal_owner;
 pub mod merchant_account_correlation;
 pub mod merchant_account_mapping;
 pub mod people;
