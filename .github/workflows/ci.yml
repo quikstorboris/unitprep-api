@@ -97,6 +97,21 @@ jobs:
       - name: Fast test suite (#[ignore]'d tests excluded by default)
         run: cargo test --workspace
 
+      # Cross-repo drift check: unitprep-ui is public, so no token is
+      # needed (and check_workflow_secrets.sh would block adding one).
+      # Tag-push only, the release boundary -- checking every push would
+      # fail in the gap between the API commit and the UI commit.
+      - name: Check out unitprep-ui for the generated-types drift check
+        uses: actions/checkout@v4
+        with:
+          repository: quikstorboris/unitprep-ui
+          ref: main
+          path: unitprep-ui-main
+          persist-credentials: false
+
+      - name: Generated TypeScript types match unitprep-ui
+        run: ./scripts/check_ts_bindings.sh unitprep-ui-main
+
       - name: Bootstrap the ephemeral test database
         env:
           TEST_DB_HOST: localhost

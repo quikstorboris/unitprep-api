@@ -19,25 +19,25 @@ step() {
     echo "==> $1"
 }
 
-step "1/8 cargo fmt --check"
+step "1/9 cargo fmt --check"
 if ! cargo fmt --check; then
     echo "FAILED: run 'cargo fmt' to fix."
     fail=1
 fi
 
-step "2/8 cargo clippy --workspace --all-targets -- -D warnings"
+step "2/9 cargo clippy --workspace --all-targets -- -D warnings"
 if ! cargo clippy --workspace --all-targets -- -D warnings; then
     echo "FAILED: fix the clippy warnings above."
     fail=1
 fi
 
-step "3/8 cargo test --workspace (fast suite only -- #[ignore]'d real-DB tests are skipped by design)"
+step "3/9 cargo test --workspace (fast suite only -- #[ignore]'d real-DB tests are skipped by design)"
 if ! cargo test --workspace; then
     echo "FAILED: fix the failing tests above."
     fail=1
 fi
 
-step "4/8 cargo audit (dependency vulnerability scan)"
+step "4/9 cargo audit (dependency vulnerability scan)"
 # Exits non-zero only for actual vulnerabilities, not for
 # unmaintained/yanked advisory-grade warnings -- those print but don't
 # block a push. Bump the offending crate (or its dependent) to clear a
@@ -48,7 +48,7 @@ if ! cargo audit; then
     fail=1
 fi
 
-step "5/8 gitleaks (real secret scan, diff-scoped)"
+step "5/9 gitleaks (real secret scan, diff-scoped)"
 # Only scans commits about to be pushed, not the whole history --
 # matches the grep backstop below's scope. Known false positives go in
 # .gitleaks.toml's allowlist, never a blanket disable.
@@ -62,7 +62,7 @@ else
     echo "SKIPPED: gitleaks not installed -- see the vault's CI-CD Framework doc for the install step."
 fi
 
-step "6/8 version/tag consistency (advisory, does not block a push)"
+step "6/9 version/tag consistency (advisory, does not block a push)"
 current_version=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
 latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
 if [ -n "$latest_tag" ]; then
@@ -79,7 +79,7 @@ else
     echo "No tags found yet -- skipping."
 fi
 
-step "7/8 secret-pattern scan (grep-based backstop, redundant with gitleaks above by design)"
+step "7/9 secret-pattern scan (grep-based backstop, redundant with gitleaks above by design)"
 # Deliberately narrow and low-false-positive: private key headers, a
 # handful of well-known cloud-provider key prefixes, and an assignment
 # to something that looks like a password/secret/api key with a
@@ -101,10 +101,17 @@ else
     echo "OK: no obvious secret patterns found."
 fi
 
-step "8/8 workflow secret/permissions guard (CI isolation control #1)"
+step "8/9 workflow secret/permissions guard (CI isolation control #1)"
 # No GitHub workflow may reference a secret, a NEON_* name or a bare
 # DATABASE_URL, and each must declare least-privilege permissions.
 if ! ./scripts/check_workflow_secrets.sh; then
+    fail=1
+fi
+
+step "9/9 generated TypeScript types match unitprep-ui (ts-rs drift check)"
+# Compares freshly generated bindings to the sibling ../unitprep-ui
+# checkout's types/generated; skips if that checkout is absent.
+if ! ./scripts/check_ts_bindings.sh; then
     fail=1
 fi
 
