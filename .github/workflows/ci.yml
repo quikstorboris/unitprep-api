@@ -1,0 +1,101 @@
+name: CI
+
+# Tier 1 of the UnitPrep CI/CD framework -- see the vault's
+# reference/UnitPrep CI-CD Framework.md for the full design and why
+# every choice below is made this way. Split by cost, not by repo:
+# cheap checks on every push (a backstop for Tier 0's local
+# preflight.sh, not a replacement for it), the full suite only on a
+# version-tag push -- matching this project's own release cadence
+# (tens of times a month, not per commit).
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore:
+      - '**.md'
+
+jobs:
+  fast-checks:
+    name: Fast checks (fmt, clippy, type-check)
+    # Not on a tag push -- full-tests below already re-covers this,
+    # running it twice for the same commit is pure waste.
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        # rust-toolchain.toml pins the exact version; rustup (already
+        # on GitHub's runners) auto-installs it the first time any
+        # cargo/rustup command runs in this directory.
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: cargo check --workspace --all-targets
+        # Type-check only, no codegen/linking -- dramatically faster
+        # than cargo test/build, exactly the "backstop, not the gate"
+        # tier this job is meant to be.
+        run: cargo check --workspace --all-targets
+
+  full-tests:
+    name: Full test suite (tag push only)
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+
+    # Mission-critical isolation (see the framework doc's isolation-
+    # controls section, control #1): this job never references
+    # NEON_DEV_DATABASE_URL*/NEON_PROD_DATABASE_URL*/DATABASE_URL as a
+    # secret anywhere below. Enforced by omission, not a GitHub
+    # "environment" gate -- there is no such secret being requested
+    # here in the first place for a gate to withhold.
+    services:
+      postgres:
+        # postgres:18, matching the real Neon dev branch version (see
+        # Docker Phase 1's own docker-compose.yml) -- not "latest".
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: unitprep_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features postgres
+
+      - name: Fast test suite (#[ignore]'d tests excluded by default)
+        run: cargo test --workspace
+
+      - name: Bootstrap the ephemeral test database
+        env:
+          TEST_DB_HOST: localhost
+          TEST_DB_PORT: "5432"
+        run: ./scripts/bootstrap_test_db.sh
+
+      - name: DB-only #[ignore]'d tests (never Process Street/Dropbox -- see script)
+        env:
+          TEST_DATABASE_URL: postgres://app_service:app_service@localhost:5432/unitprep_test
+        run: ./scripts/run_ci_db_tests.sh
