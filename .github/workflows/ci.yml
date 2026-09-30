@@ -14,6 +14,11 @@ on:
     paths-ignore:
       - '**.md'
 
+# Least privilege for GITHUB_TOKEN: these jobs only read the repo.
+# Enforced by scripts/check_workflow_secrets.sh.
+permissions:
+  contents: read
+
 jobs:
   fast-checks:
     name: Fast checks (fmt, clippy, type-check)
@@ -23,6 +28,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Workflow secret/permissions guard
+        run: ./scripts/check_workflow_secrets.sh
 
       - name: Install pinned Rust toolchain
         # rust-toolchain.toml pins the exact version; rustup (already
