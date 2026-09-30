@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.48] - 2026-09-29
+
+Builds the CI/CD framework's Tier 1: GitHub Actions CI.
+
+### Added
+- **`.github/workflows/ci.yml`** — `fast-checks` (fmt, clippy, `cargo check`) on every push to `main`; `full-tests` (fast suite + DB-only `#[ignore]`'d tests against a genuinely ephemeral `postgres:18` GitHub Actions service container) only on a version-tag push. Credential absence (isolation control #1) enforced by omission — this workflow never references any Neon secret. Both jobs pass `actionlint` cleanly.
+- **`scripts/run_ci_db_tests.sh`** — an explicit allowlist of the 17 `#[ignore]`'d tests that need only *a* real Postgres, never Process Street/Dropbox access, determined by reading every test's own `#[ignore = "..."]` reason string rather than guessing from names (one safe test is literally named `...dropbox...` despite needing no real Dropbox access at all). Verified locally against the real ephemeral test-db before wiring into CI — all 17 passed.
+
+### Changed
+- **`bootstrap_test_db.sh`'s host/port/credentials are now overridable via env vars** (defaulting to the existing Docker values) instead of hardcoded, so the same script works unchanged against GitHub Actions' service containers too.
+
 ## [1.9.47] - 2026-09-29
 
 Closes the `TEST_DATABASE_URL` isolation-control gap and an RLS-bypass regression, both found via an external (Grok) review of the Docker setup.
