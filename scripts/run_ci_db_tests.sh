@@ -47,6 +47,7 @@ DB_ONLY_IGNORED_TESTS=(
     heal_person_in_place_corrects_a_known_persons_own_name_and_phone
     policy_delinquency_entries_trigger_check_matches_the_apps_own_validation
     edit_person_and_facility_link_flips_source_to_manual_only_when_protected
+    the_seeded_registry_classifies_real_export_headers
 )
 
 echo "==> Running ${#DB_ONLY_IGNORED_TESTS[@]} DB-only #[ignore]'d tests"

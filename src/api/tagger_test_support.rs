@@ -10,6 +10,7 @@ use unitprep_tagger_pipeline::RegionCandidate;
 use crate::api::test_support::empty_auth_ceremony_store;
 use crate::api::test_support::empty_ceremony_store;
 use crate::api::test_support::empty_dedup_store;
+use crate::api::test_support::empty_file_meta_cache;
 use crate::api::test_support::empty_tagger_store;
 use crate::api::test_support::empty_vendor_cache;
 use crate::api::test_support::test_auth_backend;
@@ -71,6 +72,7 @@ pub fn tagger_state_with_source_folder(
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: empty_vendor_cache(),
         tenant_vendors: empty_vendor_cache(),
+        tenant_file_meta: empty_file_meta_cache(),
         dropbox: crate::api::test_support::test_dropbox_client(),
         process_street: None,
         sync_progress: crate::api::test_support::test_sync_progress(),

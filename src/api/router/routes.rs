@@ -29,10 +29,10 @@ use super::super::{
     clients_companies, clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
     clients_facility_people, clients_facility_policies_edit, clients_filter_options,
     clients_manual_link, clients_onboarding_summary, clients_preview, clients_resync,
-    clients_search, clients_sync, correct, correct_group, dedup, discover, dropbox_browse,
-    dropbox_settings, exclude_group, exclude_groups, exempt, export, group_file_confirm,
-    group_file_upload, process_street_settings, resolve_unit_format, select_group_file,
-    select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
+    clients_search, clients_sync, correct, correct_group, dedup, dedup_files, discover,
+    dropbox_browse, dropbox_settings, exclude_group, exclude_groups, exempt, export,
+    group_file_confirm, group_file_upload, process_street_settings, resolve_unit_format,
+    select_group_file, select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
 };
 use super::rate_limit_exceeded_with_audit;
 
@@ -993,6 +993,21 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
             "/dedup/detect-vendor",
             post(dedup::detect_vendor_format),
             [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/dedup/classify-files",
+            post(dedup_files::classify_files),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/dedup/classify-dropbox-folder",
+            post(dedup_files::classify_dropbox_folder),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/dedup/file-requirements",
+            get(dedup_files::file_requirements),
+            [(Method::GET, RouteAccess::Authenticated)],
         )
         .gated_route(
             "/dedup/detect-vendor-dropbox",

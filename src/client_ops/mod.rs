@@ -21,4 +21,5 @@
 
 pub mod audit_log;
 pub mod tool_runs;
+pub mod vendor_file_meta;
 pub mod vendor_format;

@@ -6,6 +6,7 @@ use super::clients_resync::ResyncPreviewCache;
 use crate::application::dedup_session_service::DedupSession;
 use crate::application::tagger_session_service::TaggerSession;
 use crate::application::unit_group_session::Session;
+use crate::client_ops::vendor_file_meta::FileMetaCache;
 use crate::client_ops::vendor_format::VendorFormatCache;
 use crate::clients::sync::SyncProgressHandle;
 use crate::dropbox::DropboxClient;
@@ -68,6 +69,12 @@ pub struct AppState {
     // `unit_group_sessions`/`dedup_sessions` above are already separate
     // fields per tool rather than one map.
     pub tenant_vendors: VendorFormatCache,
+
+    // File-level metadata for the same tenant formats (PMS, report name,
+    // role, selection priority, guidance) -- backs the dedup folder scan
+    // and its requirements panel. A separate snapshot, not extra fields
+    // on `VendorFormat`; see `client_ops::vendor_file_meta` for why.
+    pub tenant_file_meta: FileMetaCache,
 
     // Dropbox access for the QMS Onboarding folder (see src/dropbox for
     // the full scope/namespace caveats). A concrete client, not

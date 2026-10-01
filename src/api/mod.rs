@@ -34,6 +34,7 @@ mod clients_sync;
 mod correct;
 mod correct_group;
 mod dedup;
+mod dedup_files;
 mod dedup_view;
 pub(crate) mod discover;
 mod dropbox_browse;

@@ -1,0 +1,326 @@
+//! Which files in a folder are dedup inputs, which one to pre-select, and
+//! whether a chosen set of files can run together. Pure logic over file
+//! headers and the vendor registry -- no I/O, no HTTP -- so the rules can
+//! be tested without a server and reused by every caller (local folder
+//! scan, Dropbox folder scan, the run itself).
+//!
+//! The registry has one row per *file format* (a report a PMS can
+//! export). Each row also carries file metadata: the PMS it belongs to,
+//! the report's name, a role, and a selection priority. Today every
+//! usable format is `Primary` (a self-contained tenant file) and the only
+//! cross-file rule is "pick one of the alternatives". `Supporting` marks a
+//! recognized file that can't be checked on its own yet (e.g. QuikStor
+//! Cloud's alternate-contacts file); it is the seam a future join-capable
+//! vendor plugs into.
+
+use serde::{Deserialize, Serialize};
+use unitprep_core::csv_document::CsvDocument;
+use unitprep_core::vendor_format::{detect_vendor, VendorFormat};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileRole {
+    /// A self-contained tenant file: one of these is enough to run a check.
+    Primary,
+    /// Recognized, but not usable on its own until a join exists.
+    Supporting,
+}
+
+impl FileRole {
+    pub fn from_db_str(value: &str) -> Self {
+        match value {
+            "supporting" => FileRole::Supporting,
+            _ => FileRole::Primary,
+        }
+    }
+}
+
+/// The registry row's file-level metadata, keyed by `VendorFormat::name`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FileFormatMeta {
+    pub name: String,
+    pub pms: String,
+    pub report_name: String,
+    pub role: FileRole,
+    /// Higher is preferred when several primaries of one PMS are present.
+    pub selection_priority: i32,
+    pub guidance: String,
+}
+
+impl FileFormatMeta {
+    /// Metadata for a format the registry has no file-level row for
+    /// (cache lag, or a hand-built registry in a test): a standalone
+    /// primary file named after the format.
+    pub fn fallback(format_name: &str) -> Self {
+        Self {
+            name: format_name.to_string(),
+            pms: format_name.to_string(),
+            report_name: format_name.to_string(),
+            role: FileRole::Primary,
+            selection_priority: 0,
+            guidance: String::new(),
+        }
+    }
+}
+
+/// The registry's file metadata for `format_name`, or a standalone-primary
+/// fallback when the snapshot has none.
+pub fn meta_for(format_name: &str, metas: &[FileFormatMeta]) -> FileFormatMeta {
+    metas
+        .iter()
+        .find(|m| m.name == format_name)
+        .cloned()
+        .unwrap_or_else(|| FileFormatMeta::fallback(format_name))
+}
+
+/// One file as seen before any content is read: its name, where it came
+/// from (a Dropbox path, or `None` for a local file), and its header row.
+/// `headers` is `None` when the header row couldn't be read (a legacy
+/// `.xls` the browser can't open).
+#[derive(Debug, Clone)]
+pub struct FileHeaders {
+    pub file_name: String,
+    pub path: Option<String>,
+    pub headers: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileStatus {
+    Recognized,
+    Unrecognized,
+    Unreadable,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClassifiedFile {
+    pub file_name: String,
+    pub path: Option<String>,
+    pub status: FileStatus,
+    pub format: Option<FileFormatMeta>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Suggestion {
+    /// The PMS the panel should show first.
+    pub pms: Option<String>,
+    /// File names to pre-check.
+    pub selected: Vec<String>,
+    /// `(file, preferred file)`: a primary the user may tick instead,
+    /// which loses to the pre-selected one.
+    pub alternatives: Vec<(String, String)>,
+}
+
+/// Classifies each file by its headers against the registry (same
+/// case/separator-insensitive matching as a real ingest) and works out
+/// the pre-selection.
+pub fn classify(
+    files: &[FileHeaders],
+    vendors: &[VendorFormat],
+    metas: &[FileFormatMeta],
+) -> (Vec<ClassifiedFile>, Suggestion) {
+    let classified: Vec<ClassifiedFile> = files
+        .iter()
+        .map(|file| {
+            let (status, format) = match &file.headers {
+                None => (FileStatus::Unreadable, None),
+                Some(headers) => {
+                    let document = CsvDocument {
+                        file_name: file.file_name.clone(),
+                        headers: headers.clone(),
+                        rows: Vec::new(),
+                        modified_at: None,
+                    };
+                    match detect_vendor(&document, vendors) {
+                        Some(vendor) => {
+                            (FileStatus::Recognized, Some(meta_for(&vendor.name, metas)))
+                        }
+                        None => (FileStatus::Unrecognized, None),
+                    }
+                }
+            };
+            ClassifiedFile {
+                file_name: file.file_name.clone(),
+                path: file.path.clone(),
+                status,
+                format,
+            }
+        })
+        .collect();
+
+    let suggestion = suggest(&classified);
+    (classified, suggestion)
+}
+
+fn suggest(classified: &[ClassifiedFile]) -> Suggestion {
+    let recognized: Vec<(&ClassifiedFile, &FileFormatMeta)> = classified
+        .iter()
+        .filter_map(|f| f.format.as_ref().map(|m| (f, m)))
+        .collect();
+
+    let primaries: Vec<(&ClassifiedFile, &FileFormatMeta)> = recognized
+        .iter()
+        .copied()
+        .filter(|(_, m)| m.role == FileRole::Primary)
+        .collect();
+
+    if primaries.is_empty() {
+        return Suggestion {
+            pms: recognized.first().map(|(_, m)| m.pms.clone()),
+            ..Suggestion::default()
+        };
+    }
+
+    // The PMS with the best-priority primary wins; more primaries, then
+    // name order, break ties so the result never depends on input order.
+    let mut pms_names: Vec<&str> = primaries.iter().map(|(_, m)| m.pms.as_str()).collect();
+    pms_names.sort_unstable();
+    pms_names.dedup();
+    let best_pms = pms_names
+        .into_iter()
+        .max_by_key(|pms| {
+            let of_pms = primaries.iter().filter(|(_, m)| m.pms == *pms);
+            let top = of_pms.clone().map(|(_, m)| m.selection_priority).max();
+            (top, of_pms.count(), std::cmp::Reverse(pms.to_string()))
+        })
+        .expect("primaries is non-empty");
+
+    let mut in_pms: Vec<&(&ClassifiedFile, &FileFormatMeta)> = primaries
+        .iter()
+        .filter(|(_, m)| m.pms == best_pms)
+        .collect();
+    // Highest priority first; file name keeps equal priorities stable.
+    in_pms.sort_by(|a, b| {
+        b.1.selection_priority
+            .cmp(&a.1.selection_priority)
+            .then_with(|| a.0.file_name.cmp(&b.0.file_name))
+    });
+    let chosen = in_pms[0].0.file_name.clone();
+
+    Suggestion {
+        pms: Some(best_pms.to_string()),
+        alternatives: in_pms[1..]
+            .iter()
+            .map(|(f, _)| (f.file_name.clone(), chosen.clone()))
+            .collect(),
+        selected: vec![chosen],
+    }
+}
+
+/// A file picked for a run, with what the registry made of it
+/// (`None` = no registered format matched).
+#[derive(Debug, Clone)]
+pub struct DetectedFile<'a> {
+    pub file_name: &'a str,
+    pub format: Option<FileFormatMeta>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectionError {
+    NoFiles,
+    Unrecognized {
+        file: String,
+    },
+    Supporting {
+        file: String,
+        report: String,
+    },
+    MixedSystems {
+        first: String,
+        second: String,
+    },
+    DuplicateFormat {
+        first: String,
+        second: String,
+        report: String,
+    },
+    Alternatives {
+        first: String,
+        second: String,
+    },
+}
+
+impl std::fmt::Display for SelectionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SelectionError::NoFiles => write!(f, "No file was selected."),
+            SelectionError::Unrecognized { file } => write!(
+                f,
+                "'{file}' does not match any known tenant export format, so it can't be checked."
+            ),
+            SelectionError::Supporting { file, report } => write!(
+                f,
+                "'{file}' is a supporting file ({report}) and can't be checked on its own yet. Select the main tenant file instead."
+            ),
+            SelectionError::MixedSystems { first, second } => write!(
+                f,
+                "The selected files come from different systems ({first} and {second}). Select files from one system."
+            ),
+            SelectionError::DuplicateFormat { first, second, report } => write!(
+                f,
+                "'{first}' and '{second}' are the same kind of file ({report}). Select only one."
+            ),
+            SelectionError::Alternatives { first, second } => write!(
+                f,
+                "'{first}' and '{second}' hold the same tenants, so using both would count them twice. Select only one."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SelectionError {}
+
+/// Decides whether `files` can run together and returns the index of the
+/// one file to ingest. Today that is always exactly one primary file; the
+/// error cases are what stop a multi-select from silently double-counting
+/// tenants or mixing two systems' data.
+pub fn plan_ingest(files: &[DetectedFile<'_>]) -> Result<usize, SelectionError> {
+    if files.is_empty() {
+        return Err(SelectionError::NoFiles);
+    }
+
+    for file in files {
+        let Some(meta) = &file.format else {
+            return Err(SelectionError::Unrecognized {
+                file: file.file_name.to_string(),
+            });
+        };
+        if meta.role == FileRole::Supporting {
+            return Err(SelectionError::Supporting {
+                file: file.file_name.to_string(),
+                report: meta.report_name.clone(),
+            });
+        }
+    }
+
+    // Today a run takes exactly one primary file, so any second file is
+    // an error -- which kind depends on how it relates to the first.
+    if let Some(other) = files.get(1) {
+        let first = &files[0];
+        let first_meta = first.format.as_ref().expect("checked above");
+        let other_meta = other.format.as_ref().expect("checked above");
+        return Err(if other_meta.pms != first_meta.pms {
+            SelectionError::MixedSystems {
+                first: first_meta.pms.clone(),
+                second: other_meta.pms.clone(),
+            }
+        } else if other_meta.name == first_meta.name {
+            SelectionError::DuplicateFormat {
+                first: first.file_name.to_string(),
+                second: other.file_name.to_string(),
+                report: first_meta.report_name.clone(),
+            }
+        } else {
+            SelectionError::Alternatives {
+                first: first.file_name.to_string(),
+                second: other.file_name.to_string(),
+            }
+        });
+    }
+
+    Ok(0)
+}
+
+#[cfg(test)]
+#[path = "file_selection_tests.rs"]
+mod tests;

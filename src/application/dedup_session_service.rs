@@ -16,7 +16,8 @@ use unitprep_core::parsing::parse_document;
 use unitprep_core::session::{HasSessionMetadata, SessionMetadata};
 use unitprep_core::session_store::SessionStore;
 use unitprep_core::uploaded_file::UploadedFile;
-use unitprep_core::vendor_format::VendorFormat;
+use unitprep_core::vendor_format::{detect_vendor, VendorFormat};
+use unitprep_dedup::file_selection::{meta_for, plan_ingest, DetectedFile, FileFormatMeta};
 use unitprep_dedup::ingest::records_from_csv_document;
 use unitprep_dedup::{report, DedupReport, TenantRecord};
 
@@ -103,24 +104,48 @@ impl DedupSessionService {
         Self { store }
     }
 
-    /// Parses, ingests, and analyzes `file` in one step, then stores the
-    /// result as a new session. Unlike UnitGroup's multi-file upload
-    /// (which tolerates and skips unparseable files), this is a single
-    /// QMS export file — a parse/ingest failure here is a real error to
-    /// surface to the caller, not something to silently skip.
-    /// Returns the freshly built report and records alongside the new
-    /// session id, so the caller can use them directly rather than
-    /// immediately re-fetching (and re-cloning) the very session just
-    /// saved below.
+    /// Parses, ingests, and analyzes the selected `files` in one step,
+    /// then stores the result as a new session. Unlike UnitGroup's
+    /// multi-file upload (which tolerates and skips unparseable files),
+    /// every selected file here was chosen on purpose -- a parse or
+    /// recognition failure is a real error to surface to the caller, not
+    /// something to silently skip.
+    ///
+    /// The selection is checked before anything is ingested
+    /// (`file_selection::plan_ingest`): an unrecognized or supporting-only
+    /// file, two alternatives of one system (which would count the same
+    /// tenants twice), or files from two systems are all refused with a
+    /// message that names the files. Today exactly one primary file runs.
+    ///
+    /// Returns the report and records alongside the new session id so the
+    /// caller doesn't re-fetch the session it just saved, plus the index
+    /// (into `files`) of the file that was actually ingested -- the one a
+    /// tool run should record as its source.
     pub fn create_session(
         &self,
-        file: UploadedFile,
+        files: &[UploadedFile],
         owner_id: Option<Uuid>,
         tenant_vendors: &[VendorFormat],
+        file_meta: &[FileFormatMeta],
         source_dropbox_folder_path: Option<String>,
-    ) -> anyhow::Result<(String, DedupReport, Vec<TenantRecord>)> {
-        let document = parse_document(&file)?;
-        let records = records_from_csv_document(&document, tenant_vendors)?;
+    ) -> anyhow::Result<(String, DedupReport, Vec<TenantRecord>, usize)> {
+        let documents = files
+            .iter()
+            .map(parse_document)
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        let detected: Vec<DetectedFile<'_>> = files
+            .iter()
+            .zip(&documents)
+            .map(|(file, document)| DetectedFile {
+                file_name: &file.file_name,
+                format: detect_vendor(document, tenant_vendors)
+                    .map(|vendor| meta_for(&vendor.name, file_meta)),
+            })
+            .collect();
+
+        let ingest_index = plan_ingest(&detected)?;
+        let records = records_from_csv_document(&documents[ingest_index], tenant_vendors)?;
         let dedup_report = report::run(records.clone());
 
         let session_id = Uuid::new_v4().to_string();
@@ -142,7 +167,7 @@ impl DedupSessionService {
 
         self.store.save(session);
 
-        Ok((session_id, dedup_report, records))
+        Ok((session_id, dedup_report, records, ingest_index))
     }
 }
 
@@ -354,5 +379,163 @@ mod tests {
         store_after_restart.delete(&session_id);
 
         tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+
+    // ---- multi-file selection (create_session) -------------------------
+
+    use unitprep_core::vendor_format::ContentType;
+    use unitprep_dedup::file_selection::FileRole;
+
+    const QSX_CSV: &str = "CustNumb,UnitNumber,FirtLast,Email,AddressStreet1\n\
+                           C1,101,Doe Jane,jane@example.com,1 Main St\n\
+                           C2,102,Doe Jane,jane@example.com,1 Main St\n";
+
+    fn csv(name: &str, body: &str) -> UploadedFile {
+        UploadedFile {
+            file_name: name.to_string(),
+            relative_path: name.to_string(),
+            bytes: body.as_bytes().to_vec(),
+            modified_at: None,
+        }
+    }
+
+    fn qsx_vendor(name: &str, extra_signature: Option<&str>) -> VendorFormat {
+        let mut signature = vec!["CustNumb".to_string(), "FirtLast".to_string()];
+        signature.extend(extra_signature.map(str::to_string));
+        VendorFormat {
+            name: name.to_string(),
+            content_type: ContentType::Tenants,
+            signature_headers: signature,
+            field_mapping: [
+                "CustNumb",
+                "UnitNumber",
+                "FirtLast",
+                "Email",
+                "AddressStreet1",
+            ]
+            .iter()
+            .map(|c| (c.to_string(), c.to_string()))
+            .collect(),
+            transform_key: None,
+        }
+    }
+
+    fn meta(name: &str, pms: &str, role: FileRole, priority: i32) -> FileFormatMeta {
+        FileFormatMeta {
+            name: name.to_string(),
+            pms: pms.to_string(),
+            report_name: name.to_string(),
+            role,
+            selection_priority: priority,
+            guidance: String::new(),
+        }
+    }
+
+    fn service() -> DedupSessionService {
+        DedupSessionService::new(Arc::new(
+            unitprep_core::in_memory_session_store::InMemorySessionStore::<DedupSession>::new(),
+        ))
+    }
+
+    #[test]
+    fn a_single_recognized_file_runs_and_reports_which_file_was_ingested() {
+        let vendors = vec![qsx_vendor("QSX", None)];
+        let metas = vec![meta("QSX", "QSX", FileRole::Primary, 0)];
+
+        let (_, report, records, ingested) = service()
+            .create_session(&[csv("a.csv", QSX_CSV)], None, &vendors, &metas, None)
+            .expect("one recognized primary file runs");
+
+        assert_eq!(ingested, 0);
+        assert_eq!(records.len(), 2);
+        assert_eq!(report.multi_unit_tenants, 1);
+    }
+
+    #[test]
+    fn a_run_without_registry_metadata_still_works_for_a_recognized_file() {
+        // An empty metadata snapshot (cache lag) falls back to a standalone
+        // primary file, so recognition alone is enough to run.
+        let vendors = vec![qsx_vendor("QSX", None)];
+
+        let result = service().create_session(&[csv("a.csv", QSX_CSV)], None, &vendors, &[], None);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn two_alternatives_of_one_system_are_refused_before_anything_is_ingested() {
+        let vendors = vec![
+            qsx_vendor("Sys Directory", Some("Email")),
+            qsx_vendor("Sys Rent Roll", None),
+        ];
+        let metas = vec![
+            meta("Sys Directory", "Sys", FileRole::Primary, 20),
+            meta("Sys Rent Roll", "Sys", FileRole::Primary, 10),
+        ];
+
+        let err = service()
+            .create_session(
+                &[
+                    csv("directory.csv", QSX_CSV),
+                    csv("rent_roll.csv", "CustNumb,FirtLast\nC1,Doe Jane\n"),
+                ],
+                None,
+                &vendors,
+                &metas,
+                None,
+            )
+            .unwrap_err();
+
+        assert!(err.to_string().contains("count them twice"), "{err}");
+    }
+
+    #[test]
+    fn a_supporting_file_alone_is_refused_with_its_name() {
+        let vendors = vec![qsx_vendor("Sys Alternate", None)];
+        let metas = vec![meta("Sys Alternate", "Sys", FileRole::Supporting, 0)];
+
+        let err = service()
+            .create_session(
+                &[csv("alternate.csv", QSX_CSV)],
+                None,
+                &vendors,
+                &metas,
+                None,
+            )
+            .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("'alternate.csv' is a supporting file"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_unrecognized_file_is_refused_with_its_name() {
+        let vendors = vec![qsx_vendor("QSX", None)];
+
+        let err = service()
+            .create_session(
+                &[csv("mystery.csv", "A,B\n1,2\n")],
+                None,
+                &vendors,
+                &[],
+                None,
+            )
+            .unwrap_err();
+
+        assert!(
+            err.to_string().contains("'mystery.csv' does not match"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn no_files_is_an_error() {
+        let err = service()
+            .create_session(&[], None, &[], &[], None)
+            .unwrap_err();
+        assert!(err.to_string().contains("No file was selected"), "{err}");
     }
 }

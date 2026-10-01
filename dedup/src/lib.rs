@@ -16,6 +16,7 @@
 //! itself.
 
 pub mod comparison;
+pub mod file_selection;
 pub mod grouping;
 pub mod ingest;
 pub mod normalization;

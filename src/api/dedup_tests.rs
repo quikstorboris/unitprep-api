@@ -352,13 +352,52 @@ async fn import_from_dropbox_rejects_a_path_outside_the_configured_root() {
         State(empty_state()),
         crate::api::test_support::test_user(),
         Json(DedupImportDropboxRequest {
-            path: "/Not/Under/The/Configured/Root".to_string(),
+            paths: vec!["/Not/Under/The/Configured/Root".to_string()],
+            path: None,
             facility_id: uuid::Uuid::new_v4(),
         }),
     )
     .await;
 
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn import_from_dropbox_checks_every_selected_path_against_the_root() {
+    // The first path is fine to skip past only if it is in the root; the
+    // second is outside, so the whole request must be refused before any
+    // download is attempted.
+    let root = empty_state().dropbox.root_path().to_string();
+    let response = import_from_dropbox(
+        State(empty_state()),
+        crate::api::test_support::test_user(),
+        Json(DedupImportDropboxRequest {
+            paths: vec![
+                format!("{root}/Folder/a.csv"),
+                "/Elsewhere/b.csv".to_string(),
+            ],
+            path: None,
+            facility_id: uuid::Uuid::new_v4(),
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[test]
+fn the_legacy_single_path_field_is_still_accepted_as_a_selection() {
+    let request: DedupImportDropboxRequest = serde_json::from_str(
+        r#"{"path": "/Root/Folder/a.csv", "facility_id": "00000000-0000-0000-0000-000000000001"}"#,
+    )
+    .unwrap();
+    assert_eq!(request.selected_paths(), vec!["/Root/Folder/a.csv"]);
+
+    let both: DedupImportDropboxRequest = serde_json::from_str(
+        r#"{"paths": ["/Root/a.csv", "/Root/b.csv"], "path": "/Root/a.csv", "facility_id": "00000000-0000-0000-0000-000000000001"}"#,
+    )
+    .unwrap();
+    assert_eq!(both.selected_paths(), vec!["/Root/a.csv", "/Root/b.csv"]);
 }
 
 #[tokio::test]

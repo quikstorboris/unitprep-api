@@ -82,6 +82,11 @@ pub(crate) fn empty_vendor_cache() -> VendorFormatCache {
     Arc::new(parking_lot::RwLock::new(Vec::new()))
 }
 
+/// An empty file-metadata snapshot -- same role as `empty_vendor_cache`.
+pub(crate) fn empty_file_meta_cache() -> crate::client_ops::vendor_file_meta::FileMetaCache {
+    Arc::new(parking_lot::RwLock::new(Vec::new()))
+}
+
 /// Every test builder below needs a dedup session store too, even
 /// though none of these UnitGroup-focused fixtures populate it —
 /// `AppState` just needs the field present. Shared with
@@ -351,6 +356,7 @@ pub fn empty_state() -> AppState {
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        tenant_file_meta: empty_file_meta_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
@@ -427,6 +433,7 @@ pub fn uploaded_state(session_id: &str, documents: Vec<CsvDocument>) -> AppState
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        tenant_file_meta: empty_file_meta_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
@@ -504,6 +511,7 @@ pub fn analyzed_state_ready_for_export(session_id: &str, documents: Vec<CsvDocum
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        tenant_file_meta: empty_file_meta_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
@@ -559,6 +567,7 @@ pub fn discovered_state(session_id: &str, documents: Vec<CsvDocument>) -> AppSta
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        tenant_file_meta: empty_file_meta_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
@@ -624,6 +633,7 @@ pub fn validated_state(session_id: &str, documents: Vec<CsvDocument>) -> AppStat
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        tenant_file_meta: empty_file_meta_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),
@@ -713,6 +723,7 @@ pub fn analyzed_state_with_errors(session_id: &str, documents: Vec<CsvDocument>)
         authentication_ceremonies: empty_auth_ceremony_store(),
         unit_vendors: default_unit_vendors_cache(),
         tenant_vendors: empty_vendor_cache(),
+        tenant_file_meta: empty_file_meta_cache(),
         dropbox: test_dropbox_client(),
         process_street: None,
         sync_progress: test_sync_progress(),

@@ -116,6 +116,32 @@ async fn first_uploaded_file(
     Ok(result)
 }
 
+/// Reads every file field from `multipart` -- the folder flow can check
+/// more than one selected file at once. Fields without a filename are
+/// skipped, same as `first_uploaded_file`.
+async fn all_uploaded_files(
+    multipart: &mut Multipart,
+) -> Result<Vec<UploadedFile>, axum::extract::multipart::MultipartError> {
+    let mut files = Vec::new();
+
+    while let Some(field) = multipart.next_field().await? {
+        let Some(file_name) = field.file_name().map(str::to_string) else {
+            continue;
+        };
+        let relative_path = field.name().unwrap_or(&file_name).to_string();
+        let bytes = field.bytes().await?.to_vec();
+
+        files.push(UploadedFile {
+            file_name,
+            relative_path,
+            bytes,
+            modified_at: None,
+        });
+    }
+
+    Ok(files)
+}
+
 /// A tool run must always be recorded against a real facility -- see
 /// `client_ops::tool_runs`'s own doc comment. `Query` reads the URI via
 /// `FromRequestParts`, so it composes cleanly ahead of the
@@ -140,9 +166,9 @@ pub async fn check(
 ) -> Response {
     let started = Instant::now();
 
-    let file = match first_uploaded_file(&mut multipart).await {
-        Ok(Some(file)) => file,
-        Ok(None) => {
+    let files = match all_uploaded_files(&mut multipart).await {
+        Ok(files) if !files.is_empty() => files,
+        Ok(_) => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ApiErrorBody {
@@ -165,26 +191,30 @@ pub async fn check(
         }
     };
 
-    let file_name = file.file_name.clone();
-    let source_bytes = file.bytes.clone();
-
-    // A synchronous read of the in-memory registry snapshot -- see
-    // `client_ops::vendor_format`'s module doc comment for why this is
-    // never a per-request DB call.
+    // Synchronous reads of the in-memory registry snapshots -- see
+    // `client_ops::vendor_format`'s module doc comment for why these are
+    // never per-request DB calls.
     let tenant_vendors = state.tenant_vendors.read().clone();
+    let file_meta = state.tenant_file_meta.read().clone();
 
-    let (session_id, report, records) = match DedupSessionService::new(Arc::clone(
+    let (session_id, report, records, ingested) = match DedupSessionService::new(Arc::clone(
         &state.dedup_sessions,
     ))
-    .create_session(file, Some(user.user_id), &tenant_vendors, None)
-    {
+    .create_session(
+        &files,
+        Some(user.user_id),
+        &tenant_vendors,
+        &file_meta,
+        None,
+    ) {
         Ok(created) => created,
         Err(err) => {
-            // A parse/ingest failure here describes a problem with the
-            // uploaded file itself (missing FirtLast column, unsupported
-            // format, malformed CSV) — a data-quality issue safe to
-            // surface directly, not an internal fault.
-            tracing::warn!(file = %file_name, error = %err, "Dedup check failed to ingest file");
+            // A parse/recognition/selection failure here describes a
+            // problem with the chosen files themselves (unrecognized
+            // format, two alternatives picked, unsupported format,
+            // malformed CSV) -- a data-quality issue safe to surface
+            // directly, not an internal fault.
+            tracing::warn!(files = files.len(), error = %err, "Dedup check failed to ingest the selected files");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ApiErrorBody {
@@ -195,6 +225,9 @@ pub async fn check(
                 .into_response();
         }
     };
+
+    let file_name = files[ingested].file_name.clone();
+    let source_bytes = files[ingested].bytes.clone();
 
     tracing::info!(
         session_id = %session_id,
@@ -256,8 +289,25 @@ pub struct DedupDropboxPathRequest {
 /// `DedupCheckQuery::facility_id` -- required, no `#[serde(default)]`.
 #[derive(Debug, Deserialize)]
 pub struct DedupImportDropboxRequest {
-    pub path: String,
+    /// The files to check. A caller that still sends the original single
+    /// `path` is treated as a one-element `paths`.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub path: Option<String>,
     pub facility_id: uuid::Uuid,
+}
+
+impl DedupImportDropboxRequest {
+    fn selected_paths(&self) -> Vec<String> {
+        let mut paths = self.paths.clone();
+        if let Some(path) = &self.path {
+            if !paths.contains(path) {
+                paths.push(path.clone());
+            }
+        }
+        paths
+    }
 }
 
 /// Dropbox-sourced counterpart to `check()` -- same ingest/session-create
@@ -271,36 +321,55 @@ pub async fn import_from_dropbox(
 ) -> Response {
     let started = Instant::now();
 
-    if let Err(response) = ensure_path_in_root(&state, &request.path) {
-        return response;
+    let paths = request.selected_paths();
+    if paths.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiErrorBody {
+                error: "no_file_uploaded",
+                message: "No file was selected".to_string(),
+            }),
+        )
+            .into_response();
     }
 
-    let file = match download_as_uploaded_file(&state, &request.path).await {
-        Ok(file) => file,
-        Err(response) => return response,
-    };
+    for path in &paths {
+        if let Err(response) = ensure_path_in_root(&state, path) {
+            return response;
+        }
+    }
 
-    let file_name = file.file_name.clone();
-    let source_bytes = file.bytes.clone();
-    let source_dropbox_folder_path = parent_folder(&request.path);
+    let mut files = Vec::with_capacity(paths.len());
+    for path in &paths {
+        match download_as_uploaded_file(&state, path).await {
+            Ok(file) => files.push(file),
+            Err(response) => return response,
+        }
+    }
 
-    // A synchronous read of the in-memory registry snapshot -- see
-    // `client_ops::vendor_format`'s module doc comment for why this is
-    // never a per-request DB call.
+    // The folder the files came from, for the save-location default: the
+    // first file's parent (a run's files all come from one folder).
+    let source_dropbox_folder_path = parent_folder(&paths[0]);
+
+    // Synchronous reads of the in-memory registry snapshots -- see
+    // `client_ops::vendor_format`'s module doc comment for why these are
+    // never per-request DB calls.
     let tenant_vendors = state.tenant_vendors.read().clone();
+    let file_meta = state.tenant_file_meta.read().clone();
 
-    let (session_id, report, records) = match DedupSessionService::new(Arc::clone(
+    let (session_id, report, records, ingested) = match DedupSessionService::new(Arc::clone(
         &state.dedup_sessions,
     ))
     .create_session(
-        file,
+        &files,
         Some(user.user_id),
         &tenant_vendors,
+        &file_meta,
         source_dropbox_folder_path,
     ) {
         Ok(created) => created,
         Err(err) => {
-            tracing::warn!(file = %file_name, error = %err, "Dedup import-from-dropbox failed to ingest file");
+            tracing::warn!(files = files.len(), error = %err, "Dedup import-from-dropbox failed to ingest the selected files");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ApiErrorBody {
@@ -312,10 +381,14 @@ pub async fn import_from_dropbox(
         }
     };
 
+    let file_name = files[ingested].file_name.clone();
+    let source_bytes = files[ingested].bytes.clone();
+    let ingested_path = paths[ingested].clone();
+
     tracing::info!(
         session_id = %session_id,
         owner_id = %user.user_id,
-        path = %request.path,
+        path = %ingested_path,
         flagged_groups = report.flagged_groups.len(),
         typo_variant_candidates = report.typo_variant_candidates.len(),
         check_ms = started.elapsed().as_millis(),
@@ -331,8 +404,8 @@ pub async fn import_from_dropbox(
             session_id: &session_id,
             actor_user_id: user.user_id,
             role_keys: &user.role_keys,
-            source_file_name: request.path.rsplit('/').next().unwrap_or(&request.path),
-            source_dropbox_path: Some(&request.path),
+            source_file_name: ingested_path.rsplit('/').next().unwrap_or(&ingested_path),
+            source_dropbox_path: Some(&ingested_path),
             source_bytes,
             source_content_type: guess_content_type(&file_name),
             report_summary: serde_json::to_value(&report).unwrap_or_default(),

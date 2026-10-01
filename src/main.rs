@@ -254,6 +254,17 @@ async fn main() {
         unitprep_core::vendor_format::ContentType::Tenants,
     );
 
+    let tenant_file_meta = client_ops::vendor_file_meta::initial_cache(
+        &db_pool,
+        unitprep_core::vendor_format::ContentType::Tenants,
+    )
+    .await;
+    client_ops::vendor_file_meta::start_refresh_task(
+        tenant_file_meta.clone(),
+        db_pool.clone(),
+        unitprep_core::vendor_format::ContentType::Tenants,
+    );
+
     // WEBAUTHN_RP_ID must be a valid domain suffix of WEBAUTHN_RP_ORIGIN
     // (e.g. "example.com" with "https://app.example.com") -- defaults
     // match local frontend dev, same as CORS_ALLOWED_ORIGINS below.
@@ -329,6 +340,7 @@ async fn main() {
         authentication_ceremonies,
         unit_vendors,
         tenant_vendors,
+        tenant_file_meta,
         dropbox: dropbox_client,
         process_street: process_street_client,
         sync_progress,
