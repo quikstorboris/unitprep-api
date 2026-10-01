@@ -130,31 +130,103 @@ fn longest_match(
     (best_i, best_j, best_size)
 }
 
+/// Per-group name data computed ONCE, instead of once per pair: the
+/// display name, and the sorted characters of both forms of it that
+/// `name_similarity` compares (as written, and with its words sorted).
+/// Sorted characters give a cheap upper bound on the similarity (below)
+/// that rules out almost every pair without running the real matcher.
+struct NameProfile {
+    display: String,
+    straight_chars: Vec<char>,
+    sorted_words_chars: Vec<char>,
+}
+
+impl NameProfile {
+    fn new(display: String) -> Self {
+        let mut straight_chars: Vec<char> = display.chars().collect();
+        straight_chars.sort_unstable();
+        let mut sorted_words_chars: Vec<char> = sort_words(&display).chars().collect();
+        sorted_words_chars.sort_unstable();
+        Self {
+            display,
+            straight_chars,
+            sorted_words_chars,
+        }
+    }
+}
+
+/// Size of the multiset intersection of two sorted character slices.
+fn multiset_intersection(a: &[char], b: &[char]) -> usize {
+    let (mut i, mut j, mut common) = (0, 0, 0);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                common += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    common
+}
+
+/// The most `sequence_matcher_ratio` could possibly be for two strings
+/// with these sorted characters. Every matched block pairs equal
+/// characters one-to-one, so the matched total can never exceed the
+/// multiset intersection; the ratio is monotonic in the matched total,
+/// so this bound is never below the true ratio. Pairs whose bound is
+/// under the surface threshold are skipped with no change to the result.
+fn ratio_upper_bound(a: &[char], b: &[char]) -> f64 {
+    let total = a.len() + b.len();
+    if total == 0 {
+        return 1.0;
+    }
+    2.0 * multiset_intersection(a, b) as f64 / total as f64
+}
+
+fn could_reach_threshold(a: &NameProfile, b: &NameProfile) -> bool {
+    let straight = ratio_upper_bound(&a.straight_chars, &b.straight_chars);
+    let sorted = ratio_upper_bound(&a.sorted_words_chars, &b.sorted_words_chars);
+    straight.max(sorted) >= VARIANT_SURFACE_THRESHOLD
+}
+
 /// Pass over every pair of distinct-key groups, surfacing any whose
 /// display names are similar enough to be the same tenant under a
 /// typo/variant spelling. Unlike the reference script's
 /// `classify_variant_pairs`, this never merges groups or writes a
 /// combined row into anything — every candidate above threshold is
 /// returned as-is for a human to confirm (see crate-level docs).
+///
+/// Quadratic in the number of groups, so each name is prepared once and
+/// every pair first passes a cheap, exact upper-bound check
+/// (`could_reach_threshold`) before the real matcher runs. On a
+/// 759-row facility that cut ~8.5 s (debug build) to well under a
+/// second without changing a single result.
 pub fn find_typo_variant_candidates(
     groups: &[TenantGroup],
     composer: &dyn NoteComposer,
 ) -> Vec<TypoVariantCandidate> {
+    // Every group has at least one record — group_records never
+    // creates an empty one. A blank display name has nothing to compare.
+    let profiles: Vec<Option<NameProfile>> = groups
+        .iter()
+        .map(|group| {
+            let display = group.records[0].display_name();
+            (!display.is_empty()).then(|| NameProfile::new(display))
+        })
+        .collect();
+
     let mut candidates = Vec::new();
     for i in 0..groups.len() {
-        // Every group has at least one record — group_records never
-        // creates an empty one. `a` depends only on `i`, so compute it
-        // once per outer iteration instead of once per (i, j) pair — the
-        // inner loop can run many times per `i` in a large facility.
-        let a = groups[i].records[0].display_name();
-        if a.is_empty() {
+        let Some(a) = &profiles[i] else {
             continue;
-        }
+        };
         for j in (i + 1)..groups.len() {
-            let b = groups[j].records[0].display_name();
-            if b.is_empty() {
+            let Some(b) = &profiles[j] else {
                 continue;
-            }
+            };
             // NOTE: two *different* group keys (distinct `FirtLast`
             // spellings/formatting) can still produce an identical
             // display name — e.g. "Smith, John" vs. "John  Smith" both
@@ -163,7 +235,10 @@ pub fn find_typo_variant_candidates(
             // signal there is, so it must NOT be skipped here; a 100%
             // `name_similarity` ratio surfaces it through the normal
             // threshold check below like any other high-similarity pair.
-            let ratio = name_similarity(&a, &b);
+            if !could_reach_threshold(a, b) {
+                continue;
+            }
+            let ratio = name_similarity(&a.display, &b.display);
             if ratio < VARIANT_SURFACE_THRESHOLD {
                 continue;
             }
@@ -297,5 +372,131 @@ mod tests {
             ratio < VARIANT_SURFACE_THRESHOLD,
             "expected below threshold, got {ratio}"
         );
+    }
+
+    /// The reference behavior the pruning must reproduce exactly: the
+    /// original unpruned loop, comparing every pair with the real matcher.
+    fn brute_force_pairs(names: &[String]) -> Vec<(usize, usize)> {
+        let mut pairs = Vec::new();
+        for i in 0..names.len() {
+            for j in (i + 1)..names.len() {
+                if names[i].is_empty() || names[j].is_empty() {
+                    continue;
+                }
+                if name_similarity(&names[i], &names[j]) >= VARIANT_SURFACE_THRESHOLD {
+                    pairs.push((i, j));
+                }
+            }
+        }
+        pairs
+    }
+
+    /// A deterministic set of names with every kind of near-duplicate the
+    /// threshold exists for: typos, transposed words, middle initials,
+    /// doubled spaces, case, punctuation, short names, and many unrelated
+    /// ones.
+    fn sample_names() -> Vec<String> {
+        let firsts = [
+            "John", "Jon", "Jane", "Zachary", "Stephen", "Stephan", "Dawn", "Don", "Elaine",
+            "Leslie", "Ted", "Chris", "Tim", "Ana", "Li", "Maria", "Marie", "Robert", "Roberto",
+            "Kim",
+        ];
+        let lasts = [
+            "Smith",
+            "Smyth",
+            "Tucker",
+            "Anthony",
+            "Beach",
+            "Neufeld",
+            "Hofstadter",
+            "Cuddeback",
+            "Ng",
+            "Lee",
+            "Flores",
+            "Floras",
+            "Garcia",
+            "Garcias",
+            "O'Brien",
+            "Obrien",
+        ];
+        let mut names = Vec::new();
+        let mut state = 12345u64;
+        let mut next = |bound: usize| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) as usize) % bound
+        };
+        for _ in 0..140 {
+            let first = firsts[next(firsts.len())];
+            let last = lasts[next(lasts.len())];
+            names.push(match next(6) {
+                0 => format!("{first} {last}"),
+                1 => format!("{last} {first}"),
+                2 => format!("{first} P {last}"),
+                3 => format!("{first}  {last}"),
+                4 => format!("{} {last}", first.to_uppercase()),
+                _ => format!("{first} {last}"),
+            });
+        }
+        names.push(String::new());
+        names.push("A".to_string());
+        names
+    }
+
+    #[test]
+    fn pruning_returns_exactly_the_pairs_the_unpruned_loop_would() {
+        let names = sample_names();
+        let groups: Vec<TenantGroup> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| TenantGroup {
+                key: format!("k{i}"),
+                records: vec![TenantRecord {
+                    first_last: name.clone(),
+                    ..Default::default()
+                }],
+            })
+            .collect();
+        // display_name() title-cases first_last when first/last are blank;
+        // compute the same strings the pass compares.
+        let displays: Vec<String> = groups.iter().map(|g| g.records[0].display_name()).collect();
+
+        let expected = brute_force_pairs(&displays);
+        let mut actual: Vec<(usize, usize)> =
+            find_typo_variant_candidates(&groups, &crate::note_composer::TemplateNoteComposer)
+                .iter()
+                .map(|c| {
+                    let idx = |key: &str| key[1..].parse::<usize>().unwrap();
+                    (idx(&c.key_a), idx(&c.key_b))
+                })
+                .collect();
+        actual.sort_unstable();
+
+        assert!(
+            !expected.is_empty(),
+            "the sample must contain real candidates"
+        );
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn the_upper_bound_is_never_below_the_true_similarity() {
+        let names: Vec<String> = sample_names()
+            .into_iter()
+            .filter(|n| !n.is_empty())
+            .collect();
+        for a in &names {
+            for b in &names {
+                let (pa, pb) = (NameProfile::new(a.clone()), NameProfile::new(b.clone()));
+                let bound = ratio_upper_bound(&pa.straight_chars, &pb.straight_chars).max(
+                    ratio_upper_bound(&pa.sorted_words_chars, &pb.sorted_words_chars),
+                );
+                assert!(
+                    bound >= name_similarity(a, b),
+                    "bound {bound} below true ratio for {a:?} vs {b:?}"
+                );
+            }
+        }
     }
 }

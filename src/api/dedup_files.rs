@@ -22,6 +22,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use unitprep_core::parsing::parse_document;
@@ -37,6 +38,13 @@ use crate::auth::AuthenticatedUser;
 /// these only stop a malformed or hostile body from doing unbounded work.
 const MAX_FILES: usize = 500;
 const MAX_HEADERS_PER_FILE: usize = 2000;
+
+/// How many Dropbox files are fetched at once during a folder scan. Each
+/// download is a ~0.4 s network round trip regardless of size, so fetching
+/// them one after another made an 8-file folder take ~4 s; a handful in
+/// flight at a time keeps it near a single round trip without hammering
+/// the API.
+const DROPBOX_SCAN_CONCURRENCY: usize = 6;
 
 /// Extensions the ingest can parse -- mirrors the UI's own filter.
 fn is_supported_name(name: &str) -> bool {
@@ -219,29 +227,35 @@ pub async fn classify_dropbox_folder(
 
     // Each file is downloaded just long enough to read its header row,
     // then dropped. A file that can't be downloaded or parsed is reported
-    // as unreadable rather than failing the whole scan.
-    let mut files = Vec::with_capacity(candidates.len());
-    for entry in &candidates {
-        let headers = match download_as_uploaded_file(&state, &entry.path_display).await {
-            Ok(file) => match parse_document(&file) {
-                Ok(document) => Some(document.headers),
-                Err(err) => {
-                    tracing::warn!(path = %entry.path_display, error = %err, "Dedup folder scan could not parse a file");
+    // as unreadable rather than failing the whole scan. Downloads run a
+    // few at a time; `buffered` keeps the results in folder order.
+    let state_ref = &state;
+    let files: Vec<FileHeaders> = stream::iter(candidates)
+        .map(|entry| async move {
+            let state = state_ref;
+            let headers = match download_as_uploaded_file(state, &entry.path_display).await {
+                Ok(file) => match parse_document(&file) {
+                    Ok(document) => Some(document.headers),
+                    Err(err) => {
+                        tracing::warn!(path = %entry.path_display, error = %err, "Dedup folder scan could not parse a file");
+                        None
+                    }
+                },
+                Err(_) => {
+                    tracing::warn!(path = %entry.path_display, "Dedup folder scan could not download a file");
                     None
                 }
-            },
-            Err(_) => {
-                tracing::warn!(path = %entry.path_display, "Dedup folder scan could not download a file");
-                None
-            }
-        };
+            };
 
-        files.push(FileHeaders {
-            file_name: entry.name.clone(),
-            path: Some(entry.path_display.clone()),
-            headers,
-        });
-    }
+            FileHeaders {
+                file_name: entry.name.clone(),
+                path: Some(entry.path_display.clone()),
+                headers,
+            }
+        })
+        .buffered(DROPBOX_SCAN_CONCURRENCY)
+        .collect()
+        .await;
 
     Json(classify_to_response(&state, &files)).into_response()
 }
