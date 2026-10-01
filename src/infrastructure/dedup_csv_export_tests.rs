@@ -30,6 +30,7 @@ fn generate_csv_assigns_row_numbers_matching_actual_output_position() {
     };
 
     let report = DedupReport {
+        duplicate_customer_records: Vec::new(),
         total_rows: 4,
         unique_tenants: 2,
         multi_unit_tenants: 2,
@@ -92,6 +93,7 @@ fn generate_csv_writes_a_related_tenants_section() {
     ];
 
     let report = DedupReport {
+        duplicate_customer_records: Vec::new(),
         total_rows: 2,
         unique_tenants: 2,
         multi_unit_tenants: 0,

@@ -7,7 +7,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::comparison::find_differing_categories;
-use crate::grouping::{group_records, multi_unit_groups};
+use crate::duplicate_records::{find_duplicate_customer_records, DuplicateCustomerRecord};
+use crate::grouping::{group_records, group_records_by_tenant, multi_unit_groups};
 use crate::note_composer::{NoteComposer, TemplateNoteComposer};
 use crate::relatedness::{find_related_tenant_candidates, RelatedTenantCandidate};
 use crate::similarity::find_typo_variant_candidates;
@@ -20,6 +21,11 @@ pub struct DedupReport {
     pub unique_tenants: usize,
     pub multi_unit_tenants: usize,
     pub flagged_groups: Vec<FlaggedGroup>,
+    /// One person recorded under several vendor tenant ids -- the inverse
+    /// of a flagged group. Reported separately because these records
+    /// usually agree on every contact field, so the comparison pass
+    /// finds nothing to flag in them.
+    pub duplicate_customer_records: Vec<DuplicateCustomerRecord>,
     pub typo_variant_candidates: Vec<TypoVariantCandidate>,
     pub related_tenant_candidates: Vec<RelatedTenantCandidate>,
 }
@@ -36,20 +42,28 @@ pub fn run(records: Vec<TenantRecord>) -> DedupReport {
 /// matching/comparison logic above it.
 pub fn run_with_composer(records: Vec<TenantRecord>, composer: &dyn NoteComposer) -> DedupReport {
     let total_rows = records.len();
-    let groups = group_records(records);
-    let unique_tenants = groups.len();
+
+    // Two views of the same records. Tenants (the counts, and which rows
+    // get compared for contact mismatches) are keyed by the vendor's
+    // tenant id where the format has one; people compared *by name*
+    // (typo variants, related tenants) keep the name-keyed view, so a
+    // person split across several ids still reads as one name there.
+    let name_groups = group_records(records.clone());
+    let tenant_groups = group_records_by_tenant(records);
+    let unique_tenants = tenant_groups.len();
 
     // Typo-variant candidates and related-tenant candidates are both
     // found across *every* tenant, including single-unit ones — a
     // relationship or a typo/variant can exist between two single-unit
     // tenants just as easily as multi-unit ones. Matches the reference
     // script's own typo-variant pass, which runs over the full groups
-    // dict, not just the multi-unit subset. Both must happen before
-    // `multi_unit_groups` consumes `groups`.
-    let typo_variant_candidates = find_typo_variant_candidates(&groups, composer);
-    let related_tenant_candidates = find_related_tenant_candidates(&groups, composer);
+    // dict, not just the multi-unit subset.
+    let typo_variant_candidates = find_typo_variant_candidates(&name_groups, composer);
+    let related_tenant_candidates = find_related_tenant_candidates(&name_groups, composer);
 
-    let multi = multi_unit_groups(groups);
+    let duplicate_customer_records = find_duplicate_customer_records(&tenant_groups);
+
+    let multi = multi_unit_groups(tenant_groups);
     let multi_unit_tenants = multi.len();
 
     let flagged_groups = flag_groups(multi, composer);
@@ -59,6 +73,7 @@ pub fn run_with_composer(records: Vec<TenantRecord>, composer: &dyn NoteComposer
         unique_tenants,
         multi_unit_tenants,
         flagged_groups,
+        duplicate_customer_records,
         typo_variant_candidates,
         related_tenant_candidates,
     }

@@ -158,3 +158,55 @@ fn related_tenant_rows_never_get_a_hyperlink_target() {
         }
     }
 }
+
+#[test]
+fn duplicate_customer_records_get_their_own_marked_section_after_flagged_groups() {
+    use unitprep_dedup::duplicate_records::{DuplicateCustomerRecord, DuplicateTenantEntry};
+
+    let tenant = |id: &str, unit: &str| DuplicateTenantEntry {
+        tenant_id: id.to_string(),
+        units: vec![unit.to_string()],
+        records: vec![TenantRecord {
+            tenant_id: id.to_string(),
+            unit_number: unit.to_string(),
+            ..Default::default()
+        }],
+    };
+    let report = DedupReport {
+        flagged_groups: vec![flagged_group(
+            "smith",
+            vec![record("A1", "1"), record("A2", "")],
+            "A1 and A2",
+        )],
+        duplicate_customer_records: vec![DuplicateCustomerRecord {
+            name_key: "frank flores".to_string(),
+            display_name: "Frank Flores".to_string(),
+            tenants: vec![tenant("186417", "B18"), tenant("182866", "B26")],
+            mismatches: Vec::new(),
+            note: "Frank Flores has 2 separate customer records.".to_string(),
+        }],
+        ..Default::default()
+    };
+
+    let plan = build_export_plan(&report, &[]);
+
+    let markers: Vec<&str> = plan
+        .iter()
+        .filter_map(|row| match row {
+            PlannedRow::Marker(text) => Some(*text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(markers.len(), 1);
+    assert!(markers[0].contains("duplicate customer records"));
+
+    let rows = data_rows(&plan);
+    // Flagged group first (cluster 0), then the finding's two records
+    // (cluster 1): the note sits on the first row only.
+    assert_eq!(rows[0].2, 0);
+    assert_eq!(
+        rows[2],
+        ("B18", "Frank Flores has 2 separate customer records.", 1)
+    );
+    assert_eq!(rows[3], ("B26", "", 1));
+}

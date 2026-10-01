@@ -51,6 +51,23 @@ pub struct FlaggedGroupView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DuplicateTenantView {
+    pub tenant_id: String,
+    pub units: Vec<String>,
+}
+
+/// One person recorded under several vendor tenant ids -- see
+/// `unitprep_dedup::duplicate_records`. `differing_categories` is empty
+/// in the common case (the records agree on every contact field).
+#[derive(Debug, Clone, Serialize)]
+pub struct DuplicateCustomerRecordView {
+    pub display_name: String,
+    pub tenants: Vec<DuplicateTenantView>,
+    pub differing_categories: Vec<FieldCategory>,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TypoVariantView {
     pub display_name_a: String,
     pub units_a: Vec<String>,
@@ -98,6 +115,7 @@ pub struct DedupReportView {
     pub unique_tenants: usize,
     pub multi_unit_tenants: usize,
     pub flagged_groups: Vec<FlaggedGroupView>,
+    pub duplicate_customer_records: Vec<DuplicateCustomerRecordView>,
     pub typo_variant_candidates: Vec<TypoVariantView>,
     pub related_tenant_candidates: Vec<RelatedTenantView>,
 }
@@ -148,6 +166,24 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
                 categories,
                 bullets,
             }
+        })
+        .collect();
+
+    let duplicate_customer_records = report
+        .duplicate_customer_records
+        .iter()
+        .map(|finding| DuplicateCustomerRecordView {
+            display_name: finding.display_name.clone(),
+            tenants: finding
+                .tenants
+                .iter()
+                .map(|tenant| DuplicateTenantView {
+                    tenant_id: tenant.tenant_id.clone(),
+                    units: tenant.units.clone(),
+                })
+                .collect(),
+            differing_categories: finding.mismatches.iter().map(|m| m.category).collect(),
+            note: finding.note.clone(),
         })
         .collect();
 
@@ -251,6 +287,7 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
         unique_tenants: report.unique_tenants,
         multi_unit_tenants: report.multi_unit_tenants,
         flagged_groups,
+        duplicate_customer_records,
         typo_variant_candidates,
         related_tenant_candidates,
     }

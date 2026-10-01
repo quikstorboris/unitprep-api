@@ -195,6 +195,7 @@ fn quikstor_cloud_vendor() -> VendorFormat {
     let mapping = [
         ("CustNumb", "LegacyTenantId"),
         ("UnitNumber", "LegacyTenantId"),
+        ("TenantId", "LegacyTenantId"),
         ("FirtLast", "FirtLast"),
         ("FirstName", "FirstName"),
         ("LastName", "LastName"),
@@ -304,7 +305,7 @@ fn detects_and_normalizes_a_quikstor_cloud_row() {
 /// tenant IDs with a mistyped phone is flagged, and the note names
 /// the records by tenant ID rather than printing blank units.
 #[test]
-fn quikstor_cloud_rows_flow_through_dedup_and_flag_a_phone_mismatch() {
+fn quikstor_cloud_rows_with_two_tenant_ids_become_a_duplicate_customer_record() {
     let doc = quikstor_cloud_document(vec![
         vec![
             "tom@example.com",
@@ -352,9 +353,14 @@ fn quikstor_cloud_rows_flow_through_dedup_and_flag_a_phone_mismatch() {
         .expect("known-good QuikStor Cloud document");
     let report = crate::report::run(records);
 
-    assert_eq!(report.flagged_groups.len(), 1);
-    let note = &report.flagged_groups[0].note;
-    assert!(note.contains("units 1034223 and 1034224"), "{note}");
+    // Two LegacyTenantIds are two customer records, not one tenant: the
+    // phone disagreement now travels with the duplicate-record finding.
+    assert!(report.flagged_groups.is_empty());
+    assert_eq!(report.duplicate_customer_records.len(), 1);
+    let finding = &report.duplicate_customer_records[0];
+    assert_eq!(finding.display_name, "Tom Barrett");
+    assert_eq!(finding.tenants.len(), 2);
+    assert!(finding.note.contains("phone number"), "{}", finding.note);
 }
 
 #[test]
@@ -377,6 +383,7 @@ fn sitelink_vendor() -> VendorFormat {
     let mapping = [
         ("CustNumb", "LedgerID"),
         ("UnitNumber", "sUnitName"),
+        ("TenantId", "TenantID"),
         ("FirtLast", "FirtLast"),
         ("FirstName", "sFName"),
         ("LastName", "sLName"),
@@ -492,11 +499,12 @@ fn detects_and_normalizes_a_sitelink_row_and_skips_vacant_units() {
     assert_eq!(records[0].alt_contact_phone_number, "515-323-4858");
 }
 
-/// SiteLink keeps contact on the tenant record, so the realistic
-/// mismatch is one person entered twice under different tenant IDs.
-/// That group is flagged and the note names the real unit numbers.
+/// SiteLink keeps contact on the tenant record, so the realistic problem
+/// is one person entered twice under different tenant IDs. That is a
+/// duplicate customer record, reported with the real unit numbers; any
+/// contact disagreement between the two records travels with it.
 #[test]
-fn sitelink_rows_flow_through_dedup_and_flag_a_split_tenant() {
+fn sitelink_rows_with_two_tenant_ids_become_a_duplicate_customer_record() {
     let doc = sitelink_document(vec![
         vec![
             "B18",
@@ -540,7 +548,93 @@ fn sitelink_rows_flow_through_dedup_and_flag_a_split_tenant() {
         .expect("known-good SiteLink document");
     let report = crate::report::run(records);
 
-    assert_eq!(report.flagged_groups.len(), 1);
-    let note = &report.flagged_groups[0].note;
-    assert!(note.contains("units B18 and B26"), "{note}");
+    assert!(report.flagged_groups.is_empty());
+    assert_eq!(report.duplicate_customer_records.len(), 1);
+    let note = &report.duplicate_customer_records[0].note;
+    assert!(note.contains("ID 182866 (unit B18)"), "{note}");
+    assert!(note.contains("ID 186417 (unit B26)"), "{note}");
+    assert!(note.contains("phone number"), "{note}");
+}
+
+/// The LG Squared RV & Ministorage validation case: Frank Flores holds
+/// units B18 and B26 under TenantIDs 182866 and 186417 with identical
+/// address, phone and email. Grouped by name that was one tenant and
+/// nothing was reported; by tenant id it is two customer records.
+#[test]
+fn a_person_with_identical_contact_under_two_tenant_ids_is_still_surfaced() {
+    let row = |unit: &'static str, ledger: &'static str, tenant: &'static str| {
+        vec![
+            unit,
+            ledger,
+            tenant,
+            "Frank",
+            "Flores",
+            "",
+            "(575) 111-1111",
+            "",
+            "f@example.com",
+            "1 Main St",
+            "Alamogordo",
+            "NM",
+            "88310",
+            "",
+            "",
+            "",
+        ]
+    };
+    let doc = sitelink_document(vec![
+        row("B18", "1", "182866"),
+        row("B26", "2", "186417"),
+        // An unrelated tenant holding two units under one id: one multi-unit tenant.
+        vec![
+            "C01",
+            "3",
+            "300",
+            "Ada",
+            "Lovelace",
+            "",
+            "(575) 333-3333",
+            "",
+            "a@example.com",
+            "2 Oak St",
+            "Alamogordo",
+            "NM",
+            "88310",
+            "",
+            "",
+            "",
+        ],
+        vec![
+            "C02",
+            "4",
+            "300",
+            "Ada",
+            "Lovelace",
+            "",
+            "(575) 333-3333",
+            "",
+            "a@example.com",
+            "2 Oak St",
+            "Alamogordo",
+            "NM",
+            "88310",
+            "",
+            "",
+            "",
+        ],
+    ]);
+
+    let records = records_from_csv_document(&doc, &[sitelink_vendor()])
+        .expect("known-good SiteLink document");
+    let report = crate::report::run(records);
+
+    assert_eq!(report.unique_tenants, 3, "Flores counts once per tenant id");
+    assert_eq!(
+        report.multi_unit_tenants, 1,
+        "only Lovelace holds several units under one id"
+    );
+    assert!(report.flagged_groups.is_empty());
+    assert_eq!(report.duplicate_customer_records.len(), 1);
+    assert!(report.duplicate_customer_records[0].mismatches.is_empty());
+    assert!(report.related_tenant_candidates.is_empty());
 }

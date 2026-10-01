@@ -24,6 +24,16 @@ pub struct TenantRecord {
     pub cust_numb: String,
     pub unit_number: String,
 
+    /// The vendor's own identifier for the *person* (SiteLink `TenantID`,
+    /// QuikStor Cloud `LegacyTenantId`), when the export format has one;
+    /// blank when it doesn't (QSX and Easy Storage Solutions only carry a
+    /// per-unit `CustNumb`). Distinct from `cust_numb`, which identifies
+    /// the unit record. When present it is what makes two rows "the same
+    /// tenant" (`grouping::group_records_by_tenant`), instead of a name
+    /// match; two ids behind one name is the duplicate-customer-record
+    /// finding (`duplicate_records`).
+    pub tenant_id: String,
+
     /// The `FirtLast` column — pass-1 grouping key (trim+lowercase, see
     /// `grouping::group_key`). Named to match the source column, not
     /// reformatted, since this is a pre-existing upstream artifact this

@@ -1,5 +1,5 @@
 //! Shared row/column planning for the dedup CSV and xlsx exporters —
-//! both serialize the *exact same content* (the same three sections,
+//! both serialize the *exact same content* (the same sections,
 //! the same row order, the same notes with cell references), so this
 //! is the one place that decides what goes where. The two file-format
 //! writers (`dedup_csv_export.rs`, `dedup_xlsx_export.rs`) each just
@@ -141,6 +141,42 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
             &mut row_num,
         );
         cluster += 1;
+    }
+
+    if !report.duplicate_customer_records.is_empty() {
+        plan.push(PlannedRow::Blank);
+        row_num += 1;
+        plan.push(PlannedRow::Marker(
+            "Possible duplicate customer records (one person, several customer IDs) — for your review",
+        ));
+        row_num += 1;
+
+        for (i, finding) in report.duplicate_customer_records.iter().enumerate() {
+            if i > 0 {
+                plan.push(PlannedRow::Blank);
+                row_num += 1;
+            }
+
+            // The finding's own records, one block per customer id; the
+            // note goes on the first row only. No cell references: the
+            // finding is about the records existing twice, not about one
+            // differing cell.
+            let mut wrote_note = false;
+            for tenant in &finding.tenants {
+                let group = TenantGroup {
+                    key: format!("tenant:{}", tenant.tenant_id),
+                    records: tenant.records.clone(),
+                };
+                let row_note = if wrote_note {
+                    String::new()
+                } else {
+                    finding.note.clone()
+                };
+                push_group_rows(&mut plan, &group, row_note, None, cluster, &mut row_num);
+                wrote_note = true;
+            }
+            cluster += 1;
+        }
     }
 
     if !report.typo_variant_candidates.is_empty() {

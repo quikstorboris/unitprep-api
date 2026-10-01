@@ -33,6 +33,7 @@ type ColumnSetter = fn(&mut TenantRecord, String);
 /// literal export vocabulary.
 const COLUMNS: &[(&str, ColumnSetter)] = &[
     ("CustNumb", |r, v| r.cust_numb = v),
+    ("TenantId", |r, v| r.tenant_id = v),
     ("UnitNumber", |r, v| r.unit_number = v),
     ("FirtLast", |r, v| r.first_last = v),
     ("FirstName", |r, v| r.first_name = v),

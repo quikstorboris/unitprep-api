@@ -18,14 +18,24 @@ for the crate as a whole.
 
 ## 1. Grouping — who counts as "one tenant"
 
-**Rule**: records are grouped into one tenant by an exact match on the
-`FirtLast` column, trimmed and lowercased. Nothing fuzzy here — two
-misspelled variants of the same name are, by this rule alone, two
-different tenants (see rule 3, typo-variant detection, for how that
-gets caught separately).
+**Rule**: records are grouped into one tenant by the vendor's own
+tenant id when the export format has one (SiteLink `TenantID`, QuikStor
+Cloud `LegacyTenantId`), and by an exact match on the `FirtLast` column
+(trimmed, lowercased) when it doesn't (QSX, Easy Storage Solutions —
+their `CustNumb` identifies a unit record, not a person). Nothing fuzzy
+here — two misspelled variants of the same name are, by this rule alone,
+two different tenants (see rule 3, typo-variant detection, for how that
+gets caught separately). One name held by two different tenant ids is
+two tenants here too, and is reported by rule 5.
 
-**Implements**: `grouping.rs` (`group_key`, `group_records`,
-`multi_unit_groups`).
+Typo-variant and related-tenant detection (rules 3 and 4) compare people
+by *name*, so they run on the name-keyed grouping, unchanged: a person
+split across several ids still reads as one name there. Only the tenant
+counts and rule 2's comparison use the id-preferred grouping.
+
+**Implements**: `grouping.rs` (`group_key`, `group_records` by name,
+`group_records_by_tenant` id-preferred, `multi_unit_groups`). The id comes
+from the registry mapping to the canonical `TenantId` field.
 
 ## 2. Contact-mismatch detection — "flagged groups"
 
@@ -224,6 +234,28 @@ supporting context in a human summary, never as its own trigger.
 signal" above — `MAX_HOUSEHOLD_SIZE`), `note_composer.rs`
 (`compose_relatedness_note`, `RelatednessEvidenceInput`), `report.rs`
 (wired in alongside rule 3).
+
+## 5. Duplicate customer records (added 2026-10-01)
+
+**Rule**: group the id-keyed tenants by normalized name; any name held by
+**two or more distinct tenant ids** is one person recorded more than
+once. Reported separately from flagged groups: those records usually
+agree on every contact field, so rule 2 finds nothing in them and they
+would otherwise never surface. Records without a tenant id are ignored
+(name grouping already merges them). Any contact differences across the
+duplicate records are attached to the finding, so a disagreement that
+used to appear as a flagged group (when grouping was by name) is not
+lost.
+
+**Why it matters**: validated on LG Squared (SiteLink Directory, 240
+rows): Frank Flores holds B18 and B26 under TenantIDs 182866 and 186417
+with identical contact details. By name that was one tenant and nothing
+was reported (192 tenants / 32 multi-unit / 0 flagged); by tenant id it is
+193 tenants / 31 multi-unit / 0 flagged plus this finding.
+
+**Implements**: `duplicate_records.rs`. Related-tenant detection is
+deliberately untouched: it runs on the name-keyed groups, so two ids with
+one name never appear to it as "two people sharing an address".
 
 ## Normalization rules (used by rules 2 and 4)
 

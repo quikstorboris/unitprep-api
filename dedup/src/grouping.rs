@@ -16,10 +16,15 @@ pub fn group_key(first_last: &str) -> String {
     collapse_whitespace(&first_last.trim().to_lowercase())
 }
 
-/// Groups records by `group_key`, preserving first-seen order (mirrors
-/// the reference script's use of `OrderedDict` — matters for stable,
-/// reproducible output ordering, not for correctness of the grouping
-/// itself).
+/// Groups records by name (`group_key`), preserving first-seen order
+/// (mirrors the reference script's use of `OrderedDict` — matters for
+/// stable, reproducible output ordering, not for correctness of the
+/// grouping itself).
+///
+/// This is the *name* view of the data. Typo-variant and related-tenant
+/// detection compare people by name and so run on these groups; the
+/// tenant counts and the contact-mismatch check use
+/// `group_records_by_tenant`, which prefers the vendor's own tenant id.
 ///
 /// A blank `FirtLast` never merges with another blank one: two tenants
 /// who both left this field empty (e.g. manual/walk-in entries) are not
@@ -28,10 +33,38 @@ pub fn group_key(first_last: &str) -> String {
 /// that would otherwise report a pile of unrelated contact-info
 /// "mismatches" between strangers.
 pub fn group_records(records: Vec<TenantRecord>) -> Vec<TenantGroup> {
+    group_with(records, |record| group_key(&record.first_last))
+}
+
+/// Key for a group of records that share a vendor tenant id. The prefix
+/// keeps it from ever colliding with a name key.
+pub fn tenant_id_key(tenant_id: &str) -> Option<String> {
+    let id = tenant_id.trim();
+    (!id.is_empty()).then(|| format!("tenant:{id}"))
+}
+
+/// Groups records into *tenants*: by the vendor's own tenant id when the
+/// record has one, falling back to the name key when it doesn't. A
+/// vendor id says "same contact record" far more reliably than a name
+/// does: two records under one id can never disagree about contact info,
+/// and one name under two ids is a duplicate customer record
+/// (`duplicate_records`), not a single tenant.
+pub fn group_records_by_tenant(records: Vec<TenantRecord>) -> Vec<TenantGroup> {
+    group_with(records, |record| {
+        tenant_id_key(&record.tenant_id).unwrap_or_else(|| group_key(&record.first_last))
+    })
+}
+
+/// Shared grouping loop. `key_for` returns an empty string for a record
+/// with no usable key, which then becomes its own singleton group.
+fn group_with(
+    records: Vec<TenantRecord>,
+    key_for: impl Fn(&TenantRecord) -> String,
+) -> Vec<TenantGroup> {
     let mut groups: Vec<TenantGroup> = Vec::new();
     let mut blank_key_sequence = 0usize;
     for record in records {
-        let key = group_key(&record.first_last);
+        let key = key_for(&record);
         if key.is_empty() {
             blank_key_sequence += 1;
             groups.push(TenantGroup {

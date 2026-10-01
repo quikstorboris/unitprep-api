@@ -188,6 +188,35 @@ async fn the_seeded_registry_classifies_real_export_headers() {
         vec![("Rent Roll.xlsx".to_string(), "Directory.xlsx".to_string())]
     );
 
+    // Formats whose export has a real tenant id map it into dedup's
+    // canonical TenantId; formats that only have a per-unit customer
+    // number (QSX, Easy Storage Solutions) must not.
+    let source_of_tenant_id = |format: &str| {
+        vendors
+            .iter()
+            .find(|v| v.name == format)
+            .and_then(|v| {
+                v.field_mapping
+                    .iter()
+                    .find(|(target, _)| target == "TenantId")
+            })
+            .map(|(_, source)| source.clone())
+    };
+    assert_eq!(
+        source_of_tenant_id("SiteLink Directory"),
+        Some("TenantID".to_string())
+    );
+    assert_eq!(
+        source_of_tenant_id("SiteLink Rent Roll"),
+        Some("TenantID".to_string())
+    );
+    assert_eq!(
+        source_of_tenant_id("QuikStor Cloud"),
+        Some("LegacyTenantId".to_string())
+    );
+    assert_eq!(source_of_tenant_id("QSX"), None);
+    assert_eq!(source_of_tenant_id("Easy Storage Solutions"), None);
+
     // Every shipped format carries guidance for the requirements panel.
     for meta in &metas {
         assert!(!meta.guidance.is_empty(), "{} has no guidance", meta.name);

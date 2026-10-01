@@ -16,6 +16,7 @@
 //! itself.
 
 pub mod comparison;
+pub mod duplicate_records;
 pub mod file_selection;
 pub mod grouping;
 pub mod ingest;
@@ -28,6 +29,7 @@ pub mod report;
 pub mod similarity;
 pub mod types;
 
+pub use duplicate_records::DuplicateCustomerRecord;
 pub use note_composer::{NoteComposer, TemplateNoteComposer};
 pub use phrasing::{group_units, human_label, units_phrase};
 pub use relatedness::{RelatedTenantCandidate, RelatedTenantEvidence, RelatednessSignal};
