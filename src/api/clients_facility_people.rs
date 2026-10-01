@@ -63,7 +63,9 @@ use uuid::Uuid;
 use crate::api::{bad_request, internal_error, not_found, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
-use crate::clients::legal_owner::{legal_owner_flags, OwnerIdentity, RosterIdentity};
+use crate::clients::legal_owner::{
+    legal_owner_flags, unmatched_owners, OwnerIdentity, RosterIdentity,
+};
 use crate::clients::people::PersonAssignment;
 use crate::clients::repository::{
     edit_person_and_facility_link, heal_person_in_place, unlink_person_from_facility,
@@ -100,6 +102,22 @@ pub struct FacilityPerson {
 pub struct FacilityPeopleResponse {
     pub roster: Vec<FacilityPerson>,
     pub candidates: Vec<PersonAssignment>,
+    /// Merchant Account Pre-App owners with no roster row and no
+    /// `candidates` entry either -- see `clients::legal_owner::
+    /// unmatched_owners`. Never duplicates a person already reachable
+    /// through the roster or an existing candidate chip.
+    pub missing_legal_owners: Vec<MissingLegalOwner>,
+}
+
+/// One Pre-App owner the Users tab has no other way to surface --
+/// `role` is deliberately absent (unlike `PersonAssignment`): a
+/// Merchant Account owner has no QMS access level of their own, so the
+/// frontend defaults one (`"owner"`) only when actually adding them.
+#[derive(Debug, Serialize)]
+pub struct MissingLegalOwner {
+    pub full_name: String,
+    pub email: Option<String>,
+    pub phone: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -261,8 +279,8 @@ pub async fn get_facility_people(
     // Pre-App, matched against the (now self-healed) roster. The party
     // table's RLS SELECT policy is narrower than this tab's, so a viewer
     // without that access just sees no checkmarks rather than an error.
-    let owners: Vec<(Option<String>, Option<String>)> = match sqlx::query_as(
-        "SELECT display_name, email
+    let owners: Vec<(Option<String>, Option<String>, Option<String>)> = match sqlx::query_as(
+        "SELECT display_name, email, phone
            FROM clients.facility_merchant_account_parties
           WHERE facility_id = $1 AND party_role = 'owner'",
     )
@@ -278,31 +296,66 @@ pub async fn get_facility_people(
     };
     let owners: Vec<OwnerIdentity> = owners
         .into_iter()
-        .map(|(display_name, email)| OwnerIdentity {
+        .map(|(display_name, email, phone)| OwnerIdentity {
             display_name,
             email,
+            phone,
         })
         .collect();
-    let flags = legal_owner_flags(
-        &roster
+    {
+        let roster_identities: Vec<RosterIdentity> = roster
             .iter()
             .map(|p| RosterIdentity {
                 full_name: &p.full_name,
                 email: p.email.as_deref(),
             })
-            .collect::<Vec<_>>(),
-        &owners,
-    );
-    for (person, is_legal_owner) in roster.iter_mut().zip(flags) {
-        person.legal_owner = is_legal_owner;
+            .collect();
+        let flags = legal_owner_flags(&roster_identities, &owners);
+        for (person, is_legal_owner) in roster.iter_mut().zip(flags) {
+            person.legal_owner = is_legal_owner;
+        }
     }
+
+    // Owners the (now-flagged) roster above has no row for AND that
+    // don't already have an unadded Intake "Add" chip in `candidates` --
+    // see `clients::legal_owner`'s own doc comment for why both are
+    // checked (a real legal owner can otherwise vanish entirely,
+    // Freeland's Serene Armstrong, 2026-09-30). Rebuilt from `roster`
+    // fresh, after the mutable borrow above has already ended.
+    let known_identities: Vec<RosterIdentity> = roster
+        .iter()
+        .map(|p| RosterIdentity {
+            full_name: &p.full_name,
+            email: p.email.as_deref(),
+        })
+        .chain(candidates.iter().map(|c| RosterIdentity {
+            full_name: &c.full_name,
+            email: c.email.as_deref(),
+        }))
+        .collect();
+    let missing_legal_owners: Vec<MissingLegalOwner> = unmatched_owners(&known_identities, &owners)
+        .into_iter()
+        .map(|owner| MissingLegalOwner {
+            full_name: owner
+                .display_name
+                .clone()
+                .expect("unmatched_owners only returns owners with a non-blank display_name"),
+            email: owner.email.clone(),
+            phone: owner.phone.clone(),
+        })
+        .collect();
 
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit facility people transaction");
         return internal_error("Could not load this facility's Users tab");
     }
 
-    Json(FacilityPeopleResponse { roster, candidates }).into_response()
+    Json(FacilityPeopleResponse {
+        roster,
+        candidates,
+        missing_legal_owners,
+    })
+    .into_response()
 }
 
 /// Requires no special permission beyond authentication -- same as every
