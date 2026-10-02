@@ -109,12 +109,15 @@ async fn fetch_users_for_admin(
 }
 
 pub async fn list_users(State(state): State<AppState>, admin: AuthenticatedUser) -> Response {
-    // Redundant with the RLS-independent permission check inside
+    // `users.view` (admin and department_manager) rather than
+    // `users.manage`: a department manager may see the list in order to
+    // grant personal-integration permissions, but not invite, disable or
+    // export. Redundant with the RLS-independent permission check inside
     // auth.list_users_for_admin itself, by the same design as
     // auth_invites.rs's own handlers: this produces a clean 403, and the
     // function's own check is what holds if this one is ever forgotten.
     if let Err(response) = admin
-        .require_permission(&state.db, "users.manage", "list_users", None, None)
+        .require_permission(&state.db, "users.view", "list_users", None, None)
         .await
     {
         return response;

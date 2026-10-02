@@ -1,0 +1,1 @@
+DROP TABLE integrations.user_clickup_credentials;

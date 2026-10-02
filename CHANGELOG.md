@@ -6,6 +6,23 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.59] - 2026-10-02
+
+Per-user permission grants and the first ClickUp integration step (connect and verify a personal API token).
+
+### Added
+- **Direct per-user permission grants** (`auth.user_permissions`) alongside role-derived ones, merged into the resolved permission set in `auth.resolve_session` so every existing check works unchanged. Only permissions flagged `directly_grantable` can be granted this way (database trigger), RLS limits writers to `admin`/`department_manager` and forbids self-grants. Endpoints: `GET /auth/users/{id}/permissions`, `PUT|DELETE /auth/users/{id}/permissions/{key}` (idempotent, audited).
+- **ClickUp connection, per user**: `integrations.user_clickup_credentials` (ChaCha20-Poly1305 ciphertext, AAD bound to the user, owner-only RLS even against admins). `GET /integrations/clickup/connection`, `PUT|DELETE /integrations/clickup/token`, `POST /integrations/clickup/test`, all behind the new per-user `integrations.clickup` permission. A token ClickUp rejects is never stored; an unreachable ClickUp does not mark a stored token invalid.
+- **`users.view`** permission (list only) so department managers can see the Users page and grant personal-integration permissions without invite/disable/recover/export/role powers; `auth.user_exists(uuid)` for their existence checks (`auth.users` is not readable by them under RLS).
+- New audit events: `permission_granted`, `permission_revoked`, `integration_connected`, `integration_disconnected`.
+- Seven real-database `clickup_db_*` tests (local ephemeral test-db, as `app_service`, so RLS genuinely applies).
+
+### Changed
+- `auth.list_users_for_admin()` now also admits `department_manager`; `GET /auth/users` is gated on `users.view` (CSV export stays `users.manage`).
+
+### Migrations
+- `20261002180000_add_user_permission_grants`, `20261002190000_create_user_clickup_credentials`, `20261002200000_let_department_managers_grant_permissions`.
+
 ## [1.9.48] - 2026-09-29
 
 Builds the CI/CD framework's Tier 1: GitHub Actions CI.

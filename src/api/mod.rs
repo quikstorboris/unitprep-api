@@ -10,10 +10,12 @@ mod auth_passkey_reverify;
 mod auth_register;
 mod auth_roles;
 mod auth_totp;
+mod auth_user_permissions;
 mod auth_user_role;
 mod auth_user_status;
 mod auth_users;
 mod cancel_session;
+mod clickup_connection;
 mod client_ops_activity_logs;
 mod client_ops_activity_logs_export;
 mod client_ops_qms_tags;
@@ -242,6 +244,12 @@ pub(crate) fn user_agent_from(headers: &axum::http::HeaderMap) -> Option<&str> {
 #[cfg(test)]
 #[path = "test_support.rs"]
 pub(crate) mod test_support;
+
+/// Real-database tests for per-user permission grants and the ClickUp
+/// connection; every test `#[ignore]`d, local `test-db` only.
+#[cfg(test)]
+#[path = "clickup_db_tests.rs"]
+mod clickup_db_tests;
 
 #[cfg(test)]
 #[path = "dedup_test_support.rs"]

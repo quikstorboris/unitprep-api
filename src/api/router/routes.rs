@@ -24,15 +24,16 @@ use super::super::AppState;
 use super::super::{
     acknowledge_group_warnings, analyze, auth_audit_logs, auth_audit_logs_export,
     auth_configuration, auth_invites, auth_login, auth_logout, auth_passkey_reverify,
-    auth_register, auth_roles, auth_totp, auth_user_role, auth_user_status, auth_users,
-    cancel_session, client_ops_activity_logs, client_ops_activity_logs_export, client_ops_qms_tags,
-    clients_companies, clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
-    clients_facility_people, clients_facility_policies_edit, clients_filter_options,
-    clients_manual_link, clients_onboarding_summary, clients_preview, clients_resync,
-    clients_search, clients_sync, correct, correct_group, dedup, dedup_files, dedup_rematch,
-    discover, dropbox_browse, dropbox_settings, exclude_group, exclude_groups, exempt, export,
-    group_file_confirm, group_file_upload, process_street_settings, resolve_unit_format,
-    select_group_file, select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
+    auth_register, auth_roles, auth_totp, auth_user_permissions, auth_user_role, auth_user_status,
+    auth_users, cancel_session, clickup_connection, client_ops_activity_logs,
+    client_ops_activity_logs_export, client_ops_qms_tags, clients_companies, clients_create,
+    clients_detail, clients_dropbox_folder, clients_elavon, clients_facility_people,
+    clients_facility_policies_edit, clients_filter_options, clients_manual_link,
+    clients_onboarding_summary, clients_preview, clients_resync, clients_search, clients_sync,
+    correct, correct_group, dedup, dedup_files, dedup_rematch, discover, dropbox_browse,
+    dropbox_settings, exclude_group, exclude_groups, exempt, export, group_file_confirm,
+    group_file_upload, process_street_settings, resolve_unit_format, select_group_file,
+    select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
 };
 use super::rate_limit_exceeded_with_audit;
 
@@ -276,7 +277,7 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
             [(
                 Method::GET,
                 RouteAccess::Permission {
-                    keys: &["users.manage"],
+                    keys: &["users.view"],
                     action: "list_users",
                 },
             )],
@@ -333,6 +334,87 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
                 RouteAccess::Permission {
                     keys: &["users.manage_roles"],
                     action: "revoke_role",
+                },
+            )],
+        )
+        // Direct (non-role) permission grants -- the Users page's
+        // "Add permissions" dialog. user_permissions.manage is admin-only
+        // today; see the ClickUp Integration design log for the plan to
+        // extend it to department managers.
+        .gated_route(
+            "/auth/users/{id}/permissions",
+            get(auth_user_permissions::list_user_permissions),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["user_permissions.manage"],
+                    action: "list_user_permissions",
+                },
+            )],
+        )
+        .gated_route(
+            "/auth/users/{id}/permissions/{permission_key}",
+            put(auth_user_permissions::grant_user_permission)
+                .delete(auth_user_permissions::revoke_user_permission),
+            [
+                (
+                    Method::PUT,
+                    RouteAccess::Permission {
+                        keys: &["user_permissions.manage"],
+                        action: "grant_user_permission",
+                    },
+                ),
+                (
+                    Method::DELETE,
+                    RouteAccess::Permission {
+                        keys: &["user_permissions.manage"],
+                        action: "revoke_user_permission",
+                    },
+                ),
+            ],
+        )
+        // A user's own ClickUp connection. integrations.clickup is
+        // granted per user (never via a role), and every handler only
+        // touches the caller's own row.
+        .gated_route(
+            "/integrations/clickup/connection",
+            get(clickup_connection::get_connection),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "get_clickup_connection",
+                },
+            )],
+        )
+        .gated_route(
+            "/integrations/clickup/token",
+            put(clickup_connection::save_token).delete(clickup_connection::remove_token),
+            [
+                (
+                    Method::PUT,
+                    RouteAccess::Permission {
+                        keys: &["integrations.clickup"],
+                        action: "save_clickup_token",
+                    },
+                ),
+                (
+                    Method::DELETE,
+                    RouteAccess::Permission {
+                        keys: &["integrations.clickup"],
+                        action: "remove_clickup_token",
+                    },
+                ),
+            ],
+        )
+        .gated_route(
+            "/integrations/clickup/test",
+            post(clickup_connection::test_connection),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "test_clickup_connection",
                 },
             )],
         )

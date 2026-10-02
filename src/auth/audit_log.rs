@@ -208,6 +208,25 @@ pub mod event {
     /// other change-type event here.
     pub const AUTH_CONFIGURATION_UPDATED: &str = "auth_configuration_updated";
 
+    /// An authorized user granted an already-enrolled user an
+    /// individually-grantable permission such as a personal integration
+    /// (`auth.user_permissions`). `Change` carries the target's full set
+    /// of directly-granted permissions before and after, same
+    /// whole-set reasoning as `ROLE_GRANTED`.
+    pub const PERMISSION_GRANTED: &str = "permission_granted";
+
+    /// `PERMISSION_GRANTED`'s counterpart.
+    pub const PERMISSION_REVOKED: &str = "permission_revoked";
+
+    /// A user saved a valid personal credential for a third-party
+    /// integration (`metadata.integration` names which one). Never
+    /// carries the credential itself.
+    pub const INTEGRATION_CONNECTED: &str = "integration_connected";
+
+    /// A user removed their own credential for a third-party
+    /// integration.
+    pub const INTEGRATION_DISCONNECTED: &str = "integration_disconnected";
+
     /// Every event type that exists, for the admin audit-log viewer's
     /// "which events" filter -- served over `GET /auth/audit-logs/event-types`
     /// rather than hand-duplicated into the frontend, so the two cannot
@@ -242,6 +261,10 @@ pub mod event {
         USER_REACTIVATED,
         AUDIT_LOG_EXPORTED,
         AUTH_CONFIGURATION_UPDATED,
+        PERMISSION_GRANTED,
+        PERMISSION_REVOKED,
+        INTEGRATION_CONNECTED,
+        INTEGRATION_DISCONNECTED,
     ];
 
     #[cfg(test)]

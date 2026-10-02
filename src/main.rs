@@ -3,6 +3,7 @@ mod api;
 mod application;
 mod auth;
 mod bootstrap;
+mod clickup;
 mod client_ops;
 mod clients;
 mod db;

@@ -225,6 +225,7 @@ pub fn admin_user() -> AuthenticatedUser {
         role_keys: vec!["admin".to_string()],
         permission_keys: [
             "users.manage",
+            "users.view",
             "users.manage_roles",
             "audit_logs.read",
             "roles.manage",
@@ -244,6 +245,8 @@ pub fn admin_user() -> AuthenticatedUser {
             // Integrations (Process Street, Dropbox) settings -- see
             // add_integrations_manage_permission.
             "integrations.manage",
+            // Per-user permission grants (add_user_permission_grants).
+            "user_permissions.manage",
             // Same client-ops-adjacent sharing as client_ops.manage_tags
             // -- see create_vendor_format_registry. Missing from this
             // fixture until 2026-09-09 (confirmed live on /admin/roles
@@ -253,6 +256,23 @@ pub fn admin_user() -> AuthenticatedUser {
         .into_iter()
         .map(String::from)
         .collect(),
+        token_hash: vec![0u8; 32],
+        elevated_until: None,
+        requires_step_up: false,
+        passkey_reverified_until: None,
+    }
+}
+
+/// A user who has been individually granted `integrations.clickup`
+/// (never a role permission) -- see `add_user_permission_grants`.
+pub fn clickup_user() -> AuthenticatedUser {
+    AuthenticatedUser {
+        user_id: uuid::Uuid::new_v4(),
+        role_keys: Vec::new(),
+        permission_keys: ["integrations.clickup"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
         token_hash: vec![0u8; 32],
         elevated_until: None,
         requires_step_up: false,
@@ -293,6 +313,11 @@ pub fn department_manager_user() -> AuthenticatedUser {
         user_id: uuid::Uuid::new_v4(),
         role_keys: vec!["department_manager".to_string()],
         permission_keys: [
+            // View the Users list and grant personal-integration
+            // permissions -- but not users.manage / users.manage_roles
+            // (see let_department_managers_grant_permissions).
+            "users.view",
+            "user_permissions.manage",
             "client_ops.perform",
             "client_credentials.add",
             "client_credentials.revoke",

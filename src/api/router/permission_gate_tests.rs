@@ -22,10 +22,11 @@ use crate::api::clients_companies;
 use crate::api::route_access::RouteAccess;
 use crate::api::test_support::{empty_state, test_user};
 use crate::api::{
-    auth_audit_logs, auth_audit_logs_export, auth_configuration, auth_invites, auth_user_role,
-    auth_user_status, auth_users, client_ops_activity_logs, client_ops_activity_logs_export,
-    client_ops_qms_tags, clients_create, clients_elavon, clients_manual_link, clients_resync,
-    clients_sync, dedup_rematch, dropbox_settings, process_street_settings, tool_runs,
+    auth_audit_logs, auth_audit_logs_export, auth_configuration, auth_invites,
+    auth_user_permissions, auth_user_role, auth_user_status, auth_users, clickup_connection,
+    client_ops_activity_logs, client_ops_activity_logs_export, client_ops_qms_tags, clients_create,
+    clients_elavon, clients_manual_link, clients_resync, clients_sync, dedup_rematch,
+    dropbox_settings, process_street_settings, tool_runs,
 };
 
 use super::routes::build;
@@ -131,6 +132,94 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                 Path((Uuid::new_v4(), "onboarding_manager".to_string())),
             ))
         }),
+        (
+            "/auth/users/{id}/permissions",
+            Method::GET,
+            (|| {
+                Box::pin(auth_user_permissions::list_user_permissions(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/auth/users/{id}/permissions/{permission_key}",
+            Method::PUT,
+            (|| {
+                Box::pin(auth_user_permissions::grant_user_permission(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Path((Uuid::new_v4(), "integrations.clickup".to_string())),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/auth/users/{id}/permissions/{permission_key}",
+            Method::DELETE,
+            (|| {
+                Box::pin(auth_user_permissions::revoke_user_permission(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Path((Uuid::new_v4(), "integrations.clickup".to_string())),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/integrations/clickup/connection",
+            Method::GET,
+            (|| {
+                Box::pin(clickup_connection::get_connection(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/integrations/clickup/token",
+            Method::PUT,
+            (|| {
+                Box::pin(clickup_connection::save_token(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                    Json(clickup_connection::SaveTokenRequest {
+                        token: "pk_whatever".to_string(),
+                    }),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/integrations/clickup/token",
+            Method::DELETE,
+            (|| {
+                Box::pin(clickup_connection::remove_token(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/integrations/clickup/test",
+            Method::POST,
+            (|| {
+                Box::pin(clickup_connection::test_connection(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    local_addr(),
+                    HeaderMap::new(),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
         ("/auth/configuration", Method::GET, || {
             Box::pin(auth_configuration::get_configuration(
                 axum::extract::State(empty_state()),
