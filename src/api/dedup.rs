@@ -238,6 +238,7 @@ pub async fn check(
         check_ms = started.elapsed().as_millis(),
         "Dedup check complete"
     );
+    crate::api::slow_operation::warn_if_slow("dedup_check", started.elapsed());
 
     let report = build_report_view(&report, &records);
 
@@ -394,6 +395,7 @@ pub async fn import_from_dropbox(
         check_ms = started.elapsed().as_millis(),
         "Dedup check complete (imported from Dropbox)"
     );
+    crate::api::slow_operation::warn_if_slow("dedup_check_dropbox", started.elapsed());
 
     let report = build_report_view(&report, &records);
 

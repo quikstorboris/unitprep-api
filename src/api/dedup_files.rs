@@ -22,6 +22,8 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use std::time::Instant;
+
 use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
@@ -195,6 +197,8 @@ pub async fn classify_dropbox_folder(
     _user: AuthenticatedUser,
     Json(request): Json<ClassifyDropboxFolderRequest>,
 ) -> Response {
+    let started = Instant::now();
+
     if let Err(response) = ensure_path_in_root(&state, &request.path) {
         return response;
     }
@@ -256,6 +260,8 @@ pub async fn classify_dropbox_folder(
         .buffered(DROPBOX_SCAN_CONCURRENCY)
         .collect()
         .await;
+
+    crate::api::slow_operation::warn_if_slow("dedup_classify_dropbox_folder", started.elapsed());
 
     Json(classify_to_response(&state, &files)).into_response()
 }

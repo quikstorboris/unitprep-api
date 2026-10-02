@@ -35,3 +35,6 @@ pub use phrasing::{group_units, human_label, units_phrase};
 pub use relatedness::{RelatedTenantCandidate, RelatedTenantEvidence, RelatednessSignal};
 pub use report::{run, run_with_composer, DedupReport};
 pub use types::TenantRecord;
+
+#[cfg(test)]
+mod performance_tests;

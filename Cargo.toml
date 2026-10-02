@@ -299,3 +299,25 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 # so they run one-at-a-time relative to each other without serializing the
 # whole suite.
 serial_test = "4"
+
+# The dev server (`cargo run` in the dev container) and the test loop build
+# WITHOUT optimization, which is ~10x slower than a release build on
+# allocation-heavy loops: a dedup check measured 8.7 s in debug vs 0.84 s
+# in release before its quadratic pass was pruned. Optimize only the crates
+# and parsers on the hot path of a dedup check so debug runs stay close to
+# production speed, while the rest of the app keeps fast rebuilds and full
+# debug info. (Workspace crates are listed by package name.)
+[profile.dev.package.unitprep-dedup]
+opt-level = 2
+
+[profile.dev.package.unitprep-core]
+opt-level = 2
+
+[profile.dev.package.unitprep-unit-group]
+opt-level = 2
+
+[profile.dev.package.calamine]
+opt-level = 2
+
+[profile.dev.package.csv]
+opt-level = 2

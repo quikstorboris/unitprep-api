@@ -21,3 +21,19 @@ Full detail lives in the vault (`brain/Dev Principles.md` #3/#5, `brain/Patterns
 - **Check file size and concern-mixing at the end of a task, not only when starting one.** A file that grows substantially during a multi-edit task (new module, new test suite, a refactor that consolidates logic into one place) needs the same "should this split?" judgment call *after* the growth as a file would get if you were about to add that much to it fresh.
 - Not a hard cap, not a mandate to reflexively split on line count alone — a file well past 250 lines can be genuinely cohesive (see `repository.rs`'s ~50%-test-code case, or a single WebAuthn ceremony in `auth_register.rs`) and shouldn't be split just to hit a number. The obligation is to *notice and flag*, explicitly, in the same turn the growth happens — not to silently let it ride until a later audit catches it.
 - This applies to *any* long-term-architecture concern noticed while working, not size alone (a duplicated pattern about to be copied a third time, a hand-rolled solution where a shared helper already exists, a test gap on newly-shipped surface) — see the vault's 2026-08-14 note for the full generalization.
+
+## Standing law: performance is checked at realistic size, in the build you actually run
+
+Added 2026-10-01 after a dedup check went from under a second to ~9 s. Docker was blamed; it was not the cause. The dev server (`cargo run` in the dev container) and `cargo test` are **debug builds**, ~10x slower than `--release` on allocation-heavy loops, and they exposed a pairwise pass over tenants that had always been quadratic. Full detail is in the vault (`brain/Gotchas.md`, "The Docker dev server runs a DEBUG build..."). The rules:
+
+- **Any pass that compares every pair of tenants/units (or is otherwise O(n^2)) needs two things before it ships**: per-item data prepared once outside the pair loop, and an *exact* cheap upper-bound prune ahead of the expensive comparison (see `unitprep-dedup`'s `similarity.rs`), with a test proving the pruned result equals the brute-force result.
+- **Never `await` inside a loop over N external calls** (Dropbox, HTTP) unless the concurrency is bounded and deliberate: use `futures::stream::...buffered(N)` (see `dedup_files.rs`).
+- **Test a new flow at a realistic size, with a time budget.** Unit fixtures of a handful of records cannot expose quadratic cost. `dedup/src/performance_tests.rs` is the template: a deterministic synthetic facility (no real data) run through the whole pipeline in a debug build, failing over a budget set well above today's cost. When a new heavy pass is added, extend it.
+- **When something "got slow", benchmark the same code natively in both profiles before blaming the container** (`cargo test --release` vs plain), then profile by stage.
+- `src/api/slow_operation.rs` logs a WARN when a dedup check or folder scan exceeds 2 s; wire new potentially-slow handlers into `warn_if_slow` rather than relying on someone noticing.
+- `Cargo.toml` optimizes the dedup/core/unit-group crates and the csv/calamine parsers in the dev profile so debug runs stay near production speed; keep new hot-path crates on that list.
+
+
+# Tech stack list (standing rule)
+
+Added 2026-10-01. The vault note `reference/UnitPrep Tech Stack.md` is the canonical list of every tool, library, service and infrastructure piece used across both repos (name, area, what/why). **Whenever you introduce a new one in this repo — a Cargo/npm dependency, CI/security tool, external service or integration, infra component — add a row to that note in the same session and bump its "Last updated" line.** Also update the row if a tool is removed or replaced. Boris uses that note for CTO/architecture presentations, so it must not go stale.
