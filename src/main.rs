@@ -10,6 +10,7 @@ mod dropbox;
 mod infrastructure;
 mod integrations;
 mod process_street;
+mod reencrypt_sources;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -50,8 +51,23 @@ async fn main() {
                 run_bootstrap(&argv[1..]).await;
                 return;
             }
+            "reencrypt-tool-run-sources" => {
+                match reencrypt_sources::run().await {
+                    Ok(message) => println!("{message}"),
+                    Err(message) => {
+                        eprintln!("error: {message}");
+                        std::process::exit(1);
+                    }
+                }
+                return;
+            }
             "--help" | "-h" | "help" => {
-                println!("{}", bootstrap::USAGE);
+                println!(
+                    "{}
+{}",
+                    bootstrap::USAGE,
+                    reencrypt_sources::USAGE_LINE
+                );
                 return;
             }
             other => {

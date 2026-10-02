@@ -49,6 +49,53 @@ pub struct ToolRunCreate<'a> {
     pub report_summary: Value,
 }
 
+/// What `create_dedup_run` stores for the source file: ciphertext bound to
+/// the run's `session_id` (so a blob cannot be moved to another run's row),
+/// or -- when the encryption key is not configured -- nothing at all.
+/// Never plaintext: the upload can carry card data and SSNs, and losing
+/// the downloadable copy is the safer failure than storing it unprotected.
+pub(crate) struct SealedSource {
+    pub bytes: Option<Vec<u8>>,
+    pub content_type: Option<String>,
+    pub encrypted: bool,
+}
+
+pub(crate) fn seal_source(session_id: &str, bytes: &[u8], content_type: &str) -> SealedSource {
+    match crate::clients::encryption::encrypt(&source_aad(session_id), bytes) {
+        Ok(blob) => SealedSource {
+            bytes: Some(blob),
+            content_type: Some(content_type.to_string()),
+            encrypted: true,
+        },
+        Err(err) => {
+            tracing::error!(error = %err, session_id, "could not encrypt the tool run source file; the run is recorded without a stored copy");
+            SealedSource {
+                bytes: None,
+                content_type: None,
+                encrypted: false,
+            }
+        }
+    }
+}
+
+/// Reverses `seal_source` for a stored row. Rows written before
+/// `source_encrypted` existed hold the plaintext upload and pass through.
+pub(crate) fn open_source(
+    session_id: &str,
+    stored: Vec<u8>,
+    encrypted: bool,
+) -> Result<Vec<u8>, String> {
+    if !encrypted {
+        return Ok(stored);
+    }
+
+    crate::clients::encryption::decrypt(&source_aad(session_id), &stored).map_err(|e| e.to_string())
+}
+
+fn source_aad(session_id: &str) -> Vec<u8> {
+    format!("client_ops.tool_runs.source:{session_id}").into_bytes()
+}
+
 pub async fn create_dedup_run(db: &PgPool, run: ToolRunCreate<'_>) {
     let mut tx = match begin_rls_transaction(db, run.actor_user_id, run.role_keys).await {
         Ok(tx) => tx,
@@ -58,19 +105,23 @@ pub async fn create_dedup_run(db: &PgPool, run: ToolRunCreate<'_>) {
         }
     };
 
+    let sealed = seal_source(run.session_id, &run.source_bytes, run.source_content_type);
+
     let result = sqlx::query(
         "INSERT INTO client_ops.tool_runs
              (tool, facility_id, session_id, actor_user_id, source_file_name,
-              source_dropbox_path, source_bytes, source_content_type, report_summary)
-         VALUES ('dedup', $1, $2, $3, $4, $5, $6, $7, $8)",
+              source_dropbox_path, source_bytes, source_content_type,
+              source_encrypted, report_summary)
+         VALUES ('dedup', $1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(run.facility_id)
     .bind(run.session_id)
     .bind(run.actor_user_id)
     .bind(run.source_file_name)
     .bind(run.source_dropbox_path)
-    .bind(&run.source_bytes)
-    .bind(run.source_content_type)
+    .bind(&sealed.bytes)
+    .bind(&sealed.content_type)
+    .bind(sealed.encrypted)
     .bind(&run.report_summary)
     .execute(&mut *tx)
     .await;
@@ -242,5 +293,52 @@ mod tests {
             "/Some/Path/out.csv",
         )
         .await;
+    }
+
+    #[test]
+    #[serial_test::serial(client_pii_env)]
+    fn a_sealed_source_is_not_the_plaintext_and_opens_back_to_it() {
+        std::env::set_var(
+            "CLIENT_PII_ENCRYPTION_KEY",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let plain = b"sCreditCardNum,TenantID
+abc,1
+";
+        let sealed = seal_source("run-1", plain, "text/csv");
+        std::env::remove_var("CLIENT_PII_ENCRYPTION_KEY");
+
+        assert!(sealed.encrypted);
+        let blob = sealed.bytes.clone().expect("stored");
+        assert_ne!(blob, plain.to_vec());
+        assert!(!blob.windows(plain.len()).any(|w| w == plain));
+        assert_eq!(sealed.content_type.as_deref(), Some("text/csv"));
+
+        std::env::set_var(
+            "CLIENT_PII_ENCRYPTION_KEY",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        assert_eq!(open_source("run-1", blob.clone(), true).unwrap(), plain);
+        assert!(
+            open_source("run-2", blob, true).is_err(),
+            "a blob must not open under another run's session id"
+        );
+        std::env::remove_var("CLIENT_PII_ENCRYPTION_KEY");
+    }
+
+    #[test]
+    #[serial_test::serial(client_pii_env)]
+    fn without_a_key_no_plaintext_is_stored() {
+        std::env::remove_var("CLIENT_PII_ENCRYPTION_KEY");
+        let sealed = seal_source("run-1", b"secret", "text/csv");
+        assert!(sealed.bytes.is_none() && sealed.content_type.is_none() && !sealed.encrypted);
+    }
+
+    #[test]
+    fn a_row_written_before_encryption_existed_passes_through() {
+        assert_eq!(
+            open_source("run-1", b"old".to_vec(), false).unwrap(),
+            b"old"
+        );
     }
 }
