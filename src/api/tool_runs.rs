@@ -8,13 +8,13 @@
 //! is a real operational mistake that needs a way out, not a design
 //! this codebase controls the shape of forever).
 //!
-//! GET (list, report download): any authenticated caller -- same posture
+//! GET (list): any authenticated caller -- same posture
 //! as every other read-only facility tab (`clients_facility_people`,
 //! `clients_elavon`'s GET, etc.): RLS's own
 //! `tool_runs_select_authenticated` policy is the real backstop, not a
-//! permission check here. SOURCE-file download also requires
-//! `client_ops.perform`: the raw upload can hold card data and SSNs, so
-//! only the client-ops roles may fetch it. DELETE: requires
+//! permission check here. Output-report and SOURCE-file downloads also require
+//! `client_ops.perform`: the raw upload can hold card data and SSNs and
+//! the report names tenants, so only the client-ops roles may fetch them. DELETE: requires
 //! `client_ops.perform`, backed by the new
 //! `tool_runs_delete_client_ops_roles` RLS policy -- see that
 //! migration's own comment for why.
@@ -244,8 +244,26 @@ pub async fn list_facility_tool_runs(
 pub async fn download_tool_run_output(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    headers: HeaderMap,
     Path((company_id, facility_id, run_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Response {
+    // Tenant names and contact details: same client-ops-only posture as
+    // the source file, so downloads are consistently limited to the roles
+    // that run the tools.
+    let user_agent = request_context(&headers);
+    if let Err(response) = user
+        .require_permission(
+            &state.db,
+            PERMISSION,
+            "download_tool_run_output",
+            user_agent,
+            None,
+        )
+        .await
+    {
+        return response;
+    }
+
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
@@ -524,10 +542,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn download_tool_run_output_reaches_the_database() {
+    async fn download_tool_run_output_refuses_insufficient_permission_without_touching_anything() {
         let response = download_tool_run_output(
             State(empty_state()),
             test_user(),
+            HeaderMap::new(),
+            Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn download_tool_run_output_reaches_the_database() {
+        let response = download_tool_run_output(
+            State(empty_state()),
+            crate::api::test_support::onboarding_manager_user(),
+            HeaderMap::new(),
             Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
         )
         .await;

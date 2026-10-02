@@ -714,7 +714,13 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
         .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/output",
             get(tool_runs::download_tool_run_output),
-            [(Method::GET, RouteAccess::RlsRead)],
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "download_tool_run_output",
+                },
+            )],
         )
         .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/source",
