@@ -190,12 +190,23 @@ pub async fn attach_output_bytes(
     }
 }
 
+/// The exported file itself, as kept in the database next to its Dropbox path.
+pub struct OutputFile<'a> {
+    pub bytes: Vec<u8>,
+    pub content_type: &'a str,
+    pub file_name: &'a str,
+}
+
+/// Records that the run's output was saved to Dropbox AND keeps a copy of
+/// the same file in the database, so it stays downloadable from the
+/// Onboarding Work tab even if the Dropbox file is later moved or deleted.
 pub async fn attach_output_dropbox(
     db: &PgPool,
     actor_user_id: Uuid,
     role_keys: &[String],
     session_id: &str,
     dropbox_path: &str,
+    file: OutputFile<'_>,
 ) {
     let mut tx = match begin_rls_transaction(db, actor_user_id, role_keys).await {
         Ok(tx) => tx,
@@ -207,11 +218,16 @@ pub async fn attach_output_dropbox(
 
     let result = sqlx::query(
         "UPDATE client_ops.tool_runs
-            SET output_dropbox_path = $2, completed_at = now()
+            SET output_dropbox_path = $2, output_bytes = $3,
+                output_content_type = $4, output_file_name = $5,
+                completed_at = now()
           WHERE session_id = $1",
     )
     .bind(session_id)
     .bind(dropbox_path)
+    .bind(file.bytes)
+    .bind(file.content_type)
+    .bind(file.file_name)
     .execute(&mut *tx)
     .await;
 
@@ -291,6 +307,11 @@ mod tests {
             &[],
             "no-such-session-id",
             "/Some/Path/out.csv",
+            OutputFile {
+                bytes: b"x".to_vec(),
+                content_type: "text/csv",
+                file_name: "out.csv",
+            },
         )
         .await;
     }

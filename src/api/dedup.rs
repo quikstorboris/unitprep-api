@@ -766,7 +766,7 @@ pub async fn export_to_dropbox(
         Err(response) => return response,
     };
 
-    let (bytes, _content_type) = match generate_export(
+    let (bytes, content_type) = match generate_export(
         &request.format,
         &request.session_id,
         &report,
@@ -798,7 +798,7 @@ pub async fn export_to_dropbox(
         return internal_error("Could not create the destination folder in Dropbox");
     }
 
-    if let Err(err) = state.dropbox.upload(&dropbox_path, bytes).await {
+    if let Err(err) = state.dropbox.upload(&dropbox_path, bytes.clone()).await {
         tracing::error!(error = %err, path = %dropbox_path, "Dropbox upload failed during dedup export");
         return internal_error("Could not upload export to Dropbox");
     }
@@ -809,6 +809,11 @@ pub async fn export_to_dropbox(
         &user.role_keys,
         &request.session_id,
         &dropbox_path,
+        tool_runs::OutputFile {
+            bytes,
+            content_type,
+            file_name: &file_names.outer,
+        },
     )
     .await;
 

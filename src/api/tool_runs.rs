@@ -197,7 +197,8 @@ pub async fn list_facility_tool_runs(
         "SELECT sub.id, sub.sequence_number, sub.tool, sub.actor_user_id,
                 u.first_name AS actor_first_name, u.last_name AS actor_last_name, u.email::text AS actor_email,
                 sub.source_file_name, sub.source_dropbox_path, sub.has_source_file, sub.report_summary,
-                CASE WHEN sub.has_output_bytes THEN 'download'
+                CASE WHEN sub.has_output_bytes AND sub.output_dropbox_path IS NOT NULL THEN 'both'
+                     WHEN sub.has_output_bytes THEN 'download'
                      WHEN sub.output_dropbox_path IS NOT NULL THEN 'dropbox'
                      ELSE 'none' END AS output_kind,
                 sub.output_dropbox_path, sub.created_at, sub.completed_at
