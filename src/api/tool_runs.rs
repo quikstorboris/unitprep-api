@@ -74,6 +74,10 @@ pub struct ToolRunSummary {
     /// `check` and `import_from_dropbox` always attach it), false only
     /// for a handful of rows that predate that column.
     pub has_source_file: bool,
+    /// Whether the run kept the records it was computed from, so it can
+    /// be re-checked ("rematched") with a different choice for tenants
+    /// that had no customer id.
+    pub can_rematch: bool,
     pub report_summary: serde_json::Value,
     pub output_kind: String,
     pub output_dropbox_path: Option<String>,
@@ -98,6 +102,7 @@ type ToolRunRow = (
     String,
     Option<String>,
     bool,
+    bool,
     serde_json::Value,
     String,
     Option<String>,
@@ -117,6 +122,7 @@ fn row_to_summary(row: ToolRunRow) -> ToolRunSummary {
         source_file_name,
         source_dropbox_path,
         has_source_file,
+        can_rematch,
         report_summary,
         output_kind,
         output_dropbox_path,
@@ -135,6 +141,7 @@ fn row_to_summary(row: ToolRunRow) -> ToolRunSummary {
         source_file_name,
         source_dropbox_path,
         has_source_file,
+        can_rematch,
         report_summary,
         output_kind,
         output_dropbox_path,
@@ -146,7 +153,7 @@ fn row_to_summary(row: ToolRunRow) -> ToolRunSummary {
 /// Verifies `facility_id` actually belongs to `company_id` -- same
 /// inline check `clients_facility_people`'s own handlers each repeat;
 /// there's no shared helper for it in this codebase today.
-async fn facility_belongs_to_company(
+pub(crate) async fn facility_belongs_to_company(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     facility_id: Uuid,
     company_id: Uuid,
@@ -196,7 +203,7 @@ pub async fn list_facility_tool_runs(
     let rows: Result<Vec<ToolRunRow>, sqlx::Error> = sqlx::query_as(
         "SELECT sub.id, sub.sequence_number, sub.tool, sub.actor_user_id,
                 u.first_name AS actor_first_name, u.last_name AS actor_last_name, u.email::text AS actor_email,
-                sub.source_file_name, sub.source_dropbox_path, sub.has_source_file, sub.report_summary,
+                sub.source_file_name, sub.source_dropbox_path, sub.has_source_file, sub.can_rematch, sub.report_summary,
                 CASE WHEN sub.has_output_bytes AND sub.output_dropbox_path IS NOT NULL THEN 'both'
                      WHEN sub.has_output_bytes THEN 'download'
                      WHEN sub.output_dropbox_path IS NOT NULL THEN 'dropbox'
@@ -205,6 +212,7 @@ pub async fn list_facility_tool_runs(
            FROM (
              SELECT id, tool, actor_user_id, source_file_name, source_dropbox_path,
                     (source_bytes IS NOT NULL) AS has_source_file,
+                    (records_encrypted IS NOT NULL) AS can_rematch,
                     report_summary, (output_bytes IS NOT NULL) AS has_output_bytes,
                     output_dropbox_path, created_at, completed_at,
                     ROW_NUMBER() OVER (PARTITION BY facility_id, tool ORDER BY created_at ASC) AS sequence_number

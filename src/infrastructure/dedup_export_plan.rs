@@ -17,6 +17,7 @@ use cell_refs::{
 };
 
 mod cell_refs;
+mod unidentified;
 
 // Re-exported at this module's level rather than left `pub(crate)` only
 // inside the private `cell_refs` submodule — a private `mod cell_refs;`
@@ -258,6 +259,8 @@ pub fn build_export_plan(report: &DedupReport, all_records: &[TenantRecord]) -> 
             cluster += 1;
         }
     }
+
+    unidentified::push_section(&mut plan, &mut row_num, &mut cluster, report, &groups);
 
     plan
 }

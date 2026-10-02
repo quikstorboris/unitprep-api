@@ -20,8 +20,10 @@ use serde::Serialize;
 
 use unitprep_dedup::grouping::group_records;
 use unitprep_dedup::types::{FieldCategory, FieldName, TenantRecord};
+use unitprep_dedup::types::{FlaggedGroup, TypoVariantCandidate};
 use unitprep_dedup::{
-    group_units, human_label, DedupReport, NoteComposer, RelatednessSignal, TemplateNoteComposer,
+    group_units, human_label, DedupReport, NoteComposer, RelatedTenantCandidate, RelatednessSignal,
+    TemplateNoteComposer, UnidentifiedMode, UnidentifiedTenants,
 };
 
 use crate::infrastructure::dedup_export_plan::{build_export_plan, field_cell_refs, PlannedRow};
@@ -118,6 +120,37 @@ pub struct DedupReportView {
     pub duplicate_customer_records: Vec<DuplicateCustomerRecordView>,
     pub typo_variant_candidates: Vec<TypoVariantView>,
     pub related_tenant_candidates: Vec<RelatedTenantView>,
+    /// Tenants with no customer id, reported on their own; `None` when
+    /// nothing was held out.
+    pub unidentified: Option<UnidentifiedView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IdentifiedMatchView {
+    pub tenant_id: String,
+    pub display_name: String,
+    pub units: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UnidentifiedTenantView {
+    pub display_name: String,
+    pub units: Vec<String>,
+    pub same_name_as: Vec<IdentifiedMatchView>,
+}
+
+/// The section for tenants the source gave no customer id (see
+/// `unitprep_dedup::unidentified`). The three finding lists are filled in
+/// only once the user chose to match by name; their cell references are
+/// empty because this section is not placed by the export planner's
+/// per-cluster cell mapping.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnidentifiedView {
+    pub mode: UnidentifiedMode,
+    pub tenants: Vec<UnidentifiedTenantView>,
+    pub flagged_groups: Vec<FlaggedGroupView>,
+    pub typo_variant_candidates: Vec<TypoVariantView>,
+    pub related_tenant_candidates: Vec<RelatedTenantView>,
 }
 
 pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> DedupReportView {
@@ -131,41 +164,14 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
         .iter()
         .enumerate()
         .map(|(cluster, flagged)| {
-            let display_name = flagged.group.records[0].display_name();
-            let units: Vec<String> = group_units(&flagged.group)
-                .into_iter()
-                .map(String::from)
-                .collect();
-            let categories: Vec<FieldCategory> =
-                flagged.mismatches.iter().map(|m| m.category).collect();
-
-            let bullets = composer
-                .describe_group_bullets(&flagged.group, &flagged.mismatches)
-                .into_iter()
-                .map(|(field, sentence)| {
-                    let cell_refs = cluster_rows
-                        .get(&cluster)
-                        .map(|&(first_row, record_count)| {
-                            field_cell_refs(field, first_row, record_count)
-                        })
-                        .unwrap_or_default();
-
-                    BulletView {
-                        field,
-                        label: human_label(field),
-                        sentence,
-                        cell_refs,
-                    }
-                })
-                .collect();
-
-            FlaggedGroupView {
-                key: flagged.group.key.clone(),
-                display_name,
-                units,
-                categories,
-                bullets,
-            }
+            flagged_group_view(flagged, &composer, |field| {
+                cluster_rows
+                    .get(&cluster)
+                    .map(|&(first_row, record_count)| {
+                        field_cell_refs(field, first_row, record_count)
+                    })
+                    .unwrap_or_default()
+            })
         })
         .collect();
 
@@ -187,15 +193,70 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
         })
         .collect();
 
-    // Typo-variant and related-tenant candidates only carry group keys
-    // (not records) — re-derive groups the same way `dedup_export_plan`
-    // already does for this exact lookup, so display names/units can be
-    // resolved without pushing this concern into the pure domain crate.
+    let typo_variant_candidates = typo_variant_views(&report.typo_variant_candidates, records);
+    let related_tenant_candidates =
+        related_tenant_views(&report.related_tenant_candidates, records);
+    let unidentified = report
+        .unidentified
+        .as_ref()
+        .map(|section| build_unidentified_view(section, records));
+
+    DedupReportView {
+        total_rows: report.total_rows,
+        unique_tenants: report.unique_tenants,
+        multi_unit_tenants: report.multi_unit_tenants,
+        flagged_groups,
+        duplicate_customer_records,
+        typo_variant_candidates,
+        related_tenant_candidates,
+        unidentified,
+    }
+}
+
+fn flagged_group_view(
+    flagged: &FlaggedGroup,
+    composer: &TemplateNoteComposer,
+    cell_refs_for: impl Fn(FieldName) -> Vec<String>,
+) -> FlaggedGroupView {
+    let display_name = flagged.group.records[0].display_name();
+    let units: Vec<String> = group_units(&flagged.group)
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let categories: Vec<FieldCategory> = flagged.mismatches.iter().map(|m| m.category).collect();
+
+    let bullets = composer
+        .describe_group_bullets(&flagged.group, &flagged.mismatches)
+        .into_iter()
+        .map(|(field, sentence)| BulletView {
+            field,
+            label: human_label(field),
+            sentence,
+            cell_refs: cell_refs_for(field),
+        })
+        .collect();
+
+    FlaggedGroupView {
+        key: flagged.group.key.clone(),
+        display_name,
+        units,
+        categories,
+        bullets,
+    }
+}
+
+// Typo-variant and related-tenant candidates only carry group keys (not
+// records) -- re-derive groups the same way `dedup_export_plan` already
+// does for this exact lookup, so display names/units can be resolved
+// without pushing this concern into the pure domain crate.
+fn typo_variant_views(
+    candidates: &[TypoVariantCandidate],
+    records: &[TenantRecord],
+) -> Vec<TypoVariantView> {
     let groups = group_records(records.to_vec());
     let find = |key: &str| groups.iter().find(|g| g.key == key);
 
-    let typo_variant_candidates = report
-        .typo_variant_candidates
+    candidates
         .iter()
         .map(|candidate| {
             let group_a = find(&candidate.key_a);
@@ -209,7 +270,7 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
             // "nothing matches" when almost everything did. Naming
             // which categories actually differ (empty when
             // `contact_info_matches` is true) is what the UI needs to
-            // avoid that — see `FlaggedGroupsSection.tsx`'s own
+            // avoid that -- see `FlaggedGroupsSection.tsx`'s own
             // `categories` field for the equivalent on flagged groups.
             let combined: Vec<TenantRecord> = group_a
                 .into_iter()
@@ -241,7 +302,15 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
                 note: candidate.note.clone(),
             }
         })
-        .collect();
+        .collect()
+}
+
+fn related_tenant_views(
+    candidates: &[RelatedTenantCandidate],
+    records: &[TenantRecord],
+) -> Vec<RelatedTenantView> {
+    let groups = group_records(records.to_vec());
+    let find = |key: &str| groups.iter().find(|g| g.key == key);
 
     let resolve_members = |keys: &[String]| -> Vec<RelatedTenantMemberView> {
         keys.iter()
@@ -259,8 +328,7 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
             .collect()
     };
 
-    let related_tenant_candidates = report
-        .related_tenant_candidates
+    candidates
         .iter()
         .map(|candidate| {
             let members = resolve_members(&candidate.group_keys);
@@ -280,16 +348,44 @@ pub fn build_report_view(report: &DedupReport, records: &[TenantRecord]) -> Dedu
                 note: candidate.note.clone(),
             }
         })
-        .collect();
+        .collect()
+}
 
-    DedupReportView {
-        total_rows: report.total_rows,
-        unique_tenants: report.unique_tenants,
-        multi_unit_tenants: report.multi_unit_tenants,
-        flagged_groups,
-        duplicate_customer_records,
-        typo_variant_candidates,
-        related_tenant_candidates,
+fn build_unidentified_view(
+    section: &UnidentifiedTenants,
+    records: &[TenantRecord],
+) -> UnidentifiedView {
+    let composer = TemplateNoteComposer;
+
+    UnidentifiedView {
+        mode: section.mode,
+        tenants: section
+            .tenants
+            .iter()
+            .map(|tenant| UnidentifiedTenantView {
+                display_name: tenant.display_name.clone(),
+                units: tenant.units.clone(),
+                same_name_as: tenant
+                    .same_name_as
+                    .iter()
+                    .map(|m| IdentifiedMatchView {
+                        tenant_id: m.tenant_id.clone(),
+                        display_name: m.display_name.clone(),
+                        units: m.units.clone(),
+                    })
+                    .collect(),
+            })
+            .collect(),
+        flagged_groups: section
+            .flagged_groups
+            .iter()
+            .map(|flagged| flagged_group_view(flagged, &composer, |_| Vec::new()))
+            .collect(),
+        typo_variant_candidates: typo_variant_views(&section.typo_variant_candidates, records),
+        related_tenant_candidates: related_tenant_views(
+            &section.related_tenant_candidates,
+            records,
+        ),
     }
 }
 

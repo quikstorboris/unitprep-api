@@ -92,16 +92,27 @@ pub fn records_from_csv_document(
     doc: &CsvDocument,
     tenant_vendors: &[VendorFormat],
 ) -> Result<Vec<TenantRecord>> {
-    let vendor = detect_vendor(doc, tenant_vendors).with_context(|| {
-        let known: Vec<&str> = tenant_vendors.iter().map(|v| v.name.as_str()).collect();
-        format!(
-            "Unrecognized tenant export format — this file's columns don't match a known vendor ({})",
-            known.join(", ")
-        )
-    })?;
+    records_from_documents(doc, &[], tenant_vendors)
+}
 
-    let normalized = apply_field_mapping(doc, vendor)
-        .with_context(|| format!("Failed to normalize a '{}' export", vendor.name))?;
+/// As `records_from_csv_document`, for a main file plus the other reports
+/// of the same system that carry more fields for the same tenants (see
+/// `join`). Each file is detected and normalized on its own, then the
+/// join files are matched onto the main file by unit and customer name.
+pub fn records_from_documents(
+    primary: &CsvDocument,
+    joins: &[&CsvDocument],
+    tenant_vendors: &[VendorFormat],
+) -> Result<Vec<TenantRecord>> {
+    let mut normalized = normalize(primary, tenant_vendors)?;
+
+    if !joins.is_empty() {
+        let joined = joins
+            .iter()
+            .map(|doc| normalize(doc, tenant_vendors))
+            .collect::<Result<Vec<_>>>()?;
+        normalized = crate::join::merge_joined(normalized, &joined)?;
+    }
 
     normalized
         .header_index("FirtLast")
@@ -125,6 +136,21 @@ pub fn records_from_csv_document(
             record
         })
         .collect())
+}
+
+/// Detects `doc`'s registered vendor and renames its columns to the
+/// canonical names.
+fn normalize(doc: &CsvDocument, tenant_vendors: &[VendorFormat]) -> Result<CsvDocument> {
+    let vendor = detect_vendor(doc, tenant_vendors).with_context(|| {
+        let known: Vec<&str> = tenant_vendors.iter().map(|v| v.name.as_str()).collect();
+        format!(
+            "Unrecognized tenant export format — this file's columns don't match a known vendor ({})",
+            known.join(", ")
+        )
+    })?;
+
+    apply_field_mapping(doc, vendor)
+        .with_context(|| format!("Failed to normalize a '{}' export", vendor.name))
 }
 
 #[cfg(test)]

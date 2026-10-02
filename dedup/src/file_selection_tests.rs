@@ -225,7 +225,13 @@ fn a_single_recognized_primary_file_can_run() {
             20,
         )),
     )];
-    assert_eq!(plan_ingest(&files), Ok(0));
+    assert_eq!(
+        plan_ingest(&files),
+        Ok(IngestPlan {
+            primary: 0,
+            joins: vec![]
+        })
+    );
 }
 
 #[test]
@@ -318,4 +324,116 @@ fn files_from_two_systems_are_refused() {
         plan_ingest(&files),
         Err(SelectionError::MixedSystems { .. })
     ));
+}
+
+fn winsen(role: FileRole, name: &str) -> FileFormatMeta {
+    meta(name, "Winsen", role, 0)
+}
+
+#[test]
+fn join_files_ride_along_with_their_primary() {
+    let files = [
+        detected(
+            "rentroll.xls",
+            Some(winsen(FileRole::Join, "Winsen Rent Roll")),
+        ),
+        detected(
+            "xref.xls",
+            Some(winsen(FileRole::Primary, "Winsen Cross Reference")),
+        ),
+        detected("email.xls", Some(winsen(FileRole::Join, "Winsen Email"))),
+    ];
+    assert_eq!(
+        plan_ingest(&files),
+        Ok(IngestPlan {
+            primary: 1,
+            joins: vec![0, 2]
+        })
+    );
+}
+
+#[test]
+fn a_join_file_alone_is_refused_with_its_name() {
+    let files = [detected(
+        "email.xls",
+        Some(winsen(FileRole::Join, "Winsen Email")),
+    )];
+    assert!(matches!(
+        plan_ingest(&files),
+        Err(SelectionError::JoinWithoutPrimary { .. })
+    ));
+}
+
+#[test]
+fn a_join_file_from_another_system_is_refused() {
+    let files = [
+        detected(
+            "xref.xls",
+            Some(winsen(FileRole::Primary, "Winsen Cross Reference")),
+        ),
+        detected(
+            "e.csv",
+            Some(meta("Other Email", "Other", FileRole::Join, 0)),
+        ),
+    ];
+    assert!(matches!(
+        plan_ingest(&files),
+        Err(SelectionError::MixedSystems { .. })
+    ));
+}
+
+#[test]
+fn two_join_files_of_one_kind_are_refused() {
+    let files = [
+        detected(
+            "xref.xls",
+            Some(winsen(FileRole::Primary, "Winsen Cross Reference")),
+        ),
+        detected("email1.xls", Some(winsen(FileRole::Join, "Winsen Email"))),
+        detected("email2.xls", Some(winsen(FileRole::Join, "Winsen Email"))),
+    ];
+    assert!(matches!(
+        plan_ingest(&files),
+        Err(SelectionError::DuplicateFormat { .. })
+    ));
+}
+
+#[test]
+fn the_pre_selection_ticks_the_join_files_of_the_chosen_system() {
+    let vendors = vec![
+        vendor(
+            "Winsen Cross Reference",
+            &["Unit", "Customer Name", "Address Line 1"],
+        ),
+        vendor(
+            "Winsen Email",
+            &["Unit", "Customer Name", "Customer Email Address"],
+        ),
+        vendor("Winsen Rent Roll", &["Unit", "Customer Name", "Cust ID"]),
+    ];
+    let metas = vec![
+        winsen(FileRole::Primary, "Winsen Cross Reference"),
+        winsen(FileRole::Join, "Winsen Email"),
+        winsen(FileRole::Join, "Winsen Rent Roll"),
+    ];
+    let files = [
+        file(
+            "xref.xls",
+            Some(&["Unit", "Customer Name", "Address Line 1"]),
+        ),
+        file(
+            "email.xls",
+            Some(&["Unit", "Customer Name", "Customer Email Address"]),
+        ),
+        file("rentroll.xls", Some(&["Unit", "Customer Name", "Cust ID"])),
+        file("notes.xls", Some(&["Note"])),
+    ];
+
+    let (_, suggestion) = classify(&files, &vendors, &metas);
+
+    assert_eq!(suggestion.pms.as_deref(), Some("Winsen"));
+    assert_eq!(
+        suggestion.selected,
+        ["xref.xls", "email.xls", "rentroll.xls"]
+    );
 }

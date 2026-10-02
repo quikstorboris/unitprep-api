@@ -210,3 +210,45 @@ fn duplicate_customer_records_get_their_own_marked_section_after_flagged_groups(
     );
     assert_eq!(rows[3], ("B26", "", 1));
 }
+
+#[test]
+fn tenants_without_a_customer_id_get_their_own_marked_section_with_a_note() {
+    use unitprep_dedup::unidentified::{IdentifiedMatch, UnidentifiedTenant, UnidentifiedTenants};
+    use unitprep_dedup::UnidentifiedMode;
+
+    let named = |id: &str, unit: &str| TenantRecord {
+        tenant_id: id.to_string(),
+        first_last: "Ann Lee".to_string(),
+        unit_number: unit.to_string(),
+        ..Default::default()
+    };
+
+    let report = DedupReport {
+        unidentified: Some(UnidentifiedTenants {
+            mode: UnidentifiedMode::MatchedByName,
+            tenants: vec![UnidentifiedTenant {
+                key: "ann lee".to_string(),
+                display_name: "Ann Lee".to_string(),
+                units: vec!["9".to_string()],
+                same_name_as: vec![IdentifiedMatch {
+                    tenant_id: "55".to_string(),
+                    display_name: "Ann Lee".to_string(),
+                    units: vec!["1".to_string()],
+                }],
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let plan = build_export_plan(&report, &[named("55", "1"), named("", "9")]);
+
+    assert!(plan.iter().any(|row| matches!(
+        row,
+        PlannedRow::Marker(text) if text.starts_with("Tenants without a customer ID")
+    )));
+    let rows = data_rows(&plan);
+    assert_eq!(rows.len(), 1, "only the tenant's own id-less row is listed");
+    assert_eq!(rows[0].0, "9");
+    assert!(rows[0].1.contains("customer ID 55"), "note: {}", rows[0].1);
+}

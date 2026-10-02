@@ -10,6 +10,7 @@
 
 mod csv;
 mod excel;
+mod printed_report;
 mod spreadsheetml;
 
 pub use csv::parse_csv_document;

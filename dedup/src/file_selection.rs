@@ -22,14 +22,19 @@ use unitprep_core::vendor_format::{detect_vendor, VendorFormat};
 pub enum FileRole {
     /// A self-contained tenant file: one of these is enough to run a check.
     Primary,
-    /// Recognized, but not usable on its own until a join exists.
+    /// Recognized, but not usable on its own.
     Supporting,
+    /// More fields for the tenants in the same system's primary file (the
+    /// email report, the report holding the customer id). Joined onto the
+    /// primary by unit and name; useless without one.
+    Join,
 }
 
 impl FileRole {
     pub fn from_db_str(value: &str) -> Self {
         match value {
             "supporting" => FileRole::Supporting,
+            "join" => FileRole::Join,
             _ => FileRole::Primary,
         }
     }
@@ -197,13 +202,32 @@ fn suggest(classified: &[ClassifiedFile]) -> Suggestion {
     });
     let chosen = in_pms[0].0.file_name.clone();
 
+    // The join files of the chosen system ride along, one per kind.
+    let mut joins: Vec<&(&ClassifiedFile, &FileFormatMeta)> = recognized
+        .iter()
+        .filter(|(_, m)| m.role == FileRole::Join && m.pms == best_pms)
+        .collect();
+    joins.sort_by(|a, b| {
+        b.1.selection_priority
+            .cmp(&a.1.selection_priority)
+            .then_with(|| a.0.file_name.cmp(&b.0.file_name))
+    });
+    let mut seen_kinds: Vec<&str> = Vec::new();
+    let mut selected = vec![chosen.clone()];
+    for (file, meta) in joins {
+        if !seen_kinds.contains(&meta.name.as_str()) {
+            seen_kinds.push(meta.name.as_str());
+            selected.push(file.file_name.clone());
+        }
+    }
+
     Suggestion {
         pms: Some(best_pms.to_string()),
         alternatives: in_pms[1..]
             .iter()
             .map(|(f, _)| (f.file_name.clone(), chosen.clone()))
             .collect(),
-        selected: vec![chosen],
+        selected,
     }
 }
 
@@ -222,6 +246,10 @@ pub enum SelectionError {
         file: String,
     },
     Supporting {
+        file: String,
+        report: String,
+    },
+    JoinWithoutPrimary {
         file: String,
         report: String,
     },
@@ -252,6 +280,10 @@ impl std::fmt::Display for SelectionError {
                 f,
                 "'{file}' is a supporting file ({report}) and can't be checked on its own yet. Select the main tenant file instead."
             ),
+            SelectionError::JoinWithoutPrimary { file, report } => write!(
+                f,
+                "'{file}' ({report}) only adds details to the main tenant file of its system. Select the main tenant file as well."
+            ),
             SelectionError::MixedSystems { first, second } => write!(
                 f,
                 "The selected files come from different systems ({first} and {second}). Select files from one system."
@@ -270,11 +302,19 @@ impl std::fmt::Display for SelectionError {
 
 impl std::error::Error for SelectionError {}
 
-/// Decides whether `files` can run together and returns the index of the
-/// one file to ingest. Today that is always exactly one primary file; the
-/// error cases are what stop a multi-select from silently double-counting
-/// tenants or mixing two systems' data.
-pub fn plan_ingest(files: &[DetectedFile<'_>]) -> Result<usize, SelectionError> {
+/// What a run reads: the main file, and the files joined onto it. Indices
+/// are into the slice passed to `plan_ingest`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IngestPlan {
+    pub primary: usize,
+    pub joins: Vec<usize>,
+}
+
+/// Decides whether `files` can run together. A run takes exactly one
+/// primary file, plus any number of join files of the same system (one of
+/// each kind). The error cases are what stop a multi-select from silently
+/// double-counting tenants or mixing two systems' data.
+pub fn plan_ingest(files: &[DetectedFile<'_>]) -> Result<IngestPlan, SelectionError> {
     if files.is_empty() {
         return Err(SelectionError::NoFiles);
     }
@@ -293,12 +333,26 @@ pub fn plan_ingest(files: &[DetectedFile<'_>]) -> Result<usize, SelectionError> 
         }
     }
 
-    // Today a run takes exactly one primary file, so any second file is
-    // an error -- which kind depends on how it relates to the first.
-    if let Some(other) = files.get(1) {
-        let first = &files[0];
-        let first_meta = first.format.as_ref().expect("checked above");
-        let other_meta = other.format.as_ref().expect("checked above");
+    let meta_of = |i: usize| files[i].format.as_ref().expect("checked above");
+
+    let primaries: Vec<usize> = (0..files.len())
+        .filter(|&i| meta_of(i).role == FileRole::Primary)
+        .collect();
+    let joins: Vec<usize> = (0..files.len())
+        .filter(|&i| meta_of(i).role == FileRole::Join)
+        .collect();
+
+    let Some(&primary) = primaries.first() else {
+        let first = joins[0];
+        return Err(SelectionError::JoinWithoutPrimary {
+            file: files[first].file_name.to_string(),
+            report: meta_of(first).report_name.clone(),
+        });
+    };
+
+    if let Some(&other) = primaries.get(1) {
+        let first_meta = meta_of(primary);
+        let other_meta = meta_of(other);
         return Err(if other_meta.pms != first_meta.pms {
             SelectionError::MixedSystems {
                 first: first_meta.pms.clone(),
@@ -306,19 +360,37 @@ pub fn plan_ingest(files: &[DetectedFile<'_>]) -> Result<usize, SelectionError> 
             }
         } else if other_meta.name == first_meta.name {
             SelectionError::DuplicateFormat {
-                first: first.file_name.to_string(),
-                second: other.file_name.to_string(),
+                first: files[primary].file_name.to_string(),
+                second: files[other].file_name.to_string(),
                 report: first_meta.report_name.clone(),
             }
         } else {
             SelectionError::Alternatives {
-                first: first.file_name.to_string(),
-                second: other.file_name.to_string(),
+                first: files[primary].file_name.to_string(),
+                second: files[other].file_name.to_string(),
             }
         });
     }
 
-    Ok(0)
+    let pms = &meta_of(primary).pms;
+    for (n, &join) in joins.iter().enumerate() {
+        let meta = meta_of(join);
+        if &meta.pms != pms {
+            return Err(SelectionError::MixedSystems {
+                first: pms.clone(),
+                second: meta.pms.clone(),
+            });
+        }
+        if let Some(&earlier) = joins[..n].iter().find(|&&e| meta_of(e).name == meta.name) {
+            return Err(SelectionError::DuplicateFormat {
+                first: files[earlier].file_name.to_string(),
+                second: files[join].file_name.to_string(),
+                report: meta.report_name.clone(),
+            });
+        }
+    }
+
+    Ok(IngestPlan { primary, joins })
 }
 
 #[cfg(test)]

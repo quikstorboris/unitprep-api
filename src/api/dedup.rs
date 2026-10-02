@@ -254,6 +254,7 @@ pub async fn check(
             source_bytes,
             source_content_type: guess_content_type(&file_name),
             report_summary: serde_json::to_value(&report).unwrap_or_default(),
+            records: &records,
         },
     )
     .await;
@@ -411,6 +412,7 @@ pub async fn import_from_dropbox(
             source_bytes,
             source_content_type: guess_content_type(&file_name),
             report_summary: serde_json::to_value(&report).unwrap_or_default(),
+            records: &records,
         },
     )
     .await;
@@ -917,7 +919,7 @@ fn generate_zip_bytes(
 /// `Csv`/`Xlsx`, to keep this a plain 4-argument function rather than an
 /// `Option` only one branch needs.
 #[allow(clippy::result_large_err)]
-fn generate_export(
+pub(crate) fn generate_export(
     format: &ExportFormat,
     session_id: &str,
     report: &DedupReport,

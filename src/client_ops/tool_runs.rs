@@ -47,6 +47,10 @@ pub struct ToolRunCreate<'a> {
     pub source_bytes: Vec<u8>,
     pub source_content_type: &'a str,
     pub report_summary: Value,
+    /// The normalized tenant records the check ran on, kept (encrypted)
+    /// so the run can be re-checked later with a different choice for
+    /// tenants that had no customer id. See `seal_records`.
+    pub records: &'a [unitprep_dedup::TenantRecord],
 }
 
 /// What `create_dedup_run` stores for the source file: ciphertext bound to
@@ -96,6 +100,44 @@ fn source_aad(session_id: &str) -> Vec<u8> {
     format!("client_ops.tool_runs.source:{session_id}").into_bytes()
 }
 
+/// The records a run was computed from, as encrypted JSON bound to the
+/// run's `session_id`. `None` (nothing stored) when the key is not
+/// configured or serialization fails: the run is then recorded as usual
+/// but cannot be rematched later.
+pub(crate) fn seal_records(
+    session_id: &str,
+    records: &[unitprep_dedup::TenantRecord],
+) -> Option<Vec<u8>> {
+    let json = match serde_json::to_vec(records) {
+        Ok(json) => json,
+        Err(err) => {
+            tracing::error!(error = %err, session_id, "could not serialize tool run records");
+            return None;
+        }
+    };
+
+    match crate::clients::encryption::encrypt(&records_aad(session_id), &json) {
+        Ok(blob) => Some(blob),
+        Err(err) => {
+            tracing::error!(error = %err, session_id, "could not encrypt the tool run records; the run cannot be rematched later");
+            None
+        }
+    }
+}
+
+pub(crate) fn open_records(
+    session_id: &str,
+    blob: &[u8],
+) -> Result<Vec<unitprep_dedup::TenantRecord>, String> {
+    let json = crate::clients::encryption::decrypt(&records_aad(session_id), blob)
+        .map_err(|e| e.to_string())?;
+    serde_json::from_slice(&json).map_err(|e| e.to_string())
+}
+
+fn records_aad(session_id: &str) -> Vec<u8> {
+    format!("client_ops.tool_runs.records:{session_id}").into_bytes()
+}
+
 pub async fn create_dedup_run(db: &PgPool, run: ToolRunCreate<'_>) {
     let mut tx = match begin_rls_transaction(db, run.actor_user_id, run.role_keys).await {
         Ok(tx) => tx,
@@ -111,8 +153,8 @@ pub async fn create_dedup_run(db: &PgPool, run: ToolRunCreate<'_>) {
         "INSERT INTO client_ops.tool_runs
              (tool, facility_id, session_id, actor_user_id, source_file_name,
               source_dropbox_path, source_bytes, source_content_type,
-              source_encrypted, report_summary)
-         VALUES ('dedup', $1, $2, $3, $4, $5, $6, $7, $8, $9)",
+              source_encrypted, report_summary, records_encrypted)
+         VALUES ('dedup', $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(run.facility_id)
     .bind(run.session_id)
@@ -123,6 +165,7 @@ pub async fn create_dedup_run(db: &PgPool, run: ToolRunCreate<'_>) {
     .bind(&sealed.content_type)
     .bind(sealed.encrypted)
     .bind(&run.report_summary)
+    .bind(seal_records(run.session_id, run.records))
     .execute(&mut *tx)
     .await;
 
@@ -138,6 +181,61 @@ pub async fn create_dedup_run(db: &PgPool, run: ToolRunCreate<'_>) {
 
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, session_id = run.session_id, "failed to commit tool_runs insert");
+    }
+}
+
+/// Replaces a run's stored report (the on-screen summary) after the user
+/// re-checked it, and -- when the run has a stored output file -- the
+/// regenerated file too, so the downloadable workbook matches the report.
+/// Infallible from the caller's side, like the other writers here.
+pub async fn update_report(
+    db: &PgPool,
+    actor_user_id: Uuid,
+    role_keys: &[String],
+    session_id: &str,
+    report_summary: &Value,
+    output: Option<OutputFile<'_>>,
+) {
+    let mut tx = match begin_rls_transaction(db, actor_user_id, role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, session_id, "failed to open transaction for update_report");
+            return;
+        }
+    };
+
+    let result = match output {
+        Some(file) => {
+            sqlx::query(
+                "UPDATE client_ops.tool_runs
+                    SET report_summary = $2, output_bytes = $3,
+                        output_content_type = $4, output_file_name = $5
+                  WHERE session_id = $1",
+            )
+            .bind(session_id)
+            .bind(report_summary)
+            .bind(file.bytes)
+            .bind(file.content_type)
+            .bind(file.file_name)
+            .execute(&mut *tx)
+            .await
+        }
+        None => {
+            sqlx::query("UPDATE client_ops.tool_runs SET report_summary = $2 WHERE session_id = $1")
+                .bind(session_id)
+                .bind(report_summary)
+                .execute(&mut *tx)
+                .await
+        }
+    };
+
+    if let Err(err) = result {
+        tracing::error!(error = %err, session_id, "failed to update the tool run report");
+        return;
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, session_id, "failed to commit update_report");
     }
 }
 

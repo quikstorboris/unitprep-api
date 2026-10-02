@@ -13,6 +13,7 @@ use crate::note_composer::{NoteComposer, TemplateNoteComposer};
 use crate::relatedness::{find_related_tenant_candidates, RelatedTenantCandidate};
 use crate::similarity::find_typo_variant_candidates;
 use crate::types::{FlaggedGroup, TenantGroup, TenantRecord, TypoVariantCandidate};
+use crate::unidentified::{self, UnidentifiedMode, UnidentifiedTenants};
 
 /// Full result of a duplicate-tenant check run.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -28,6 +29,10 @@ pub struct DedupReport {
     pub duplicate_customer_records: Vec<DuplicateCustomerRecord>,
     pub typo_variant_candidates: Vec<TypoVariantCandidate>,
     pub related_tenant_candidates: Vec<RelatedTenantCandidate>,
+    /// Tenants the source gave no customer id, held out of the sections
+    /// above and reported on their own. `None` when nothing was held out
+    /// (a format with no ids at all, or every row has one).
+    pub unidentified: Option<UnidentifiedTenants>,
 }
 
 /// Runs the full duplicate-tenant check over `records`, composing notes
@@ -41,7 +46,24 @@ pub fn run(records: Vec<TenantRecord>) -> DedupReport {
 /// swapping how note text gets written without touching any of the
 /// matching/comparison logic above it.
 pub fn run_with_composer(records: Vec<TenantRecord>, composer: &dyn NoteComposer) -> DedupReport {
+    run_with_options(records, composer, UnidentifiedMode::Pending)
+}
+
+/// Same as `run_with_composer`, plus what to do with tenants that have no
+/// customer id when others do (see `unidentified`). Those rows are held
+/// out of the main sections either way; `mode` decides whether they are
+/// also matched by name against everyone.
+pub fn run_with_options(
+    records: Vec<TenantRecord>,
+    composer: &dyn NoteComposer,
+    mode: UnidentifiedMode,
+) -> DedupReport {
     let total_rows = records.len();
+
+    let (records, held_out) = match unidentified::split_by_identification(&records) {
+        Some((identified, unidentified)) => (identified.clone(), Some((identified, unidentified))),
+        None => (records, None),
+    };
 
     // Two views of the same records. Tenants (the counts, and which rows
     // get compared for contact mismatches) are keyed by the vendor's
@@ -68,6 +90,10 @@ pub fn run_with_composer(records: Vec<TenantRecord>, composer: &dyn NoteComposer
 
     let flagged_groups = flag_groups(multi, composer);
 
+    let unidentified = held_out.map(|(identified, unidentified)| {
+        unidentified::analyze(&identified, &unidentified, mode, composer)
+    });
+
     DedupReport {
         total_rows,
         unique_tenants,
@@ -76,6 +102,7 @@ pub fn run_with_composer(records: Vec<TenantRecord>, composer: &dyn NoteComposer
         duplicate_customer_records,
         typo_variant_candidates,
         related_tenant_candidates,
+        unidentified,
     }
 }
 

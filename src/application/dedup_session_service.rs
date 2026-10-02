@@ -14,12 +14,12 @@ use uuid::Uuid;
 
 use unitprep_core::parsing::parse_document;
 use unitprep_core::session::{HasSessionMetadata, SessionMetadata};
-use unitprep_core::session_store::SessionStore;
+use unitprep_core::session_store::{SessionStore, SessionStoreExt};
 use unitprep_core::uploaded_file::UploadedFile;
 use unitprep_core::vendor_format::{detect_vendor, VendorFormat};
 use unitprep_dedup::file_selection::{meta_for, plan_ingest, DetectedFile, FileFormatMeta};
-use unitprep_dedup::ingest::records_from_csv_document;
-use unitprep_dedup::{report, DedupReport, TenantRecord};
+use unitprep_dedup::ingest::records_from_documents;
+use unitprep_dedup::{report, DedupReport, TenantRecord, UnidentifiedMode};
 
 /// Only one real stage today: the check runs synchronously on upload,
 /// there's no correction loop and no in-app confirm/dismiss step (the
@@ -144,8 +144,12 @@ impl DedupSessionService {
             })
             .collect();
 
-        let ingest_index = plan_ingest(&detected)?;
-        let records = records_from_csv_document(&documents[ingest_index], tenant_vendors)?;
+        let plan = plan_ingest(&detected)?;
+        let ingest_index = plan.primary;
+        let join_documents: Vec<&unitprep_core::csv_document::CsvDocument> =
+            plan.joins.iter().map(|&i| &documents[i]).collect();
+        let records =
+            records_from_documents(&documents[ingest_index], &join_documents, tenant_vendors)?;
         let dedup_report = report::run(records.clone());
 
         let session_id = Uuid::new_v4().to_string();
@@ -168,6 +172,33 @@ impl DedupSessionService {
         self.store.save(session);
 
         Ok((session_id, dedup_report, records, ingest_index))
+    }
+
+    /// Re-runs the check on a session's records with the user's choice for
+    /// the tenants that have no customer id, stores the new report, and
+    /// returns it with the records. `None` if the session isn't the
+    /// caller's or no longer exists.
+    pub fn set_unidentified_mode(
+        &self,
+        session_id: &str,
+        owner_id: Uuid,
+        mode: UnidentifiedMode,
+    ) -> Option<(DedupReport, Vec<TenantRecord>)> {
+        let updated = self
+            .store
+            .with_owned_session_mut(session_id, owner_id, |session| {
+                session.report = report::run_with_options(
+                    session.records.clone(),
+                    &unitprep_dedup::TemplateNoteComposer,
+                    mode,
+                );
+                session.clone()
+            })?;
+
+        let result = (updated.report.clone(), updated.records.clone());
+        // The durable layer only persists on save.
+        self.store.save(updated);
+        Some(result)
     }
 }
 
@@ -449,6 +480,55 @@ mod tests {
         assert_eq!(ingested, 0);
         assert_eq!(records.len(), 2);
         assert_eq!(report.multi_unit_tenants, 1);
+    }
+
+    #[test]
+    fn choosing_to_match_tenants_without_an_id_by_name_updates_the_stored_report() {
+        let service = service();
+        let owner = Uuid::new_v4();
+        let records = vec![
+            TenantRecord {
+                tenant_id: "5".to_string(),
+                first_last: "Ann Lee".to_string(),
+                unit_number: "1".to_string(),
+                email: "a@x.com".to_string(),
+                ..Default::default()
+            },
+            TenantRecord {
+                first_last: "Ann Lee".to_string(),
+                unit_number: "9".to_string(),
+                email: "b@x.com".to_string(),
+                ..Default::default()
+            },
+        ];
+        let report = report::run(records.clone());
+        let session = DedupSession::new("s1".to_string(), Some(owner), records, report, None);
+        service.store.save(session);
+
+        let (matched, _) = service
+            .set_unidentified_mode("s1", owner, UnidentifiedMode::MatchedByName)
+            .expect("the owner's session");
+
+        let section = matched.unidentified.expect("one tenant has no id");
+        assert_eq!(section.mode, UnidentifiedMode::MatchedByName);
+        assert_eq!(section.tenants[0].same_name_as[0].tenant_id, "5");
+
+        let stored = service
+            .store
+            .with_owned_session("s1", owner, |s| s.report.clone())
+            .unwrap();
+        assert_eq!(
+            stored.unidentified.unwrap().mode,
+            UnidentifiedMode::MatchedByName,
+            "the choice is kept on the session"
+        );
+
+        assert!(
+            service
+                .set_unidentified_mode("s1", Uuid::new_v4(), UnidentifiedMode::Ignored)
+                .is_none(),
+            "another user's session is not found"
+        );
     }
 
     #[test]

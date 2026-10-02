@@ -20,6 +20,7 @@ pub mod duplicate_records;
 pub mod file_selection;
 pub mod grouping;
 pub mod ingest;
+pub mod join;
 pub mod normalization;
 pub mod note_composer;
 pub mod notes;
@@ -28,13 +29,15 @@ pub mod relatedness;
 pub mod report;
 pub mod similarity;
 pub mod types;
+pub mod unidentified;
 
 pub use duplicate_records::DuplicateCustomerRecord;
 pub use note_composer::{NoteComposer, TemplateNoteComposer};
 pub use phrasing::{group_units, human_label, units_phrase};
 pub use relatedness::{RelatedTenantCandidate, RelatedTenantEvidence, RelatednessSignal};
-pub use report::{run, run_with_composer, DedupReport};
+pub use report::{run, run_with_composer, run_with_options, DedupReport};
 pub use types::TenantRecord;
+pub use unidentified::{UnidentifiedMode, UnidentifiedTenants};
 
 #[cfg(test)]
 mod performance_tests;

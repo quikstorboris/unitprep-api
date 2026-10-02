@@ -75,6 +75,7 @@ fn generate_xlsx_writes_flagged_group_rows_and_notes() {
     };
 
     let report = DedupReport {
+        unidentified: None,
         duplicate_customer_records: Vec::new(),
         total_rows: 2,
         unique_tenants: 1,
@@ -134,6 +135,7 @@ fn generate_xlsx_writes_a_related_tenants_section_without_crashing() {
     ];
 
     let report = DedupReport {
+        unidentified: None,
         duplicate_customer_records: Vec::new(),
         total_rows: 2,
         unique_tenants: 2,
@@ -186,6 +188,7 @@ fn a_leading_plus_value_round_trips_without_a_csv_style_apostrophe() {
     };
 
     let report = DedupReport {
+        unidentified: None,
         duplicate_customer_records: Vec::new(),
         flagged_groups: vec![FlaggedGroup {
             group,
@@ -225,6 +228,7 @@ fn formatting_fixes_are_present_in_the_raw_worksheet_xml() {
     };
 
     let report = DedupReport {
+        unidentified: None,
         duplicate_customer_records: Vec::new(),
         flagged_groups: vec![FlaggedGroup {
             group,

@@ -29,8 +29,8 @@ use super::super::{
     clients_companies, clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
     clients_facility_people, clients_facility_policies_edit, clients_filter_options,
     clients_manual_link, clients_onboarding_summary, clients_preview, clients_resync,
-    clients_search, clients_sync, correct, correct_group, dedup, dedup_files, discover,
-    dropbox_browse, dropbox_settings, exclude_group, exclude_groups, exempt, export,
+    clients_search, clients_sync, correct, correct_group, dedup, dedup_files, dedup_rematch,
+    discover, dropbox_browse, dropbox_settings, exclude_group, exclude_groups, exempt, export,
     group_file_confirm, group_file_upload, process_street_settings, resolve_unit_format,
     select_group_file, select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
 };
@@ -712,6 +712,17 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
             )],
         )
         .gated_route(
+            "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/rematch",
+            post(dedup_rematch::rematch_tool_run),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "rematch_tool_run",
+                },
+            )],
+        )
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/output",
             get(tool_runs::download_tool_run_output),
             [(
@@ -1029,6 +1040,11 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
         .gated_route(
             "/dedup/import-dropbox",
             post(dedup::import_from_dropbox),
+            [(Method::POST, RouteAccess::Authenticated)],
+        )
+        .gated_route(
+            "/dedup/unidentified",
+            post(dedup_rematch::set_unidentified_mode),
             [(Method::POST, RouteAccess::Authenticated)],
         )
         .gated_route(

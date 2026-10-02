@@ -170,18 +170,33 @@ fn synthetic_facility(rows: usize) -> Vec<TenantRecord> {
     records
 }
 
-fn time_run(rows: usize) -> (Duration, usize) {
+/// Times the whole run in both modes for tenants that have no customer id
+/// (the synthetic facility has some): the default listing, and the heavier
+/// by-name matching a user can ask for afterwards.
+fn time_run(rows: usize) -> (Duration, Duration, usize) {
     let records = synthetic_facility(rows);
     assert_eq!(records.len(), rows);
+
     let started = Instant::now();
-    let report = run(records);
-    (started.elapsed(), report.unique_tenants)
+    let report = run(records.clone());
+    let default_run = started.elapsed();
+
+    let started = Instant::now();
+    let _ = crate::run_with_options(
+        records,
+        &crate::TemplateNoteComposer,
+        crate::UnidentifiedMode::MatchedByName,
+    );
+    let matched_run = started.elapsed();
+
+    let held_out = report.unidentified.map(|u| u.tenants.len()).unwrap_or(0);
+    (default_run, matched_run, report.unique_tenants + held_out)
 }
 
 #[test]
 fn a_realistic_facility_is_analyzed_within_the_speed_budget() {
     // Today (debug build): ~0.1 s. The unpruned pairwise pass: ~9 s.
-    let (elapsed, tenants) = time_run(800);
+    let (elapsed, matched, tenants) = time_run(800);
 
     assert!(
         tenants > 500,
@@ -191,13 +206,17 @@ fn a_realistic_facility_is_analyzed_within_the_speed_budget() {
         elapsed < Duration::from_secs(2),
         "analyzing 800 rows took {elapsed:?} (budget 2s) -- a pass over the tenants has probably gone quadratic without pruning"
     );
+    assert!(
+        matched < Duration::from_secs(2),
+        "matching the tenants without a customer id by name took {matched:?} (budget 2s)"
+    );
 }
 
 #[test]
 fn a_large_facility_still_scales_within_budget() {
     // 3x the rows is ~9x the pairs for a pairwise pass: the pruned pass
     // stays cheap, an unpruned one would take ~80 s.
-    let (elapsed, _) = time_run(2400);
+    let (elapsed, _, _) = time_run(2400);
 
     assert!(
         elapsed < Duration::from_secs(8),

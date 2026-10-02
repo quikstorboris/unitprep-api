@@ -3,6 +3,7 @@ use std::io::Cursor;
 use calamine::{open_workbook_auto_from_rs, Data, Reader};
 use chrono::NaiveTime;
 
+use super::printed_report;
 use crate::csv_document::CsvDocument;
 use crate::uploaded_file::UploadedFile;
 
@@ -29,29 +30,36 @@ pub fn parse_excel_document(file: &UploadedFile) -> anyhow::Result<CsvDocument> 
 
     let range = workbook.worksheet_range(&first_sheet)?;
 
-    let mut rows_iter = range.rows();
-
-    let header_row = rows_iter
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("Workbook '{}' contains no rows", file.file_name))?;
-
-    let headers: Vec<String> = header_row
-        .iter()
-        .map(cell_to_string)
-        .map(|v| v.trim().to_lowercase())
+    let all_rows: Vec<Vec<String>> = range
+        .rows()
+        .map(|row| row.iter().map(cell_to_string).collect())
         .collect();
 
-    let mut rows: Vec<Vec<String>> = Vec::new();
-
-    for row in rows_iter {
-        let values: Vec<String> = row.iter().map(cell_to_string).collect();
-
-        let has_data = values.iter().any(|v| !v.trim().is_empty());
-
-        if has_data {
-            rows.push(values);
-        }
+    if all_rows.is_empty() {
+        anyhow::bail!("Workbook '{}' contains no rows", file.file_name);
     }
+
+    // A printed-report layout (title rows, "Page N", repeated headers) is
+    // flattened into a plain table first; an ordinary export falls through.
+    if let Some(report) = printed_report::flatten(&all_rows) {
+        return Ok(CsvDocument {
+            file_name: file.file_name.clone(),
+            headers: report.headers,
+            rows: report.rows,
+            modified_at: file.modified_at,
+        });
+    }
+
+    let mut rows_iter = all_rows.into_iter();
+
+    let headers: Vec<String> = rows_iter
+        .next()
+        .map(|row| row.into_iter().map(|v| v.trim().to_lowercase()).collect())
+        .unwrap_or_default();
+
+    let rows: Vec<Vec<String>> = rows_iter
+        .filter(|values| values.iter().any(|v| !v.trim().is_empty()))
+        .collect();
 
     Ok(CsvDocument {
         file_name: file.file_name.clone(),

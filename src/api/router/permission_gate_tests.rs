@@ -25,7 +25,7 @@ use crate::api::{
     auth_audit_logs, auth_audit_logs_export, auth_configuration, auth_invites, auth_user_role,
     auth_user_status, auth_users, client_ops_activity_logs, client_ops_activity_logs_export,
     client_ops_qms_tags, clients_create, clients_elavon, clients_manual_link, clients_resync,
-    clients_sync, dropbox_settings, process_street_settings, tool_runs,
+    clients_sync, dedup_rematch, dropbox_settings, process_street_settings, tool_runs,
 };
 
 use super::routes::build;
@@ -374,6 +374,21 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                     test_user(),
                     HeaderMap::new(),
                     Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
+                ))
+            },
+        ),
+        (
+            "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/rematch",
+            Method::POST,
+            || {
+                Box::pin(dedup_rematch::rematch_tool_run(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
+                    axum::Json(dedup_rematch::RematchRequest {
+                        mode: unitprep_dedup::UnidentifiedMode::Ignored,
+                    }),
                 ))
             },
         ),

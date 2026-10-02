@@ -638,3 +638,113 @@ fn a_person_with_identical_contact_under_two_tenant_ids_is_still_surfaced() {
     assert!(report.duplicate_customer_records[0].mismatches.is_empty());
     assert!(report.related_tenant_candidates.is_empty());
 }
+
+fn winsen_formats() -> Vec<VendorFormat> {
+    let fmt = |name: &str, sig: &[&str], map: &[(&str, &str)]| VendorFormat {
+        name: name.to_string(),
+        content_type: unitprep_core::vendor_format::ContentType::Tenants,
+        signature_headers: sig.iter().map(|s| s.to_string()).collect(),
+        field_mapping: map
+            .iter()
+            .map(|(t, s)| (t.to_string(), s.to_string()))
+            .collect(),
+        transform_key: None,
+    };
+    vec![
+        fmt(
+            "Winsen Cross Reference",
+            &["Unit", "Customer Name", "Address Line 1", "City"],
+            &[
+                ("UnitNumber", "Unit"),
+                ("FirtLast", "Customer Name"),
+                ("AddressStreet1", "Address Line 1"),
+                ("PhoneNumber", "Res. Phone"),
+            ],
+        ),
+        fmt(
+            "Winsen Email",
+            &["Unit", "Customer Name", "Customer Email Address"],
+            &[
+                ("UnitNumber", "Unit"),
+                ("FirtLast", "Customer Name"),
+                ("Email", "Customer Email Address"),
+            ],
+        ),
+        fmt(
+            "Winsen Rent Roll",
+            &["Unit", "Customer Name", "Cust ID"],
+            &[
+                ("UnitNumber", "Unit"),
+                ("FirtLast", "Customer Name"),
+                ("TenantId", "Cust ID"),
+            ],
+        ),
+    ]
+}
+
+fn table(headers: &[&str], rows: &[&[&str]]) -> CsvDocument {
+    CsvDocument {
+        file_name: "f.xls".to_string(),
+        headers: headers.iter().map(|s| s.to_string()).collect(),
+        rows: rows
+            .iter()
+            .map(|r| r.iter().map(|s| s.to_string()).collect())
+            .collect(),
+        modified_at: None,
+    }
+}
+
+#[test]
+fn a_joined_run_gets_email_and_customer_id_from_the_other_reports() {
+    let xref = table(
+        &[
+            "Unit",
+            "Customer Name",
+            "Address Line 1",
+            "City",
+            "Res. Phone",
+        ],
+        &[
+            &["101", "Ann Lee", "1 Main St", "Town", "815-555-0100"],
+            &["102", "Ann Lee", "1 Main St", "Town", "815-555-0100"],
+            &["103", "Bo Ray", "2 Oak Rd", "Town", "815-555-0101"],
+        ],
+    );
+    let email = table(
+        &["Unit", "Customer Name", "Customer Email Address"],
+        &[&["101", "Ann Lee", "ann@example.com"]],
+    );
+    let rent = table(
+        &["Unit", "Customer Name", "Cust ID"],
+        &[&["101", "Ann Lee", "55"], &["102", "Ann Lee", "55"]],
+    );
+
+    let records = records_from_documents(&xref, &[&email, &rent], &winsen_formats()).unwrap();
+
+    assert_eq!(records.len(), 3);
+    assert_eq!(records[0].tenant_id, "55");
+    assert_eq!(records[1].tenant_id, "55");
+    assert_eq!(records[2].tenant_id, "", "Bo is not on the rent roll");
+    assert_eq!(records[0].email, "ann@example.com");
+    assert_eq!(records[1].email, "", "no email on file for unit 102");
+
+    // Ann is one customer holding two units; Bo has no id and is held out.
+    let report = crate::report::run(records);
+    assert_eq!(report.unique_tenants, 1);
+    assert_eq!(report.multi_unit_tenants, 1);
+    let held_out = report.unidentified.expect("Bo has no customer id");
+    assert_eq!(held_out.tenants.len(), 1);
+    assert_eq!(held_out.tenants[0].units, ["103"]);
+}
+
+#[test]
+fn a_run_without_the_id_report_holds_nothing_out() {
+    let xref = table(
+        &["Unit", "Customer Name", "Address Line 1", "City"],
+        &[&["101", "Ann Lee", "1 Main St", "Town"]],
+    );
+    let records = records_from_documents(&xref, &[], &winsen_formats()).unwrap();
+    let report = crate::report::run(records);
+    assert!(report.unidentified.is_none());
+    assert_eq!(report.unique_tenants, 1);
+}
