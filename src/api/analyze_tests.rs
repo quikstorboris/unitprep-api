@@ -16,6 +16,7 @@ async fn analyze_returns_404_for_missing_session() {
         crate::api::test_support::test_user(),
         Json(AnalyzeRequest {
             session_id: "missing".to_string(),
+            facility_id: None,
         }),
     )
     .await;
@@ -42,6 +43,7 @@ async fn analyze_returns_409_when_called_before_validation() {
         crate::api::test_support::test_user(),
         Json(AnalyzeRequest {
             session_id: "s1".to_string(),
+            facility_id: None,
         }),
     )
     .await;
@@ -64,6 +66,7 @@ async fn analyze_finds_net_new_groups_with_no_reference_file() {
         crate::api::test_support::test_user(),
         Json(AnalyzeRequest {
             session_id: "s1".to_string(),
+            facility_id: None,
         }),
     )
     .await;
@@ -119,6 +122,7 @@ async fn analyze_returns_404_for_a_session_belonging_to_a_different_user() {
         someone_else,
         Json(AnalyzeRequest {
             session_id: "s1".to_string(),
+            facility_id: None,
         }),
     )
     .await;
@@ -251,5 +255,51 @@ async fn a_correction_between_analyzes_read_and_write_back_is_not_silently_overw
         WorkflowStage::Validated,
         "the concurrent correction's downgrade must survive -- it must NOT get \
          silently re-promoted to Analyzed by the stale write-back"
+    );
+}
+
+#[test]
+fn the_run_summary_carries_the_analysis_and_the_files_it_read() {
+    let response = AnalyzeResponse {
+        facilities: 1,
+        global_groups: 20,
+        net_new_groups: 3,
+        similar_groups: 1,
+        advisory_issues: 0,
+        net_new_group_details: vec!["Self Storage 10x20".to_string()],
+        similar_group_details: Vec::new(),
+        advisory_issue_details: Vec::new(),
+    };
+
+    let summary = unit_group_summary(
+        &response,
+        vec!["Custom Unit Report.xlsx".to_string()],
+        Some("Unit Groups Template.csv".to_string()),
+    );
+
+    assert_eq!(summary["net_new_groups"], 3);
+    assert_eq!(summary["net_new_group_details"][0], "Self Storage 10x20");
+    assert_eq!(summary["unit_files"][0], "Custom Unit Report.xlsx");
+    assert_eq!(summary["group_file"], "Unit Groups Template.csv");
+}
+
+#[test]
+fn file_names_show_only_the_last_path_segment() {
+    assert_eq!(display_name("Folder/Sub/units.csv"), "units.csv");
+    assert_eq!(display_name(r"C:\data\units.csv"), "units.csv");
+    assert_eq!(display_name("units.csv"), "units.csv");
+}
+
+#[test]
+fn the_source_label_names_one_file_or_counts_the_rest() {
+    assert_eq!(source_label(&[]), "Unit files");
+    assert_eq!(source_label(&["a.csv".to_string()]), "a.csv");
+    assert_eq!(
+        source_label(&[
+            "a.csv".to_string(),
+            "b.csv".to_string(),
+            "c.csv".to_string()
+        ]),
+        "a.csv + 2 more"
     );
 }

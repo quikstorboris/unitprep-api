@@ -36,7 +36,7 @@ use crate::{
     api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
     application::unit_group_session::WorkflowStage,
     auth::AuthenticatedUser,
-    client_ops::audit_log,
+    client_ops::{audit_log, tool_runs},
     infrastructure::csv_export,
 };
 
@@ -287,6 +287,19 @@ pub async fn export(
     )
     .await;
 
+    // Keep a copy on the facility's Onboarding Work record for this run
+    // (a no-op when the run was not recorded, e.g. a standalone session).
+    tool_runs::attach_output_bytes(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        &request.session_id,
+        generated.zip_bytes.clone(),
+        "application/zip",
+        &generated.filename,
+    )
+    .await;
+
     let mut headers = HeaderMap::new();
 
     headers.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
@@ -380,12 +393,26 @@ pub async fn export_to_dropbox(
 
     if let Err(err) = state
         .dropbox
-        .upload(&request.dropbox_path, generated.zip_bytes)
+        .upload(&request.dropbox_path, generated.zip_bytes.clone())
         .await
     {
         tracing::error!(error = %err, path = %request.dropbox_path, "Dropbox upload failed during unit-group export");
         return internal_error("Could not upload the export to Dropbox");
     }
+
+    tool_runs::attach_output_dropbox(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        &request.session_id,
+        &request.dropbox_path,
+        tool_runs::OutputFile {
+            bytes: generated.zip_bytes.clone(),
+            content_type: "application/zip",
+            file_name: &generated.filename,
+        },
+    )
+    .await;
 
     audit_log::record(
         &state.db,

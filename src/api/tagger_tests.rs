@@ -202,6 +202,7 @@ async fn import_from_dropbox_rejects_a_path_outside_the_configured_root() {
         crate::api::test_support::test_user(),
         Json(TaggerDropboxPathRequest {
             path: "/Not/Under/The/Configured/Root/file.docx".to_string(),
+            facility_id: None,
         }),
     )
     .await;
@@ -518,6 +519,7 @@ mod check_tests {
         let response = check(
             State(state),
             crate::api::test_support::test_user(),
+            axum::extract::Query(TaggerCheckQuery::default()),
             multipart,
         )
         .await;
@@ -549,6 +551,7 @@ mod check_tests {
         let response = check(
             State(state),
             crate::api::test_support::test_user(),
+            axum::extract::Query(TaggerCheckQuery::default()),
             multipart,
         )
         .await;
@@ -561,4 +564,30 @@ mod check_tests {
         let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(body["error"], "invalid_docx");
     }
+}
+
+#[test]
+fn the_check_summary_counts_candidates_tags_and_reviews() {
+    let view = |tag: &str, tier: TierView| CandidateView {
+        index: 0,
+        region: RegionView::Body,
+        tag_key: tag.to_string(),
+        matched_text: "____".to_string(),
+        tier,
+        snippet: String::new(),
+    };
+    let candidates = vec![
+        view("tenant_name", TierView::Auto),
+        view("tenant_name", TierView::NeedsReview),
+        view("unit_number", TierView::Auto),
+    ];
+
+    let summary = check_summary("Late Notice.docx", &candidates);
+
+    assert_eq!(summary["template_file"], "Late Notice.docx");
+    assert_eq!(summary["candidate_count"], 3);
+    assert_eq!(summary["needs_review_count"], 1);
+    assert_eq!(summary["tags"]["tenant_name"], 2);
+    assert_eq!(summary["tags"]["unit_number"], 1);
+    assert!(summary["applied_count"].is_null());
 }

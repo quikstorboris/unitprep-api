@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
-    extract::{Json, Multipart, State},
+    extract::{Json, Multipart, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -27,6 +27,7 @@ use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root,
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::application::tagger_session_service::TaggerSessionService;
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::client_ops::tool_runs;
 
 /// How much surrounding text a candidate's snippet carries on each side
 /// -- enough to read the label/context around a match without sending
@@ -270,6 +271,7 @@ async fn load_label_proximity_patterns(
 pub async fn check(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    Query(query): Query<TaggerCheckQuery>,
     mut multipart: Multipart,
 ) -> Response {
     let file = match first_uploaded_file(&mut multipart).await {
@@ -297,12 +299,23 @@ pub async fn check(
         }
     };
 
-    recognize_and_create_session(&state, &user, file, None).await
+    recognize_and_create_session(&state, &user, file, None, query.facility_id).await
+}
+
+/// The facility a tagging run is for, when it was opened from a facility's
+/// own Template Tagger page. When present the check is recorded on the
+/// facility's Onboarding Work page.
+#[derive(Debug, Default, Deserialize)]
+pub struct TaggerCheckQuery {
+    #[serde(default)]
+    pub facility_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct TaggerDropboxPathRequest {
     pub path: String,
+    #[serde(default)]
+    pub facility_id: Option<uuid::Uuid>,
 }
 
 /// Dropbox-sourced counterpart to `check` -- same recognize/session-create
@@ -323,7 +336,14 @@ pub async fn import_from_dropbox(
     };
 
     let source_dropbox_folder_path = parent_folder(&request.path);
-    recognize_and_create_session(&state, &user, file, source_dropbox_folder_path).await
+    recognize_and_create_session(
+        &state,
+        &user,
+        file,
+        source_dropbox_folder_path,
+        request.facility_id,
+    )
+    .await
 }
 
 /// The actual "upload+recognize" logic shared by `check` and
@@ -339,6 +359,7 @@ async fn recognize_and_create_session(
     user: &AuthenticatedUser,
     file: UploadedFile,
     source_dropbox_folder_path: Option<String>,
+    facility_id: Option<uuid::Uuid>,
 ) -> Response {
     let started = Instant::now();
 
@@ -402,6 +423,7 @@ async fn recognize_and_create_session(
     }
 
     let candidate_views = build_candidate_views(&doc, &candidates);
+    let summary = check_summary(&file.file_name, &candidate_views);
 
     let session_id = TaggerSessionService::new(Arc::clone(&state.tagger_sessions)).create_session(
         file.bytes,
@@ -410,6 +432,22 @@ async fn recognize_and_create_session(
         Some(user.user_id),
         source_dropbox_folder_path,
     );
+
+    if let Some(facility_id) = facility_id {
+        tool_runs::record_run(
+            &state.db,
+            tool_runs::RunRecord {
+                tool: "tagger",
+                facility_id,
+                session_id: &session_id,
+                actor_user_id: user.user_id,
+                role_keys: &user.role_keys,
+                source_file_name: &file.file_name,
+                report_summary: summary,
+            },
+        )
+        .await;
+    }
 
     tracing::info!(
         session_id = %session_id,
@@ -426,6 +464,28 @@ async fn recognize_and_create_session(
         candidates: candidate_views,
     })
     .into_response()
+}
+
+/// The stored summary for a tagging run's check: the template, how many
+/// places were found and how sure the matcher was about them. The reviewer's
+/// result (how many were applied) is merged in later by `apply`.
+fn check_summary(file_name: &str, candidates: &[CandidateView]) -> serde_json::Value {
+    let mut by_tag: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
+    for candidate in candidates {
+        *by_tag.entry(candidate.tag_key.as_str()).or_default() += 1;
+    }
+    let needs_review = candidates
+        .iter()
+        .filter(|c| matches!(c.tier, TierView::NeedsReview))
+        .count();
+
+    serde_json::json!({
+        "template_file": file_name,
+        "candidate_count": candidates.len(),
+        "needs_review_count": needs_review,
+        "tags": by_tag,
+        "applied_count": null,
+    })
 }
 
 /// Re-fetches a previously computed candidate list -- e.g. after a page
@@ -539,7 +599,51 @@ pub async fn apply(
         Err(response) => return response,
     };
 
+    record_applied(
+        &state,
+        &user,
+        &request.session_id,
+        request.confirmed.len(),
+        request.preserve_blanks,
+    )
+    .await;
+    tool_runs::attach_output_bytes(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        &request.session_id,
+        edited_bytes.clone(),
+        DOCX_CONTENT_TYPE,
+        &file_name,
+    )
+    .await;
+
     file_response(edited_bytes, &file_name)
+}
+
+const DOCX_CONTENT_TYPE: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+
+/// Adds the reviewer's result to the run's stored summary (a no-op when
+/// the run was not recorded).
+async fn record_applied(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    session_id: &str,
+    applied_count: usize,
+    preserve_blanks: bool,
+) {
+    tool_runs::merge_report_summary(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        session_id,
+        &serde_json::json!({
+            "applied_count": applied_count,
+            "preserve_blanks": preserve_blanks,
+        }),
+    )
+    .await;
 }
 
 /// The shared "re-read the stored document, build and validate every
@@ -758,7 +862,7 @@ pub async fn apply_to_dropbox(
         confirmed: request.confirmed,
         preserve_blanks: request.preserve_blanks,
     };
-    let (edited_bytes, _file_name) = match build_edited_docx(&state, &user, &apply_request).await {
+    let (edited_bytes, file_name) = match build_edited_docx(&state, &user, &apply_request).await {
         Ok(built) => built,
         Err(response) => return response,
     };
@@ -772,12 +876,34 @@ pub async fn apply_to_dropbox(
 
     if let Err(err) = state
         .dropbox
-        .upload(&request.dropbox_path, edited_bytes)
+        .upload(&request.dropbox_path, edited_bytes.clone())
         .await
     {
         tracing::error!(error = %err, path = %request.dropbox_path, "Dropbox upload failed during tagger apply");
         return internal_error("Could not upload the tagged document to Dropbox");
     }
+
+    record_applied(
+        &state,
+        &user,
+        &request.session_id,
+        apply_request.confirmed.len(),
+        apply_request.preserve_blanks,
+    )
+    .await;
+    tool_runs::attach_output_dropbox(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        &request.session_id,
+        &request.dropbox_path,
+        tool_runs::OutputFile {
+            bytes: edited_bytes,
+            content_type: DOCX_CONTENT_TYPE,
+            file_name: &file_name,
+        },
+    )
+    .await;
 
     tracing::info!(
         session_id = %request.session_id,

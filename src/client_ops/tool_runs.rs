@@ -184,6 +184,103 @@ pub async fn create_dedup_run(db: &PgPool, run: ToolRunCreate<'_>) {
     }
 }
 
+/// One run of a tool other than Dedup (Unit Groups, Template Tagger) for
+/// `record_run`. Those tools have no stored source file or kept records;
+/// the row carries the report summary and, later, the output file.
+pub struct RunRecord<'a> {
+    pub tool: &'a str,
+    pub facility_id: Uuid,
+    pub session_id: &'a str,
+    pub actor_user_id: Uuid,
+    pub role_keys: &'a [String],
+    pub source_file_name: &'a str,
+    pub report_summary: Value,
+}
+
+/// Records a run, or updates it when this session already has one (the
+/// Unit Groups analysis can run again after a correction; the newest
+/// result replaces the earlier one on the same row). Infallible from the
+/// caller's side, like the other writers here.
+pub async fn record_run(db: &PgPool, run: RunRecord<'_>) {
+    let mut tx = match begin_rls_transaction(db, run.actor_user_id, run.role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, facility_id = %run.facility_id, "failed to open transaction for record_run");
+            return;
+        }
+    };
+
+    let result = sqlx::query(
+        "INSERT INTO client_ops.tool_runs
+             (tool, facility_id, session_id, actor_user_id, source_file_name, report_summary)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (session_id) DO UPDATE
+            SET report_summary = EXCLUDED.report_summary,
+                source_file_name = EXCLUDED.source_file_name",
+    )
+    .bind(run.tool)
+    .bind(run.facility_id)
+    .bind(run.session_id)
+    .bind(run.actor_user_id)
+    .bind(run.source_file_name)
+    .bind(&run.report_summary)
+    .execute(&mut *tx)
+    .await;
+
+    if let Err(err) = result {
+        tracing::error!(
+            error = %err,
+            tool = run.tool,
+            facility_id = %run.facility_id,
+            session_id = run.session_id,
+            "failed to record client_ops.tool_runs row"
+        );
+        return;
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, session_id = run.session_id, "failed to commit record_run");
+    }
+}
+
+/// Adds `patch`'s keys to a run's stored summary (existing keys it names
+/// are replaced). For facts that only exist after the check, such as how
+/// many substitutions a tagger run actually applied.
+pub async fn merge_report_summary(
+    db: &PgPool,
+    actor_user_id: Uuid,
+    role_keys: &[String],
+    session_id: &str,
+    patch: &Value,
+) {
+    let mut tx = match begin_rls_transaction(db, actor_user_id, role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, session_id, "failed to open transaction for merge_report_summary");
+            return;
+        }
+    };
+
+    let result = sqlx::query(
+        "UPDATE client_ops.tool_runs
+            SET report_summary = report_summary || $2::jsonb
+          WHERE session_id = $1",
+    )
+    .bind(session_id)
+    .bind(patch)
+    .execute(&mut *tx)
+    .await;
+
+    if let Err(err) = result {
+        tracing::error!(error = %err, session_id, "failed to merge into the tool run report");
+        return;
+    }
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, session_id, "failed to commit merge_report_summary");
+    }
+}
+
 /// Replaces a run's stored report (the on-screen summary) after the user
 /// re-checked it, and -- when the run has a stored output file -- the
 /// regenerated file too, so the downloadable workbook matches the report.

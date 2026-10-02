@@ -14,6 +14,7 @@ use crate::{
     api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
     application::unit_group_session::{StageError, WorkflowStage},
     auth::AuthenticatedUser,
+    client_ops::tool_runs,
 };
 use unitprep_unit_group::{
     analyze_batch, build_batch_from_documents, load_reference_groups_from_document,
@@ -32,6 +33,11 @@ enum AnalyzeNotReady {
 #[derive(Debug, Deserialize)]
 pub struct AnalyzeRequest {
     pub session_id: String,
+    /// The facility this run is for, when it was opened from a facility's
+    /// own Unit Groups page. When present the analysis is recorded on the
+    /// facility's Onboarding Work page.
+    #[serde(default)]
+    pub facility_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Serialize, ts_rs::TS)]
@@ -267,7 +273,7 @@ pub async fn analyze(
         "Analysis complete"
     );
 
-    Json(AnalyzeResponse {
+    let response = AnalyzeResponse {
         facilities: results.batch_run.facilities.len(),
 
         global_groups: results.batch_run.global_groups.len(),
@@ -283,8 +289,66 @@ pub async fn analyze(
         similar_group_details: results.similar_groups.clone(),
 
         advisory_issue_details: results.batch_run.advisory_issues.clone(),
-    })
-    .into_response()
+    };
+
+    if let Some(facility_id) = request.facility_id {
+        let unit_files: Vec<String> = discovery
+            .unit_file_names
+            .iter()
+            .map(|name| display_name(name))
+            .collect();
+        let group_file = discovery
+            .selected_group_file_name
+            .as_deref()
+            .or(discovery.group_file_names.first().map(String::as_str))
+            .map(display_name);
+
+        tool_runs::record_run(
+            &state.db,
+            tool_runs::RunRecord {
+                tool: "unit_group",
+                facility_id,
+                session_id: &request.session_id,
+                actor_user_id: user.user_id,
+                role_keys: &user.role_keys,
+                source_file_name: &source_label(&unit_files),
+                report_summary: unit_group_summary(&response, unit_files, group_file),
+            },
+        )
+        .await;
+    }
+
+    Json(response).into_response()
+}
+
+/// The last path segment of a file name, for display.
+fn display_name(name: &str) -> String {
+    name.rsplit(['/', '\\']).next().unwrap_or(name).to_string()
+}
+
+/// What the run's `source_file_name` column shows: the one unit file, or
+/// the first plus a count when there are several.
+fn source_label(unit_files: &[String]) -> String {
+    match unit_files {
+        [] => "Unit files".to_string(),
+        [only] => only.clone(),
+        [first, rest @ ..] => format!("{first} + {} more", rest.len()),
+    }
+}
+
+/// The stored summary for a Unit Groups run: the analysis response plus
+/// which files it read.
+fn unit_group_summary(
+    response: &AnalyzeResponse,
+    unit_files: Vec<String>,
+    group_file: Option<String>,
+) -> serde_json::Value {
+    let mut summary = serde_json::to_value(response).unwrap_or_default();
+    if let Some(object) = summary.as_object_mut() {
+        object.insert("unit_files".to_string(), serde_json::json!(unit_files));
+        object.insert("group_file".to_string(), serde_json::json!(group_file));
+    }
+    summary
 }
 
 #[cfg(test)]
