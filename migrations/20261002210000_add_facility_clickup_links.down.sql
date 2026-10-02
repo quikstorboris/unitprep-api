@@ -1,0 +1,10 @@
+DROP TABLE integrations.clickup_settings;
+DROP INDEX clients.idx_facilities_clickup_list_id;
+ALTER TABLE clients.facilities
+    DROP CONSTRAINT facilities_clickup_link_all_or_nothing,
+    DROP COLUMN clickup_list_id,
+    DROP COLUMN clickup_list_name,
+    DROP COLUMN clickup_folder_name,
+    DROP COLUMN clickup_list_url,
+    DROP COLUMN clickup_linked_by,
+    DROP COLUMN clickup_linked_at;

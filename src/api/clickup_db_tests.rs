@@ -43,7 +43,7 @@ const ENCRYPTION_KEY: &str = "00000000000000000000000000000000000000000000000000
 /// Local-only superuser connection for writing fixtures, derived from
 /// the same host/port the app-role URL uses. Refuses anything that looks
 /// like Neon, same backstop as `db::connect_test`.
-fn superuser_pool() -> PgPool {
+pub(super) fn superuser_pool() -> PgPool {
     let app_url = std::env::var("TEST_DATABASE_URL")
         .expect("TEST_DATABASE_URL must point at the local test-db");
     assert!(
@@ -62,7 +62,7 @@ fn superuser_pool() -> PgPool {
         .expect("superuser URL must be well-formed")
 }
 
-async fn create_user(superuser: &PgPool, label: &str) -> Uuid {
+pub(super) async fn create_user(superuser: &PgPool, label: &str) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO auth.users (id, email, first_name, last_name, company, status)
@@ -77,7 +77,7 @@ async fn create_user(superuser: &PgPool, label: &str) -> Uuid {
     id
 }
 
-fn caller(user_id: Uuid, roles: &[&str], permissions: &[&str]) -> AuthenticatedUser {
+pub(super) fn caller(user_id: Uuid, roles: &[&str], permissions: &[&str]) -> AuthenticatedUser {
     AuthenticatedUser {
         user_id,
         role_keys: roles.iter().map(|r| r.to_string()).collect(),
@@ -93,7 +93,7 @@ fn local_addr() -> ConnectInfo<SocketAddr> {
     ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0)))
 }
 
-async fn body_json(response: Response) -> Value {
+pub(super) async fn body_json(response: Response) -> Value {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("response body must read");

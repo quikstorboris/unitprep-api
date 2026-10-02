@@ -25,15 +25,15 @@ use super::super::{
     acknowledge_group_warnings, analyze, auth_audit_logs, auth_audit_logs_export,
     auth_configuration, auth_invites, auth_login, auth_logout, auth_passkey_reverify,
     auth_register, auth_roles, auth_totp, auth_user_permissions, auth_user_role, auth_user_status,
-    auth_users, cancel_session, clickup_connection, client_ops_activity_logs,
-    client_ops_activity_logs_export, client_ops_qms_tags, clients_companies, clients_create,
-    clients_detail, clients_dropbox_folder, clients_elavon, clients_facility_people,
-    clients_facility_policies_edit, clients_filter_options, clients_manual_link,
-    clients_onboarding_summary, clients_preview, clients_resync, clients_search, clients_sync,
-    correct, correct_group, dedup, dedup_files, dedup_rematch, discover, dropbox_browse,
-    dropbox_settings, exclude_group, exclude_groups, exempt, export, group_file_confirm,
-    group_file_upload, process_street_settings, resolve_unit_format, select_group_file,
-    select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
+    auth_users, cancel_session, clickup_connection, clickup_lookup, client_ops_activity_logs,
+    client_ops_activity_logs_export, client_ops_qms_tags, clients_clickup_links, clients_companies,
+    clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
+    clients_facility_people, clients_facility_policies_edit, clients_filter_options,
+    clients_manual_link, clients_onboarding_summary, clients_preview, clients_resync,
+    clients_search, clients_sync, correct, correct_group, dedup, dedup_files, dedup_rematch,
+    discover, dropbox_browse, dropbox_settings, exclude_group, exclude_groups, exempt, export,
+    group_file_confirm, group_file_upload, process_street_settings, resolve_unit_format,
+    select_group_file, select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
 };
 use super::rate_limit_exceeded_with_audit;
 
@@ -415,6 +415,76 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
                 RouteAccess::Permission {
                     keys: &["integrations.clickup"],
                     action: "test_clickup_connection",
+                },
+            )],
+        )
+        // Link ClickUp (Company page): the catalog of onboarding lists for
+        // the per-row dropdown, resolving a pasted ClickUp URL, per-company
+        // match suggestions, and saving/removing links. All need the
+        // per-user integrations.clickup permission; they call ClickUp with
+        // the caller's own token.
+        .gated_route(
+            "/integrations/clickup/lists",
+            get(clickup_lookup::list_clickup_lists),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "list_clickup_lists",
+                },
+            )],
+        )
+        .gated_route(
+            "/integrations/clickup/resolve-url",
+            post(clickup_lookup::resolve_clickup_url),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "resolve_clickup_url",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/clickup/suggestions",
+            get(clickup_lookup::clickup_suggestions),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_suggestions",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/clickup/links",
+            put(clients_clickup_links::save_clickup_links)
+                .delete(clients_clickup_links::unlink_company_clickup),
+            [
+                (
+                    Method::PUT,
+                    RouteAccess::Permission {
+                        keys: &["integrations.clickup"],
+                        action: "save_clickup_links",
+                    },
+                ),
+                (
+                    Method::DELETE,
+                    RouteAccess::Permission {
+                        keys: &["integrations.clickup"],
+                        action: "unlink_company_clickup",
+                    },
+                ),
+            ],
+        )
+        .gated_route(
+            "/clients/{company_id}/facilities/{facility_id}/clickup-link",
+            delete(clients_clickup_links::unlink_facility_clickup),
+            [(
+                Method::DELETE,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "unlink_facility_clickup",
                 },
             )],
         )

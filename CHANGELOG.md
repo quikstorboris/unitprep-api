@@ -6,6 +6,26 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.60] - 2026-10-02
+
+Link facilities to their ClickUp onboarding lists.
+
+### Added
+- **Facility -> ClickUp list links** stored on `clients.facilities` (`clickup_list_id/name/url`, `clickup_folder_name`, `clickup_linked_by/at`; all-or-nothing CHECK). Only the list id is authoritative; the rest is a snapshot taken at link time. Many facilities may share a list; the API reports it rather than blocking.
+- **Fuzzy matching** of a facility to ClickUp lists (`clickup::matching`): IDF-weighted token overlap (rare words such as a town outrank brand words), the facility's city folded into the query, a small legal-entity folder bonus, generic words dropped, typo tolerant. Non-facility lists (Post-/Pre-Onboarding, templates, sandboxes, "General / Multiple Sites", training, demo) are excluded. Confidence is High only with a strong score *and* clear daylight over the runner-up. `clickup::assignment` never suggests the same list for two facilities.
+- **ClickUp URL parser** for "Link manually" (`clickup::url`): list URLs, the list-view URL from the address bar (resolved to its parent list), bare ids; refuses look-alike hosts, folders, tasks, docs.
+- **Endpoints** (per-user `integrations.clickup`, caller's own token): `GET /integrations/clickup/lists`, `POST /integrations/clickup/resolve-url`, `GET /clients/{id}/clickup/suggestions`, `PUT /clients/{id}/clickup/links` (all-or-nothing; every list re-verified with ClickUp, name/URL taken from ClickUp), `DELETE /clients/{id}/facilities/{fid}/clickup-link`, `DELETE /clients/{id}/clickup/links`. Unlinking makes no ClickUp call. Audited as `facility_clickup_linked` / `facility_clickup_unlinked`.
+- `integrations.clickup_settings` (onboarding space looked up **by name**, default "QMS Onboarding"), readable by any signed-in user, editable by admin/developer.
+- Company and facility detail responses carry the link fields.
+- Eight real-database tests against a mock ClickUp, plus unit tests for the matcher (using a slice of the real hierarchy), URL parser, assignment, and client.
+
+### Fixed
+- ClickUp answers HTTP 401 both for a bad token (`OAUTH_025`) and for "no such list / no access" (`OAUTH_027`); the client now tells them apart so a mistyped list URL can never mark a good token invalid.
+- A facility write by a user with ClickUp but no client-ops role now returns a clear 403 instead of a silent no-op.
+
+### Migrations
+- `20261002210000_add_facility_clickup_links`.
+
 ## [1.9.59] - 2026-10-02
 
 Per-user permission grants and the first ClickUp integration step (connect and verify a personal API token).

@@ -38,6 +38,13 @@ pub struct FacilitySummary {
     /// is a list of each facility's own link, same pattern as Owner(s)
     /// Information below.
     pub dropbox_folder_url: Option<String>,
+    /// The facility's ClickUp onboarding list, if linked (see
+    /// `clients_clickup_links`). Name/folder/URL are a snapshot taken at
+    /// link time; only the list id is authoritative.
+    pub clickup_list_id: Option<String>,
+    pub clickup_list_name: Option<String>,
+    pub clickup_folder_name: Option<String>,
+    pub clickup_list_url: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,7 +162,9 @@ async fn fetch_company_facilities(
 ) -> Result<Vec<FacilitySummary>, sqlx::Error> {
     let mut tx = begin_rls_transaction(db, user_id, role_keys).await?;
     let rows = sqlx::query_as(
-        "SELECT id, name, dropbox_folder_url FROM clients.facilities WHERE company_id = $1 ORDER BY name",
+        "SELECT id, name, dropbox_folder_url, clickup_list_id, clickup_list_name, \
+         clickup_folder_name, clickup_list_url \
+         FROM clients.facilities WHERE company_id = $1 ORDER BY name",
     )
     .bind(company_id)
     .fetch_all(&mut *tx)
@@ -363,6 +372,10 @@ pub struct FacilityDetailResponse {
     pub subdomain_exists_in_qms_raw: Option<String>,
     pub system_email: Option<String>,
     pub website_url: Option<String>,
+    pub clickup_list_id: Option<String>,
+    pub clickup_list_name: Option<String>,
+    pub clickup_folder_name: Option<String>,
+    pub clickup_list_url: Option<String>,
 }
 
 /// Any authenticated caller -- General tab is plain facility contact
@@ -384,7 +397,8 @@ pub async fn get_facility_detail(
         "SELECT id, company_id, name, street_address, city, state, zip, phone, email, \
          units_count, primary_storage_offering, previous_pms, access_control_system, \
          go_live_date, dropbox_folder_url, subdomain, subdomain_exists_in_qms_raw, system_email, \
-         website_url \
+         website_url, clickup_list_id, clickup_list_name, clickup_folder_name, \
+         clickup_list_url \
          FROM clients.facilities WHERE id = $1 AND company_id = $2",
     )
     .bind(facility_id)

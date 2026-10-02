@@ -82,6 +82,13 @@ pub mod event {
     /// folder structure changed), worth its own audited event the same
     /// way a Merchant Account relink is.
     pub const FACILITY_DROPBOX_FOLDER_CHANGED: &str = "facility_dropbox_folder_changed";
+    /// A facility was linked to (or re-pointed at) a ClickUp list --
+    /// `api::clients_clickup_links`. `Change` carries the list id before
+    /// and after.
+    pub const FACILITY_CLICKUP_LINKED: &str = "facility_clickup_linked";
+    /// A facility's ClickUp link was removed (one facility, or every
+    /// facility of a company via "Unlink All Facilities").
+    pub const FACILITY_CLICKUP_UNLINKED: &str = "facility_clickup_unlinked";
 
     /// A person was added to a facility's Users tab roster
     /// (`api::clients_facility_people::add_facility_person`) -- either an
@@ -152,6 +159,8 @@ pub mod event {
         MERCHANT_ACCOUNT_UNLINKED,
         ELAVON_DATA_RESYNCED,
         FACILITY_DROPBOX_FOLDER_CHANGED,
+        FACILITY_CLICKUP_LINKED,
+        FACILITY_CLICKUP_UNLINKED,
         FACILITY_PERSON_ADDED,
         FACILITY_PERSON_UPDATED,
         FACILITY_PERSON_UNLINKED,

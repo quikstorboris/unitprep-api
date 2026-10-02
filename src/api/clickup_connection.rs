@@ -28,7 +28,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{bad_request, internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, conflict, internal_error, ApiErrorBody, AppState};
 use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser};
 use crate::clickup::{ClickUpClient, ClickUpError, ClickUpIdentity};
 use crate::integrations::secrets;
@@ -50,7 +50,7 @@ fn aad(user_id: Uuid) -> Vec<u8> {
 /// local mock through the `CLICKUP_API_BASE_URL` seam; that override is
 /// compiled out of release builds so a stray environment variable can
 /// never redirect users' tokens to another host.
-fn clickup_client(state: &AppState) -> ClickUpClient {
+pub(crate) fn clickup_client(state: &AppState) -> ClickUpClient {
     #[cfg(test)]
     if let Some(base_url) = state.env_source.get(crate::clickup::BASE_URL_ENV) {
         return ClickUpClient::new(&base_url);
@@ -123,7 +123,7 @@ const STATUS_COLUMNS: &str = "status, clickup_user_id, clickup_username, last_va
 
 /// 502 for "ClickUp itself could not be reached / misbehaved" -- the
 /// user's token may be perfectly fine, so this is not a 4xx.
-fn clickup_unavailable(err: &ClickUpError) -> Response {
+pub(crate) fn clickup_unavailable(err: &ClickUpError) -> Response {
     (
         StatusCode::BAD_GATEWAY,
         Json(ApiErrorBody {
@@ -132,6 +132,95 @@ fn clickup_unavailable(err: &ClickUpError) -> Response {
         }),
     )
         .into_response()
+}
+
+/// The calling user's decrypted ClickUp token, for the endpoints that
+/// make ClickUp calls on their behalf (link suggestions, resolving a
+/// pasted URL, confirming a link). `Err` is the response to return as-is:
+/// 409 when they have not connected ClickUp, or their saved token was
+/// already found to be invalid -- both fixable on the ClickUp page, and
+/// distinct from a server fault.
+pub(crate) async fn load_user_token(
+    state: &AppState,
+    user: &AuthenticatedUser,
+) -> Result<String, Response> {
+    let mut tx = begin_rls_transaction(&state.db, user.user_id, &user.role_keys)
+        .await
+        .map_err(|err| {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction to load a ClickUp token");
+            internal_error("Could not use your ClickUp connection")
+        })?;
+
+    let row: Option<(Vec<u8>, String)> = sqlx::query_as(
+        "SELECT token_ciphertext, status FROM integrations.user_clickup_credentials WHERE user_id = $1",
+    )
+    .bind(user.user_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|err| {
+        tracing::error!(error = %err, user_id = %user.user_id, "ClickUp token lookup failed");
+        internal_error("Could not use your ClickUp connection")
+    })?;
+
+    if let Err(err) = tx.commit().await {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit ClickUp token lookup");
+        return Err(internal_error("Could not use your ClickUp connection"));
+    }
+
+    let Some((ciphertext, status)) = row else {
+        return Err(conflict(
+            "clickup_not_connected",
+            "Connect your ClickUp account first (My Integrations > ClickUp).".to_string(),
+        ));
+    };
+
+    if status != "valid" {
+        return Err(conflict(
+            "clickup_token_invalid",
+            "ClickUp rejected your saved token. Paste a new one under My Integrations > ClickUp."
+                .to_string(),
+        ));
+    }
+
+    secrets::decrypt(&aad(user.user_id), &ciphertext).map_err(|err| {
+        tracing::error!(error = %err, user_id = %user.user_id, "failed to decrypt stored ClickUp token");
+        internal_error("Could not use your ClickUp connection")
+    })
+}
+
+/// Maps a failed ClickUp call made *with a token we believed valid* to
+/// the response the caller should return. A rejected token also flips the
+/// stored status to `invalid`, so the nav dot turns red and the next call
+/// short-circuits with the actionable 409 instead of hitting ClickUp
+/// again. `NotFound` is left to the caller, which knows what was being
+/// looked up.
+pub(crate) async fn clickup_failure_response(
+    state: &AppState,
+    user: &AuthenticatedUser,
+    err: &ClickUpError,
+) -> Response {
+    match err {
+        ClickUpError::Unauthorized => {
+            if let Ok(mut tx) =
+                begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await
+            {
+                let _ = sqlx::query(
+                    "UPDATE integrations.user_clickup_credentials
+                        SET status = 'invalid', last_validated_at = now()
+                      WHERE user_id = $1",
+                )
+                .bind(user.user_id)
+                .execute(&mut *tx)
+                .await;
+                let _ = tx.commit().await;
+            }
+            conflict(
+                "clickup_token_invalid",
+                "ClickUp rejected your saved token. Paste a new one under My Integrations > ClickUp.".to_string(),
+            )
+        }
+        other => clickup_unavailable(other),
+    }
 }
 
 pub async fn get_connection(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
@@ -288,6 +377,9 @@ pub async fn save_token(
         serde_json::json!({ "integration": "clickup", "clickup_user_id": identity.user_id }),
     )
     .await;
+
+    // A different token may see a different slice of the workspace.
+    crate::clickup::hierarchy::invalidate(user.user_id);
 
     tracing::info!(user_id = %user.user_id, "ClickUp token saved");
 
@@ -485,6 +577,8 @@ pub async fn remove_token(
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit ClickUp token removal");
         return internal_error("Could not remove your ClickUp token");
     }
+
+    crate::clickup::hierarchy::invalidate(user.user_id);
 
     if deleted > 0 {
         audit_log::record(

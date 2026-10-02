@@ -16,9 +16,11 @@ mod auth_user_status;
 mod auth_users;
 mod cancel_session;
 mod clickup_connection;
+mod clickup_lookup;
 mod client_ops_activity_logs;
 mod client_ops_activity_logs_export;
 mod client_ops_qms_tags;
+mod clients_clickup_links;
 mod clients_companies;
 mod clients_create;
 mod clients_detail;
@@ -250,6 +252,10 @@ pub(crate) mod test_support;
 #[cfg(test)]
 #[path = "clickup_db_tests.rs"]
 mod clickup_db_tests;
+
+#[cfg(test)]
+#[path = "clickup_links_db_tests.rs"]
+mod clickup_links_db_tests;
 
 #[cfg(test)]
 #[path = "dedup_test_support.rs"]

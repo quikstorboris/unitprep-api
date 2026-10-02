@@ -1,6 +1,8 @@
-//! ClickUp integration -- today only the connection check (does this
-//! personal API token work, and who does it belong to); task actions
-//! (status, due date, comment, create under a group) build on `client`.
+//! ClickUp integration -- the connection check (does this personal API
+//! token work, and who does it belong to), the onboarding hierarchy
+//! (folders/lists), fuzzy matching of Orchestrator facilities to ClickUp
+//! lists, and parsing of pasted ClickUp links. Task actions (status,
+//! due date, comment, create under a phase) will build on `client`.
 //!
 //! Unlike Dropbox/Process Street, there is no app-wide credential: each
 //! Orchestrator user connects their own ClickUp personal API token
@@ -12,7 +14,11 @@
 //! Design record: the vault's `work/active/UnitPrep/ClickUp Integration/`
 //! design log.
 
+pub mod assignment;
 mod client;
+pub mod hierarchy;
+pub mod matching;
+pub mod url;
 
 #[cfg(test)]
 pub use client::BASE_URL_ENV;

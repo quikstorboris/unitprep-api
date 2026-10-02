@@ -24,9 +24,9 @@ use crate::api::test_support::{empty_state, test_user};
 use crate::api::{
     auth_audit_logs, auth_audit_logs_export, auth_configuration, auth_invites,
     auth_user_permissions, auth_user_role, auth_user_status, auth_users, clickup_connection,
-    client_ops_activity_logs, client_ops_activity_logs_export, client_ops_qms_tags, clients_create,
-    clients_elavon, clients_manual_link, clients_resync, clients_sync, dedup_rematch,
-    dropbox_settings, process_street_settings, tool_runs,
+    clickup_lookup, client_ops_activity_logs, client_ops_activity_logs_export, client_ops_qms_tags,
+    clients_clickup_links, clients_create, clients_elavon, clients_manual_link, clients_resync,
+    clients_sync, dedup_rematch, dropbox_settings, process_street_settings, tool_runs,
 };
 
 use super::routes::build;
@@ -217,6 +217,77 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                     test_user(),
                     local_addr(),
                     HeaderMap::new(),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/integrations/clickup/lists",
+            Method::GET,
+            (|| {
+                Box::pin(clickup_lookup::list_clickup_lists(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/integrations/clickup/resolve-url",
+            Method::POST,
+            (|| {
+                Box::pin(clickup_lookup::resolve_clickup_url(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Json(clickup_lookup::ResolveUrlRequest {
+                        url: "https://app.clickup.com/1/v/li/2".to_string(),
+                    }),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/clickup/suggestions",
+            Method::GET,
+            (|| {
+                Box::pin(clickup_lookup::clickup_suggestions(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Path(Uuid::new_v4()),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/clickup/links",
+            Method::PUT,
+            (|| {
+                Box::pin(clients_clickup_links::save_clickup_links(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                    Json(clients_clickup_links::SaveLinksRequest { links: Vec::new() }),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/clickup/links",
+            Method::DELETE,
+            (|| {
+                Box::pin(clients_clickup_links::unlink_company_clickup(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/facilities/{facility_id}/clickup-link",
+            Method::DELETE,
+            (|| {
+                Box::pin(clients_clickup_links::unlink_facility_clickup(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path((Uuid::new_v4(), Uuid::new_v4())),
                 ))
             }) as fn() -> BoxFuture,
         ),
