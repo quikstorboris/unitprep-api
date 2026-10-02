@@ -198,6 +198,47 @@ impl Session {
             .collect()
     }
 
+    /// Runs each document's detected vendor's `transform_key` (if any)
+    /// and stores the result in place, so a vendor whose export needs a
+    /// derived column (SiteLink's `UnitGroup` from type x size) looks like
+    /// any other to everything downstream: discovery's header list, the
+    /// suggested mapping, manual-map validation, `effective_documents`.
+    /// Transforms keep the original columns and are idempotent, so
+    /// running this on every discovery pass is harmless. A transform that
+    /// fails leaves that document untouched rather than failing the pass.
+    pub fn apply_vendor_transforms(&mut self) {
+        let transformed: Vec<(usize, CsvDocument)> = self
+            .data
+            .documents
+            .iter()
+            .enumerate()
+            .filter_map(|(index, document)| {
+                let key = detect_vendor(document, &self.data.unit_vendors)?
+                    .transform_key
+                    .as_deref()?;
+                match unitprep_core::vendor_format::transforms::apply(key, document) {
+                    Ok(out) if out.headers != document.headers => Some((index, out)),
+                    Ok(_) => None,
+                    Err(err) => {
+                        tracing::warn!(error = %err, file = %document.file_name, "vendor transform failed; leaving the document as uploaded");
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        if transformed.is_empty() {
+            return;
+        }
+
+        let documents = Arc::make_mut(&mut self.data.documents);
+        for (index, document) in transformed {
+            documents[index] = document;
+        }
+
+        self.touch_data();
+    }
+
     /// Adds a document, replacing any existing one with the same file
     /// name -- used by the manual-file-upload endpoint (see
     /// `api::group_file_upload`), which lets a user designate a specific

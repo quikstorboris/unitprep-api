@@ -38,6 +38,7 @@ pub(crate) fn compute_discovery(
     // registry through themselves — see `SessionData::unit_vendors`'s
     // own doc comment.
     session.data.unit_vendors = unit_vendors.to_vec();
+    session.apply_vendor_transforms();
 
     let selection = reconcile_unit_file_selection(session, &previous, unit_vendors);
 

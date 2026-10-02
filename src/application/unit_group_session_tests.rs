@@ -41,6 +41,73 @@ fn door_swap_vendor() -> unitprep_core::vendor_format::VendorFormat {
     }
 }
 
+/// SiteLink's Custom Unit Report row, hand-built to mirror the
+/// `20261002120000_seed_sitelink_units_vendor_format` registry migration.
+fn sitelink_unit_vendor() -> unitprep_core::vendor_format::VendorFormat {
+    unitprep_core::vendor_format::VendorFormat {
+        name: "SiteLink Custom Unit Report".to_string(),
+        content_type: unitprep_core::vendor_format::ContentType::Units,
+        signature_headers: [
+            "UnitName",
+            "Type",
+            "UnitSize",
+            "Width",
+            "Length",
+            "StandardRate",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
+        field_mapping: [
+            ("Number", "UnitName"),
+            ("UnitGroup", "UnitGroup"),
+            ("StandardRate", "StandardRate"),
+            ("Width", "Width"),
+            ("Length", "Length"),
+        ]
+        .into_iter()
+        .map(|(t, s)| (t.to_string(), s.to_string()))
+        .collect(),
+        transform_key: Some("derive_sitelink_unit_group".to_string()),
+    }
+}
+
+fn sitelink_unit_report() -> CsvDocument {
+    CsvDocument {
+        modified_at: None,
+        file_name: "Custom Unit Report.xlsx".to_string(),
+        headers: [
+            "UnitName",
+            "Type",
+            "Width",
+            "Length",
+            "Area",
+            "UnitSize",
+            "StandardRate",
+            "Power",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect(),
+        rows: vec![
+            vec![
+                "A01",
+                "Enclosed RV Park",
+                "12.5",
+                "42",
+                "525",
+                "12.5x42",
+                "125",
+                "X",
+            ],
+            vec!["B07", "Self Storage", "10", "20", "200", "10x20", "90", " "],
+        ]
+        .into_iter()
+        .map(|r| r.into_iter().map(String::from).collect())
+        .collect(),
+    }
+}
+
 fn discovery_result() -> DiscoveryResult {
     DiscoveryResult {
         unit_file_names: vec!["units.csv".to_string()],
@@ -628,4 +695,30 @@ async fn a_group_prep_session_survives_a_simulated_process_restart_durability() 
     store_after_restart.delete(&session_id);
 
     tokio::time::sleep(Duration::from_millis(300)).await;
+}
+
+#[test]
+fn a_sitelink_unit_report_gets_a_type_by_size_unit_group_after_discovery_transforms() {
+    let mut session = Session::new("s1".to_string(), None);
+    session.data.unit_vendors = vec![sitelink_unit_vendor()];
+    session.upsert_document(sitelink_unit_report());
+
+    session.apply_vendor_transforms();
+
+    let effective = session.effective_documents();
+    let doc = &effective[0];
+    let number = doc.header_index("Number").expect("Number is mapped");
+    let group = doc.header_index("UnitGroup").expect("UnitGroup is mapped");
+    assert_eq!(doc.rows[0][number], "A01");
+    assert_eq!(doc.rows[0][group], "Enclosed RV Park 12.5x42");
+    assert_eq!(doc.rows[1][group], "Self Storage 10x20");
+    assert!(
+        doc.header_index("Power").is_none(),
+        "unmapped flag columns are dropped, not carried as blanks"
+    );
+
+    // Running it again (every discovery pass does) changes nothing.
+    let before = session.data.documents.clone();
+    session.apply_vendor_transforms();
+    assert_eq!(before[0].headers, session.data.documents[0].headers);
 }

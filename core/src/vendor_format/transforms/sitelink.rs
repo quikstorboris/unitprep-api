@@ -1,6 +1,6 @@
 //! SiteLink's tenant-export transform (Directory / Rent Roll reports).
 
-use super::{cell, person_key};
+use super::{cell, collapse_whitespace, person_key};
 use crate::csv_document::CsvDocument;
 
 /// SiteLink's Directory and Rent Roll reports have no single name column
@@ -50,6 +50,45 @@ pub(super) fn derive_sitelink_tenant_fields(document: &CsvDocument) -> CsvDocume
 
             row.push(first_last);
             row.push(phone);
+            row
+        })
+        .collect();
+
+    CsvDocument {
+        file_name: document.file_name.clone(),
+        headers,
+        rows,
+        modified_at: document.modified_at,
+    }
+}
+
+/// SiteLink prices and groups units by unit type x size (the Price List's
+/// grain), but its Custom Unit Report carries them as two separate
+/// columns and has no group column, which Group Prep needs as one. This
+/// appends `UnitGroup` = `"{Type} {UnitSize}"` (whitespace collapsed),
+/// e.g. `"Self Storage 10x20"`; the original columns are kept so the
+/// vendor's signature still matches afterwards. If a `UnitGroup` column
+/// is already present (the transform has run before) the document is
+/// returned unchanged, so applying it twice is harmless.
+pub(super) fn derive_sitelink_unit_group(document: &CsvDocument) -> CsvDocument {
+    if document.header_index("UnitGroup").is_some() {
+        return document.clone();
+    }
+
+    let mut headers = document.headers.clone();
+    headers.push("UnitGroup".to_string());
+
+    let rows = document
+        .rows
+        .iter()
+        .map(|row| {
+            let mut row = row.clone();
+            let group = collapse_whitespace(&format!(
+                "{} {}",
+                cell(document, &row, "Type"),
+                cell(document, &row, "UnitSize")
+            ));
+            row.push(group);
             row
         })
         .collect();
@@ -152,5 +191,60 @@ mod tests {
         assert_eq!(out.rows.len(), 2);
         assert_eq!(derived(&out, 0, "FirtLast"), "Solo");
         assert_eq!(derived(&out, 0, "PhoneNumber"), "");
+    }
+
+    fn unit_report(rows: Vec<Vec<&str>>) -> CsvDocument {
+        CsvDocument {
+            file_name: "Custom Unit Report.xlsx".to_string(),
+            headers: [
+                "UnitName",
+                "Type",
+                "Width",
+                "Length",
+                "UnitSize",
+                "StandardRate",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            rows: rows
+                .into_iter()
+                .map(|r| r.into_iter().map(String::from).collect())
+                .collect(),
+            modified_at: None,
+        }
+    }
+
+    #[test]
+    fn sitelink_unit_group_joins_type_and_size() {
+        let out = derive_sitelink_unit_group(&unit_report(vec![
+            vec!["A01", "Enclosed RV Park", "12.5", "42", "12.5x42", "125"],
+            vec!["B02", "Self Storage", "10", "20", "10x20", "90"],
+        ]));
+        let idx = out.header_index("UnitGroup").unwrap();
+        assert_eq!(out.rows[0][idx], "Enclosed RV Park 12.5x42");
+        assert_eq!(out.rows[1][idx], "Self Storage 10x20");
+        assert_eq!(out.header_index("UnitName"), Some(0), "originals are kept");
+    }
+
+    #[test]
+    fn sitelink_unit_group_collapses_stray_whitespace_and_tolerates_a_blank_part() {
+        let out = derive_sitelink_unit_group(&unit_report(vec![
+            vec!["A01", "  Small   Outdoor ", "10", "20", " 10x20 ", "50"],
+            vec!["A02", "Parking", "10", "20", "", "50"],
+        ]));
+        let idx = out.header_index("UnitGroup").unwrap();
+        assert_eq!(out.rows[0][idx], "Small Outdoor 10x20");
+        assert_eq!(out.rows[1][idx], "Parking");
+    }
+
+    #[test]
+    fn sitelink_unit_group_is_a_no_op_the_second_time() {
+        let once = derive_sitelink_unit_group(&unit_report(vec![vec![
+            "A01", "Parking", "10", "20", "10x20", "50",
+        ]]));
+        let twice = derive_sitelink_unit_group(&once);
+        assert_eq!(once.headers, twice.headers);
+        assert_eq!(once.rows, twice.rows);
     }
 }

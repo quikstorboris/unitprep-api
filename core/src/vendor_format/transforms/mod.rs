@@ -21,6 +21,7 @@ pub fn apply(key: &str, document: &CsvDocument) -> anyhow::Result<CsvDocument> {
             quikstor_cloud::derive_quikstor_cloud_tenant_fields(document),
         ),
         "derive_sitelink_tenant_fields" => Ok(sitelink::derive_sitelink_tenant_fields(document)),
+        "derive_sitelink_unit_group" => Ok(sitelink::derive_sitelink_unit_group(document)),
         other => anyhow::bail!("unknown vendor-format transform key: {other}"),
     }
 }
