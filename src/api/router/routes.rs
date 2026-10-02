@@ -719,7 +719,13 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
         .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/source",
             get(tool_runs::download_tool_run_source),
-            [(Method::GET, RouteAccess::RlsRead)],
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "download_tool_run_source",
+                },
+            )],
         )
         // Requires client_ops.perform to start; status read is any
         // authenticated caller -- see clients_sync's own module doc.

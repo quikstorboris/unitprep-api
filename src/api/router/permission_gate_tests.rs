@@ -365,6 +365,18 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                 ))
             },
         ),
+        (
+            "/clients/{company_id}/facilities/{facility_id}/tool-runs/{run_id}/source",
+            Method::GET,
+            || {
+                Box::pin(tool_runs::download_tool_run_source(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path((Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())),
+                ))
+            },
+        ),
         ("/clients/sync", Method::POST, || {
             Box::pin(clients_sync::start_sync(
                 axum::extract::State(empty_state()),
