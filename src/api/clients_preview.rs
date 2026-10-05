@@ -60,7 +60,8 @@ use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::company_naming::resolve_company_name;
 use crate::clients::intake_mapping::{map_intake_fields, MappedCompany, MappedFacility};
 use crate::clients::merchant_account_correlation::{
-    correlate_by_title, merchant_account_run_titles, Correlation, IntakeRunTitle,
+    all_intake_run_titles, correlate_by_title, merchant_account_run_titles, Correlation,
+    IntakeRunTitle,
 };
 use crate::clients::merchant_account_mapping::map_merchant_account_fields;
 use crate::clients::people::PersonAssignment;
@@ -224,6 +225,14 @@ pub async fn preview_clients(
         }
     };
 
+    let intake_universe = match all_intake_run_titles(&mut tx).await {
+        Ok(titles) => titles,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "intake title universe fetch failed");
+            return internal_error("Could not load these runs from Process Street");
+        }
+    };
+
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit client preview transaction");
         return internal_error("Could not load these runs from Process Street");
@@ -238,7 +247,7 @@ pub async fn preview_clients(
         })
         .collect();
     let auto_correlated: std::collections::HashMap<String, String> =
-        correlate_by_title(&intake_titles, &merchant_account_titles)
+        correlate_by_title(&intake_titles, &merchant_account_titles, &intake_universe)
             .into_iter()
             .filter_map(|(run_id, correlation)| match correlation {
                 Correlation::Unambiguous(ma_run_id) => Some((run_id, ma_run_id)),

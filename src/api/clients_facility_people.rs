@@ -107,6 +107,20 @@ pub struct FacilityPeopleResponse {
     /// unmatched_owners`. Never duplicates a person already reachable
     /// through the roster or an existing candidate chip.
     pub missing_legal_owners: Vec<MissingLegalOwner>,
+    /// Set when this facility has no Merchant Account owners of its own
+    /// and the Legal Owner checkmarks (and `missing_legal_owners`) were
+    /// worked out from a *sister facility's* form instead -- see
+    /// `sister_facility_owners`. `None` means they came from this
+    /// facility's own form, or there are none at all.
+    pub legal_owner_source: Option<LegalOwnerSource>,
+}
+
+/// The sister facility whose Merchant Account form supplied the owners
+/// when this facility has none of its own.
+#[derive(Debug, Serialize)]
+pub struct LegalOwnerSource {
+    pub facility_id: Uuid,
+    pub facility_name: String,
 }
 
 /// One Pre-App owner the Users tab has no other way to surface --
@@ -123,6 +137,84 @@ pub struct MissingLegalOwner {
 #[derive(sqlx::FromRow)]
 struct FacilityIdentity {
     ps_intake_run_id: Option<String>,
+}
+
+/// A facility's own Merchant Account owners with a name -- the only
+/// ones that can say who owns anything.
+async fn merchant_account_owners(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    facility_id: Uuid,
+) -> Result<Vec<OwnerIdentity>, sqlx::Error> {
+    let rows: Vec<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT display_name, email, phone
+           FROM clients.facility_merchant_account_parties
+          WHERE facility_id = $1 AND party_role = 'owner'",
+    )
+    .bind(facility_id)
+    .fetch_all(&mut **tx)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(display_name, email, phone)| OwnerIdentity {
+            display_name,
+            email,
+            phone,
+        })
+        .collect())
+}
+
+fn has_a_named_owner(owners: &[OwnerIdentity]) -> bool {
+    owners.iter().any(|owner| {
+        owner
+            .display_name
+            .as_deref()
+            .is_some_and(|name| !name.trim().is_empty())
+    })
+}
+
+/// Owners from a **sister facility's** Merchant Account form, for a
+/// facility that has no owners of its own yet. Boris, 2026-10-02: every
+/// facility will eventually need its own Merchant form, but until then
+/// "we can relatively safely pick any that has information about owners
+/// (i.e. merch form filled out)" -- the same company's facilities share
+/// the same legal owners far more often than not (Affordable Storage's
+/// Beau and Brad Ryan own all nine). Picks the sister with the most
+/// named owners, then the most recently synced, then by name, so the
+/// choice is stable between page loads.
+async fn sister_facility_owners(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    company_id: Uuid,
+    facility_id: Uuid,
+) -> Result<Option<(LegalOwnerSource, Vec<OwnerIdentity>)>, sqlx::Error> {
+    let source: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT f.id, f.name
+           FROM clients.facilities f
+           JOIN clients.facility_merchant_account_parties p ON p.facility_id = f.id
+          WHERE f.company_id = $1 AND f.id <> $2
+            AND p.party_role = 'owner'
+            AND btrim(coalesce(p.display_name, '')) <> ''
+          GROUP BY f.id, f.name
+          ORDER BY count(*) DESC, max(p.last_synced_at) DESC NULLS LAST, f.name
+          LIMIT 1",
+    )
+    .bind(company_id)
+    .bind(facility_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let Some((source_id, source_name)) = source else {
+        return Ok(None);
+    };
+
+    let owners = merchant_account_owners(tx, source_id).await?;
+    Ok(Some((
+        LegalOwnerSource {
+            facility_id: source_id,
+            facility_name: source_name,
+        },
+        owners,
+    )))
 }
 
 /// Any authenticated caller -- same reasoning as `clients_elavon`'s own
@@ -279,29 +371,30 @@ pub async fn get_facility_people(
     // Pre-App, matched against the (now self-healed) roster. The party
     // table's RLS SELECT policy is narrower than this tab's, so a viewer
     // without that access just sees no checkmarks rather than an error.
-    let owners: Vec<(Option<String>, Option<String>, Option<String>)> = match sqlx::query_as(
-        "SELECT display_name, email, phone
-           FROM clients.facility_merchant_account_parties
-          WHERE facility_id = $1 AND party_role = 'owner'",
-    )
-    .bind(facility_id)
-    .fetch_all(&mut *tx)
-    .await
-    {
-        Ok(rows) => rows,
+    //
+    // A facility with no owners on a form of its own borrows a sister
+    // facility's (see `sister_facility_owners`), and says so.
+    let mut owners = match merchant_account_owners(&mut tx, facility_id).await {
+        Ok(owners) => owners,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "merchant account owner lookup failed");
             return internal_error("Could not load this facility's Users tab");
         }
     };
-    let owners: Vec<OwnerIdentity> = owners
-        .into_iter()
-        .map(|(display_name, email, phone)| OwnerIdentity {
-            display_name,
-            email,
-            phone,
-        })
-        .collect();
+    let mut legal_owner_source = None;
+    if !has_a_named_owner(&owners) {
+        match sister_facility_owners(&mut tx, company_id, facility_id).await {
+            Ok(Some((source, sister_owners))) => {
+                owners = sister_owners;
+                legal_owner_source = Some(source);
+            }
+            Ok(None) => {}
+            Err(err) => {
+                tracing::error!(error = %err, user_id = %user.user_id, "sister facility owner lookup failed");
+                return internal_error("Could not load this facility's Users tab");
+            }
+        }
+    }
     {
         let roster_identities: Vec<RosterIdentity> = roster
             .iter()
@@ -354,6 +447,7 @@ pub async fn get_facility_people(
         roster,
         candidates,
         missing_legal_owners,
+        legal_owner_source,
     })
     .into_response()
 }

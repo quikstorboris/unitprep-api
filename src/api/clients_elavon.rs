@@ -31,8 +31,8 @@ use crate::api::{internal_error, not_found, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::merchant_account_correlation::{
-    correlate_by_title, merchant_account_run_titles, Correlation, IntakeRunTitle,
-    MerchantAccountRunInfo,
+    all_intake_run_titles, correlate_by_title, merchant_account_run_titles, Correlation,
+    IntakeRunTitle, MerchantAccountRunInfo,
 };
 use crate::clients::merchant_account_mapping::{
     credentials_added_to_qms_from_tasks, decrypt_elavon_credentials, decrypt_facility_secrets,
@@ -530,6 +530,16 @@ pub async fn get_facility_elavon(
                         }
                     };
 
+                    // Every sister's Intake title, so a keyword that names
+                    // the company/owner (not this one facility) is ignored.
+                    let intake_universe = match all_intake_run_titles(&mut tx).await {
+                        Ok(titles) => titles,
+                        Err(err) => {
+                            tracing::error!(error = %err, user_id = %user.user_id, "intake title universe fetch failed");
+                            return internal_error("Could not load this facility's Elavon status");
+                        }
+                    };
+
                     let as_candidate = |ma_run_id: &str| {
                         ma_titles
                             .iter()
@@ -545,7 +555,7 @@ pub async fn get_facility_elavon(
                         run_id: intake_run_id.clone(),
                         title_text,
                     }];
-                    let correlated = correlate_by_title(&intake_runs, &ma_titles);
+                    let correlated = correlate_by_title(&intake_runs, &ma_titles, &intake_universe);
                     match correlated.get(intake_run_id) {
                         Some(Correlation::Unambiguous(ma_run_id)) => {
                             (as_candidate(ma_run_id), Vec::new())

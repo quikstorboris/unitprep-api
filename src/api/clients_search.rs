@@ -79,7 +79,7 @@ use crate::api::{bad_request, internal_error, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::company_naming::resolve_company_name;
 use crate::clients::merchant_account_correlation::{
-    addresses_fuzzy_match, correlate_by_title, merchant_account_run_titles,
+    addresses_fuzzy_match, all_intake_run_titles, correlate_by_title, merchant_account_run_titles,
     shares_a_significant_word, Correlation, IntakeRunTitle,
 };
 use crate::clients::merchant_account_mapping::map_merchant_account_fields;
@@ -584,6 +584,14 @@ pub async fn search_clients(
         }
     };
 
+    let intake_universe = match all_intake_run_titles(&mut tx).await {
+        Ok(titles) => titles,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "intake title universe fetch failed");
+            return internal_error("Could not search Process Street");
+        }
+    };
+
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit person-name search transaction");
         return internal_error("Could not search for a person by name");
@@ -604,7 +612,8 @@ pub async fn search_clients(
                 }),
         )
         .collect();
-    let correlations = correlate_by_title(&intake_titles, &merchant_account_titles);
+    let correlations =
+        correlate_by_title(&intake_titles, &merchant_account_titles, &intake_universe);
     let merchant_account_updated_at: HashMap<String, DateTime<Utc>> = merchant_account_titles
         .iter()
         .map(|ma| (ma.run_id.clone(), ma.updated_at))

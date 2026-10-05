@@ -258,6 +258,10 @@ mod clickup_db_tests;
 mod clickup_links_db_tests;
 
 #[cfg(test)]
+#[path = "clients_facility_people_db_tests.rs"]
+mod clients_facility_people_db_tests;
+
+#[cfg(test)]
 #[path = "dedup_test_support.rs"]
 pub(crate) mod dedup_test_support;
 

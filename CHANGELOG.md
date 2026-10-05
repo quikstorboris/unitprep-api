@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.61] - 2026-10-05
+
+Stops sister facilities being offered the wrong Merchant Account form, and lets a facility without its own form borrow Legal Owners from a sister's.
+
+### Fixed
+- **Elavon tab / search / import preview offered a sister's Merchant Account form.** Affordable Storage's only form is titled "Affordable Storage (Beau Ryan) Katy-Flewellen"; "Beau Ryan" is the owner and the tail of every sister's Intake title, so Copperfield (and others) were offered Katy-Flewellen's form. `correlate_by_title` now takes the full set of Intake titles and ignores any keyword that appears in more than one facility's title (it names a company or owner, not a facility). The run's real facility still matches through its own DBA.
+
+### Added
+- **Legal Owner fallback.** A facility with no Merchant Account owners of its own now takes its Legal Owner checkmarks (and "missing owner" chips) from a sister facility in the same company: the sister whose form lists the most named owners, then the most recently synced. A form with only a signer or blank owner slots does not count as having owners; another company's forms are never used. `GET .../people` returns `legal_owner_source` (the sister facility) so the UI can say so.
+- Real-database tests for the fallback (`people_db_*`) and regression tests for the Beau Ryan case.
+
 ## [1.9.60] - 2026-10-02
 
 Link facilities to their ClickUp onboarding lists.

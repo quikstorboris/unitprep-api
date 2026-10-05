@@ -118,6 +118,24 @@ pub async fn merchant_account_run_titles(
     .await
 }
 
+/// Every locally-indexed Intake run's title -- the "universe" a
+/// keyword is checked against to tell a facility-specific nickname from
+/// a company-wide one (see `correlate_by_title`).
+pub async fn all_intake_run_titles(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<Vec<IntakeRunTitle>, sqlx::Error> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT ps_run_id, run_name FROM clients.ps_sync_state WHERE workflow = 'intake'",
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(run_id, title_text)| IntakeRunTitle { run_id, title_text })
+        .collect())
+}
+
 /// One Intake run's own identifying text to search for inside a
 /// Merchant Account run's parenthetical nickname -- callers pass
 /// whichever they already have cheaply: `clients_search` uses the raw
@@ -335,15 +353,43 @@ fn candidate_keywords(ma: &MerchantAccountRunInfo) -> Vec<&str> {
 /// surfaced as `Correlation::Ambiguous`, not silently dropped or
 /// arbitrarily picked (see this module's own doc comment for why that
 /// distinction matters for real data).
+///
+/// **A keyword that points at more than one facility is not a facility
+/// identifier, and is ignored** (real bug, 2026-10-02: Affordable
+/// Storage's Katy-Flewellen Merchant Account run is titled "Affordable
+/// Storage (Beau Ryan) Katy-Flewellen"; "Beau Ryan" is the *owner*, and
+/// it is also the tail of every sister facility's Intake title --
+/// "Affordable Storage Copperfield - BEAU RYAN" -- so Copperfield, and
+/// each of its sisters, was offered Katy-Flewellen's Merchant Account
+/// form as its own). `universe` is every locally-indexed Intake title:
+/// a keyword that appears in more than one of them names a company, an
+/// owner or a manager, not one facility, so it can never discriminate.
+/// Pass the *whole* index, not just the runs being correlated -- the
+/// point is to see the sisters that are not in this request. An empty
+/// `universe` falls back to `intake_runs` alone.
 pub fn correlate_by_title(
     intake_runs: &[IntakeRunTitle],
     merchant_account_runs: &[MerchantAccountRunInfo],
+    universe: &[IntakeRunTitle],
 ) -> HashMap<String, Correlation> {
+    let universe = if universe.is_empty() {
+        intake_runs
+    } else {
+        universe
+    };
     let mut candidates: HashMap<&str, HashSet<&str>> = HashMap::new();
 
     for ma in merchant_account_runs {
         for keyword in candidate_keywords(ma) {
             let keyword_lower = keyword.to_lowercase();
+
+            let facilities_named = universe
+                .iter()
+                .filter(|intake| intake.title_text.to_lowercase().contains(&keyword_lower))
+                .count();
+            if facilities_named > 1 {
+                continue;
+            }
 
             for intake in intake_runs {
                 if intake.title_text.to_lowercase().contains(&keyword_lower) {
@@ -522,7 +568,7 @@ mod tests {
             "Dubuqueland Mini-Storage, Inc. (Main)",
         )];
 
-        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs, &intake_runs);
 
         assert!(!correlated.contains_key("intake-main-street-storage"));
     }
@@ -553,7 +599,7 @@ mod tests {
             ma("ma-highway-20", "Prairie Enterprises (Highway 20)"),
         ];
 
-        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs, &intake_runs);
 
         assert!(!correlated.contains_key("intake-main-street-storage"));
         assert_eq!(
@@ -593,7 +639,7 @@ mod tests {
             ma("ma-pyott-road", "Prairie Enterprises (Pyott Road)"),
         ];
 
-        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs, &intake_runs);
 
         assert_eq!(
             correlated.get("intake-highway-20"),
@@ -636,7 +682,7 @@ mod tests {
             ma("ma-pyott-road", "Prairie Enterprises (Pyott Road)"),
         ];
 
-        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs, &intake_runs);
 
         assert_eq!(
             correlated.get("intake-highway-20"),
@@ -649,7 +695,7 @@ mod tests {
         let intake_runs = vec![intake("intake-solo", "Solo Storage - QMS Onboarding")];
         let merchant_account_runs = vec![ma("ma-solo", "Solo Owner LLC")];
 
-        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs, &intake_runs);
 
         assert!(correlated.is_empty());
     }
@@ -671,7 +717,7 @@ mod tests {
             ma("ma-pyott-road", "Prairie Enterprises (Pyott Road)"),
         ];
 
-        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs, &intake_runs);
 
         assert_eq!(correlated.len(), 2);
     }
@@ -695,7 +741,7 @@ mod tests {
             "Main Street Storage",
         )];
 
-        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs, &intake_runs);
 
         assert_eq!(
             correlated.get("intake-main-street-storage"),
@@ -714,7 +760,7 @@ mod tests {
             "West",
         )];
 
-        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs, &intake_runs);
 
         assert!(correlated.is_empty());
     }
@@ -736,7 +782,7 @@ mod tests {
             "Highway 20 self storage",
         )];
 
-        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs, &intake_runs);
 
         assert_eq!(
             correlated.get("intake-highway-20"),
@@ -778,7 +824,7 @@ mod tests {
             "Pyott Road self storage",
         )];
 
-        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs);
+        let correlated = correlate_by_title(&intake_runs, &merchant_account_runs, &intake_runs);
 
         assert_eq!(
             correlated.get("intake-highway-20"),
@@ -787,6 +833,84 @@ mod tests {
         assert_eq!(
             correlated.get("intake-pyott-road"),
             Some(&Correlation::Unambiguous("ma-mismatched".to_string()))
+        );
+    }
+
+    // Real bug, 2026-10-02: Affordable Storage (Beau Ryan)'s only Merchant
+    // Account run is titled "Affordable Storage (Beau Ryan)
+    // Katy-Flewellen". "Beau Ryan" is the owner, and it is the tail of
+    // every sister's Intake title, so Copperfield was offered
+    // Katy-Flewellen's form as its own.
+    fn beau_ryan_intakes() -> Vec<IntakeRunTitle> {
+        [
+            "Affordable Storage Copperfield - BEAU RYAN",
+            "Affordable Storage FM 529 - BEAU RYAN",
+            "Affordable Storage Fadeway - BEAU RYAN",
+            "Affordable Storage Katy-Flewellen - BEAU RYAN",
+            "Affordable Storage Lozano - BEAU RYAN",
+        ]
+        .iter()
+        .map(|title| intake(title, title))
+        .collect()
+    }
+
+    fn katy_flewellen_run() -> MerchantAccountRunInfo {
+        ma_with_dba(
+            "ma-flewellen",
+            "Affordable Storage (Beau Ryan) Katy-Flewellen",
+            "Affordable Storage Katy-Flewellen",
+        )
+    }
+
+    #[test]
+    fn an_owner_name_every_sister_facility_shares_does_not_correlate_a_sister() {
+        let universe = beau_ryan_intakes();
+        let copperfield = vec![intake(
+            "Affordable Storage Copperfield - BEAU RYAN",
+            "Affordable Storage Copperfield - BEAU RYAN",
+        )];
+
+        let correlated = correlate_by_title(&copperfield, &[katy_flewellen_run()], &universe);
+
+        assert!(
+            correlated.is_empty(),
+            "Copperfield must not be offered Katy-Flewellen's Merchant Account run: {correlated:?}"
+        );
+    }
+
+    #[test]
+    fn the_facility_the_run_really_belongs_to_still_correlates_through_its_own_dba() {
+        let universe = beau_ryan_intakes();
+        let flewellen = vec![intake(
+            "Affordable Storage Katy-Flewellen - BEAU RYAN",
+            "Affordable Storage Katy-Flewellen - BEAU RYAN",
+        )];
+
+        let correlated = correlate_by_title(&flewellen, &[katy_flewellen_run()], &universe);
+
+        assert_eq!(
+            correlated.get("Affordable Storage Katy-Flewellen - BEAU RYAN"),
+            Some(&Correlation::Unambiguous("ma-flewellen".to_string()))
+        );
+    }
+
+    #[test]
+    fn a_keyword_unique_to_one_facility_still_correlates_with_a_full_universe() {
+        let universe = vec![
+            intake("a", "Highway 20 Self Storage - QMS Onboarding"),
+            intake("b", "Pyott Road Self Storage - QMS Onboarding"),
+        ];
+        let target = vec![intake("a", "Highway 20 Self Storage - QMS Onboarding")];
+
+        let correlated = correlate_by_title(
+            &target,
+            &[ma("ma-1", "Prairie Enterprises (Highway 20)")],
+            &universe,
+        );
+
+        assert_eq!(
+            correlated.get("a"),
+            Some(&Correlation::Unambiguous("ma-1".to_string()))
         );
     }
 }
