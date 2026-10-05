@@ -1,12 +1,12 @@
 [package]
 name = "unitprep-core"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 [dependencies]
-anyhow = "1"
-csv = "1"
-tracing = "0.1"
+anyhow = { workspace = true }
+csv = { workspace = true }
+tracing = { workspace = true }
 # "rc" lets `Arc<T>`/`Rc<T>` fields derive Serialize/Deserialize by
 # allocating a fresh Arc on deserialize -- needed by the binary crate's
 # `SessionData` (Arc<Vec<CsvDocument>>, Arc<AnalysisResults>), which
@@ -14,7 +14,7 @@ tracing = "0.1"
 # too (not just in the root Cargo.toml) so this crate's own use of
 # `serde`'s derive macros doesn't depend on the feature merely being
 # unified in from elsewhere in the workspace graph.
-serde = { version = "1", features = ["derive", "rc"] }
+serde = { workspace = true, features = ["rc"] }
 
 # CSV encoding fallback -- real facility exports are frequently
 # Windows-1252 (Excel's default "CSV" save format), not true UTF-8. Already
@@ -28,25 +28,25 @@ encoding_rs = "0.8"
 # that fn only exists when built with "rt-multi-thread", hence that
 # feature being listed explicitly here rather than relying on it being
 # unified in transitively from the binary crate's own "full" feature set.
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time"] }
 
 # Session locking — panicking while a lock is held releases it instead of
 # poisoning it, so a bug in one request can never permanently wedge session
 # access for every other request.
-parking_lot = "0.12"
+parking_lot = { workspace = true }
 
 # SessionMetadata::owner_id -- the same uuid crate (with the same "v4"
 # feature) the binary crate already uses for session IDs. "serde" added
 # for DurableSessionStore -- SessionMetadata now derives Serialize/
 # Deserialize, and owner_id is an Option<Uuid> field of it.
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["serde"] }
 
 # Excel support. "dates" enables ExcelDateTime::as_datetime() — without it,
 # date/datetime-typed cells silently stringify to their raw serial-number
 # float instead of a real date. calamine depends on chrono for this
 # internally, but that doesn't make chrono usable here — it must be a
 # direct dependency of this crate too to format the resulting NaiveDateTime.
-calamine = { version = "0.36", features = ["dates"] }
+calamine = { workspace = true, features = ["dates"] }
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 
 # Excel 2003 SpreadsheetML (XML) support — some facility export tools
@@ -56,7 +56,7 @@ chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 # duplicate-attribute checking, unbounded namespace-allocation) directly
 # reachable via a user-uploaded file, which is exactly what this parser
 # reads.
-quick-xml = "0.41"
+quick-xml = { workspace = true }
 
 # DurableSessionStore's Postgres write-through/rehydration path. Same
 # major version and TLS/runtime feature choice as the binary crate's own
@@ -65,19 +65,19 @@ quick-xml = "0.41"
 # "time") feature -- see durable_session_store.rs's own doc comment for
 # why timestamps cross the SQL boundary as plain epoch-second floats
 # instead.
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
+sqlx = { workspace = true }
 
 # DurableSessionStore's on-disk session encoding -- see that module's doc
 # comment for why bincode was chosen over serde_json.
 bincode = "1"
 
 [dev-dependencies]
-zip = "2"
+zip = { workspace = true }
 
 # "macros" (for #[tokio::test]) is test-only -- the "rt"/"rt-multi-thread"/
 # "time" features it needs beyond that are already pulled in additively
 # from the main [dependencies] tokio entry above.
-tokio = { version = "1", features = ["macros"] }
+tokio = { workspace = true, features = ["macros"] }
 
 # Property-based/fuzz-style testing for the file parsers (csv, excel,
 # spreadsheetml) -- these read arbitrary user-uploaded bytes, so generated

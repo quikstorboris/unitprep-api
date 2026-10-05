@@ -6,6 +6,16 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.77] - 2026-10-05
+
+Efficiency refactor chunk E5: shared dependency versions across the workspace. A pure manifest change -- no code changed and nothing resolves differently.
+
+### Changed
+- **`[workspace.dependencies]` and `[workspace.package]`.** Thirteen dependencies were declared in two or more of the seven manifests (`serde`, `anyhow`, `tracing`, `csv`, `parking_lot`, `uuid`, `tokio`, `sqlx`, `zip`, `quick-xml`, `calamine`, `ts-rs`, `reqwest`), with feature sets that had already drifted (for example `serde` with and without `rc`, `tokio` with three different feature lists). Each is now declared once in the root manifest and referenced as `{ workspace = true }`; a crate that needs more features adds them (`{ workspace = true, features = ["rc"] }`). Every crate takes `edition` from `[workspace.package]`.
+- **Verified identical:** `Cargo.lock` is byte-for-byte unchanged, the set of duplicate crate versions is unchanged, and the fully resolved feature graph (`cargo tree -e features`, 1,455 lines) is identical before and after.
+- `chrono` is deliberately left out: the root crate uses its default features plus `clock`/`serde`, while `unitprep-core` uses `default-features = false`, and a workspace dependency cannot express both. Explained in a comment next to the workspace table.
+- No unused dependencies were found (every crate's dependencies were checked against its source). The `reqwest` entries that appear in both `[dependencies]` and `[dev-dependencies]` of the root crate are intentional: the dev entry adds `multipart` for the HTTP integration tests.
+
 ## [1.9.76] - 2026-10-05
 
 Efficiency refactor chunk E4: a real bug fixed -- Dropbox folder listings were silently truncated to the first page.

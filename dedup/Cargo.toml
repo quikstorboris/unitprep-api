@@ -1,16 +1,16 @@
 [package]
 name = "unitprep-dedup"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 
 [dependencies]
 # File ingestion — CsvDocument / header_index, so this crate never grows
 # its own ad hoc header-name parser.
 unitprep-core = { path = "../core" }
 
-anyhow = "1"
+anyhow = { workspace = true }
 
 # Result types cross the API boundary directly (same convention as
 # UnitGroup's own domain::models) — this is a data-shape derive, not an
 # I/O dependency, so it doesn't compromise this crate's no-I/O purity.
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true }

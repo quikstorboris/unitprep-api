@@ -1,5 +1,36 @@
 [workspace]
 members = ["core", "unit-group", "dedup", "template-tagger", "docx-surgeon", "tagger-pipeline"]
+
+# Shared by every crate in the workspace. A dependency used by more than one
+# crate is declared ONCE here and referenced with `{ workspace = true }`, so
+# the crates can never drift to different versions or feature sets -- the
+# audit found `serde`, `anyhow`, `tracing`, `csv`, `parking_lot`, `uuid`,
+# `tokio`, `sqlx`, `zip`, `quick-xml`, `calamine`, `ts-rs` and `reqwest`
+# each declared in two or more manifests. A member that needs MORE features
+# than the shared set adds them (`{ workspace = true, features = [...] }`);
+# the shared entry carries only what every user needs.
+#
+# `chrono` is deliberately NOT here: the root crate uses it with its default
+# features plus `clock`/`serde`, while `unitprep-core` uses it with
+# `default-features = false` (a `no_std`-style subset), and a workspace
+# dependency cannot express both.
+[workspace.package]
+edition = "2021"
+
+[workspace.dependencies]
+anyhow = "1"
+csv = "1"
+tracing = "0.1"
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }
+tokio = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid"] }
+zip = "2"
+quick-xml = "0.41"
+calamine = "0.36"
+ts-rs = "12.0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 # This root Cargo.toml is both the workspace manifest and the
 # `unitprep` binary's own package manifest — the binary crate stays at
 # the repo root (unchanged import paths, unchanged build command) while
@@ -12,7 +43,7 @@ members = ["core", "unit-group", "dedup", "template-tagger", "docx-surgeon", "ta
 [package]
 name = "unitprep"
 version = "1.9.76"
-edition = "2021"
+edition.workspace = true
 
 authors = ["Boris Maksimov <bmaksimov@quikstor.com>"]
 
@@ -50,12 +81,12 @@ unitprep-tagger-pipeline = { path = "tagger-pipeline" }
 unitprep-template-tagger = { path = "template-tagger" }
 
 # Core error handling
-anyhow = "1"
+anyhow = { workspace = true }
 
 # CSV *writing* — infrastructure/csv_export.rs uses csv::Writer to build
 # export output. Parsing/reading input CSVs lives entirely in
 # unitprep-core now; this is a distinct, still-legitimate direct use.
-csv = "1"
+csv = { workspace = true }
 
 # Serialization. "rc" lets `Arc<T>`/`Rc<T>` fields derive
 # Serialize/Deserialize by allocating a fresh Arc on deserialize --
@@ -64,7 +95,7 @@ csv = "1"
 # `Session` can round-trip through `DurableSessionStore`. A rehydrated
 # session doesn't need to share the original Arc's identity with
 # anything else, just its contents, so a fresh allocation is fine.
-serde = { version = "1", features = ["derive", "rc"] }
+serde = { workspace = true, features = ["rc"] }
 serde_json = "1"
 
 # Date/time support
@@ -74,7 +105,7 @@ chrono = { version = "0.4", features = ["clock", "serde"] }
 axum = { version = "0.8", features = ["multipart"] }
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { workspace = true, features = ["full"] }
 # join_all -- concurrent (not sequential) live Process Street calls in
 # clients_preview/clients_search, where each fetch is independent I/O.
 futures = "0.3"
@@ -92,21 +123,21 @@ futures = "0.3"
 tower-http = { version = "0.6", features = ["cors", "catch-panic", "trace", "request-id", "compression-gzip"] }
 
 # Logging
-tracing = "0.1"
+tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Session IDs
-uuid = { version = "1", features = ["v4"] }
+uuid = { workspace = true }
 
 # client_ops::vendor_format's in-memory registry cache -- same
 # non-poisoning-on-panic rationale unitprep-core already uses it for
 # (see that crate's own Cargo.toml comment): a panicked reader/writer
 # must never permanently wedge vendor recognition for the rest of the
 # process's life the way a poisoned std::sync::RwLock would.
-parking_lot = "0.12"
+parking_lot = { workspace = true }
 
 # ZIP export generation
-zip = "2"
+zip = { workspace = true }
 
 # XLSX export generation (dedup only) — no existing dependency covers
 # writing; unitprep-core's `calamine` (used for parsing uploaded .xlsx
@@ -119,7 +150,7 @@ rust_xlsxwriter = "0.96"
 # Neon requires TLS regardless of which backend provides it. uuid,
 # chrono, ipnetwork, and json enable the column-type mappings the auth
 # schema actually uses (UUID PKs, TIMESTAMPTZ, INET, JSONB).
-sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "ipnetwork", "json"] }
+sqlx = { workspace = true, features = ["chrono", "ipnetwork", "json"] }
 
 # Loads .env.local into the process environment at startup (see
 # main.rs) -- not required in a deployed environment, where real env
@@ -279,22 +310,22 @@ printpdf = { version = "0.12", default-features = false, features = ["png"] }
 # entirely, and rustls-tls (matching sqlx's own TLS choice above) avoids
 # pulling in a second, independent OpenSSL dependency tree alongside
 # webauthn-rs's.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-ts-rs = "12.0.1"
+reqwest = { workspace = true, features = ["rustls-tls"] }
+ts-rs = { workspace = true }
 
 [dev-dependencies]
 
 # Reads the xlsx exporter's own output back in its tests, so those
 # tests verify real cell values/structure instead of just "some bytes
 # came out". Same version already pinned in core/Cargo.toml.
-calamine = "0.36"
+calamine = { workspace = true }
 
 # A real HTTP client for the integration tests in
 # src/api/http_integration_tests.rs -- these bind the actual router to a
 # real loopback port and make real requests, since some bugs (the CORS
 # credentials gap) only ever show up at the router/middleware layer, not
 # from calling a handler function directly.
-reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
+reqwest = { workspace = true, features = ["multipart"] }
 
 # Several TOTP tests (src/auth/totp.rs and src/api/auth_totp.rs) set or
 # remove the process-global TOTP_ENCRYPTION_KEY env var, which races under

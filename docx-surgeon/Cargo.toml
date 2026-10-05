@@ -1,15 +1,15 @@
 [package]
 name = "docx-surgeon"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 description = "Surgical, minimal-diff text edits inside a .docx -- replace exact text spans without touching anything else in the file."
 
 [dependencies]
-quick-xml = "0.41"
-zip = "2"
+quick-xml = { workspace = true }
+zip = { workspace = true }
 
 # RegionRef derives Serialize/Deserialize so unitprep-tagger-pipeline's
 # RegionCandidate (which embeds it) can round-trip through
 # unitprep_core::durable_session_store::DurableSessionStore as part of
 # TaggerSession.
-serde = { version = "1", features = ["derive"] }
+serde = { workspace = true }
