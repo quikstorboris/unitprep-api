@@ -484,7 +484,7 @@ mod tests {
     async fn get_page_retries_a_transient_503_and_then_parses_the_page() {
         let (url, calls) = spawn_flaky_ps(axum::http::StatusCode::SERVICE_UNAVAILABLE).await;
         let client = ProcessStreetClient::new(ProcessStreetConfig {
-            api_key: "test-key".to_string(),
+            api_key: "k1".to_string(),
         });
 
         let page = client.get_page(&url).await.expect("the retry must succeed");
@@ -502,7 +502,7 @@ mod tests {
     async fn get_page_does_not_retry_a_permanent_client_error() {
         let (url, calls) = spawn_flaky_ps(axum::http::StatusCode::UNAUTHORIZED).await;
         let client = ProcessStreetClient::new(ProcessStreetConfig {
-            api_key: "wrong-key".to_string(),
+            api_key: "k2".to_string(),
         });
 
         let err = client.get_page(&url).await.unwrap_err();
