@@ -1,6 +1,9 @@
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::Deserialize;
+
+use crate::integrations::http::{client_builder, send_with_retry, RetryPolicy};
 
 /// ClickUp's public REST API, v2. Overridable (see `ClickUpClient::new`)
 /// only so tests can aim the client at a local mock server.
@@ -162,6 +165,24 @@ struct ErrorBody {
     ecode: Option<String>,
 }
 
+/// One connection pool for the whole process. `ClickUpClient::new` runs
+/// on every handler call (`api::clickup_connection::clickup_client`), and
+/// building a fresh `reqwest::Client` each time meant a new pool and a
+/// new TLS handshake per request. `reqwest::Client` is a cheap
+/// reference-counted handle, so cloning the shared one is free.
+fn shared_http() -> reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+    CLIENT
+        .get_or_init(|| {
+            client_builder()
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .expect("a reqwest client with only timeouts configured must build")
+        })
+        .clone()
+}
+
 pub struct ClickUpClient {
     http: reqwest::Client,
     base_url: String,
@@ -170,10 +191,7 @@ pub struct ClickUpClient {
 impl ClickUpClient {
     pub fn new(base_url: &str) -> Self {
         Self {
-            http: reqwest::Client::builder()
-                .timeout(REQUEST_TIMEOUT)
-                .build()
-                .expect("a reqwest client with only a timeout configured must build"),
+            http: shared_http(),
             base_url: base_url.trim_end_matches('/').to_string(),
         }
     }
@@ -183,12 +201,14 @@ impl ClickUpClient {
     /// (confirmed against the live API 2026-10-02). The token never
     /// appears in logs or in a returned error.
     async fn get(&self, token: &str, path: &str) -> Result<String, ClickUpError> {
-        let response = self
-            .http
-            .get(format!("{}{}", self.base_url, path))
-            .header(reqwest::header::AUTHORIZATION, token)
-            .send()
-            .await?;
+        // GET only, so repeating it on a transient failure is safe.
+        let url = format!("{}{}", self.base_url, path);
+        let response = send_with_retry(RetryPolicy::STANDARD, || {
+            self.http
+                .get(&url)
+                .header(reqwest::header::AUTHORIZATION, token)
+        })
+        .await?;
 
         let status = response.status();
         let body = response.text().await?;

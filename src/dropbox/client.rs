@@ -4,6 +4,9 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 use super::config::DropboxConfig;
+use crate::integrations::http::{
+    client_builder, send_with_retry, truncate_for_log, RetryPolicy, MAX_LOGGED_BODY_BYTES,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DropboxError {
@@ -99,6 +102,14 @@ struct CachedToken {
 /// than risking a request racing the token's real expiry mid-flight.
 const REFRESH_SAFETY_MARGIN: Duration = Duration::from_secs(60);
 
+/// Per-request ceiling for the OAuth token refresh -- tighter than the
+/// shared default because it runs under the token mutex.
+const REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Per-request ceiling for moving file contents (download/upload), which
+/// can legitimately outlast the shared 30 s default.
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// `DropboxClient::find_facility_folder`'s own picking logic, pulled out
 /// as a pure function so it's testable without a real network call --
 /// see that method's own doc comment for why this is exact-match-only.
@@ -130,7 +141,9 @@ pub struct DropboxClient {
 impl DropboxClient {
     pub fn new(config: DropboxConfig) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: client_builder()
+                .build()
+                .expect("a reqwest client with only timeouts configured must build"),
             config,
             token: Mutex::new(None),
         }
@@ -156,17 +169,23 @@ impl DropboxClient {
             }
         }
 
-        let response = self
-            .http
-            .post("https://api.dropboxapi.com/oauth2/token")
-            .form(&[
-                ("grant_type", "refresh_token"),
-                ("refresh_token", &self.config.refresh_token),
-                ("client_id", &self.config.app_key),
-                ("client_secret", &self.config.app_secret),
-            ])
-            .send()
-            .await?;
+        // This runs while holding the token mutex, so a hung refresh used
+        // to stall every other Dropbox call in the process. It now has a
+        // tight per-request timeout and at most one retry, so the lock is
+        // held for a bounded time (about 2 x REFRESH_TIMEOUT worst case).
+        // A refresh is a pure token exchange, safe to repeat.
+        let response = send_with_retry(RetryPolicy::QUICK, || {
+            self.http
+                .post("https://api.dropboxapi.com/oauth2/token")
+                .timeout(REFRESH_TIMEOUT)
+                .form(&[
+                    ("grant_type", "refresh_token"),
+                    ("refresh_token", &self.config.refresh_token),
+                    ("client_id", &self.config.app_key),
+                    ("client_secret", &self.config.app_secret),
+                ])
+        })
+        .await?;
 
         let status = response.status();
         let body = response.text().await?;
@@ -174,7 +193,7 @@ impl DropboxClient {
         if !status.is_success() {
             tracing::error!(
                 status = status.as_u16(),
-                body = %body,
+                body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES),
                 "Dropbox access token refresh failed"
             );
             return Err(DropboxError::Api {
@@ -210,6 +229,40 @@ impl DropboxClient {
         Ok(access_token)
     }
 
+    /// Forgets the cached access token so the next `access_token()` call
+    /// refreshes it. Used when Dropbox says the token in hand is no good.
+    async fn invalidate_token(&self) {
+        *self.token.lock().await = None;
+    }
+
+    /// Sends the request `build` produces with a live access token, with
+    /// transient-failure retries per `policy`. If Dropbox answers 401 the
+    /// cached token is dropped, a fresh one is fetched, and the request is
+    /// sent once more -- a token can expire (or be revoked) between the
+    /// cache check and the call, and that should not surface to a user as
+    /// a failure. A second 401 is returned to the caller as-is.
+    async fn send_authed<F>(
+        &self,
+        policy: RetryPolicy,
+        build: F,
+    ) -> Result<reqwest::Response, DropboxError>
+    where
+        F: Fn(&str) -> reqwest::RequestBuilder,
+    {
+        let token = self.access_token().await?;
+        let response = send_with_retry(policy, || build(&token)).await?;
+
+        if response.status() != reqwest::StatusCode::UNAUTHORIZED {
+            return Ok(response);
+        }
+
+        tracing::warn!("Dropbox returned 401; refreshing the access token and retrying once");
+        self.invalidate_token().await;
+        let token = self.access_token().await?;
+
+        Ok(send_with_retry(policy, || build(&token)).await?)
+    }
+
     fn path_root_header(&self) -> String {
         format!(
             "{{\".tag\": \"root\", \"root\": \"{}\"}}",
@@ -224,15 +277,14 @@ impl DropboxClient {
     /// this calls ever silently returns fewer entries than expected,
     /// pagination is the first thing to check.
     pub async fn list_folder(&self, path: &str) -> Result<Vec<Entry>, DropboxError> {
-        let access_token = self.access_token().await?;
-
         let response = self
-            .http
-            .post("https://api.dropboxapi.com/2/files/list_folder")
-            .bearer_auth(access_token)
-            .header("Dropbox-API-Path-Root", self.path_root_header())
-            .json(&serde_json::json!({ "path": path, "recursive": false }))
-            .send()
+            .send_authed(RetryPolicy::STANDARD, |token| {
+                self.http
+                    .post("https://api.dropboxapi.com/2/files/list_folder")
+                    .bearer_auth(token)
+                    .header("Dropbox-API-Path-Root", self.path_root_header())
+                    .json(&serde_json::json!({ "path": path, "recursive": false }))
+            })
             .await?;
 
         let status = response.status();
@@ -242,7 +294,7 @@ impl DropboxClient {
             tracing::error!(
                 path = %path,
                 status = status.as_u16(),
-                body = %body,
+                body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES),
                 "Dropbox list_folder failed"
             );
             return Err(DropboxError::Api {
@@ -286,22 +338,21 @@ impl DropboxClient {
     /// every match in one page), and a query broad enough to need it is
     /// arguably not a useful facility search anyway.
     pub async fn search_folders(&self, query: &str) -> Result<Vec<Entry>, DropboxError> {
-        let access_token = self.access_token().await?;
-
         let response = self
-            .http
-            .post("https://api.dropboxapi.com/2/files/search_v2")
-            .bearer_auth(access_token)
-            .header("Dropbox-API-Path-Root", self.path_root_header())
-            .json(&serde_json::json!({
-                "query": query,
-                "options": {
-                    "path": self.config.root_path,
-                    "max_results": 100,
-                    "filename_only": true,
-                },
-            }))
-            .send()
+            .send_authed(RetryPolicy::STANDARD, |token| {
+                self.http
+                    .post("https://api.dropboxapi.com/2/files/search_v2")
+                    .bearer_auth(token)
+                    .header("Dropbox-API-Path-Root", self.path_root_header())
+                    .json(&serde_json::json!({
+                        "query": query,
+                        "options": {
+                            "path": self.config.root_path,
+                            "max_results": 100,
+                            "filename_only": true,
+                        },
+                    }))
+            })
             .await?;
 
         let status = response.status();
@@ -311,7 +362,7 @@ impl DropboxClient {
             tracing::error!(
                 query = %query,
                 status = status.as_u16(),
-                body = %body,
+                body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES),
                 "Dropbox search failed"
             );
             return Err(DropboxError::Api {
@@ -381,28 +432,27 @@ impl DropboxClient {
     /// `find_facility_folder`. A transport-level failure (`?` on
     /// `access_token()`) still propagates as a real error.
     pub async fn resolve_shared_link(&self, url: &str) -> Result<Option<Entry>, DropboxError> {
-        let access_token = self.access_token().await?;
-
         let link_response = self
-            .http
-            .post("https://api.dropboxapi.com/2/sharing/get_shared_link_metadata")
-            .bearer_auth(&access_token)
-            .json(&serde_json::json!({ "url": url }))
-            .send()
+            .send_authed(RetryPolicy::STANDARD, |token| {
+                self.http
+                    .post("https://api.dropboxapi.com/2/sharing/get_shared_link_metadata")
+                    .bearer_auth(token)
+                    .json(&serde_json::json!({ "url": url }))
+            })
             .await?;
 
         let status = link_response.status();
         let body = link_response.text().await?;
 
         if !status.is_success() {
-            tracing::warn!(url = %url, status = status.as_u16(), body = %body, "Dropbox shared-link resolution failed, falling back to name search");
+            tracing::warn!(url = %url, status = status.as_u16(), body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES), "Dropbox shared-link resolution failed, falling back to name search");
             return Ok(None);
         }
 
         let link_metadata: SharedLinkMetadataResponse = match serde_json::from_str(&body) {
             Ok(parsed) => parsed,
             Err(err) => {
-                tracing::warn!(url = %url, error = %err, body = %body, "failed to parse shared-link metadata response, falling back to name search");
+                tracing::warn!(url = %url, error = %err, body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES), "failed to parse shared-link metadata response, falling back to name search");
                 return Ok(None);
             }
         };
@@ -413,19 +463,20 @@ impl DropboxClient {
         }
 
         let metadata_response = self
-            .http
-            .post("https://api.dropboxapi.com/2/files/get_metadata")
-            .bearer_auth(&access_token)
-            .header("Dropbox-API-Path-Root", self.path_root_header())
-            .json(&serde_json::json!({ "path": link_metadata.id }))
-            .send()
+            .send_authed(RetryPolicy::STANDARD, |token| {
+                self.http
+                    .post("https://api.dropboxapi.com/2/files/get_metadata")
+                    .bearer_auth(token)
+                    .header("Dropbox-API-Path-Root", self.path_root_header())
+                    .json(&serde_json::json!({ "path": link_metadata.id }))
+            })
             .await?;
 
         let status = metadata_response.status();
         let body = metadata_response.text().await?;
 
         if !status.is_success() {
-            tracing::warn!(url = %url, id = %link_metadata.id, status = status.as_u16(), body = %body, "Dropbox get_metadata by shared-link id failed, falling back to name search");
+            tracing::warn!(url = %url, id = %link_metadata.id, status = status.as_u16(), body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES), "Dropbox get_metadata by shared-link id failed, falling back to name search");
             return Ok(None);
         }
 
@@ -435,7 +486,7 @@ impl DropboxClient {
                 Ok(Some(entry))
             }
             Err(err) => {
-                tracing::warn!(url = %url, error = %err, body = %body, "failed to parse get_metadata response, falling back to name search");
+                tracing::warn!(url = %url, error = %err, body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES), "failed to parse get_metadata response, falling back to name search");
                 Ok(None)
             }
         }
@@ -471,15 +522,16 @@ impl DropboxClient {
     /// treated as success, since the caller's actual goal -- "this folder
     /// exists" -- is already satisfied; every other error propagates.
     pub async fn create_folder_if_missing(&self, path: &str) -> Result<(), DropboxError> {
-        let access_token = self.access_token().await?;
-
+        // Safe to retry: a repeat of a create that actually landed comes
+        // back as the 409 "already exists" handled just below.
         let response = self
-            .http
-            .post("https://api.dropboxapi.com/2/files/create_folder_v2")
-            .bearer_auth(access_token)
-            .header("Dropbox-API-Path-Root", self.path_root_header())
-            .json(&serde_json::json!({ "path": path }))
-            .send()
+            .send_authed(RetryPolicy::STANDARD, |token| {
+                self.http
+                    .post("https://api.dropboxapi.com/2/files/create_folder_v2")
+                    .bearer_auth(token)
+                    .header("Dropbox-API-Path-Root", self.path_root_header())
+                    .json(&serde_json::json!({ "path": path }))
+            })
             .await?;
 
         let status = response.status();
@@ -501,7 +553,7 @@ impl DropboxClient {
         tracing::error!(
             path = %path,
             status = status.as_u16(),
-            body = %body,
+            body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES),
             "Dropbox create_folder_v2 failed"
         );
         Err(DropboxError::Api {
@@ -517,18 +569,18 @@ impl DropboxClient {
     // fast unit test should exercise -- see api::dedup's own no-network
     // rejection tests for what actually is covered.
     pub async fn download(&self, path: &str) -> Result<Vec<u8>, DropboxError> {
-        let access_token = self.access_token().await?;
-
         let response = self
-            .http
-            .post("https://content.dropboxapi.com/2/files/download")
-            .bearer_auth(access_token)
-            .header("Dropbox-API-Path-Root", self.path_root_header())
-            .header(
-                "Dropbox-API-Arg",
-                serde_json::json!({ "path": path }).to_string(),
-            )
-            .send()
+            .send_authed(RetryPolicy::STANDARD, |token| {
+                self.http
+                    .post("https://content.dropboxapi.com/2/files/download")
+                    .timeout(TRANSFER_TIMEOUT)
+                    .bearer_auth(token)
+                    .header("Dropbox-API-Path-Root", self.path_root_header())
+                    .header(
+                        "Dropbox-API-Arg",
+                        serde_json::json!({ "path": path }).to_string(),
+                    )
+            })
             .await?;
 
         let status = response.status();
@@ -538,7 +590,7 @@ impl DropboxClient {
             tracing::error!(
                 path = %path,
                 status = status.as_u16(),
-                body = %body,
+                body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES),
                 "Dropbox download failed"
             );
             return Err(DropboxError::Api {
@@ -568,6 +620,10 @@ impl DropboxClient {
         let response = self
             .http
             .post("https://content.dropboxapi.com/2/files/upload")
+            // Deliberately NOT retried (no `send_authed`): the body is
+            // moved into the request, and an overwrite upload that may
+            // already have landed is not something to repeat blindly.
+            .timeout(TRANSFER_TIMEOUT)
             .bearer_auth(access_token)
             .header("Dropbox-API-Path-Root", self.path_root_header())
             .header(
@@ -586,7 +642,7 @@ impl DropboxClient {
             tracing::error!(
                 path = %path,
                 status = status.as_u16(),
-                body = %body,
+                body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES),
                 "Dropbox upload failed"
             );
             return Err(DropboxError::Api {
@@ -603,7 +659,78 @@ impl DropboxClient {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
     use super::*;
+
+    /// A loopback Dropbox that records the Authorization header it saw and
+    /// answers the first request 503, later ones 200.
+    async fn spawn_flaky_dropbox() -> (String, Arc<AtomicUsize>, Arc<std::sync::Mutex<Vec<String>>>)
+    {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen_auth = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let (counter, seen) = (calls.clone(), seen_auth.clone());
+
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::post(move |headers: axum::http::HeaderMap| {
+                let (counter, seen) = (counter.clone(), seen.clone());
+                async move {
+                    let auth = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("")
+                        .to_string();
+                    seen.lock().unwrap().push(auth);
+
+                    if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE
+                    } else {
+                        axum::http::StatusCode::OK
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, calls, seen_auth)
+    }
+
+    #[tokio::test]
+    async fn send_authed_sends_the_cached_token_and_retries_a_transient_failure() {
+        let (url, calls, seen_auth) = spawn_flaky_dropbox().await;
+        let client = DropboxClient::new(DropboxConfig {
+            app_key: "k".into(),
+            app_secret: "s".into(),
+            refresh_token: "r".into(),
+            root_namespace_id: "1".into(),
+            root_path: "/".into(),
+        });
+        // A live cached token, so no real OAuth refresh is attempted.
+        *client.token.lock().await = Some(CachedToken {
+            access_token: "cached-token".into(),
+            expires_at: Instant::now() + Duration::from_secs(3600),
+        });
+
+        let response = client
+            .send_authed(RetryPolicy::STANDARD, |token| {
+                client.http.post(&url).bearer_auth(token)
+            })
+            .await
+            .expect("the retry must succeed");
+
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        assert_eq!(calls.load(Ordering::SeqCst), 2, "one 503, then the retry");
+        assert_eq!(
+            *seen_auth.lock().unwrap(),
+            vec!["Bearer cached-token".to_string(); 2],
+            "both attempts must carry the cached bearer token"
+        );
+    }
 
     #[test]
     fn picks_the_exact_name_match_over_any_other_candidate() {

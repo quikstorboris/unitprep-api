@@ -6,6 +6,20 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.63] - 2026-10-05
+
+Efficiency refactor chunk A2: one outbound-HTTP policy for Process Street, Dropbox and ClickUp. A hung or flaky upstream can no longer pin a request (or every Dropbox call) indefinitely.
+
+### Changed
+- **Timeouts everywhere.** The Process Street and Dropbox clients were built with `reqwest::Client::new()`, which has no timeout of any kind. Both now use the shared builder in the new `integrations::http` module: 5 s connect timeout, 30 s overall request timeout. Dropbox file download/upload get a 300 s per-request ceiling instead, since they move real payloads. ClickUp keeps its 15 s limit but now uses the same builder.
+- **Transient failures are retried.** A connect error, a timeout, or an HTTP 429/500/502/503/504 is retried up to 3 times with 0.5 s / 1 s backoff plus jitter (Process Street and ClickUp reads; Dropbox reads and the idempotent `create_folder_v2`). A numeric `Retry-After` is honoured, but one longer than 10 s is not waited out: the response is returned so a user-facing request fails fast. Permanent errors (401, 404, ...) are never retried, and the overwrite upload is deliberately never retried.
+- **Dropbox token refresh is bounded and self-healing.** The OAuth refresh ran while holding the token mutex with no timeout, so one hung refresh stalled every Dropbox call app-wide; it now has a 10 s timeout and at most one retry. A 401 from any Dropbox call now drops the cached token, fetches a fresh one and retries once, instead of surfacing an expired-token error to the user.
+- **ClickUp shares one connection pool.** `clickup_client()` built a new `reqwest::Client` (new pool, new TLS handshake) on every handler call; the underlying client is now created once per process and cloned (a cheap handle).
+- **Upstream error bodies are truncated in logs.** Process Street and Dropbox error responses (which can echo customer data) were logged in full at error level; log lines now carry at most 512 bytes. The full body still travels in the returned error.
+
+### Added
+- `integrations::http`: `client_builder`, `send_with_retry` / `RetryPolicy`, `truncate_for_log`, with loopback-server tests for success-after-retry, retries exhausted, permanent errors, `Retry-After` (short and over the cap), timeouts, refused connections, backoff bounds and multibyte-safe truncation. Process Street (`get_page`) and Dropbox (`send_authed`) each have a loopback test of the retry path.
+
 ## [1.9.62] - 2026-10-05
 
 First step of the efficiency refactor (plan: vault `work/active/UnitPrep/Efficiency Refactor/`, chunk A1): fewer database writes and round trips on every authenticated request. No behaviour change except the idle timeout can fire up to 60 s earlier than before (never later).

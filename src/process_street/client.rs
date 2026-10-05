@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::config::ProcessStreetConfig;
+use crate::integrations::http::{
+    client_builder, send_with_retry, truncate_for_log, RetryPolicy, MAX_LOGGED_BODY_BYTES,
+};
 
 const BASE_URL: &str = "https://public-api.process.st/api/v1.1";
 
@@ -125,27 +128,31 @@ pub struct ProcessStreetClient {
 impl ProcessStreetClient {
     pub fn new(config: ProcessStreetConfig) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: client_builder()
+                .build()
+                .expect("a reqwest client with only timeouts configured must build"),
             config,
         }
     }
 
     async fn get_page(&self, url: &str) -> Result<Value, ProcessStreetError> {
-        let response = self
-            .http
-            .get(url)
-            .header("X-API-KEY", &self.config.api_key)
-            .send()
-            .await?;
+        // Every call here is a GET, so repeating one is always safe.
+        let response = send_with_retry(RetryPolicy::STANDARD, || {
+            self.http.get(url).header("X-API-KEY", &self.config.api_key)
+        })
+        .await?;
 
         let status = response.status();
         let body = response.text().await?;
 
         if !status.is_success() {
+            // The full body still rides in the returned error; only the
+            // log line is bounded, since a PS error body can echo
+            // customer data back.
             tracing::error!(
                 url = %url,
                 status = status.as_u16(),
-                body = %body,
+                body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES),
                 "Process Street request failed"
             );
             return Err(ProcessStreetError::Api {
@@ -436,5 +443,75 @@ mod tests {
         assert_eq!(tasks[0].status, "Completed");
         assert_eq!(tasks[1].status, "NotCompleted");
         assert_eq!(tasks[1].name, "🌐 Website: Update ClickUp Task");
+    }
+
+    /// A tiny loopback Process Street: answers the first request with
+    /// `first_status`, every later one with a valid empty page. Returns the
+    /// URL and the request counter.
+    async fn spawn_flaky_ps(
+        first_status: axum::http::StatusCode,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(move || {
+                let counter = counter.clone();
+                async move {
+                    if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                        (first_status, "upstream said no".to_string())
+                    } else {
+                        (
+                            axum::http::StatusCode::OK,
+                            r#"{"workflows": []}"#.to_string(),
+                        )
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (url, calls)
+    }
+
+    #[tokio::test]
+    async fn get_page_retries_a_transient_503_and_then_parses_the_page() {
+        let (url, calls) = spawn_flaky_ps(axum::http::StatusCode::SERVICE_UNAVAILABLE).await;
+        let client = ProcessStreetClient::new(ProcessStreetConfig {
+            api_key: "test-key".to_string(),
+        });
+
+        let page = client.get_page(&url).await.expect("the retry must succeed");
+
+        assert_eq!(
+            page.get("workflows")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn get_page_does_not_retry_a_permanent_client_error() {
+        let (url, calls) = spawn_flaky_ps(axum::http::StatusCode::UNAUTHORIZED).await;
+        let client = ProcessStreetClient::new(ProcessStreetConfig {
+            api_key: "wrong-key".to_string(),
+        });
+
+        let err = client.get_page(&url).await.unwrap_err();
+
+        assert!(matches!(err, ProcessStreetError::Api { status: 401, .. }));
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a 401 is permanent and must not be retried"
+        );
     }
 }

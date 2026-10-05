@@ -6,6 +6,8 @@
 //!
 //! - [`secrets`]: encrypting a credential for storage in that
 //!   integration's own settings table.
+//! - [`http`]: the shared outbound-HTTP policy (timeouts, retries, log-safe
+//!   body truncation) every integration client is built on.
 //! - [`env_source`]: reading a credential's *currently effective* value
 //!   when no row has been saved yet, so a settings page can show what's
 //!   actually running rather than a blank form -- and so that lookup has
@@ -14,4 +16,5 @@
 //!   config API, etc.).
 
 pub mod env_source;
+pub mod http;
 pub mod secrets;
