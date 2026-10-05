@@ -6,6 +6,21 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.69] - 2026-10-05
+
+Efficiency refactor chunk A6: recording a Dedup run no longer encrypts and serializes on an async worker, and no longer does it while holding a database connection. This finishes Phase A of the plan.
+
+### Changed
+- **`create_dedup_run` seals off the async workers.** It encrypted the uploaded source file and serialized + encrypted every tenant record (the whole tenant list) directly on the async worker, *after* opening the RLS transaction -- so a pooled connection was held through the CPU work. It now does the sealing on the blocking pool first and opens the transaction only when the ciphertext is ready. If the sealing task itself panics the run is still recorded, without a stored copy or rematch records (the same degradation as a missing encryption key).
+- `ToolRunCreate.records` is now an owned `Vec<TenantRecord>` (the blocking pool needs `'static` data); both callers move their records in, so nothing is cloned.
+- The span-preserving `spawn_blocking_in_span` primitive moved to a new crate-root `blocking` module so non-HTTP code (`client_ops`) can use it without importing from `api`; `api::blocking` re-exports it and keeps the handler-facing wrappers.
+
+### Not needed
+- **Session persistence serialization** (`DurableSessionStore::persist`'s `bincode::serialize`) was in the plan for this chunk, but after 1.9.66-1.9.68 every heavy `save()` (session creation and the unidentified-mode re-check) already runs inside a blocking-pool closure; the remaining callers are the tiny WebAuthn ceremony saves. Write ordering/coalescing of those upserts stays with plan chunk B5.
+
+### Added
+- Real-database test (`tool_run_create_db_*`, `#[ignore]`d, local `test-db`): the stored source is ciphertext (never the plaintext, which can carry card numbers) that opens back to the original under the run's session id, the kept records round-trip, and with no key configured the run is still recorded with no stored copy.
+
 ## [1.9.68] - 2026-10-05
 
 Efficiency refactor chunk A4b: the unit-group (Group Prep) compute that runs under a session lock no longer runs on the async worker threads.

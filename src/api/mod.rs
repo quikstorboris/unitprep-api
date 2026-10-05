@@ -269,6 +269,12 @@ mod clients_facility_people_db_tests;
 #[path = "session_resolution_db_tests.rs"]
 mod session_resolution_db_tests;
 
+/// Real-database test that  seals the source and records
+/// off the async workers and still stores them correctly; d.
+#[cfg(test)]
+#[path = "tool_run_create_db_tests.rs"]
+mod tool_run_create_db_tests;
+
 #[cfg(test)]
 #[path = "dedup_test_support.rs"]
 pub(crate) mod dedup_test_support;

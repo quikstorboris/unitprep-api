@@ -25,8 +25,6 @@
 use std::sync::Arc;
 
 use axum::response::Response;
-use tokio::task::JoinError;
-use tracing::Span;
 use uuid::Uuid;
 
 use unitprep_core::session::HasSessionMetadata;
@@ -34,18 +32,12 @@ use unitprep_core::session_store::{SessionStore, SessionStoreExt};
 
 use super::internal_error;
 
-/// The lower-level form: runs `work` on the blocking pool inside the
-/// caller's current span and hands back the raw join result. Use this
-/// where a panic should be handled some way other than a 500 response
-/// (a per-file failure inside a larger scan, say).
-pub(crate) async fn spawn_blocking_in_span<T, F>(work: F) -> Result<T, JoinError>
-where
-    F: FnOnce() -> T + Send + 'static,
-    T: Send + 'static,
-{
-    let span = Span::current();
-    tokio::task::spawn_blocking(move || span.in_scope(work)).await
-}
+/// The lower-level form (defined in `crate::blocking` so non-HTTP code can
+/// use it too): runs `work` on the blocking pool inside the caller's
+/// current span and hands back the raw join result. Use this where a panic
+/// should be handled some way other than a 500 response (a per-file
+/// failure inside a larger scan, say).
+pub(crate) use crate::blocking::spawn_blocking_in_span;
 
 /// Runs `work` on the blocking pool. If it panics (or the runtime is
 /// shutting down), logs it and returns the standard `internal_error`
@@ -133,6 +125,7 @@ mod tests {
     use std::time::Duration;
 
     use axum::http::StatusCode;
+    use tracing::Span;
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::*;

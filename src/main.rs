@@ -2,6 +2,7 @@ mod ai;
 mod api;
 mod application;
 mod auth;
+mod blocking;
 mod bootstrap;
 mod clickup;
 mod client_ops;

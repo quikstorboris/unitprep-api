@@ -50,7 +50,12 @@ pub struct ToolRunCreate<'a> {
     /// The normalized tenant records the check ran on, kept (encrypted)
     /// so the run can be re-checked later with a different choice for
     /// tenants that had no customer id. See `seal_records`.
-    pub records: &'a [unitprep_dedup::TenantRecord],
+    ///
+    /// Owned (not borrowed) because serializing and encrypting them is
+    /// CPU-bound and runs on the blocking pool, which needs `'static` data.
+    /// Callers have no use for the records once the run is recorded, so
+    /// moving them in costs nothing.
+    pub records: Vec<unitprep_dedup::TenantRecord>,
 }
 
 /// What `create_dedup_run` stores for the source file: ciphertext bound to
@@ -139,6 +144,37 @@ fn records_aad(session_id: &str) -> Vec<u8> {
 }
 
 pub async fn create_dedup_run(db: &PgPool, run: ToolRunCreate<'_>) {
+    // Encrypting the source file and serializing + encrypting every record
+    // is CPU-bound (the records are the whole tenant list): do it first,
+    // off the async workers, and BEFORE opening the transaction so a pooled
+    // connection is not held through it.
+    let session_id = run.session_id.to_string();
+    let content_type = run.source_content_type.to_string();
+    let source_bytes = run.source_bytes;
+    let records = run.records;
+    let (sealed, sealed_records) = match crate::blocking::spawn_blocking_in_span(move || {
+        let sealed = seal_source(&session_id, &source_bytes, &content_type);
+        let sealed_records = seal_records(&session_id, &records);
+        (sealed, sealed_records)
+    })
+    .await
+    {
+        Ok(sealed) => sealed,
+        Err(err) => {
+            // Same degradation as a missing encryption key: the run is
+            // still recorded, just without the stored copies.
+            tracing::error!(error = %err, session_id = run.session_id, "tool run sealing task failed; the run is recorded without a stored copy or rematch records");
+            (
+                SealedSource {
+                    bytes: None,
+                    content_type: None,
+                    encrypted: false,
+                },
+                None,
+            )
+        }
+    };
+
     let mut tx = match begin_rls_transaction(db, run.actor_user_id, run.role_keys).await {
         Ok(tx) => tx,
         Err(err) => {
@@ -146,8 +182,6 @@ pub async fn create_dedup_run(db: &PgPool, run: ToolRunCreate<'_>) {
             return;
         }
     };
-
-    let sealed = seal_source(run.session_id, &run.source_bytes, run.source_content_type);
 
     let result = sqlx::query(
         "INSERT INTO client_ops.tool_runs
@@ -165,7 +199,7 @@ pub async fn create_dedup_run(db: &PgPool, run: ToolRunCreate<'_>) {
     .bind(&sealed.content_type)
     .bind(sealed.encrypted)
     .bind(&run.report_summary)
-    .bind(seal_records(run.session_id, run.records))
+    .bind(&sealed_records)
     .execute(&mut *tx)
     .await;
 

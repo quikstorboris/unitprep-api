@@ -268,7 +268,7 @@ pub async fn check(
             source_bytes,
             source_content_type: guess_content_type(&file_name),
             report_summary: serde_json::to_value(&report).unwrap_or_default(),
-            records: &records,
+            records,
         },
     )
     .await;
@@ -436,7 +436,7 @@ pub async fn import_from_dropbox(
             source_bytes,
             source_content_type: guess_content_type(&file_name),
             report_summary: serde_json::to_value(&report).unwrap_or_default(),
-            records: &records,
+            records,
         },
     )
     .await;
