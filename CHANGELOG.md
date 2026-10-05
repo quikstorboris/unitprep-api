@@ -6,6 +6,21 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.66] - 2026-10-05
+
+Efficiency refactor chunk A4: spreadsheet parsing no longer runs on the async worker threads.
+
+### Changed
+- **File parsing and session creation now run on tokio's blocking pool.** Parsing an uploaded xlsx/csv is CPU-bound, and called straight from an `async fn` handler it occupied one of the runtime's few worker threads for its whole duration -- stalling every unrelated request scheduled on that worker, including the auth lookup each authenticated request starts with. Moved off the workers: the unit-group upload and Dropbox import (`SessionService::create_session`), the manual group-file and unit-file uploads, the dedup check and Dropbox-import check (`DedupSessionService::create_session`, which also builds the whole report, so this also covers part of chunk A5), and each file's parse in the Dedup folder scan (up to `DROPBOX_SCAN_CONCURRENCY` at once; a panic parsing one file now reports just that file as unreadable instead of failing the scan).
+- **New `api::blocking` helper** (`run_blocking`, `spawn_blocking_in_span`) used by every site above. It carries the request's tracing span onto the blocking thread -- a plain `spawn_blocking` closure runs with no current span, so every log line inside the parsers ("Skipping file", "Creating session") would have silently lost its `request_id` -- and turns a panic in the work into the project's standard `internal_error` 500 (logged with the operation name), exactly like a panic in the handler body already did.
+
+### Not changed (deliberately)
+- The two detect-vendor handlers (`POST /dedup/detect-vendor*`) still parse inline: they are dead code scheduled for removal (plan chunk E2).
+- Unit-group `validate` / `analyze` / discovery work that runs under a session write lock is a separate piece (plan chunk A4b), as is the dedup report/export generation (A5).
+
+### Added
+- Tests for the helper: the runtime keeps running other tasks while blocking work runs (single-thread runtime, so it would fail if the work ran inline), a panic becomes the standard 500, and the caller's tracing span is entered on the blocking thread.
+
 ## [1.9.65] - 2026-10-05
 
 Efficiency refactor chunk A7: gzip response compression.

@@ -14,13 +14,16 @@ use axum::{
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use unitprep_core::parsing::parse_document;
 use unitprep_core::session_store::SessionStoreExt;
 use unitprep_core::uploaded_file::UploadedFile;
-use unitprep_core::vendor_format::detect_vendor;
+use unitprep_core::vendor_format::{detect_vendor, VendorFormat};
+use unitprep_dedup::file_selection::FileFormatMeta;
 use unitprep_dedup::{DedupReport, TenantRecord};
 
+use crate::api::blocking::run_blocking;
 use crate::api::dedup_view::{build_report_view, DedupReportView};
 use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root, parent_folder};
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
@@ -197,16 +200,21 @@ pub async fn check(
     let tenant_vendors = state.tenant_vendors.read().clone();
     let file_meta = state.tenant_file_meta.read().clone();
 
-    let (session_id, report, records, ingested) = match DedupSessionService::new(Arc::clone(
-        &state.dedup_sessions,
-    ))
-    .create_session(
-        &files,
+    let (files, created) = match create_dedup_session(
+        &state,
+        files,
         Some(user.user_id),
-        &tenant_vendors,
-        &file_meta,
+        tenant_vendors,
+        file_meta,
         None,
-    ) {
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+
+    let (session_id, report, records, ingested) = match created {
         Ok(created) => created,
         Err(err) => {
             // A parse/recognition/selection failure here describes a
@@ -359,16 +367,21 @@ pub async fn import_from_dropbox(
     let tenant_vendors = state.tenant_vendors.read().clone();
     let file_meta = state.tenant_file_meta.read().clone();
 
-    let (session_id, report, records, ingested) = match DedupSessionService::new(Arc::clone(
-        &state.dedup_sessions,
-    ))
-    .create_session(
-        &files,
+    let (files, created) = match create_dedup_session(
+        &state,
+        files,
         Some(user.user_id),
-        &tenant_vendors,
-        &file_meta,
+        tenant_vendors,
+        file_meta,
         source_dropbox_folder_path,
-    ) {
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
+
+    let (session_id, report, records, ingested) = match created {
         Ok(created) => created,
         Err(err) => {
             tracing::warn!(files = files.len(), error = %err, "Dedup import-from-dropbox failed to ingest the selected files");
@@ -1030,6 +1043,45 @@ pub(crate) fn file_response(bytes: Vec<u8>, content_type: &str, file_name: &str)
             .unwrap(),
     );
     (headers, bytes).into_response()
+}
+
+/// What `DedupSessionService::create_session` hands back on success: the
+/// new session id, the report, the ingested records and the index (into
+/// the submitted files) of the file that was actually ingested.
+type CreatedDedupSession = (String, DedupReport, Vec<TenantRecord>, usize);
+
+/// Runs `DedupSessionService::create_session` -- which parses every
+/// selected file, ingests the records and builds the whole report, all
+/// CPU-bound -- on the blocking pool so a large facility cannot stall an
+/// async worker (and every unrelated request scheduled on it).
+///
+/// The files go in by value and come straight back out, since both callers
+/// still need the ingested one afterwards (its name and bytes for the
+/// tool-run record). The OUTER `Err` is a failure of the work itself (a
+/// panic), already turned into the standard 500; the INNER result is the
+/// service's own ingest outcome, which callers map to a 400 because it
+/// describes a problem with the chosen files.
+async fn create_dedup_session(
+    state: &AppState,
+    files: Vec<UploadedFile>,
+    owner_id: Option<Uuid>,
+    tenant_vendors: Vec<VendorFormat>,
+    file_meta: Vec<FileFormatMeta>,
+    source_dropbox_folder_path: Option<String>,
+) -> Result<(Vec<UploadedFile>, anyhow::Result<CreatedDedupSession>), Response> {
+    let service = DedupSessionService::new(Arc::clone(&state.dedup_sessions));
+
+    run_blocking("check the selected files", move || {
+        let created = service.create_session(
+            &files,
+            owner_id,
+            &tenant_vendors,
+            &file_meta,
+            source_dropbox_folder_path,
+        );
+        (files, created)
+    })
+    .await
 }
 
 #[cfg(test)]

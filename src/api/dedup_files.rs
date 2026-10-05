@@ -28,6 +28,8 @@ use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
 
 use unitprep_core::parsing::parse_document;
+
+use crate::api::blocking::spawn_blocking_in_span;
 use unitprep_dedup::file_selection::{
     classify, ClassifiedFile, FileFormatMeta, FileHeaders, FileRole, FileStatus, Suggestion,
 };
@@ -238,10 +240,18 @@ pub async fn classify_dropbox_folder(
         .map(|entry| async move {
             let state = state_ref;
             let headers = match download_as_uploaded_file(state, &entry.path_display).await {
-                Ok(file) => match parse_document(&file) {
-                    Ok(document) => Some(document.headers),
-                    Err(err) => {
+                // The parse is CPU-bound, so it runs on the blocking pool;
+                // up to DROPBOX_SCAN_CONCURRENCY files parse at once.
+                Ok(file) => match spawn_blocking_in_span(move || parse_document(&file)).await {
+                    Ok(Ok(document)) => Some(document.headers),
+                    Ok(Err(err)) => {
                         tracing::warn!(path = %entry.path_display, error = %err, "Dedup folder scan could not parse a file");
+                        None
+                    }
+                    Err(err) => {
+                        // A panic while parsing one file must not fail the
+                        // whole scan: report that file as unreadable.
+                        tracing::error!(path = %entry.path_display, error = %err, "Dedup folder scan parse task failed");
                         None
                     }
                 },

@@ -4,6 +4,8 @@ use axum::Json;
 
 use unitprep_core::csv_document::CsvDocument;
 use unitprep_core::parsing::parse_document;
+
+use crate::api::blocking::run_blocking;
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::manual_file_upload::{
@@ -32,12 +34,19 @@ pub async fn upload_group_file(
         Err(err) => return manual_upload_error_response(err),
     };
 
-    let document = match parse_document(&fields.file) {
+    // Parsing a spreadsheet is CPU-bound -- keep it off the async workers.
+    let file_name = fields.file.file_name.clone();
+    let file = fields.file;
+    let parsed = match run_blocking("parse the uploaded file", move || parse_document(&file)).await
+    {
+        Ok(parsed) => parsed,
+        Err(response) => return response,
+    };
+    let document = match parsed {
         Ok(document) => document,
         Err(err) => {
             return manual_upload_error_response(ManualUploadError::ParseFailed(format!(
-                "Could not read '{}': {err}",
-                fields.file.file_name
+                "Could not read '{file_name}': {err}"
             )));
         }
     };

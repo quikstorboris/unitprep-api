@@ -14,6 +14,7 @@ mod auth_user_permissions;
 mod auth_user_role;
 mod auth_user_status;
 mod auth_users;
+pub(crate) mod blocking;
 mod cancel_session;
 mod clickup_connection;
 mod clickup_lookup;

@@ -9,6 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::api::blocking::run_blocking;
 use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root};
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::application::session_service::SessionService;
@@ -193,11 +194,17 @@ pub async fn upload(
             .into_response();
     }
 
-    let session_id = SessionService::new(Arc::clone(&state.unit_group_sessions)).create_session(
-        uploaded_files,
-        Some(user.user_id),
-        None,
-    );
+    // Parses every uploaded file: CPU-bound, so off the async workers.
+    let sessions = Arc::clone(&state.unit_group_sessions);
+    let owner_id = Some(user.user_id);
+    let session_id = match run_blocking("create the upload session", move || {
+        SessionService::new(sessions).create_session(uploaded_files, owner_id, None)
+    })
+    .await
+    {
+        Ok(session_id) => session_id,
+        Err(response) => return response,
+    };
 
     tracing::info!(
         session_id = %session_id,
@@ -295,11 +302,18 @@ pub async fn import_from_dropbox(
         return internal_error("Could not download any files from this Dropbox folder");
     }
 
-    let session_id = SessionService::new(Arc::clone(&state.unit_group_sessions)).create_session(
-        uploaded_files,
-        Some(user.user_id),
-        Some(request.path.clone()),
-    );
+    // Parses every downloaded file: CPU-bound, so off the async workers.
+    let sessions = Arc::clone(&state.unit_group_sessions);
+    let owner_id = Some(user.user_id);
+    let source_path = Some(request.path.clone());
+    let session_id = match run_blocking("create the Dropbox import session", move || {
+        SessionService::new(sessions).create_session(uploaded_files, owner_id, source_path)
+    })
+    .await
+    {
+        Ok(session_id) => session_id,
+        Err(response) => return response,
+    };
 
     tracing::info!(
         session_id = %session_id,
