@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.78] - 2026-10-05
+
+Efficiency refactor chunk E3: four redundant indexes dropped. One migration; no code change.
+
+### Changed
+- **Migration `20261005120000` drops four single-column indexes that a UNIQUE constraint already covers**: `facility_merchant_account_parties (facility_id)`, `policy_coverage_tiers (facility_policies_id)`, `policy_delinquency_steps (facility_policies_id)` and `ps_task_status (facility_id)`. Each was on the leading column of a composite UNIQUE index the same table has, and a btree on `(a, b, ...)` serves every lookup on `(a)` alone, so the twin added nothing to reads while costing space and a write on every insert/update/delete. Verified against the migrated schema (`pg_indexes`), and the query planner was confirmed to use the composite index for single-column lookups after the drop. Foreign keys are unaffected. Reversible (the down migration recreates all four); applied, reversed and re-applied cleanly on the test database.
+
+### Decided (left alone)
+- **`clients.staff_identity_alias` is kept.** Its only reader (`staff_resolution`, never built) was removed in 1.9.74, so nothing uses the table -- but dropping a table is destructive and may hold data on the dev database, and it was created for a still-possible feature (Implementation Manager / Sales Rep assignment). Dropping it is a one-line migration whenever you decide that feature is not coming.
+- **The columns with no Rust references** (`auth.user_roles.granted_at`, `auth.users.deletion_reason`, `auth.webauthn_credentials.transports`, `client_ops.tag_pattern.requires_rewrite`, `clients.policy_delinquency_steps.notice_channel`) are kept: several are constrained or granted by name and look reserved for features, and none costs anything meaningful.
+
 ## [1.9.77] - 2026-10-05
 
 Efficiency refactor chunk E5: shared dependency versions across the workspace. A pure manifest change -- no code changed and nothing resolves differently.
