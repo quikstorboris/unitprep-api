@@ -90,3 +90,31 @@ vault for the fuller reasoning if this ever needs to change.
 3. If sessions look wrong after a restart, check `auth.durable_sessions`
    directly — `SELECT kind, id, last_accessed FROM auth.durable_sessions;`
    — to see what actually persisted.
+
+## Database migrations: the production scripts
+
+Two scripts under `scripts/` operate on the **production** Neon branch. Both
+are run **by hand, interactively, by Boris -- never from CI** -- and both read
+`NEON_PROD_DATABASE_URL_DIRECT` out of `.env.local` by extracting that single
+line (never `source .env.local`: a stray line in it has held a cleartext
+password before).
+
+| Script | What it does | Changes anything? |
+|---|---|---|
+| `scripts/prod_db_status.sh` | Shows the latest applied migration on the prod branch and which local migrations it is missing, plus any migration that failed. | No (read-only) |
+| `scripts/prod_db_sync.sh` | Counts pending migrations, then (only after you type `apply prod`) runs `sqlx migrate run` against prod, re-applies the `app_service` grants (`scripts/setup_app_service_role.sql`), and verifies. | **Yes** -- each migration runs in its own transaction, so a failure stops with the earlier ones kept |
+
+Order of operations for a release that includes a migration: run
+`prod_db_status.sh` to see what is pending, review the pending migrations'
+`.up.sql` files, run `prod_db_sync.sh`, then deploy the code. A chunk whose
+Rust code *requires* a new column or table (rather than merely benefiting
+from one) must say so in its CHANGELOG entry, because deploying that code
+before its migration would break it.
+
+Always apply migrations with sqlx (these scripts, or `scripts/bootstrap_test_db.sh`
+for the local test database), never by pasting SQL into `psql`: a hand-run
+migration leaves no `_sqlx_migrations` record and the next sqlx run then fails
+with "already exists".
+
+`SCHEMA.sql` is a read-only snapshot of the schema the migrations produce;
+regenerate it after a migration lands with `scripts/regenerate_schema_sql.sh`.

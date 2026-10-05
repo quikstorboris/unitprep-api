@@ -6,6 +6,21 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.79] - 2026-10-05
+
+Efficiency refactor chunk E6: stale files and documentation. No code changed.
+
+### Changed
+- **`SCHEMA.sql` regenerated** (it was 15 migrations behind: missing `auth.user_permissions`, the ClickUp credential and settings tables, the facility ClickUp-link columns, tool-run additions, and every index change since). A new `scripts/regenerate_schema_sql.sh` rebuilds it from the local test database after `scripts/bootstrap_test_db.sh` has applied every migration (so it always reflects exactly what the migrations produce, needs no credentials and never touches Neon) and strips pg_dump's random `\restrict` token so a regeneration only shows real schema changes in the diff. A standing rule in `CLAUDE.md` says to run it with any migration-adding change.
+- **`RUNBOOK.md` documents the production migration scripts**: `scripts/prod_db_status.sh` (read-only: which migrations prod is missing) and `scripts/prod_db_sync.sh` (applies them after an explicit `apply prod` confirmation, re-applies the `app_service` grants, verifies). These had no references anywhere and looked abandoned; they are in fact the hand-run production tooling, and the order of operations for a release with a migration is now written down. `README.md` now links `RUNBOOK.md`, `docs/DOCKER.md`, `AUTHENTICATION.md`, `THREAT_MODEL.md` and `SCHEMA.sql`, which had no inbound links.
+
+### Removed
+- **`README.sample.md`** (193-line drafted README redesign, never adopted, referenced by nothing). Archived verbatim in the vault (`work/archive/2026/UnitPrep/README Sample Draft (Unadopted).md`) and still in git history (`git show 9b19eab:README.sample.md`).
+- Untracked, gitignored leftovers on disk (not part of the commit): two empty directories (`.sqlx/`, `examples/` -- the crate has no `query!` macros), two superseded environment backups (`.env.local.bak`, `.env.local.bak2`; every key they held also exists in the current `.env.local`, compared by name only), and two incomplete security-scan output directories (`CLAUDE-SECURITY-*`; zipped to `~/Desktop/stale-unitprep-artifacts-2026-10-05.zip` first).
+
+### Kept deliberately
+- `.env.local.pre-prod-app-pw` (until the production `app_service` password change is confirmed), `REFACTOR.md` (gitignored scratch), `dev-tools/` (the manual WebAuthn harness; not verified against the TOTP flow), `/health` and `/health/db` (infrastructure endpoints with no UI caller by design).
+
 ## [1.9.78] - 2026-10-05
 
 Efficiency refactor chunk E3: four redundant indexes dropped. One migration; no code change.

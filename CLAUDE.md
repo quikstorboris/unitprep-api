@@ -37,3 +37,8 @@ Added 2026-10-01 after a dedup check went from under a second to ~9 s. Docker wa
 # Tech stack list (standing rule)
 
 Added 2026-10-01. The vault note `reference/UnitPrep Tech Stack.md` is the canonical list of every tool, library, service and infrastructure piece used across both repos (name, area, what/why). **Whenever you introduce a new one in this repo — a Cargo/npm dependency, CI/security tool, external service or integration, infra component — add a row to that note in the same session and bump its "Last updated" line.** Also update the row if a tool is removed or replaced. Boris uses that note for CTO/architecture presentations, so it must not go stale.
+
+
+# Migrations and `SCHEMA.sql` (standing rule)
+
+Added 2026-10-05. After any change that adds or alters a migration, run `./scripts/bootstrap_test_db.sh` (applies it to the local test-db) and then `./scripts/regenerate_schema_sql.sh`, and commit the regenerated `SCHEMA.sql` with the change -- it had drifted 15 migrations behind before this rule. Apply migrations with sqlx only, never by pasting SQL into `psql` (a hand-run migration leaves no `_sqlx_migrations` record and the next run fails). The production scripts (`scripts/prod_db_status.sh`, `scripts/prod_db_sync.sh`) are run by hand by Boris only; see RUNBOOK.md.

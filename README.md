@@ -114,3 +114,10 @@ file-only regardless.
 See [CHANGELOG.md](CHANGELOG.md) for what shipped recently and
 [AUDIT_RETENTION.md](AUDIT_RETENTION.md) for how audit/activity logs
 are retained.
+
+Operations and design docs: [RUNBOOK.md](RUNBOOK.md) (required
+configuration, restarts, deployment model, the production migration scripts),
+[docs/DOCKER.md](docs/DOCKER.md) (dev-container commands),
+[AUTHENTICATION.md](AUTHENTICATION.md) and [THREAT_MODEL.md](THREAT_MODEL.md)
+(how sign-in works and what it defends against), and
+[SCHEMA.sql](SCHEMA.sql) (a read-only snapshot of the current schema).
