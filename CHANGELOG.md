@@ -6,6 +6,18 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.68] - 2026-10-05
+
+Efficiency refactor chunk A4b: the unit-group (Group Prep) compute that runs under a session lock no longer runs on the async worker threads.
+
+### Changed
+- **Discovery, validation, analysis and export compute run on tokio's blocking pool.** Many Group Prep handlers do their real work -- re-deriving the whole discovery, validating every document, mapping a vendor format, building the analysis batch, rendering and zipping the export CSVs -- inside the closure they hand the session store, i.e. under the session lock, on an async worker. Now off the workers: `POST /discover`, `/unit-file/select`, `/unit-file/resolve-format`, `/unit-file/upload`, `/group-file/select`, `/group-file/confirm`, `/group-file/upload`, `/validate`, `/analyze` (both the document preparation under the read lock and the batch build + analysis itself) and the unit-group `/export` (CSV generation and ZIP build). The lock semantics are unchanged: it is taken and released inside the single blocking call.
+- New `with_owned_session_mut_blocking` / `with_owned_session_blocking` helpers (next to `run_blocking` in `api::blocking`) carry the session-store closure onto the blocking pool, with the request's tracing span and the same panic-to-500 mapping. Handlers share their parsed request into the closure through an `Arc`, so the closure bodies are textually unchanged.
+- A panic inside any of these now becomes the standard `internal_error` response (logged with the operation name) via the helper, as before via `CatchPanicLayer`.
+
+### Not changed
+- The light "flip a flag" session mutations (`/correct`, `/correct-group`, `/exclude-group(s)`, `/exempt`, `/acknowledge-group-warnings`, `/cancel`) stay inline: they do no meaningful work under the lock.
+
 ## [1.9.67] - 2026-10-05
 
 Efficiency refactor chunk A5: the Dedup report view and export generation no longer run on the async worker threads.

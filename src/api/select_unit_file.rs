@@ -4,9 +4,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
+use std::sync::Arc;
 
-use unitprep_core::session_store::SessionStoreExt;
-
+use crate::api::blocking::with_owned_session_mut_blocking;
 use crate::{
     api::{discover::compute_discovery, session_not_found, stage_conflict, ApiErrorBody, AppState},
     application::unit_group_session::{StageError, WorkflowStage},
@@ -42,80 +42,91 @@ pub async fn select_unit_file(
     // call.
     let unit_vendors = state.unit_vendors.read().clone();
 
-    let result = state.unit_group_sessions.with_owned_session_mut(
+    let request = Arc::new(request);
+    let result = match with_owned_session_mut_blocking(
+        "select the unit files",
+        &state.unit_group_sessions,
         &request.session_id,
         user.user_id,
-        |session| {
-            if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    required = ?err.required,
-                    current = ?err.current,
-                    "Unit-file select called before discovery completed"
-                );
-
-                return Err(SelectNotReady::Stage(err));
-            }
-
-            if request.unit_file_names.is_empty() {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    "Unit-file select rejected — empty selection"
-                );
-
-                return Err(SelectNotReady::EmptySelection);
-            }
-
-            let discovery = session
-                .data
-                .discovery
-                .as_ref()
-                .expect("Discovered stage guarantees discovery data");
-
-            for name in &request.unit_file_names {
-                if !discovery
-                    .unit_file_candidates
-                    .iter()
-                    .any(|c| &c.file_name == name)
-                {
+        {
+            let request = Arc::clone(&request);
+            move |session| {
+                if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
                     tracing::warn!(
                         session_id = %request.session_id,
-                        file = %name,
-                        "Unit-file select rejected — file was not discovered"
+                        required = ?err.required,
+                        current = ?err.current,
+                        "Unit-file select called before discovery completed"
                     );
 
-                    return Err(SelectNotReady::FileNotDiscovered(name.clone()));
+                    return Err(SelectNotReady::Stage(err));
                 }
-            }
 
-            let mut discovery = discovery.clone();
-            discovery.selected_unit_file_names = request.unit_file_names.clone();
-            session.complete_discovery(discovery);
+                if request.unit_file_names.is_empty() {
+                    tracing::warn!(
+                        session_id = %request.session_id,
+                        "Unit-file select rejected — empty selection"
+                    );
 
-            // One line per file rather than the whole Vec crammed
-            // into a single `unit_file_names=[...]` field -- a real
-            // multi-facility folder can select a dozen-plus files at
-            // once, each with a long path, and a single-line dump of
-            // all of them is unreadable in the raw log. The summary
-            // line right after keeps the total greppable/gawkable on
-            // its own too.
-            for file_name in &request.unit_file_names {
+                    return Err(SelectNotReady::EmptySelection);
+                }
+
+                let discovery = session
+                    .data
+                    .discovery
+                    .as_ref()
+                    .expect("Discovered stage guarantees discovery data");
+
+                for name in &request.unit_file_names {
+                    if !discovery
+                        .unit_file_candidates
+                        .iter()
+                        .any(|c| &c.file_name == name)
+                    {
+                        tracing::warn!(
+                            session_id = %request.session_id,
+                            file = %name,
+                            "Unit-file select rejected — file was not discovered"
+                        );
+
+                        return Err(SelectNotReady::FileNotDiscovered(name.clone()));
+                    }
+                }
+
+                let mut discovery = discovery.clone();
+                discovery.selected_unit_file_names = request.unit_file_names.clone();
+                session.complete_discovery(discovery);
+
+                // One line per file rather than the whole Vec crammed
+                // into a single `unit_file_names=[...]` field -- a real
+                // multi-facility folder can select a dozen-plus files at
+                // once, each with a long path, and a single-line dump of
+                // all of them is unreadable in the raw log. The summary
+                // line right after keeps the total greppable/gawkable on
+                // its own too.
+                for file_name in &request.unit_file_names {
+                    tracing::info!(
+                        session_id = %request.session_id,
+                        file = %file_name,
+                        "Unit file selected"
+                    );
+                }
+
                 tracing::info!(
                     session_id = %request.session_id,
-                    file = %file_name,
-                    "Unit file selected"
+                    unit_file_count = request.unit_file_names.len(),
+                    "Unit file selection complete"
                 );
+
+                Ok(compute_discovery(session, &unit_vendors))
             }
-
-            tracing::info!(
-                session_id = %request.session_id,
-                unit_file_count = request.unit_file_names.len(),
-                "Unit file selection complete"
-            );
-
-            Ok(compute_discovery(session, &unit_vendors))
         },
-    );
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
 
     match result {
         Some(Ok(response)) => Json(response).into_response(),

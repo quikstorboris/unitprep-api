@@ -6,8 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use unitprep_core::session_store::SessionStoreExt;
-
+use crate::api::blocking::with_owned_session_mut_blocking;
 use crate::{
     api::{session_not_found, stage_conflict, AppState},
     application::unit_group_session::{Session, StageError, WorkflowStage},
@@ -194,11 +193,21 @@ pub async fn validate(
     user: AuthenticatedUser,
     Json(request): Json<ValidateRequest>,
 ) -> Response {
-    let response = state.unit_group_sessions.with_owned_session_mut(
+    // Validating every document is CPU-bound and runs under the session's
+    // write lock: keep it off the async workers.
+    let session_id = request.session_id.clone();
+    let response = match with_owned_session_mut_blocking(
+        "validate the session",
+        &state.unit_group_sessions,
         &request.session_id,
         user.user_id,
-        |session| run_validation(session, &request.session_id),
-    );
+        move |session| run_validation(session, &session_id),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(response) => return response,
+    };
 
     match response {
         Some(Ok(response)) => Json(response).into_response(),

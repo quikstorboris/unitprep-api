@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::{
+    api::blocking::{run_blocking, with_owned_session_blocking},
     api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
     application::unit_group_session::{StageError, WorkflowStage},
     auth::AuthenticatedUser,
@@ -66,58 +67,76 @@ pub async fn analyze(
     // returning `Err`, which means the session exists and is this caller's
     // but isn't ready for a business-logic reason (wrong stage, or
     // ambiguous group file).
-    let analysis_inputs = match state.unit_group_sessions.with_owned_session(
+    // `effective_documents_for` clones and transforms every relevant
+    // document under the session's read lock: CPU-bound, so off the async
+    // workers. `request` is shared into the closure through an `Arc` so
+    // its body reads `request.field` exactly as it always did.
+    let request = Arc::new(request);
+    let read = match with_owned_session_blocking(
+        "prepare the analysis",
+        &state.unit_group_sessions,
         &request.session_id,
         user.user_id,
-        |session| {
-            if let Err(err) = session.require_stage(WorkflowStage::Validated) {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    required = ?err.required,
-                    current = ?err.current,
-                    "Analyze called before discovery/validation completed"
-                );
+        {
+            let request = Arc::clone(&request);
+            move |session| {
+                if let Err(err) = session.require_stage(WorkflowStage::Validated) {
+                    tracing::warn!(
+                        session_id = %request.session_id,
+                        required = ?err.required,
+                        current = ?err.current,
+                        "Analyze called before discovery/validation completed"
+                    );
 
-                return Err(AnalyzeNotReady::Stage(err));
+                    return Err(AnalyzeNotReady::Stage(err));
+                }
+
+                let discovery = session
+                    .data
+                    .discovery
+                    .clone()
+                    .expect("Validated stage guarantees discovery data");
+
+                if discovery.group_file_names.len() > 1
+                    && discovery.selected_group_file_name.is_none()
+                {
+                    tracing::warn!(
+                        session_id = %request.session_id,
+                        group_files = ?discovery.group_file_names,
+                        "Analysis requires master group file selection"
+                    );
+
+                    return Err(AnalyzeNotReady::GroupFileNotSelected);
+                }
+
+                // Only transform (map/correct/exclude) the documents
+                // this call can actually use — the confirmed unit files,
+                // plus every group-file candidate `select_group_document`
+                // below might look up — instead of every document ever
+                // uploaded to the session, which can include stray or
+                // superseded files nothing here reads.
+                let relevant_names: Vec<String> = discovery
+                    .unit_file_names
+                    .iter()
+                    .cloned()
+                    .chain(discovery.group_file_names.iter().cloned())
+                    .collect();
+
+                Ok((
+                    discovery,
+                    session.effective_documents_for(&relevant_names),
+                    session.data_generation(),
+                ))
             }
-
-            let discovery = session
-                .data
-                .discovery
-                .clone()
-                .expect("Validated stage guarantees discovery data");
-
-            if discovery.group_file_names.len() > 1 && discovery.selected_group_file_name.is_none()
-            {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    group_files = ?discovery.group_file_names,
-                    "Analysis requires master group file selection"
-                );
-
-                return Err(AnalyzeNotReady::GroupFileNotSelected);
-            }
-
-            // Only transform (map/correct/exclude) the documents
-            // this call can actually use — the confirmed unit files,
-            // plus every group-file candidate `select_group_document`
-            // below might look up — instead of every document ever
-            // uploaded to the session, which can include stray or
-            // superseded files nothing here reads.
-            let relevant_names: Vec<String> = discovery
-                .unit_file_names
-                .iter()
-                .cloned()
-                .chain(discovery.group_file_names.iter().cloned())
-                .collect();
-
-            Ok((
-                discovery,
-                session.effective_documents_for(&relevant_names),
-                session.data_generation(),
-            ))
         },
-    ) {
+    )
+    .await
+    {
+        Ok(read) => read,
+        Err(response) => return response,
+    };
+
+    let analysis_inputs = match read {
         Some(Ok(data)) => data,
         Some(Err(AnalyzeNotReady::Stage(err))) => {
             return stage_conflict(&request.session_id, err);
@@ -139,57 +158,75 @@ pub async fn analyze(
 
     let (discovery, documents, read_generation) = analysis_inputs;
 
-    let unit_docs: Vec<&unitprep_core::csv_document::CsvDocument> = documents
-        .iter()
-        .filter(|d| discovery.unit_file_names.contains(&d.file_name))
-        .collect();
+    // Building the batch and running the analysis is the heavy part: off
+    // the async workers. `discovery` goes in and comes back out for the
+    // tool-run record below.
+    let computed = match run_blocking("analyze the session", {
+        let request = Arc::clone(&request);
+        move || {
+            let unit_docs: Vec<&unitprep_core::csv_document::CsvDocument> = documents
+                .iter()
+                .filter(|d| discovery.unit_file_names.contains(&d.file_name))
+                .collect();
 
-    let group_doc = select_group_document(&documents, &discovery);
+            let group_doc = select_group_document(&documents, &discovery);
 
-    let batch = match build_batch_from_documents(unit_docs) {
-        Ok(batch) => batch,
+            let batch = match build_batch_from_documents(unit_docs) {
+                Ok(batch) => batch,
 
-        Err(err) => {
-            tracing::error!(
-                session_id = %request.session_id,
-                error = %err,
-                "Failed to build batch"
-            );
+                Err(err) => {
+                    tracing::error!(
+                        session_id = %request.session_id,
+                        error = %err,
+                        "Failed to build batch"
+                    );
 
-            return internal_error("Failed to build analysis batch from documents");
-        }
-    };
+                    return Err("Failed to build analysis batch from documents");
+                }
+            };
 
-    let reference_groups = match group_doc {
-        Some(doc) => match load_reference_groups_from_document(doc) {
-            Ok(groups) => Some(groups),
+            let reference_groups = match group_doc {
+                Some(doc) => match load_reference_groups_from_document(doc) {
+                    Ok(groups) => Some(groups),
 
-            Err(err) => {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    error = %err,
-                    "Could not load reference groups"
-                );
+                    Err(err) => {
+                        tracing::warn!(
+                            session_id = %request.session_id,
+                            error = %err,
+                            "Could not load reference groups"
+                        );
 
-                None
+                        None
+                    }
+                },
+
+                None => None,
+            };
+
+            match analyze_batch(batch, reference_groups) {
+                Ok(results) => Ok((results, discovery)),
+
+                Err(err) => {
+                    tracing::error!(
+                        session_id = %request.session_id,
+                        error = %err,
+                        "Analysis failed"
+                    );
+
+                    Err("Analysis failed")
+                }
             }
-        },
-
-        None => None,
+        }
+    })
+    .await
+    {
+        Ok(computed) => computed,
+        Err(response) => return response,
     };
 
-    let results = match analyze_batch(batch, reference_groups) {
-        Ok(results) => results,
-
-        Err(err) => {
-            tracing::error!(
-                session_id = %request.session_id,
-                error = %err,
-                "Analysis failed"
-            );
-
-            return internal_error("Analysis failed");
-        }
+    let (results, discovery) = match computed {
+        Ok(computed) => computed,
+        Err(message) => return internal_error(message),
     };
 
     // Arc, not owned -- storing this on the session and reading its

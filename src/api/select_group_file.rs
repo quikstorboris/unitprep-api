@@ -1,9 +1,9 @@
 use axum::extract::{Json, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use std::sync::Arc;
 
-use unitprep_core::session_store::SessionStoreExt;
-
+use crate::api::blocking::with_owned_session_mut_blocking;
 use crate::api::{
     discover::compute_discovery, session_not_found, stage_conflict, ApiErrorBody, AppState,
 };
@@ -39,58 +39,69 @@ pub async fn select_group_file(
     // call.
     let unit_vendors = state.unit_vendors.read().clone();
 
-    let result = state.unit_group_sessions.with_owned_session_mut(
+    let request = Arc::new(request);
+    let result = match with_owned_session_mut_blocking(
+        "select the group file",
+        &state.unit_group_sessions,
         &request.session_id,
         user.user_id,
-        |session| {
-            if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
-                tracing::warn!(
-                    session_id = %request.session_id,
-                    required = ?err.required,
-                    current = ?err.current,
-                    "Group-file select called before discovery completed"
-                );
+        {
+            let request = Arc::clone(&request);
+            move |session| {
+                if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
+                    tracing::warn!(
+                        session_id = %request.session_id,
+                        required = ?err.required,
+                        current = ?err.current,
+                        "Group-file select called before discovery completed"
+                    );
 
-                return Err(SelectNotReady::Stage(err));
-            }
+                    return Err(SelectNotReady::Stage(err));
+                }
 
-            let is_known_candidate = session
-                .data
-                .discovery
-                .as_ref()
-                .expect("Discovered stage guarantees discovery data")
-                .group_file_names
-                .contains(&request.group_file_name);
+                let is_known_candidate = session
+                    .data
+                    .discovery
+                    .as_ref()
+                    .expect("Discovered stage guarantees discovery data")
+                    .group_file_names
+                    .contains(&request.group_file_name);
 
-            if !is_known_candidate {
-                tracing::warn!(
+                if !is_known_candidate {
+                    tracing::warn!(
+                        session_id = %request.session_id,
+                        group_file_name = %request.group_file_name,
+                        "Group-file select rejected — not one of the discovered candidates"
+                    );
+
+                    return Err(SelectNotReady::UnknownCandidate);
+                }
+
+                // `compute_discovery` re-derives `selected_group_file_name` from
+                // this stored value on every call whenever there's more than one
+                // candidate (see its own doc comment) -- setting it here on the
+                // previous snapshot is what makes the choice stick.
+                if let Some(discovery) = session.data.discovery.as_mut() {
+                    discovery.selected_group_file_name = Some(request.group_file_name.clone());
+                }
+
+                session.data.group_file_confirmed = false;
+
+                tracing::info!(
                     session_id = %request.session_id,
                     group_file_name = %request.group_file_name,
-                    "Group-file select rejected — not one of the discovered candidates"
+                    "Master group file selected from multiple candidates"
                 );
 
-                return Err(SelectNotReady::UnknownCandidate);
+                Ok(compute_discovery(session, &unit_vendors))
             }
-
-            // `compute_discovery` re-derives `selected_group_file_name` from
-            // this stored value on every call whenever there's more than one
-            // candidate (see its own doc comment) -- setting it here on the
-            // previous snapshot is what makes the choice stick.
-            if let Some(discovery) = session.data.discovery.as_mut() {
-                discovery.selected_group_file_name = Some(request.group_file_name.clone());
-            }
-
-            session.data.group_file_confirmed = false;
-
-            tracing::info!(
-                session_id = %request.session_id,
-                group_file_name = %request.group_file_name,
-                "Master group file selected from multiple candidates"
-            );
-
-            Ok(compute_discovery(session, &unit_vendors))
         },
-    );
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
 
     match result {
         Some(Ok(response)) => Json(response).into_response(),

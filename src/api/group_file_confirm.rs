@@ -1,9 +1,9 @@
 use axum::extract::{Json, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use std::sync::Arc;
 
-use unitprep_core::session_store::SessionStoreExt;
-
+use crate::api::blocking::with_owned_session_mut_blocking;
 use crate::api::{
     discover::compute_discovery, session_not_found, stage_conflict, ApiErrorBody, AppState,
 };
@@ -36,7 +36,15 @@ pub async fn confirm_group_file(
     // call.
     let unit_vendors = state.unit_vendors.read().clone();
 
-    let result = state.unit_group_sessions.with_owned_session_mut(&request.session_id, user.user_id, |session| {
+    let request = Arc::new(request);
+    let result = match with_owned_session_mut_blocking(
+        "confirm the group file",
+        &state.unit_group_sessions,
+        &request.session_id,
+        user.user_id,
+        {
+            let request = Arc::clone(&request);
+            move |session| {
         if let Err(err) = session.require_stage(WorkflowStage::Discovered) {
             tracing::warn!(
                 session_id = %request.session_id,
@@ -97,7 +105,14 @@ pub async fn confirm_group_file(
         );
 
         Ok(compute_discovery(session, &unit_vendors))
-    });
+            }
+        },
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
 
     match result {
         Some(Ok(response)) => Json(response).into_response(),

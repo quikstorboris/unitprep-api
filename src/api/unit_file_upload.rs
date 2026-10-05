@@ -58,13 +58,18 @@ pub async fn upload_unit_file(
     // call.
     let unit_vendors = state.unit_vendors.read().clone();
 
-    apply_unit_file_upload(
-        &state,
-        &fields.session_id,
-        user.user_id,
-        document,
-        &unit_vendors,
-    )
+    // Re-derives the whole discovery under the session's write lock:
+    // CPU-bound, so off the async workers.
+    let session_id = fields.session_id;
+    let owner_id = user.user_id;
+    match run_blocking("apply the unit file", move || {
+        apply_unit_file_upload(&state, &session_id, owner_id, document, &unit_vendors)
+    })
+    .await
+    {
+        Ok(response) => response,
+        Err(response) => response,
+    }
 }
 
 /// The testable core, separated from the Multipart-extracting handler

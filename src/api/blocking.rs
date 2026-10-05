@@ -22,9 +22,15 @@
 //!   panic in the handler body would (`CatchPanicLayer`), instead of an
 //!   unhandled `JoinError`.
 
+use std::sync::Arc;
+
 use axum::response::Response;
 use tokio::task::JoinError;
 use tracing::Span;
+use uuid::Uuid;
+
+use unitprep_core::session::HasSessionMetadata;
+use unitprep_core::session_store::{SessionStore, SessionStoreExt};
 
 use super::internal_error;
 
@@ -62,6 +68,62 @@ where
         );
         internal_error(operation)
     })
+}
+
+/// `SessionStoreExt::with_owned_session_mut` on the blocking pool.
+///
+/// Many handlers do their real work -- re-deriving a discovery, validating
+/// every document, mapping a format -- inside the closure they hand the
+/// session store, i.e. under the session's write lock. Running that on an
+/// async worker blocks the worker for the whole computation; running it
+/// here blocks only a blocking-pool thread. The lock semantics are
+/// unchanged: it is taken and released inside the one blocking call.
+///
+/// `op` must own what it captures (`'static`). Handlers typically wrap
+/// their parsed `request` in an `Arc` and give the closure a clone, so the
+/// closure body can keep reading `request.field` exactly as before.
+/// `Ok(None)` is the store's own "no such session (or not yours)".
+pub(crate) async fn with_owned_session_mut_blocking<S, R, F>(
+    operation: &'static str,
+    store: &Arc<dyn SessionStore<S>>,
+    session_id: &str,
+    owner_id: Uuid,
+    op: F,
+) -> Result<Option<R>, Response>
+where
+    S: HasSessionMetadata + 'static,
+    F: FnOnce(&mut S) -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let store = Arc::clone(store);
+    let session_id = session_id.to_string();
+
+    run_blocking(operation, move || {
+        store.with_owned_session_mut(&session_id, owner_id, op)
+    })
+    .await
+}
+
+/// Read-only counterpart of [`with_owned_session_mut_blocking`].
+pub(crate) async fn with_owned_session_blocking<S, R, F>(
+    operation: &'static str,
+    store: &Arc<dyn SessionStore<S>>,
+    session_id: &str,
+    owner_id: Uuid,
+    op: F,
+) -> Result<Option<R>, Response>
+where
+    S: HasSessionMetadata + 'static,
+    F: FnOnce(&S) -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let store = Arc::clone(store);
+    let session_id = session_id.to_string();
+
+    run_blocking(operation, move || {
+        store.with_owned_session(&session_id, owner_id, op)
+    })
+    .await
 }
 
 #[cfg(test)]

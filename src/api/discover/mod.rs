@@ -23,6 +23,7 @@ pub(crate) use format_helpers::{
 };
 pub(crate) use format_resolution::{resolve_confirm_action, validate_manual_mapping};
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
@@ -30,8 +31,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use unitprep_core::session_store::SessionStoreExt;
-
+use crate::api::blocking::with_owned_session_mut_blocking;
 use crate::api::{session_not_found, AppState};
 use crate::auth::AuthenticatedUser;
 
@@ -49,30 +49,41 @@ pub async fn discover(
     // to interact with the session lock's own.
     let unit_vendors = state.unit_vendors.read().clone();
 
-    let response = state.unit_group_sessions.with_owned_session_mut(
+    let request = Arc::new(request);
+    let response = match with_owned_session_mut_blocking(
+        "run discovery",
+        &state.unit_group_sessions,
         &request.session_id,
         user.user_id,
-        |session| {
-            let response = compute_discovery(session, &unit_vendors);
+        {
+            let request = Arc::clone(&request);
+            move |session| {
+                let response = compute_discovery(session, &unit_vendors);
 
-            tracing::info!(
-                session_id = %request.session_id,
-                unit_files_found = response.unit_files_found,
-                group_files_found = response.group_files_found,
-                requires_unit_file_selection = response.requires_unit_file_selection,
-                requires_format_resolution = response.requires_format_resolution,
-                group_file_confirmed = response.group_file_confirmed,
-                ready = response.ready,
-                discovery_ms =
-                    started
-                        .elapsed()
-                        .as_millis(),
-                "Discovery complete"
-            );
+                tracing::info!(
+                    session_id = %request.session_id,
+                    unit_files_found = response.unit_files_found,
+                    group_files_found = response.group_files_found,
+                    requires_unit_file_selection = response.requires_unit_file_selection,
+                    requires_format_resolution = response.requires_format_resolution,
+                    group_file_confirmed = response.group_file_confirmed,
+                    ready = response.ready,
+                    discovery_ms =
+                        started
+                            .elapsed()
+                            .as_millis(),
+                    "Discovery complete"
+                );
 
-            response
+                response
+            }
         },
-    );
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(response) => return response,
+    };
 
     match response {
         Some(response) => Json(response).into_response(),

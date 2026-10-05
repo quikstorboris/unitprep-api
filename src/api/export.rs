@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 
 use unitprep_core::session_store::SessionStoreExt;
 
+use crate::api::blocking::run_blocking;
 use crate::{
     api::dropbox_browse::{ensure_path_in_root, parent_folder},
     api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
@@ -160,32 +161,47 @@ async fn generate_export_zip(
             .into_response());
     }
 
-    let export_files = match csv_export::generate_outputs(&analysis, true) {
-        Ok(files) => files,
-        Err(err) => {
-            tracing::error!(
-                session_id = %session_id,
-                error = %err,
-                "Failed generating export files"
-            );
+    // Rendering the CSVs and zipping them is CPU-bound: off the async
+    // workers. `analysis` is an `Arc`, so handing a clone to the closure is
+    // free and the original stays available below.
+    let (file_count, zip_bytes) = match run_blocking("build the export", {
+        let analysis = analysis.clone();
+        let session_id = session_id.to_string();
+        move || {
+            let export_files = match csv_export::generate_outputs(&analysis, true) {
+                Ok(files) => files,
+                Err(err) => {
+                    tracing::error!(
+                        session_id = %session_id,
+                        error = %err,
+                        "Failed generating export files"
+                    );
 
-            return Err(internal_error("Failed generating export files"));
+                    return Err("Failed generating export files");
+                }
+            };
+
+            let file_count = export_files.len();
+
+            match csv_export::build_zip(export_files) {
+                Ok(bytes) => Ok((file_count, bytes)),
+                Err(err) => {
+                    tracing::error!(
+                        session_id = %session_id,
+                        error = %err,
+                        "Failed building export ZIP"
+                    );
+
+                    Err("Failed building export ZIP")
+                }
+            }
         }
-    };
-
-    let file_count = export_files.len();
-
-    let zip_bytes = match csv_export::build_zip(export_files) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            tracing::error!(
-                session_id = %session_id,
-                error = %err,
-                "Failed building export ZIP"
-            );
-
-            return Err(internal_error("Failed building export ZIP"));
-        }
+    })
+    .await
+    {
+        Ok(Ok(built)) => built,
+        Ok(Err(message)) => return Err(internal_error(message)),
+        Err(response) => return Err(response),
     };
 
     let timestamp = Utc::now().format("%Y-%m-%d_%H%M%S").to_string();
