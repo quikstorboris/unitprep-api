@@ -585,3 +585,52 @@ async fn the_invite_rate_limit_is_independent_of_the_auth_rate_limit() {
         "the invite endpoint must not share the auth endpoints' rate-limit bucket"
     );
 }
+
+/// The compression layer is built and unit-tested in
+/// `router::compression`; this proves it is actually wired into the REAL
+/// router. A 401 body is the probe: the standard `{error, message}` JSON
+/// is comfortably over the 32-byte floor `tower-http` will not compress
+/// below, and reaching it needs no session. reqwest here has no
+/// decompression features, so the headers and bytes are exactly what went
+/// over the wire.
+#[tokio::test]
+async fn the_real_router_gzips_a_response_for_a_client_that_accepts_it() {
+    let addr = spawn_test_server().await;
+    let client = reqwest::Client::new();
+
+    let compressed = client
+        .get(format!("http://{addr}/clients"))
+        .header(reqwest::header::ACCEPT_ENCODING, "gzip")
+        .send()
+        .await
+        .expect("request should reach the real server");
+
+    assert_eq!(compressed.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        compressed
+            .headers()
+            .get(reqwest::header::CONTENT_ENCODING)
+            .map(|v| v.to_str().unwrap()),
+        Some("gzip"),
+        "the compression layer must be wired into the real router"
+    );
+    let bytes = compressed.bytes().await.unwrap();
+    assert_eq!(
+        &bytes[..2],
+        &[0x1f, 0x8b],
+        "the body must be a real gzip stream"
+    );
+
+    // And a client that does not ask gets plain JSON, unchanged.
+    let plain = client
+        .get(format!("http://{addr}/clients"))
+        .send()
+        .await
+        .expect("request should reach the real server");
+    assert!(plain
+        .headers()
+        .get(reqwest::header::CONTENT_ENCODING)
+        .is_none());
+    let body: serde_json::Value = plain.json().await.expect("an uncompressed JSON error body");
+    assert!(body.get("error").is_some());
+}

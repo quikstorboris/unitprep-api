@@ -6,6 +6,20 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.65] - 2026-10-05
+
+Efficiency refactor chunk A7: gzip response compression.
+
+### Changed
+- **Large JSON and CSV responses are now gzip-compressed** for clients that send `Accept-Encoding: gzip` (every browser does). The dedup report view, client/facility detail, search results, audit-log pages and CSV exports are highly repetitive text that gzip typically shrinks 80-90%, which is most of the transfer time for a user on an ordinary connection. Implemented as a `tower-http` `CompressionLayer` (`api::router::compression`), applied outside the panic/rejection layers and inside the request-id/trace layers.
+- **Already-compressed formats are deliberately excluded**: ZIP, the OOXML formats (XLSX dedup exports, DOCX tagger output), and PDF. `tower-http`'s default predicate also skips bodies under 32 bytes, images, gRPC and server-sent events, and a response that already carries a `Content-Encoding` is left alone, so a reverse proxy that compresses in front of this service will not double-compress.
+
+### Dependencies
+- `tower-http` gains the `compression-gzip` feature (gzip only; brotli would add a second compression crate for a marginal gain on this traffic). New transitive crates: `async-compression`, `compression-codecs`, `compression-core`, `tokio-util` (`flate2` was already in the tree). Recorded in the vault's tech-stack note.
+
+### Added
+- Tests for the layer on a toy router (gzip for JSON/CSV with a real gzip stream well under the original size; no compression when the client does not ask; ZIP/XLSX/DOCX/PDF untouched; tiny bodies untouched; pre-encoded responses not double-compressed) and one against the **real** router proving the layer is actually wired in.
+
 ## [1.9.64] - 2026-10-05
 
 Efficiency refactor chunk A3: indexes for the Process Street run-id lookups.

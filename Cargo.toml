@@ -85,7 +85,11 @@ futures = "0.3"
 # per-request correlation id (see router::router's layer stack) -- the
 # "worth having, not yet" item from the 2026-07-30 logging roadmap,
 # revisited now that more people are about to start using Orchestrator.
-tower-http = { version = "0.6", features = ["cors", "catch-panic", "trace", "request-id"] }
+# "compression-gzip" backs the response-compression layer (see
+# api::router::compression): the big JSON/CSV payloads shrink 80-90%.
+# gzip only -- brotli would add a second compression crate for a marginal
+# gain over gzip on this traffic.
+tower-http = { version = "0.6", features = ["cors", "catch-panic", "trace", "request-id", "compression-gzip"] }
 
 # Logging
 tracing = "0.1"

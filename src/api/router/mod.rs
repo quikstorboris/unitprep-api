@@ -24,6 +24,10 @@ use super::{internal_error, ApiErrorBody, AppState};
 /// for why.
 mod routes;
 
+/// gzip response compression, split out so the predicate and its tests
+/// live beside each other rather than inflating this file.
+mod compression;
+
 /// The runtime proof that every `RouteAccess::Permission` route `routes`
 /// declares is actually enforced by the handler wired up to it -- split
 /// out on its own since it grew alongside `routes` into the same "this
@@ -121,6 +125,12 @@ fn with_response_layers(router: Router) -> Router {
         // three request-id/trace layers below wrap it), but still the
         // outermost of the response-shaping ones.
         .layer(CatchPanicLayer::custom(handle_panic))
+        // gzip for the large JSON/CSV bodies, applied outside the
+        // panic/rejection layers (so their small bodies pass through
+        // untouched) and inside the request-id/trace layers (so those
+        // still see the final response). See the compression module for
+        // what is deliberately excluded.
+        .layer(compression::compression_layer())
         // Copies the id `SetRequestIdLayer` below assigned back onto the
         // response header, once a response exists -- applied here (more
         // inner than TraceLayer) so it runs before TraceLayer's own
