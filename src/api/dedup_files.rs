@@ -86,6 +86,12 @@ pub struct ClassifiedFileView {
     pub report_name: Option<String>,
     pub role: Option<FileRole>,
     pub selection_priority: i32,
+    /// For an unrecognized file that resembles a registered format: the
+    /// closest one ("looks like X") ...
+    pub closest_vendor: Option<String>,
+    /// ... and which of its required headers the file lacks (empty when
+    /// there is no resemblance).
+    pub missing_headers: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +120,11 @@ fn view_of(file: ClassifiedFile) -> ClassifiedFileView {
         None => (None, None, None, None, 0),
     };
 
+    let (closest_vendor, missing_headers) = match file.near_miss {
+        Some(near_miss) => (Some(near_miss.vendor_name), near_miss.missing_headers),
+        None => (None, Vec::new()),
+    };
+
     ClassifiedFileView {
         file_name: file.file_name,
         path: file.path,
@@ -123,6 +134,8 @@ fn view_of(file: ClassifiedFile) -> ClassifiedFileView {
         report_name,
         role,
         selection_priority,
+        closest_vendor,
+        missing_headers,
     }
 }
 

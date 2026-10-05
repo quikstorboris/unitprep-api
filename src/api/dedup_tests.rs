@@ -401,20 +401,6 @@ fn the_legacy_single_path_field_is_still_accepted_as_a_selection() {
 }
 
 #[tokio::test]
-async fn detect_vendor_format_dropbox_rejects_a_path_outside_the_configured_root() {
-    let response = detect_vendor_format_dropbox(
-        State(empty_state()),
-        crate::api::test_support::test_user(),
-        Json(DedupDropboxPathRequest {
-            path: "/Not/Under/The/Configured/Root".to_string(),
-        }),
-    )
-    .await;
-
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-}
-
-#[tokio::test]
 async fn export_to_dropbox_rejects_a_path_outside_the_configured_root() {
     let response = export_to_dropbox(
         State(empty_state()),

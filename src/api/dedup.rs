@@ -16,10 +16,9 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use unitprep_core::parsing::parse_document;
 use unitprep_core::session_store::SessionStoreExt;
 use unitprep_core::uploaded_file::UploadedFile;
-use unitprep_core::vendor_format::{detect_vendor, VendorFormat};
+use unitprep_core::vendor_format::VendorFormat;
 use unitprep_dedup::file_selection::FileFormatMeta;
 use unitprep_dedup::{DedupReport, TenantRecord};
 
@@ -86,43 +85,9 @@ pub struct DedupExportRequest {
     pub facility_id: Option<uuid::Uuid>,
 }
 
-/// Reads the first file field from `multipart` — a duplicate-tenant
-/// check is always one QMS export file, not a multi-file upload like
-/// UnitGroup's `/upload`. Extra fields beyond the first are logged and
-/// ignored rather than treated as an error.
-async fn first_uploaded_file(
-    multipart: &mut Multipart,
-) -> Result<Option<UploadedFile>, axum::extract::multipart::MultipartError> {
-    let mut result = None;
-
-    while let Some(field) = multipart.next_field().await? {
-        let Some(file_name) = field.file_name().map(str::to_string) else {
-            continue;
-        };
-        let relative_path = field.name().unwrap_or(&file_name).to_string();
-        let bytes = field.bytes().await?.to_vec();
-
-        if result.is_none() {
-            result = Some(UploadedFile {
-                file_name,
-                relative_path,
-                bytes,
-                modified_at: None,
-            });
-        } else {
-            tracing::warn!(
-                file = %file_name,
-                "Ignoring extra multipart field — duplicate-tenant check takes one file"
-            );
-        }
-    }
-
-    Ok(result)
-}
-
 /// Reads every file field from `multipart` -- the folder flow can check
 /// more than one selected file at once. Fields without a filename are
-/// skipped, same as `first_uploaded_file`.
+/// skipped.
 async fn all_uploaded_files(
     multipart: &mut Multipart,
 ) -> Result<Vec<UploadedFile>, axum::extract::multipart::MultipartError> {
@@ -150,7 +115,7 @@ async fn all_uploaded_files(
 /// `client_ops::tool_runs`'s own doc comment. `Query` reads the URI via
 /// `FromRequestParts`, so it composes cleanly ahead of the
 /// body-consuming `Multipart` extractor below with no change needed to
-/// `first_uploaded_file`'s field-scanning loop. No `#[serde(default)]`:
+/// `all_uploaded_files`'s field-scanning loop. No `#[serde(default)]`:
 /// a request missing `facility_id` fails extraction (400) the same way
 /// every other required field in this file already does.
 #[derive(Debug, Deserialize)]
@@ -293,16 +258,9 @@ fn guess_content_type(file_name: &str) -> &'static str {
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct DedupDropboxPathRequest {
-    pub path: String,
-}
-
-/// Distinct from `DedupDropboxPathRequest` (used by the stateless
-/// `detect_vendor_format_dropbox` below, which has no facility to
-/// record) -- this one actually creates a session and a `tool_runs`
-/// row, so `facility_id` is required here. Same reasoning as
-/// `DedupCheckQuery::facility_id` -- required, no `#[serde(default)]`.
+/// Creates a session and a `tool_runs` row, so `facility_id` is required
+/// here. Same reasoning as `DedupCheckQuery::facility_id` -- required, no
+/// `#[serde(default)]`.
 #[derive(Debug, Deserialize)]
 pub struct DedupImportDropboxRequest {
     /// The files to check. A caller that still sends the original single
@@ -453,123 +411,6 @@ pub async fn import_from_dropbox(
     .await;
 
     Json(DedupCheckResponse { session_id, report }).into_response()
-}
-
-#[derive(Debug, Serialize)]
-pub struct DedupDetectVendorResponse {
-    /// `None` when the file doesn't match any registered vendor's
-    /// signature — the frontend shows this as "unrecognized" and keeps
-    /// Run Check disabled, same outcome `/dedup/check` itself would
-    /// reach, just surfaced before the user commits to running it.
-    pub vendor_name: Option<String>,
-}
-
-/// Parses an uploaded file and reports which registered vendor (if any)
-/// its columns match — called as soon as a file is selected, before
-/// `/dedup/check` actually runs, so the UI can show "Vendor: {name}" and
-/// gate the Run Check button on the user confirming it. Deliberately
-/// does not build or store anything: no session, no ingest, no report.
-/// `/dedup/check` re-detects the vendor itself when it actually runs
-/// rather than trusting this call's result — the same "server
-/// re-verifies, never trusts the frontend's own gate" pattern Group
-/// Prep's bulk-confirm already uses.
-pub async fn detect_vendor_format(
-    State(state): State<AppState>,
-    _user: AuthenticatedUser,
-    mut multipart: Multipart,
-) -> Response {
-    let file = match first_uploaded_file(&mut multipart).await {
-        Ok(Some(file)) => file,
-        Ok(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "no_file_uploaded",
-                    message: "No file was uploaded".to_string(),
-                }),
-            )
-                .into_response();
-        }
-        Err(err) => {
-            tracing::error!(error = %err, "Multipart parser error during dedup vendor detection");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "multipart_error",
-                    message: err.to_string(),
-                }),
-            )
-                .into_response();
-        }
-    };
-
-    let document = match parse_document(&file) {
-        Ok(document) => document,
-        Err(err) => {
-            tracing::warn!(file = %file.file_name, error = %err, "Dedup vendor detection failed to read file");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "invalid_file",
-                    message: format!("Could not read '{}': {err}", file.file_name),
-                }),
-            )
-                .into_response();
-        }
-    };
-
-    // A synchronous read of the in-memory registry snapshot -- see
-    // `client_ops::vendor_format`'s module doc comment for why this is
-    // never a per-request DB call.
-    let tenant_vendors = state.tenant_vendors.read().clone();
-
-    let vendor_name = detect_vendor(&document, &tenant_vendors).map(|v| v.name.clone());
-
-    Json(DedupDetectVendorResponse { vendor_name }).into_response()
-}
-
-/// Dropbox-sourced counterpart to `detect_vendor_format` -- same
-/// parse-and-report logic via `download_as_uploaded_file`, source is a
-/// Dropbox path instead of a multipart upload. Does not create a
-/// session, same as the local-upload version; `/dedup/import-dropbox`
-/// re-detects when it actually runs.
-pub async fn detect_vendor_format_dropbox(
-    State(state): State<AppState>,
-    _user: AuthenticatedUser,
-    Json(request): Json<DedupDropboxPathRequest>,
-) -> Response {
-    if let Err(response) = ensure_path_in_root(&state, &request.path) {
-        return response;
-    }
-
-    let file = match download_as_uploaded_file(&state, &request.path).await {
-        Ok(file) => file,
-        Err(response) => return response,
-    };
-
-    let document = match parse_document(&file) {
-        Ok(document) => document,
-        Err(err) => {
-            tracing::warn!(file = %file.file_name, error = %err, "Dedup vendor detection (Dropbox) failed to read file");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "invalid_file",
-                    message: format!("Could not read '{}': {err}", file.file_name),
-                }),
-            )
-                .into_response();
-        }
-    };
-
-    // A synchronous read of the in-memory registry snapshot -- see
-    // `client_ops::vendor_format`'s module doc comment for why this is
-    // never a per-request DB call.
-    let tenant_vendors = state.tenant_vendors.read().clone();
-
-    let vendor_name = detect_vendor(&document, &tenant_vendors).map(|v| v.name.clone());
-
-    Json(DedupDetectVendorResponse { vendor_name }).into_response()
 }
 
 /// Re-fetches a previously computed report — e.g. after a page refresh,

@@ -1165,11 +1165,6 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
             [(Method::POST, RouteAccess::Authenticated)],
         )
         .gated_route(
-            "/dedup/detect-vendor",
-            post(dedup::detect_vendor_format),
-            [(Method::POST, RouteAccess::Authenticated)],
-        )
-        .gated_route(
             "/dedup/classify-files",
             post(dedup_files::classify_files),
             [(Method::POST, RouteAccess::Authenticated)],
@@ -1183,11 +1178,6 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
             "/dedup/file-requirements",
             get(dedup_files::file_requirements),
             [(Method::GET, RouteAccess::Authenticated)],
-        )
-        .gated_route(
-            "/dedup/detect-vendor-dropbox",
-            post(dedup::detect_vendor_format_dropbox),
-            [(Method::POST, RouteAccess::Authenticated)],
         )
         .gated_route(
             "/dedup/import-dropbox",

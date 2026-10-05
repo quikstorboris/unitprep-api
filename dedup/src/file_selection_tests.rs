@@ -437,3 +437,80 @@ fn the_pre_selection_ticks_the_join_files_of_the_chosen_system() {
         ["xref.xls", "email.xls", "rentroll.xls"]
     );
 }
+
+#[test]
+fn an_unrecognized_file_that_resembles_a_format_names_it_and_what_is_missing() {
+    let vendors = vec![vendor(
+        "Directory",
+        &["sUnitName", "LedgerID", "TenantID", "sFName", "sLName"],
+    )];
+    // Has 3 of the 5 required headers (case/separator-insensitive).
+    let files = [file(
+        "rent_roll.csv",
+        Some(&["s unit name", "ledgerid", "TenantID", "Balance"]),
+    )];
+
+    let (classified, _) = classify(&files, &vendors, &[]);
+
+    assert_eq!(classified[0].status, FileStatus::Unrecognized);
+    assert_eq!(
+        classified[0].near_miss,
+        Some(NearMiss {
+            vendor_name: "Directory".to_string(),
+            missing_headers: vec!["sFName".to_string(), "sLName".to_string()],
+        })
+    );
+}
+
+#[test]
+fn a_file_that_resembles_nothing_gets_no_suggestion() {
+    let vendors = vec![vendor(
+        "Directory",
+        &["sUnitName", "LedgerID", "TenantID", "sFName", "sLName"],
+    )];
+    // One shared header out of five is coincidence, not a near miss.
+    let files = [file("notes.csv", Some(&["TenantID", "Colour", "Size"]))];
+
+    let (classified, _) = classify(&files, &vendors, &[]);
+
+    assert_eq!(classified[0].status, FileStatus::Unrecognized);
+    assert_eq!(classified[0].near_miss, None);
+}
+
+#[test]
+fn the_closest_of_several_formats_wins_and_ties_go_to_the_earlier_one() {
+    let vendors = vec![
+        vendor("Wide", &["A", "B", "C", "D", "E", "F"]),
+        vendor("Narrow", &["A", "B", "C", "X"]),
+        vendor("NarrowTwin", &["A", "B", "C", "Y"]),
+    ];
+    // 3 headers match Narrow and NarrowTwin (1 missing each), 3 match Wide
+    // (3 missing): fewest missing wins, and of the tied pair the earlier.
+    let files = [file("f.csv", Some(&["A", "B", "C"]))];
+
+    let (classified, _) = classify(&files, &vendors, &[]);
+
+    assert_eq!(
+        classified[0].near_miss,
+        Some(NearMiss {
+            vendor_name: "Narrow".to_string(),
+            missing_headers: vec!["X".to_string()],
+        })
+    );
+}
+
+#[test]
+fn recognized_and_unreadable_files_have_no_near_miss() {
+    let vendors = vec![vendor("QSX", &["FirtLast", "CustNumb", "AddressStreet1"])];
+    let files = [
+        file("ok.csv", Some(&["FirtLast", "CustNumb", "AddressStreet1"])),
+        file("legacy.xls", None),
+    ];
+
+    let (classified, _) = classify(&files, &vendors, &[]);
+
+    assert_eq!(classified[0].status, FileStatus::Recognized);
+    assert_eq!(classified[0].near_miss, None);
+    assert_eq!(classified[1].status, FileStatus::Unreadable);
+    assert_eq!(classified[1].near_miss, None);
+}

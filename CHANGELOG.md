@@ -6,6 +6,16 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.75] - 2026-10-05
+
+Efficiency refactor chunk E2: the superseded detect-vendor endpoints are removed, and an unrecognized Dedup file now says what it most resembles and what it is missing.
+
+### Removed
+- **`POST /dedup/detect-vendor` and `POST /dedup/detect-vendor-dropbox`** (handlers, response/request types, route entries, one test). They answered a single question for a single file ("which vendor is this?") and required uploading the whole file (or downloading it from Dropbox) to do it. They were the pre-Run-Check "confirm the vendor" gate, built 2026-08-20; since 2026-10-01 the folder-scan flow (`/dedup/classify-files`, `/dedup/classify-dropbox-folder`, `/dedup/file-requirements`) does the same for many files from just their header rows, and the UI stopped calling them. `/dedup/check` and `/dedup/import-dropbox` re-detect the vendor themselves, so nothing depended on them. The dead single-file multipart reader went with them.
+
+### Added
+- **"Looks like X, but is missing ..." for unrecognized files.** The classify responses (`POST /dedup/classify-files`, `/dedup/classify-dropbox-folder`) gain two fields on each file: `closest_vendor` (the registered format the file most resembles) and `missing_headers` (which of that format's required headers it lacks, in the format's own spelling); both empty/`null` when nothing resembles it and always for recognized or unreadable files. Resemblance is deliberately strict -- at least two of the format's required headers present and at least half of them -- because a wrong "looks like X" is worse than saying nothing. Ranked by headers matched, then fewest missing, then registry order. The change is additive (new fields only), so an older UI keeps working unchanged. Four tests cover it (names the format and the missing headers; no suggestion for a coincidental overlap; closest of several, ties to the earlier-registered; none for recognized/unreadable files); writing them caught a bug in my own tie-break (`max_by_key` keeps the last maximum, so registry order must be part of the key).
+
 ## [1.9.74] - 2026-10-05
 
 Efficiency refactor chunk E1: dead code removed, and the compiler's dead-code detection turned back on for the `clients` module. Net -554 lines.

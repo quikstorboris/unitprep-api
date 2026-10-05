@@ -97,12 +97,70 @@ pub enum FileStatus {
     Unreadable,
 }
 
+/// For a readable file no registered format matched: the registered format
+/// it most resembles and which of that format's required headers it lacks --
+/// so the UI can say "looks like X, but is missing: ..." instead of a bare
+/// "not a dedup file". Only produced when the resemblance is real (see
+/// `closest_vendor`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NearMiss {
+    pub vendor_name: String,
+    /// The vendor's own spelling of each required header the file lacks, in
+    /// the vendor's order.
+    pub missing_headers: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ClassifiedFile {
     pub file_name: String,
     pub path: Option<String>,
     pub status: FileStatus,
     pub format: Option<FileFormatMeta>,
+    /// `Some` only for an `Unrecognized` file that resembles a registered
+    /// format.
+    pub near_miss: Option<NearMiss>,
+}
+
+/// The registered vendor whose signature `document` satisfies best without
+/// satisfying it fully, or `None` when nothing resembles it.
+///
+/// "Resembles" is deliberately strict -- a wrong "looks like X" is worse
+/// than saying nothing: at least two of the vendor's required headers must be
+/// present (a one-header signature can never be a near miss, it either
+/// matches or it does not), and at least half of them. Ranked by headers
+/// matched, then fewest missing, then registry order, so the answer never
+/// depends on anything but the registry's own ordering.
+fn closest_vendor(document: &CsvDocument, vendors: &[VendorFormat]) -> Option<NearMiss> {
+    vendors
+        .iter()
+        .enumerate()
+        .filter_map(|(index, vendor)| {
+            let missing: Vec<String> = vendor
+                .signature_headers
+                .iter()
+                .filter(|header| document.header_index(header).is_none())
+                .cloned()
+                .collect();
+            let total = vendor.signature_headers.len();
+            let matched = total - missing.len();
+
+            (matched >= 2 && matched * 2 >= total && !missing.is_empty())
+                .then_some((matched, missing, index, vendor))
+        })
+        // `max_by_key` keeps the LAST maximum, so the registry-order
+        // tiebreak is part of the key (reversed: the earliest-registered of
+        // otherwise-equal formats must win).
+        .max_by_key(|(matched, missing, index, _)| {
+            (
+                *matched,
+                std::cmp::Reverse(missing.len()),
+                std::cmp::Reverse(*index),
+            )
+        })
+        .map(|(_, missing, _, vendor)| NearMiss {
+            vendor_name: vendor.name.clone(),
+            missing_headers: missing,
+        })
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -127,8 +185,8 @@ pub fn classify(
     let classified: Vec<ClassifiedFile> = files
         .iter()
         .map(|file| {
-            let (status, format) = match &file.headers {
-                None => (FileStatus::Unreadable, None),
+            let (status, format, near_miss) = match &file.headers {
+                None => (FileStatus::Unreadable, None, None),
                 Some(headers) => {
                     let document = CsvDocument {
                         file_name: file.file_name.clone(),
@@ -137,10 +195,16 @@ pub fn classify(
                         modified_at: None,
                     };
                     match detect_vendor(&document, vendors) {
-                        Some(vendor) => {
-                            (FileStatus::Recognized, Some(meta_for(&vendor.name, metas)))
-                        }
-                        None => (FileStatus::Unrecognized, None),
+                        Some(vendor) => (
+                            FileStatus::Recognized,
+                            Some(meta_for(&vendor.name, metas)),
+                            None,
+                        ),
+                        None => (
+                            FileStatus::Unrecognized,
+                            None,
+                            closest_vendor(&document, vendors),
+                        ),
                     }
                 }
             };
@@ -149,6 +213,7 @@ pub fn classify(
                 path: file.path.clone(),
                 status,
                 format,
+                near_miss,
             }
         })
         .collect();
