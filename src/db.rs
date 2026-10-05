@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
-use sqlx::ConnectOptions;
+use sqlx::{ConnectOptions, Connection};
 
 /// Builds the application database connection pool from DATABASE_URL.
 ///
@@ -55,6 +55,36 @@ pub fn connect() -> Result<PgPool, sqlx::Error> {
         .parse::<PgConnectOptions>()?
         .log_slow_statements(log::LevelFilter::Warn, Duration::from_millis(200));
 
+    Ok(pool_options(PING_IDLE_THRESHOLD).connect_lazy_with(connect_options))
+}
+
+/// A pooled connection that has sat idle at least this long is pinged
+/// before it is handed out; one used more recently is trusted.
+const PING_IDLE_THRESHOLD: Duration = Duration::from_secs(30);
+
+/// How long a caller waits for a pooled connection (including opening a new
+/// one) before giving up with `PoolTimedOut`. sqlx's default is 30 s, which
+/// turns pool exhaustion into a request that hangs for half a minute; this
+/// still leaves comfortable room for a cold start of a suspended Neon
+/// compute while failing a starved request in a bounded, visible way.
+const POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The application pool's sizing and health-check policy, separate from
+/// `connect()` so it can be asserted on and benchmarked.
+///
+/// **Ping only connections that have been idle a while.** sqlx's default
+/// (`test_before_acquire(true)`) pings EVERY connection on EVERY acquire --
+/// a full extra network round trip before the caller's own first statement,
+/// on every transaction and every pooled query in the app. Against a
+/// remote Postgres that is a visible slice of each request. A connection
+/// that was in use moments ago is almost certainly healthy, so it skips the
+/// ping; one idle past `ping_idle_threshold` (long enough for a pooler,
+/// proxy or the database to have dropped it) is still pinged, and a dead
+/// one is discarded and replaced rather than handed to a request. The
+/// remaining risk is a connection that dies inside that window, which fails
+/// the single statement that finds it -- a rare, bounded cost against a
+/// round trip saved on every acquire.
+pub(crate) fn pool_options(ping_idle_threshold: Duration) -> PgPoolOptions {
     // 20, not 5 (2026-09-03): `clients_detail`'s Company/Facility Policies
     // endpoints deliberately open several short-lived RLS transactions
     // concurrently (`tokio::join!`, one connection each) to cut real
@@ -65,9 +95,18 @@ pub fn connect() -> Result<PgPool, sqlx::Error> {
     // than the pre-fix serial version). This is Neon's own pooled
     // (`-pooler`) endpoint, itself a PgBouncer in front of Postgres, so
     // the app holding 20 connections against it is unremarkable.
-    Ok(PgPoolOptions::new()
+    PgPoolOptions::new()
         .max_connections(20)
-        .connect_lazy_with(connect_options))
+        .acquire_timeout(POOL_ACQUIRE_TIMEOUT)
+        .test_before_acquire(false)
+        .before_acquire(move |conn, meta| {
+            Box::pin(async move {
+                if meta.idle_for >= ping_idle_threshold {
+                    conn.ping().await?;
+                }
+                Ok(true)
+            })
+        })
 }
 
 /// Builds a database connection pool for `#[ignore]`'d real-DB tests
@@ -113,4 +152,103 @@ pub fn connect_test() -> PgPool {
     PgPoolOptions::new()
         .max_connections(5)
         .connect_lazy_with(connect_options)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_pool_pings_only_idle_connections_and_bounds_the_wait_for_one() {
+        let options = pool_options(PING_IDLE_THRESHOLD);
+
+        assert_eq!(options.get_max_connections(), 20);
+        assert_eq!(options.get_acquire_timeout(), POOL_ACQUIRE_TIMEOUT);
+        assert!(
+            !options.get_test_before_acquire(),
+            "the unconditional ping-on-every-acquire must stay off; the idle-gated before_acquire replaces it"
+        );
+    }
+
+    /// Benchmark, not a pass/fail test: what the idle-gated ping saves.
+    /// Meaningful only through `dev-tools/latency_proxy.py`, which adds
+    /// artificial network latency in front of the local `test-db`:
+    ///
+    /// ```text
+    /// python3 dev-tools/latency_proxy.py --delay-ms 10 &      # 20 ms round trip
+    /// TEST_DATABASE_URL=postgres://app_service:app_service@127.0.0.1:5434/unitprep_test \
+    ///   cargo test --release --bin unitprep -- --ignored --nocapture pool_ping_policy
+    /// ```
+    ///
+    /// Each iteration does what a handler does: acquire a pooled
+    /// connection, open an RLS transaction (BEGIN + set_config), run one
+    /// query, commit. Prints the mean per iteration for sqlx's default
+    /// (ping on every acquire) and for `pool_options`.
+    #[tokio::test]
+    #[ignore = "benchmark; needs test-db behind dev-tools/latency_proxy.py"]
+    async fn pool_ping_policy_latency_benchmark() {
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        assert!(!url.contains("neon.tech"), "never run against Neon");
+        let connect_options: PgConnectOptions = url.parse().unwrap();
+        let user = uuid::Uuid::new_v4();
+        let roles = vec!["admin".to_string()];
+        const ITERATIONS: u32 = 40;
+
+        async fn mean_ms(pool: &PgPool, user: uuid::Uuid, roles: &[String]) -> f64 {
+            // Warm the pool so connection setup is not measured.
+            for _ in 0..3 {
+                let mut tx = crate::auth::begin_rls_transaction(pool, user, roles)
+                    .await
+                    .unwrap();
+                sqlx::query("SELECT 1").execute(&mut *tx).await.unwrap();
+                tx.commit().await.unwrap();
+            }
+            let started = std::time::Instant::now();
+            for _ in 0..ITERATIONS {
+                let mut tx = crate::auth::begin_rls_transaction(pool, user, roles)
+                    .await
+                    .unwrap();
+                sqlx::query("SELECT 1").execute(&mut *tx).await.unwrap();
+                tx.commit().await.unwrap();
+            }
+            started.elapsed().as_secs_f64() * 1000.0 / f64::from(ITERATIONS)
+        }
+
+        let default_pool = PgPoolOptions::new()
+            .max_connections(20)
+            .connect_lazy_with(connect_options.clone());
+        let tuned_pool = pool_options(PING_IDLE_THRESHOLD).connect_lazy_with(connect_options);
+
+        let default_ms = mean_ms(&default_pool, user, &roles).await;
+        let tuned_ms = mean_ms(&tuned_pool, user, &roles).await;
+
+        println!(
+            "per handler-style transaction: default pool {default_ms:.1} ms, tuned pool {tuned_ms:.1} ms ({:.1} ms saved)",
+            default_ms - tuned_ms
+        );
+    }
+
+    /// Needs the local `test-db` (see docker-compose.yml). Exercises both
+    /// branches of the idle-gated ping against a real server: a threshold
+    /// of zero pings on every acquire, a huge one never does, and the pool
+    /// must hand out a working connection either way.
+    #[tokio::test]
+    #[ignore = "needs the local test-db"]
+    async fn the_idle_gated_ping_hands_out_working_connections_on_both_branches() {
+        let _ = dotenvy::from_filename(".env.local");
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        assert!(!url.contains("neon.tech"), "never run against Neon");
+        let connect_options: PgConnectOptions = url.parse().unwrap();
+
+        for threshold in [Duration::ZERO, Duration::from_secs(3600)] {
+            let pool = pool_options(threshold).connect_lazy_with(connect_options.clone());
+            for _ in 0..3 {
+                let one: i32 = sqlx::query_scalar("SELECT 1")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                assert_eq!(one, 1);
+            }
+        }
+    }
 }

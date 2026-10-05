@@ -6,6 +6,24 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.70] - 2026-10-05
+
+Efficiency refactor chunk B1a: database pool tuning. Removes a hidden network round trip from every pooled database use.
+
+### Changed
+- **The pool no longer pings every connection on every acquire.** sqlx's default (`test_before_acquire(true)`) sends a full extra round trip before the caller's own first statement -- on every RLS transaction, every session lookup and every pooled audit write in the app. The pool (`db::pool_options`) now pings only connections that have been idle 30 s or more (a dead one is discarded and replaced, not handed to a request) and trusts one that was in use moments ago. The residual risk is a connection that dies inside that window, which fails the single statement that finds it.
+- **`acquire_timeout` is 10 s** (sqlx default 30 s), so a starved request fails in a bounded, visible way instead of hanging for half a minute, while still leaving room for a cold start of a suspended Neon compute.
+
+### Measured
+- Through a latency-injecting proxy in front of the local test-db (new `dev-tools/latency_proxy.py`, 20 ms round trip, plausible for Neon): one handler-style transaction (acquire, BEGIN + `set_config`, one query, COMMIT) **105.5 ms -> 84.2 ms**, i.e. exactly the one round trip saved (5 -> 4). The same saving applies to the session lookup (`resolve_session`) and every audit write, so a typical authenticated request saves two to three round trips. Benchmark: `db::tests::pool_ping_policy_latency_benchmark` (`#[ignore]`d; usage in its doc comment).
+
+### Decided
+- **The client detail endpoints keep their parallel transactions.** The plan's fallback of running the page's 4 / 10 queries sequentially on one transaction was rejected: the code's own 2026-09-03 note records that the parallel form was a deliberate fix for a real, visible load delay against remote Neon, and sequential on one connection would cost ~13 round trips instead of ~4 on the wall clock. A single bundled query (one SQL function returning one JSON document) is the only change that would cut connection use without costing latency; it is tracked as optional plan chunk B1b.
+
+### Added
+- `dev-tools/latency_proxy.py`: a tiny TCP proxy that adds artificial latency in front of the local test-db, for benchmarking round-trip behaviour against something closer to a remote database than loopback.
+- Tests: the pool's configuration is asserted (max 20, 10 s acquire timeout, unconditional ping off); an `#[ignore]`d real-DB test exercises both branches of the idle-gated ping.
+
 ## [1.9.69] - 2026-10-05
 
 Efficiency refactor chunk A6: recording a Dedup run no longer encrypts and serializes on an async worker, and no longer does it while holding a database connection. This finishes Phase A of the plan.
