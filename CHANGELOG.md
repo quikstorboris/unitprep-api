@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.76] - 2026-10-05
+
+Efficiency refactor chunk E4: a real bug fixed -- Dropbox folder listings were silently truncated to the first page.
+
+### Fixed
+- **`DropboxClient::list_folder` now follows Dropbox's pagination** (`has_more` / `files/list_folder/continue`). It returned only the first page and ignored `has_more` (the field was `#[allow(dead_code)]`, with a comment saying it was "not needed" while the QMS Onboarding folder held 282 entries). A folder past one page (~2,000 entries) would have shown fewer files than it holds in the folder picker and the Dedup folder scan, with no error anywhere. A cursor that never ends is guarded (more than 100 pages is an error, not a silent truncation).
+
+### Added
+- **A test-only endpoint seam for the Dropbox client**, mirroring the ClickUp client's: every Dropbox URL now goes through an `Endpoints` value, and the override constructor exists only in test builds (`#[cfg(test)]`), so nothing in a release build -- no environment variable, setting or request -- can redirect the refresh token and app secret to another host.
+- **Hermetic tests against a mock Dropbox** (axum on loopback): pagination across three pages (order, the continue requests carrying the right cursors, the namespace header on every page); a single page makes exactly one request; **a 401 refreshes the access token and retries once with the fresh one** (this path, added in 1.9.63, had no hermetic test because the OAuth URL was hard-coded); and a second 401 is returned as an error after exactly one refresh-and-retry, not retried forever.
+
 ## [1.9.75] - 2026-10-05
 
 Efficiency refactor chunk E2: the superseded detect-vendor endpoints are removed, and an unrecognized Dedup file now says what it most resembles and what it is missing.

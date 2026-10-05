@@ -46,10 +46,18 @@ impl Entry {
 #[derive(Deserialize)]
 struct ListFolderResponse {
     entries: Vec<Entry>,
-    // Not consumed yet -- see `DropboxClient::list_folder`'s doc comment.
-    #[allow(dead_code)]
+    /// More entries exist beyond this page: fetch them with
+    /// `files/list_folder/continue` and `cursor`.
     has_more: bool,
+    #[serde(default)]
+    cursor: String,
 }
+
+/// A safety valve against a cursor that never ends, not a limit anyone is
+/// expected to reach: Dropbox pages hold up to 2,000 entries, so this is
+/// hundreds of thousands of entries. Exceeding it is an error -- silently
+/// returning a truncated listing is exactly the bug pagination fixes.
+const MAX_LIST_FOLDER_PAGES: usize = 100;
 
 /// `files/search_v2`'s response shape is unrelated to `list_folder`'s
 /// (a `matches` array of match wrappers, not a flat `entries` array),
@@ -129,9 +137,40 @@ fn pick_facility_folder(folders: Vec<Entry>, facility_name: &str) -> Option<Entr
     folders.into_iter().find(|f| f.name == facility_name)
 }
 
+/// Where Dropbox's two hosts live. Production code only ever uses
+/// [`Endpoints::production`]; the override constructor
+/// (`DropboxClient::with_endpoints`) is compiled ONLY into test builds, so
+/// no configuration, environment variable or request can ever redirect the
+/// refresh token and app secret to another host in a release build -- the
+/// same rule as the ClickUp client's test seam.
+struct Endpoints {
+    /// OAuth (`/oauth2/token`) and every JSON RPC call.
+    api: String,
+    /// File content (`/2/files/download`, `/2/files/upload`).
+    content: String,
+}
+
+impl Endpoints {
+    fn production() -> Self {
+        Self {
+            api: "https://api.dropboxapi.com".to_string(),
+            content: "https://content.dropboxapi.com".to_string(),
+        }
+    }
+
+    fn api_url(&self, path: &str) -> String {
+        format!("{}{path}", self.api)
+    }
+
+    fn content_url(&self, path: &str) -> String {
+        format!("{}{path}", self.content)
+    }
+}
+
 pub struct DropboxClient {
     http: reqwest::Client,
     config: DropboxConfig,
+    endpoints: Endpoints,
     // Mutex, not RwLock: refreshes happen roughly once per 4 hours, so
     // there is no real read-concurrency to optimize for, and a plain
     // Mutex is simpler to reason about.
@@ -145,8 +184,18 @@ impl DropboxClient {
                 .build()
                 .expect("a reqwest client with only timeouts configured must build"),
             config,
+            endpoints: Endpoints::production(),
             token: Mutex::new(None),
         }
+    }
+
+    /// Test-only: aim the client at a local mock Dropbox. Compiled out of
+    /// release builds -- see [`Endpoints`].
+    #[cfg(test)]
+    fn with_endpoints(config: DropboxConfig, api: String, content: String) -> Self {
+        let mut client = Self::new(config);
+        client.endpoints = Endpoints { api, content };
+        client
     }
 
     /// The app-level path boundary described in this module's parent doc
@@ -176,7 +225,7 @@ impl DropboxClient {
         // A refresh is a pure token exchange, safe to repeat.
         let response = send_with_retry(RetryPolicy::QUICK, || {
             self.http
-                .post("https://api.dropboxapi.com/oauth2/token")
+                .post(self.endpoints.api_url("/oauth2/token"))
                 .timeout(REFRESH_TIMEOUT)
                 .form(&[
                     ("grant_type", "refresh_token"),
@@ -270,52 +319,100 @@ impl DropboxClient {
         )
     }
 
-    /// Lists one folder, non-recursively. Does not follow pagination
-    /// (`has_more`/`list_folder/continue`) -- not needed for the current
-    /// QMS Onboarding folder (282 entries, well within a single page)
-    /// and left unhandled rather than built speculatively. If a listing
-    /// this calls ever silently returns fewer entries than expected,
-    /// pagination is the first thing to check.
+    /// Lists one folder, non-recursively, following Dropbox's pagination
+    /// (`has_more` / `files/list_folder/continue`) until every entry has
+    /// been returned.
+    ///
+    /// This used to return only the first page and silently ignore
+    /// `has_more` -- fine for the QMS Onboarding folder when it held 282
+    /// entries, wrong the moment any folder passed a page (~2,000 entries):
+    /// the folder picker and the Dedup folder scan would simply have shown
+    /// fewer files than the folder holds, with no error anywhere.
     pub async fn list_folder(&self, path: &str) -> Result<Vec<Entry>, DropboxError> {
+        let mut entries = Vec::new();
+        let mut page = self
+            .list_folder_page(
+                "/2/files/list_folder",
+                path,
+                serde_json::json!({ "path": path, "recursive": false }),
+            )
+            .await?;
+        let mut pages = 1;
+
+        loop {
+            entries.append(&mut page.entries);
+
+            if !page.has_more {
+                break;
+            }
+            if pages >= MAX_LIST_FOLDER_PAGES {
+                return Err(DropboxError::Api {
+                    status: 200,
+                    body: format!(
+                        "list_folder for {path} still had more entries after {MAX_LIST_FOLDER_PAGES} pages"
+                    ),
+                });
+            }
+
+            page = self
+                .list_folder_page(
+                    "/2/files/list_folder/continue",
+                    path,
+                    serde_json::json!({ "cursor": page.cursor }),
+                )
+                .await?;
+            pages += 1;
+        }
+
+        tracing::info!(
+            path = %path,
+            entry_count = entries.len(),
+            pages,
+            "dropbox list_folder succeeded"
+        );
+
+        Ok(entries)
+    }
+
+    /// One page of a folder listing: the first call (`/2/files/list_folder`)
+    /// or a continuation (`/2/files/list_folder/continue`).
+    async fn list_folder_page(
+        &self,
+        endpoint: &str,
+        path: &str,
+        body: serde_json::Value,
+    ) -> Result<ListFolderResponse, DropboxError> {
         let response = self
             .send_authed(RetryPolicy::STANDARD, |token| {
                 self.http
-                    .post("https://api.dropboxapi.com/2/files/list_folder")
+                    .post(self.endpoints.api_url(endpoint))
                     .bearer_auth(token)
                     .header("Dropbox-API-Path-Root", self.path_root_header())
-                    .json(&serde_json::json!({ "path": path, "recursive": false }))
+                    .json(&body)
             })
             .await?;
 
         let status = response.status();
-        let body = response.text().await?;
+        let text = response.text().await?;
 
         if !status.is_success() {
             tracing::error!(
                 path = %path,
+                endpoint,
                 status = status.as_u16(),
-                body = %truncate_for_log(&body, MAX_LOGGED_BODY_BYTES),
+                body = %truncate_for_log(&text, MAX_LOGGED_BODY_BYTES),
                 "Dropbox list_folder failed"
             );
             return Err(DropboxError::Api {
                 status: status.as_u16(),
-                body,
+                body: text,
             });
         }
 
-        let parsed: ListFolderResponse =
-            serde_json::from_str(&body).map_err(|err| DropboxError::Api {
-                status: status.as_u16(),
-                body: format!("failed to parse list_folder response ({err}): {body}"),
-            })?;
-
-        tracing::info!(
-            path = %path,
-            entry_count = parsed.entries.len(),
-            "dropbox list_folder succeeded"
-        );
-
-        Ok(parsed.entries)
+        serde_json::from_str(&text).map_err(|err| DropboxError::Api {
+            status: status.as_u16(),
+            body: format!("failed to parse list_folder response ({err}): {text}"),
+        })
     }
 
     /// Searches folder names recursively under the configured root --
@@ -341,7 +438,7 @@ impl DropboxClient {
         let response = self
             .send_authed(RetryPolicy::STANDARD, |token| {
                 self.http
-                    .post("https://api.dropboxapi.com/2/files/search_v2")
+                    .post(self.endpoints.api_url("/2/files/search_v2"))
                     .bearer_auth(token)
                     .header("Dropbox-API-Path-Root", self.path_root_header())
                     .json(&serde_json::json!({
@@ -435,7 +532,10 @@ impl DropboxClient {
         let link_response = self
             .send_authed(RetryPolicy::STANDARD, |token| {
                 self.http
-                    .post("https://api.dropboxapi.com/2/sharing/get_shared_link_metadata")
+                    .post(
+                        self.endpoints
+                            .api_url("/2/sharing/get_shared_link_metadata"),
+                    )
                     .bearer_auth(token)
                     .json(&serde_json::json!({ "url": url }))
             })
@@ -465,7 +565,7 @@ impl DropboxClient {
         let metadata_response = self
             .send_authed(RetryPolicy::STANDARD, |token| {
                 self.http
-                    .post("https://api.dropboxapi.com/2/files/get_metadata")
+                    .post(self.endpoints.api_url("/2/files/get_metadata"))
                     .bearer_auth(token)
                     .header("Dropbox-API-Path-Root", self.path_root_header())
                     .json(&serde_json::json!({ "path": link_metadata.id }))
@@ -527,7 +627,7 @@ impl DropboxClient {
         let response = self
             .send_authed(RetryPolicy::STANDARD, |token| {
                 self.http
-                    .post("https://api.dropboxapi.com/2/files/create_folder_v2")
+                    .post(self.endpoints.api_url("/2/files/create_folder_v2"))
                     .bearer_auth(token)
                     .header("Dropbox-API-Path-Root", self.path_root_header())
                     .json(&serde_json::json!({ "path": path }))
@@ -572,7 +672,7 @@ impl DropboxClient {
         let response = self
             .send_authed(RetryPolicy::STANDARD, |token| {
                 self.http
-                    .post("https://content.dropboxapi.com/2/files/download")
+                    .post(self.endpoints.content_url("/2/files/download"))
                     .timeout(TRANSFER_TIMEOUT)
                     .bearer_auth(token)
                     .header("Dropbox-API-Path-Root", self.path_root_header())
@@ -619,7 +719,7 @@ impl DropboxClient {
 
         let response = self
             .http
-            .post("https://content.dropboxapi.com/2/files/upload")
+            .post(self.endpoints.content_url("/2/files/upload"))
             // Deliberately NOT retried (no `send_authed`): the body is
             // moved into the request, and an overwrite upload that may
             // already have landed is not something to repeat blindly.
@@ -730,6 +830,214 @@ mod tests {
             vec!["Bearer cached-token".to_string(); 2],
             "both attempts must carry the cached bearer token"
         );
+    }
+
+    // ---- a hermetic mock Dropbox (axum on loopback) -----------------------
+
+    use std::collections::VecDeque;
+
+    #[derive(Clone, Debug)]
+    struct Recorded {
+        path: String,
+        authorization: String,
+        path_root: String,
+        body: serde_json::Value,
+    }
+
+    #[derive(Default)]
+    struct MockDropbox {
+        requests: std::sync::Mutex<Vec<Recorded>>,
+        list_pages: std::sync::Mutex<VecDeque<serde_json::Value>>,
+        /// Bearer tokens the mock answers with 401 (an expired/revoked token).
+        reject_tokens: std::sync::Mutex<Vec<String>>,
+        token_calls: AtomicUsize,
+    }
+
+    async fn mock_handler(
+        axum::extract::State(mock): axum::extract::State<Arc<MockDropbox>>,
+        uri: axum::http::Uri,
+        headers: axum::http::HeaderMap,
+        body: String,
+    ) -> (axum::http::StatusCode, String) {
+        let path = uri.path().to_string();
+
+        if path == "/oauth2/token" {
+            let n = mock.token_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            return (
+                axum::http::StatusCode::OK,
+                serde_json::json!({ "access_token": format!("T{n}"), "expires_in": 14400 })
+                    .to_string(),
+            );
+        }
+
+        let header = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string()
+        };
+        let authorization = header("authorization");
+        mock.requests.lock().unwrap().push(Recorded {
+            path,
+            authorization: authorization.clone(),
+            path_root: header("dropbox-api-path-root"),
+            body: serde_json::from_str(&body).unwrap_or(serde_json::Value::Null),
+        });
+
+        let rejected = mock
+            .reject_tokens
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|t| authorization == format!("Bearer {t}"));
+        if rejected {
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                r#"{"error_summary": "expired_access_token/"}"#.to_string(),
+            );
+        }
+
+        match mock.list_pages.lock().unwrap().pop_front() {
+            Some(page) => (axum::http::StatusCode::OK, page.to_string()),
+            None => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "mock ran out of pages".to_string(),
+            ),
+        }
+    }
+
+    async fn spawn_mock(mock: Arc<MockDropbox>) -> DropboxClient {
+        let app = axum::Router::new().fallback(mock_handler).with_state(mock);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        DropboxClient::with_endpoints(
+            DropboxConfig {
+                app_key: "k".into(),
+                app_secret: "s".into(),
+                refresh_token: "r".into(),
+                root_namespace_id: "ns1".into(),
+                root_path: "/Root".into(),
+            },
+            base.clone(),
+            base,
+        )
+    }
+
+    fn entry(name: &str) -> serde_json::Value {
+        serde_json::json!({ ".tag": "folder", "name": name, "path_display": format!("/Root/{name}") })
+    }
+
+    fn page(names: &[&str], has_more: bool, cursor: &str) -> serde_json::Value {
+        serde_json::json!({
+            "entries": names.iter().map(|n| entry(n)).collect::<Vec<_>>(),
+            "has_more": has_more,
+            "cursor": cursor,
+        })
+    }
+
+    #[tokio::test]
+    async fn list_folder_follows_pagination_until_has_more_is_false() {
+        let mock = Arc::new(MockDropbox::default());
+        mock.list_pages.lock().unwrap().extend([
+            page(&["a", "b"], true, "c1"),
+            page(&["c"], true, "c2"),
+            page(&["d"], false, "c3"),
+        ]);
+        let client = spawn_mock(mock.clone()).await;
+
+        let entries = client.list_folder("/Root").await.unwrap();
+
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b", "c", "d"], "every page, in order");
+
+        let requests = mock.requests.lock().unwrap().clone();
+        let paths: Vec<&str> = requests.iter().map(|r| r.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            vec![
+                "/2/files/list_folder",
+                "/2/files/list_folder/continue",
+                "/2/files/list_folder/continue"
+            ]
+        );
+        assert_eq!(requests[0].body["path"], "/Root");
+        assert_eq!(requests[0].body["recursive"], false);
+        assert_eq!(requests[1].body["cursor"], "c1");
+        assert_eq!(requests[2].body["cursor"], "c2");
+        assert!(
+            requests.iter().all(|r| r.path_root.contains("ns1")),
+            "every page must carry the namespace root header"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_folder_with_one_page_makes_exactly_one_request() {
+        let mock = Arc::new(MockDropbox::default());
+        mock.list_pages
+            .lock()
+            .unwrap()
+            .push_back(page(&["only"], false, "c1"));
+        let client = spawn_mock(mock.clone()).await;
+
+        let entries = client.list_folder("/Root").await.unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(mock.requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_401_refreshes_the_token_and_retries_once_with_the_fresh_one() {
+        let mock = Arc::new(MockDropbox::default());
+        // The first token the mock mints (T1) is "expired" by the time it is used.
+        mock.reject_tokens.lock().unwrap().push("T1".to_string());
+        mock.list_pages
+            .lock()
+            .unwrap()
+            .push_back(page(&["x"], false, "c"));
+        let client = spawn_mock(mock.clone()).await;
+
+        let entries = client.list_folder("/Root").await.unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            mock.token_calls.load(Ordering::SeqCst),
+            2,
+            "one refresh to get T1, one more after its 401"
+        );
+        let auths: Vec<String> = mock
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|r| r.authorization.clone())
+            .collect();
+        assert_eq!(auths, vec!["Bearer T1", "Bearer T2"]);
+    }
+
+    #[tokio::test]
+    async fn a_second_401_is_returned_as_an_error_not_retried_forever() {
+        let mock = Arc::new(MockDropbox::default());
+        mock.reject_tokens.lock().unwrap().extend([
+            "T1".to_string(),
+            "T2".to_string(),
+            "T3".to_string(),
+        ]);
+        let client = spawn_mock(mock.clone()).await;
+
+        let err = client.list_folder("/Root").await.unwrap_err();
+
+        assert!(matches!(err, DropboxError::Api { status: 401, .. }));
+        assert_eq!(
+            mock.token_calls.load(Ordering::SeqCst),
+            2,
+            "exactly one refresh-and-retry, then give up"
+        );
+        assert_eq!(mock.requests.lock().unwrap().len(), 2);
     }
 
     #[test]
