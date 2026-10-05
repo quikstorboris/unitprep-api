@@ -6,6 +6,21 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.73] - 2026-10-05
+
+Efficiency refactor chunk B3: the Process Street background sync no longer holds a database transaction open for minutes, fetches runs concurrently, and writes in batches. The largest single change of the refactor.
+
+### Changed
+- **No transaction is open while Process Street is called.** `run_all_workflows_with_progress` opened ONE transaction per workflow and, inside it, fetched each changed run's form fields from Process Street one at a time, then deleted and re-inserted that run's `ps_person_index` rows one statement per person, then upserted `ps_sync_state` -- so a workflow with thousands of changed runs held a pooled connection idle in a transaction for minutes and issued tens of thousands of single-row statements. Each workflow now runs in three phases (`sync_workflow_runs`): a short read transaction for the recorded `updatedDate`s; for each batch of 25 runs that need a refresh, fetch their fields **concurrently** (bounded to 6 in flight, `join_all_bounded`) with nothing held; then write that batch in its own short transaction (`apply_fetched_runs`) and commit it before the next batch's fetch starts.
+- **Writes are batched.** Per batch: one `DELETE ... ps_run_id = ANY(...)`, one multi-row `INSERT ... FROM UNNEST(...)` of the fresh people, one multi-row upsert of `ps_sync_state`. (Intake runs still refresh their matching company/facility per run.) **Measured** through a 20 ms round-trip database proxy, 100 changed runs with two people each: write phase **8,776 ms -> 958 ms (9.2x)**, against a replay of the old per-row statement pattern (`db::tests`-style benchmark `sync_db_batching_benchmark`, `#[ignore]`d). Not measured: the network phase, which depends on Process Street's latency; it now runs six fetches at a time instead of one.
+- **The three workflows' run lists are fetched together** instead of one after another.
+- **Failure semantics, deliberately:** a failure partway (Process Street erroring after its retries, or a database error) still stops the sync and marks it `Failed` -- unchanged. But commits are now per batch, not per workflow, so everything already committed stays committed and the next delta check skips those runs (each run's `ps_sync_state` row is written in the same transaction as its person-index rows, so a run is never half-recorded). Previously a failure rolled back the entire workflow and the next attempt redid all of it. `GET` progress counts a skipped run as processed immediately and a refreshed run when its batch commits.
+- A run id repeated in the list (Process Street's pagination can do this if the list changes mid-walk) is refreshed once; two rows with one key in a single batched upsert would be an error.
+
+### Added
+- Tests of the pipeline with a fake fetch (so no Process Street is involved): the pure delta decision (new / moved / unchanged / forced / duplicate ids) and two real-database tests (`sync_db_*`, `#[ignore]`d, local `test-db`): only changed runs are fetched and written, in batches, with stale person rows replaced, an unchanged run's rows untouched, and `business_dba` recorded; and a failed fetch stops the sync while keeping the already-committed batch. The pre-existing live-API tests keep working through a test-only `sync_one_run` wrapper that writes inside the caller's transaction so they can still roll back.
+- The old code had no hermetic test at all (its only tests needed a live Process Street API key), so there is no before/after test pair for this chunk; the new tests assert the expected end state directly.
+
 ## [1.9.72] - 2026-10-05
 
 Efficiency refactor chunk B4: independent work runs together, and every fan-out to an upstream API is bounded.

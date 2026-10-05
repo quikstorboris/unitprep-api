@@ -494,7 +494,7 @@ fn assemble_comparisons(
 
     // Same `extract_intake_people` projection the scheduled/"Sync Now"
     // background sync writes into `clients.ps_person_index` (see
-    // `clients::sync::orchestrator::sync_one_run`) -- this per-client
+    // `clients::sync::orchestrator::apply_fetched_runs`) -- this per-client
     // "Re-sync" button fetches these same runs' fields anyway for the
     // company/facility field refresh below, so it can keep the Users
     // tab's own "Add User" candidates fresh too, at no extra PS request
@@ -933,7 +933,7 @@ pub async fn apply_resync(
     // ever kept fresh by the separate scheduled/"Sync Now" background
     // sync, never by this per-client button despite its own doc comment
     // claiming a full re-pull. Same rebuild-wholesale, delete-then-insert
-    // shape `sync_one_run` already uses -- a genuine `run_name` value is
+    // shape `apply_fetched_runs` already uses -- a genuine `run_name` value is
     // only available from `ps_sync_state` (that data isn't part of the
     // form-fields fetch this endpoint already makes), so a run with no
     // prior sync_state row at all falls back to the entity's own current

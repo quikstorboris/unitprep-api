@@ -18,7 +18,7 @@ pub struct SyncStats {
     pub runs_seen: usize,
     pub runs_changed: usize,
     pub people_indexed: usize,
-    /// Always 0 for every workflow but "intake" -- see `sync_one_run`'s
+    /// Always 0 for every workflow but "intake" -- see `apply_fetched_runs`'s
     /// own doc comment on why company/facility refresh is Intake-only.
     pub companies_refreshed: usize,
     pub facilities_refreshed: usize,

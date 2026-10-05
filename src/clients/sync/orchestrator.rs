@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -18,7 +19,8 @@ use crate::clients::person_index::{
     extract_contract_order_people, extract_intake_people, extract_merchant_account_people,
     ExtractedPerson,
 };
-use crate::process_street::ProcessStreetClient;
+use crate::integrations::http::join_all_bounded;
+use crate::process_street::{FormField, ProcessStreetClient, ProcessStreetError, WorkflowRun};
 
 use super::progress::{try_claim_running, SyncError, SyncProgressHandle, SyncState, SyncStats};
 use super::refresh::{refresh_matching_company, refresh_matching_facility};
@@ -59,6 +61,7 @@ fn needs_refresh(
 /// got its fields updated from this same fresh fetch. A single Intake
 /// run can match both: since `create.rs`'s 2026-09-02 change, a
 /// company's source run is often also one of its own facility runs.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct RunSyncOutcome {
     person_index_refreshed: bool,
@@ -83,16 +86,69 @@ const WORKFLOWS: &[(&str, &str, ExtractFn)] = &[
     ),
 ];
 
-/// Applies the delta check to exactly one run, refreshing it (deleting
-/// and re-inserting its `ps_person_index` rows, upserting
-/// `ps_sync_state`, and -- for an Intake run only -- refreshing any
-/// already-imported Company/Facility whose own `ps_intake_run_id`
-/// matches, see `refresh_matching_company`/`refresh_matching_facility`)
-/// only when `needs_refresh` says so. Split out of `sync_workflow_within`
-/// so `live_tests` can prove the skip behavior against one specific
-/// known run without paying for a real `/form-fields` fetch on every
-/// other real run in the workflow -- the expensive call this whole
-/// module exists to avoid making unnecessarily.
+/// How many runs are fetched together (concurrently, bounded) and then
+/// written in ONE short transaction. Small enough that a failure mid-sync
+/// loses little (everything already committed stays committed and is
+/// skipped by the next delta check), large enough that the per-batch
+/// statements (one delete, one insert, one upsert) amortize their round
+/// trips over many runs.
+const RUN_BATCH_SIZE: usize = 25;
+
+/// A run that needs refreshing, with the form fields just fetched for it.
+struct FetchedRun<'a> {
+    run: &'a WorkflowRun,
+    fields: Vec<FormField>,
+}
+
+/// What one batch write did -- the building block of `SyncStats`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct BatchOutcome {
+    runs_changed: usize,
+    people_indexed: usize,
+    companies_refreshed: usize,
+    facilities_refreshed: usize,
+}
+
+/// The pure half of the delta check: which of `runs` actually need a
+/// `form-fields` fetch. A run is skipped when `ps_sync_state` already holds
+/// an `updatedDate` at least as new as PS's (see `needs_refresh`); `force`
+/// treats every run as never-synced. A run id that appears twice in the
+/// list (PS's pagination can repeat one if the list changes while it is
+/// being walked) is refreshed once -- two rows with the same key in one
+/// batched upsert would otherwise be an error.
+fn runs_needing_refresh<'a>(
+    runs: &'a [WorkflowRun],
+    existing: &HashMap<String, DateTime<Utc>>,
+    force: bool,
+) -> Vec<&'a WorkflowRun> {
+    let mut seen: HashSet<&str> = HashSet::new();
+
+    runs.iter()
+        .filter(|run| {
+            let previously_synced_at = if force {
+                None
+            } else {
+                existing.get(&run.id).copied()
+            };
+            needs_refresh(previously_synced_at, run.updated_at()) && seen.insert(run.id.as_str())
+        })
+        .collect()
+}
+
+/// The database-only half: writes one batch of fetched runs inside the
+/// caller's transaction -- a single `DELETE` of every run's old
+/// `ps_person_index` rows, a single multi-row `INSERT` of the fresh people,
+/// a single multi-row upsert of `ps_sync_state`, and -- for an Intake run
+/// only -- refreshing any already-imported Company/Facility whose own
+/// `ps_intake_run_id` matches (`refresh_matching_company` /
+/// `refresh_matching_facility`, still one pair per run).
+///
+/// This used to be `sync_one_run`: per run, a fetch from Process Street
+/// INSIDE the open transaction, a `DELETE`, one `INSERT` per person, and an
+/// upsert -- so a workflow of thousands of changed runs held one pooled
+/// connection in one transaction for minutes while it waited on the network
+/// and issued tens of thousands of single-row statements. Keeping the
+/// network OUT of this function is what lets the transaction stay short.
 ///
 /// Company/Facility refresh is Intake-only for now: a company's fields
 /// are seeded from whichever facility's own Intake run answered "first
@@ -100,43 +156,22 @@ const WORKFLOWS: &[(&str, &str, ExtractFn)] = &[
 /// comment), not from a persisted link to a Merchant Account run -- there
 /// is no such link stored today, so a later change to that Merchant
 /// Account run's own data has nothing to refresh against yet.
-async fn sync_one_run(
+async fn apply_fetched_runs(
     tx: &mut Transaction<'_, Postgres>,
-    client: &ProcessStreetClient,
     workflow_key: &'static str,
-    run: &crate::process_street::WorkflowRun,
-    previously_synced_at: Option<DateTime<Utc>>,
     extract: ExtractFn,
-) -> Result<RunSyncOutcome, SyncError> {
-    if !needs_refresh(previously_synced_at, run.updated_at()) {
-        return Ok(RunSyncOutcome::default());
+    fetched: &[FetchedRun<'_>],
+) -> Result<BatchOutcome, SyncError> {
+    if fetched.is_empty() {
+        return Ok(BatchOutcome::default());
     }
 
-    let fields = client.get_run_form_fields(&run.id).await?;
-    let people = extract(&fields);
-
-    sqlx::query("DELETE FROM clients.ps_person_index WHERE workflow = $1 AND ps_run_id = $2")
+    let run_ids: Vec<&str> = fetched.iter().map(|f| f.run.id.as_str()).collect();
+    sqlx::query("DELETE FROM clients.ps_person_index WHERE workflow = $1 AND ps_run_id = ANY($2)")
         .bind(workflow_key)
-        .bind(&run.id)
+        .bind(&run_ids)
         .execute(&mut **tx)
         .await?;
-
-    for person in &people {
-        sqlx::query(
-            "INSERT INTO clients.ps_person_index
-                 (workflow, ps_run_id, run_name, full_name, email, phone, role)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        )
-        .bind(workflow_key)
-        .bind(&run.id)
-        .bind(&run.name)
-        .bind(&person.full_name)
-        .bind(&person.email)
-        .bind(&person.phone)
-        .bind(person.role)
-        .execute(&mut **tx)
-        .await?;
-    }
 
     // A Merchant Account run's own `Business_DBA` -- falling back to
     // the two known key-drift variants PS's own template has used for
@@ -147,18 +182,65 @@ async fn sync_one_run(
     // workflow's form has these fields -- `value_for_any` just returns
     // `None`, not an error, so this needs no `if workflow_key == ...`
     // branch.
-    let business_dba = value_for_any(
-        &fields,
-        &[
-            "Business_DBA".to_string(),
-            "Facility_Name_in_CRM".to_string(),
-            "Facility_Name_in_Zoho".to_string(),
-        ],
-    );
+    let business_dba_keys = [
+        "Business_DBA".to_string(),
+        "Facility_Name_in_CRM".to_string(),
+        "Facility_Name_in_Zoho".to_string(),
+    ];
+
+    let mut person_run_ids: Vec<&str> = Vec::new();
+    let mut person_run_names: Vec<&str> = Vec::new();
+    let mut person_full_names: Vec<String> = Vec::new();
+    let mut person_emails: Vec<Option<String>> = Vec::new();
+    let mut person_phones: Vec<Option<String>> = Vec::new();
+    let mut person_roles: Vec<&'static str> = Vec::new();
+
+    let mut state_run_names: Vec<&str> = Vec::new();
+    let mut state_business_dbas: Vec<Option<String>> = Vec::new();
+    let mut state_updated_ats: Vec<DateTime<Utc>> = Vec::new();
+
+    for fetched_run in fetched {
+        let run = fetched_run.run;
+
+        for person in extract(&fetched_run.fields) {
+            person_run_ids.push(&run.id);
+            person_run_names.push(&run.name);
+            person_full_names.push(person.full_name);
+            person_emails.push(person.email);
+            person_phones.push(person.phone);
+            person_roles.push(person.role);
+        }
+
+        state_run_names.push(&run.name);
+        state_business_dbas.push(value_for_any(&fetched_run.fields, &business_dba_keys));
+        state_updated_ats.push(run.updated_at());
+    }
+
+    let people_indexed = person_run_ids.len();
+    if people_indexed > 0 {
+        sqlx::query(
+            "INSERT INTO clients.ps_person_index
+                 (workflow, ps_run_id, run_name, full_name, email, phone, role)
+             SELECT $1, run_id, run_name, full_name, email, phone, role
+               FROM UNNEST($2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
+                    AS t(run_id, run_name, full_name, email, phone, role)",
+        )
+        .bind(workflow_key)
+        .bind(&person_run_ids)
+        .bind(&person_run_names)
+        .bind(&person_full_names)
+        .bind(&person_emails)
+        .bind(&person_phones)
+        .bind(&person_roles)
+        .execute(&mut **tx)
+        .await?;
+    }
 
     sqlx::query(
         "INSERT INTO clients.ps_sync_state (workflow, ps_run_id, run_name, business_dba, ps_updated_at, last_synced_at)
-         VALUES ($1, $2, $3, $4, $5, now())
+         SELECT $1, run_id, run_name, business_dba, ps_updated_at, now()
+           FROM UNNEST($2::text[], $3::text[], $4::text[], $5::timestamptz[])
+                AS t(run_id, run_name, business_dba, ps_updated_at)
          ON CONFLICT (workflow, ps_run_id) DO UPDATE SET
              run_name = EXCLUDED.run_name,
              business_dba = EXCLUDED.business_dba,
@@ -166,43 +248,66 @@ async fn sync_one_run(
              last_synced_at = now()",
     )
     .bind(workflow_key)
-    .bind(&run.id)
-    .bind(&run.name)
-    .bind(&business_dba)
-    .bind(run.updated_at())
+    .bind(&run_ids)
+    .bind(&state_run_names)
+    .bind(&state_business_dbas)
+    .bind(&state_updated_ats)
     .execute(&mut **tx)
     .await?;
 
-    let (company_refreshed, facility_refreshed) = if workflow_key == "intake" {
-        let mapped = map_intake_fields(&fields);
-        let company_refreshed = refresh_matching_company(tx, &run.id, &mapped.company).await?;
-        let facility_refreshed = refresh_matching_facility(tx, &run.id, &mapped.facility).await?;
-        (company_refreshed, facility_refreshed)
-    } else {
-        (false, false)
-    };
+    let mut companies_refreshed = 0;
+    let mut facilities_refreshed = 0;
+    if workflow_key == "intake" {
+        for fetched_run in fetched {
+            let mapped = map_intake_fields(&fetched_run.fields);
+            if refresh_matching_company(tx, &fetched_run.run.id, &mapped.company).await? {
+                companies_refreshed += 1;
+            }
+            if refresh_matching_facility(tx, &fetched_run.run.id, &mapped.facility).await? {
+                facilities_refreshed += 1;
+            }
+        }
+    }
 
-    Ok(RunSyncOutcome {
-        person_index_refreshed: true,
-        people_indexed: people.len(),
-        company_refreshed,
-        facility_refreshed,
+    Ok(BatchOutcome {
+        runs_changed: fetched.len(),
+        people_indexed,
+        companies_refreshed,
+        facilities_refreshed,
     })
 }
 
 /// Syncs a pre-fetched list of one workflow's runs into
-/// `ps_sync_state`/`ps_person_index` within an already-open transaction
-/// -- the caller decides whether to commit or roll back, same
-/// discipline `clients::ingest::ingest_facility` and every
-/// `clients::repository` function already use. Takes `runs` rather than
-/// a `workflow_id` and listing them itself so `run_all_workflows_with_progress`
-/// can list every workflow up front (to know the real total before
-/// processing any of them) without a second, redundant list call here.
+/// `ps_sync_state`/`ps_person_index`.
 ///
-/// `on_processed` fires once per run after its delta check resolves --
-/// `run_all_workflows_with_progress` uses it to advance a shared
-/// progress counter; the plain `sync_workflow` entry point below passes
-/// a no-op.
+/// Three phases per workflow, in this order, so that **no database
+/// transaction is ever open while Process Street is being called**:
+///
+/// 1. a short read transaction for the already-recorded `updatedDate`s;
+/// 2. for each batch of `batch_size` runs that need a refresh, fetch their
+///    form fields CONCURRENTLY (bounded -- see `join_all_bounded`) with
+///    nothing held;
+/// 3. write that batch in its own short transaction (`apply_fetched_runs`)
+///    and commit it before the next batch's fetch starts.
+///
+/// Commits are per batch, not per workflow: a failure partway (Process
+/// Street erroring after its retries, or a database error) stops the sync
+/// -- same fail-fast as before, since a partial percentage that silently
+/// stalls is worse than a clearly-`Failed` state -- but everything already
+/// committed stays committed, and the next delta check skips those runs
+/// (their `ps_sync_state` rows were written in the same transaction as
+/// their person-index rows, so a run is never half-recorded). Previously a
+/// failure rolled back the whole workflow, so the next attempt redid all of
+/// it.
+///
+/// `fetch` gets a run id and returns that run's form fields: the real sync
+/// passes `ProcessStreetClient::get_run_form_fields`; tests pass a fake, so
+/// the whole pipeline is provable without Process Street.
+///
+/// `on_processed` fires once per run -- immediately for each run the delta
+/// check skips, and after each batch commits for the rest --
+/// `run_all_workflows_with_progress` uses it to advance a shared progress
+/// counter.
 ///
 /// `force`: when true, every run is treated as never-synced-before
 /// (`previously_synced_at` is always `None`, regardless of what's
@@ -220,57 +325,113 @@ async fn sync_one_run(
 /// exists to avoid paying every single tick -- see this module's own
 /// "2,500 requests/hour" gotcha before running this against a large
 /// workflow.
-async fn sync_runs_within(
-    tx: &mut Transaction<'_, Postgres>,
-    client: &ProcessStreetClient,
+#[allow(clippy::too_many_arguments)]
+async fn sync_workflow_runs<F, Fut>(
+    db: &PgPool,
+    fetch: F,
     workflow_key: &'static str,
-    runs: &[crate::process_street::WorkflowRun],
+    runs: &[WorkflowRun],
     extract: ExtractFn,
     force: bool,
+    batch_size: usize,
     mut on_processed: impl FnMut(),
-) -> Result<SyncStats, SyncError> {
-    let existing: HashMap<String, DateTime<Utc>> = sqlx::query_as(
-        "SELECT ps_run_id, ps_updated_at FROM clients.ps_sync_state WHERE workflow = $1",
-    )
-    .bind(workflow_key)
-    .fetch_all(&mut **tx)
-    .await?
-    .into_iter()
-    .collect();
+) -> Result<SyncStats, SyncError>
+where
+    F: Fn(String) -> Fut,
+    Fut: Future<Output = Result<Vec<FormField>, ProcessStreetError>>,
+{
+    let system_roles = [SYSTEM_ROLE.to_string()];
 
-    let mut runs_changed = 0;
-    let mut people_indexed = 0;
-    let mut companies_refreshed = 0;
-    let mut facilities_refreshed = 0;
+    let existing: HashMap<String, DateTime<Utc>> = {
+        let mut tx = begin_rls_transaction(db, SYSTEM_USER_ID, &system_roles).await?;
+        let rows = sqlx::query_as(
+            "SELECT ps_run_id, ps_updated_at FROM clients.ps_sync_state WHERE workflow = $1",
+        )
+        .bind(workflow_key)
+        .fetch_all(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        rows.into_iter().collect()
+    };
 
-    for run in runs {
-        let previously_synced_at = if force {
-            None
-        } else {
-            existing.get(&run.id).copied()
-        };
-        let outcome =
-            sync_one_run(tx, client, workflow_key, run, previously_synced_at, extract).await?;
-        if outcome.person_index_refreshed {
-            runs_changed += 1;
-            people_indexed += outcome.people_indexed;
-        }
-        if outcome.company_refreshed {
-            companies_refreshed += 1;
-        }
-        if outcome.facility_refreshed {
-            facilities_refreshed += 1;
-        }
+    let to_refresh = runs_needing_refresh(runs, &existing, force);
+
+    // Every run the delta check skips is "processed" right away.
+    for _ in 0..(runs.len() - to_refresh.len()) {
         on_processed();
     }
 
-    Ok(SyncStats {
+    let mut stats = SyncStats {
         workflow: workflow_key,
         runs_seen: runs.len(),
-        runs_changed,
-        people_indexed,
-        companies_refreshed,
-        facilities_refreshed,
+        runs_changed: 0,
+        people_indexed: 0,
+        companies_refreshed: 0,
+        facilities_refreshed: 0,
+    };
+
+    for batch in to_refresh.chunks(batch_size.max(1)) {
+        // Network phase: nothing held while Process Street answers.
+        let results = join_all_bounded(batch.iter().map(|run| fetch(run.id.clone()))).await;
+
+        let mut fetched = Vec::with_capacity(batch.len());
+        for (run, result) in batch.iter().zip(results) {
+            fetched.push(FetchedRun {
+                run,
+                fields: result?,
+            });
+        }
+
+        // Write phase: one short transaction for the whole batch.
+        let mut tx = begin_rls_transaction(db, SYSTEM_USER_ID, &system_roles).await?;
+        let outcome = match apply_fetched_runs(&mut tx, workflow_key, extract, &fetched).await {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                let _ = tx.rollback().await;
+                return Err(err);
+            }
+        };
+        tx.commit().await?;
+
+        stats.runs_changed += outcome.runs_changed;
+        stats.people_indexed += outcome.people_indexed;
+        stats.companies_refreshed += outcome.companies_refreshed;
+        stats.facilities_refreshed += outcome.facilities_refreshed;
+
+        for _ in batch {
+            on_processed();
+        }
+    }
+
+    Ok(stats)
+}
+
+/// One run, fetched and written inside the CALLER's transaction -- kept
+/// (test-only) so the `#[ignore]`d live tests below can still prove the
+/// pipeline against the real API and then roll back ("prove it, then roll
+/// back"), which the production path, committing per batch, cannot do.
+#[cfg(test)]
+async fn sync_one_run(
+    tx: &mut Transaction<'_, Postgres>,
+    client: &ProcessStreetClient,
+    workflow_key: &'static str,
+    run: &WorkflowRun,
+    previously_synced_at: Option<DateTime<Utc>>,
+    extract: ExtractFn,
+) -> Result<RunSyncOutcome, SyncError> {
+    if !needs_refresh(previously_synced_at, run.updated_at()) {
+        return Ok(RunSyncOutcome::default());
+    }
+
+    let fields = client.get_run_form_fields(&run.id).await?;
+    let outcome =
+        apply_fetched_runs(tx, workflow_key, extract, &[FetchedRun { run, fields }]).await?;
+
+    Ok(RunSyncOutcome {
+        person_index_refreshed: true,
+        people_indexed: outcome.people_indexed,
+        company_refreshed: outcome.companies_refreshed > 0,
+        facility_refreshed: outcome.facilities_refreshed > 0,
     })
 }
 
@@ -302,16 +463,26 @@ pub async fn run_all_workflows_with_progress(
     actor_user_id: Uuid,
     force: bool,
 ) {
-    let mut per_workflow_runs = Vec::with_capacity(WORKFLOWS.len());
-    for (workflow_id, workflow_key, extract) in WORKFLOWS {
-        match client.list_workflow_runs(workflow_id).await {
-            Ok(runs) => per_workflow_runs.push((*workflow_key, *extract, runs)),
-            Err(err) => {
-                fail(db, progress, actor_user_id, err.to_string()).await;
-                return;
-            }
+    // The three workflows' (cheap) run lists are independent, so they are
+    // listed together rather than one after another.
+    let listings = futures::future::try_join_all(
+        WORKFLOWS
+            .iter()
+            .map(|(workflow_id, _, _)| client.list_workflow_runs(workflow_id)),
+    )
+    .await;
+
+    let per_workflow_runs: Vec<_> = match listings {
+        Ok(lists) => WORKFLOWS
+            .iter()
+            .zip(lists)
+            .map(|((_, workflow_key, extract), runs)| (*workflow_key, *extract, runs))
+            .collect(),
+        Err(err) => {
+            fail(db, progress, actor_user_id, err.to_string()).await;
+            return;
         }
-    }
+    };
 
     let total_runs: usize = per_workflow_runs
         .iter()
@@ -322,36 +493,27 @@ pub async fn run_all_workflows_with_progress(
     let mut results = Vec::with_capacity(per_workflow_runs.len());
 
     for (workflow_key, extract, runs) in &per_workflow_runs {
-        let mut tx =
-            match begin_rls_transaction(db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()]).await {
-                Ok(tx) => tx,
-                Err(err) => {
-                    fail(db, progress, actor_user_id, err.to_string()).await;
-                    return;
-                }
-            };
-
-        let stats_result =
-            sync_runs_within(&mut tx, client, workflow_key, runs, *extract, force, || {
+        let stats_result = sync_workflow_runs(
+            db,
+            |run_id: String| async move { client.get_run_form_fields(&run_id).await },
+            workflow_key,
+            runs,
+            *extract,
+            force,
+            RUN_BATCH_SIZE,
+            || {
                 progress.write().processed_runs += 1;
-            })
-            .await;
+            },
+        )
+        .await;
 
-        let stats = match stats_result {
-            Ok(stats) => stats,
+        match stats_result {
+            Ok(stats) => results.push(stats),
             Err(err) => {
-                let _ = tx.rollback().await;
                 fail(db, progress, actor_user_id, err.to_string()).await;
                 return;
             }
-        };
-
-        if let Err(err) = tx.commit().await {
-            fail(db, progress, actor_user_id, err.to_string()).await;
-            return;
         }
-
-        results.push(stats);
     }
 
     let companies_refreshed: usize = results.iter().map(|s| s.companies_refreshed).sum();
@@ -967,5 +1129,427 @@ mod live_tests {
         tx.rollback()
             .await
             .expect("rollback must succeed -- this is a one-time check, must not persist against the real row");
+    }
+}
+
+/// Tests of the batched fetch-then-write pipeline (`sync_workflow_runs`).
+/// The pure ones need nothing; the `sync_db_*` ones are `#[ignore]`d real-DB
+/// tests (local `test-db` only -- see `api::clickup_db_tests`' module doc for
+/// the run command) that drive the WHOLE pipeline with a fake `fetch`, so
+/// no Process Street is involved.
+#[cfg(test)]
+mod batch_tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use super::*;
+
+    fn run(id: &str, updated: &str) -> WorkflowRun {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "name": format!("Run {id}"),
+            "status": "Active",
+            "workflowId": "wf",
+            "audit": { "updatedDate": updated },
+        }))
+        .unwrap()
+    }
+
+    fn at(s: &str) -> DateTime<Utc> {
+        s.parse().unwrap()
+    }
+
+    fn text_field(key: &str, value: &str) -> FormField {
+        serde_json::from_value(serde_json::json!({
+            "id": "test", "taskId": "test", "key": key, "label": key,
+            "fieldType": "Text", "data": {"value": value}
+        }))
+        .unwrap()
+    }
+
+    /// A Merchant Account run's fields: one listed owner, one distinct
+    /// signer (so two people), and a `Business_DBA`.
+    fn merchant_account_fields(run_id: &str) -> Vec<FormField> {
+        vec![
+            text_field("Owner_1_-_First_Name", "Owner"),
+            text_field("Owner_1_-_Last_Name", run_id),
+            text_field("Signer_Name", &format!("Signer {run_id}")),
+            text_field("Business_DBA", &format!("DBA {run_id}")),
+        ]
+    }
+
+    #[test]
+    fn only_new_or_moved_runs_need_a_refresh_and_an_unchanged_one_does_not() {
+        let runs = vec![
+            run("new", "2026-03-01T00:00:00Z"),
+            run("moved", "2026-03-01T00:00:00Z"),
+            run("same", "2026-02-01T00:00:00Z"),
+            run("older-in-ps", "2026-01-01T00:00:00Z"),
+        ];
+        let existing: HashMap<String, DateTime<Utc>> = [
+            ("moved".to_string(), at("2026-02-01T00:00:00Z")),
+            ("same".to_string(), at("2026-02-01T00:00:00Z")),
+            ("older-in-ps".to_string(), at("2026-02-01T00:00:00Z")),
+        ]
+        .into_iter()
+        .collect();
+
+        let ids: Vec<&str> = runs_needing_refresh(&runs, &existing, false)
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect();
+
+        assert_eq!(ids, vec!["new", "moved"]);
+    }
+
+    #[test]
+    fn force_refreshes_every_run_and_a_repeated_run_id_only_once() {
+        let runs = vec![
+            run("a", "2026-02-01T00:00:00Z"),
+            run("b", "2026-02-01T00:00:00Z"),
+            run("a", "2026-02-01T00:00:00Z"),
+        ];
+        let existing: HashMap<String, DateTime<Utc>> = [
+            ("a".to_string(), at("2026-02-01T00:00:00Z")),
+            ("b".to_string(), at("2026-02-01T00:00:00Z")),
+        ]
+        .into_iter()
+        .collect();
+
+        assert!(runs_needing_refresh(&runs, &existing, false).is_empty());
+
+        let ids: Vec<&str> = runs_needing_refresh(&runs, &existing, true)
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["a", "b"],
+            "forced: everything, but a repeated id once (two rows with one key in a single batched upsert would be an error)"
+        );
+    }
+
+    async fn index_rows(
+        db: &PgPool,
+        run_id: &str,
+    ) -> Vec<(String, String, Option<String>, String)> {
+        // Through a system-role RLS transaction, exactly like the sync
+        // itself: the plain pool carries no identity, so row-level security
+        // would hide every row.
+        let mut tx = begin_rls_transaction(db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
+            .await
+            .unwrap();
+        let rows = sqlx::query_as(
+            "SELECT full_name, run_name, email, role FROM clients.ps_person_index
+              WHERE workflow = 'merchant_account' AND ps_run_id = $1 ORDER BY full_name",
+        )
+        .bind(run_id)
+        .fetch_all(&mut *tx)
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        rows
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the local test-db -- see this module's doc comment"]
+    async fn sync_db_refreshes_only_changed_runs_in_batches_and_leaves_the_rest_alone() {
+        let _ = dotenvy::from_filename(".env.local");
+        let db = crate::db::connect_test();
+        let tag = Uuid::new_v4().simple().to_string();
+        let id = |name: &str| format!("sync-{tag}-{name}");
+
+        let (new1, new2, moved, same) = (id("new1"), id("new2"), id("moved"), id("same"));
+        let runs = vec![
+            run(&new1, "2026-03-01T00:00:00Z"),
+            run(&new2, "2026-03-01T00:00:00Z"),
+            run(&moved, "2026-03-01T00:00:00Z"),
+            run(&same, "2026-02-01T00:00:00Z"),
+        ];
+
+        // Existing state: `moved` was synced before PS's newer edit, with a
+        // stale person; `same` is current, with a person that must survive.
+        let mut seed = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
+            .await
+            .unwrap();
+        for (run_id, updated, person) in [
+            (&moved, "2026-01-01T00:00:00Z", "Stale Person"),
+            (&same, "2026-02-01T00:00:00Z", "Untouched Person"),
+        ] {
+            sqlx::query(
+                "INSERT INTO clients.ps_sync_state
+                     (workflow, ps_run_id, run_name, ps_updated_at, last_synced_at)
+                 VALUES ('merchant_account', $1, 'Old Name', $2::timestamptz, now())",
+            )
+            .bind(run_id)
+            .bind(updated)
+            .execute(&mut *seed)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO clients.ps_person_index
+                     (workflow, ps_run_id, run_name, full_name, email, phone, role)
+                 VALUES ('merchant_account', $1, 'Old Name', $2, NULL, NULL, 'owner')",
+            )
+            .bind(run_id)
+            .bind(person)
+            .execute(&mut *seed)
+            .await
+            .unwrap();
+        }
+        seed.commit().await.unwrap();
+
+        let fetch_calls = Arc::new(AtomicUsize::new(0));
+        let mut processed = 0usize;
+        let stats = sync_workflow_runs(
+            &db,
+            {
+                let fetch_calls = fetch_calls.clone();
+                move |run_id: String| {
+                    let fetch_calls = fetch_calls.clone();
+                    async move {
+                        fetch_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(merchant_account_fields(&run_id))
+                    }
+                }
+            },
+            "merchant_account",
+            &runs,
+            extract_merchant_account_people,
+            false,
+            2, // three runs to refresh -> a batch of two, then a batch of one
+            || processed += 1,
+        )
+        .await
+        .expect("the sync must succeed");
+
+        assert_eq!(stats.runs_seen, 4);
+        assert_eq!(stats.runs_changed, 3);
+        assert_eq!(
+            stats.people_indexed, 6,
+            "two people (owner + signer) per refreshed run"
+        );
+        assert_eq!(
+            fetch_calls.load(Ordering::SeqCst),
+            3,
+            "the unchanged run must not be fetched from Process Street at all"
+        );
+        assert_eq!(
+            processed, 4,
+            "every run is reported processed, skipped or not"
+        );
+
+        // A new run: freshly indexed, carrying the PS run's own name.
+        let rows = index_rows(&db, &new1).await;
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|r| r.1 == format!("Run {new1}")));
+        assert!(rows
+            .iter()
+            .any(|r| r.0 == format!("Owner {new1}") && r.3 == "owner"));
+        assert!(rows
+            .iter()
+            .any(|r| r.0 == format!("Signer {new1}") && r.3 == "signer"));
+
+        // The moved run: the stale person is gone, replaced by the fresh two.
+        let moved_rows = index_rows(&db, &moved).await;
+        assert_eq!(moved_rows.len(), 2);
+        assert!(moved_rows.iter().all(|r| r.0 != "Stale Person"));
+
+        // The unchanged run: untouched.
+        let same_rows = index_rows(&db, &same).await;
+        assert_eq!(same_rows.len(), 1);
+        assert_eq!(same_rows[0].0, "Untouched Person");
+
+        // ps_sync_state: updated (with business_dba) for refreshed runs only.
+        let mut read = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
+            .await
+            .unwrap();
+        let state: (Option<String>, DateTime<Utc>) = sqlx::query_as(
+            "SELECT business_dba, ps_updated_at FROM clients.ps_sync_state
+              WHERE workflow = 'merchant_account' AND ps_run_id = $1",
+        )
+        .bind(&moved)
+        .fetch_one(&mut *read)
+        .await
+        .unwrap();
+        read.commit().await.unwrap();
+        assert_eq!(state.0.as_deref(), Some(format!("DBA {moved}").as_str()));
+        assert_eq!(state.1, at("2026-03-01T00:00:00Z"));
+    }
+
+    /// Benchmark, not a pass/fail test: the DATABASE-write cost of syncing
+    /// 100 changed runs (two people each), batched (`sync_workflow_runs`)
+    /// versus a replay of the old statement pattern (inside one
+    /// transaction: per run a `DELETE`, one `INSERT` per person, an upsert).
+    /// The fake fetch is instant, so this isolates the write phase. Only
+    /// meaningful through `dev-tools/latency_proxy.py`:
+    ///
+    /// ```text
+    /// python3 dev-tools/latency_proxy.py --delay-ms 10 &      # 20 ms round trip
+    /// TEST_DATABASE_URL=postgres://app_service:app_service@127.0.0.1:5434/unitprep_test \
+    ///   cargo test --release --bin unitprep -- --ignored --nocapture sync_db_batching_benchmark
+    /// ```
+    #[tokio::test]
+    #[ignore = "benchmark; needs test-db behind dev-tools/latency_proxy.py"]
+    async fn sync_db_batching_benchmark() {
+        let db = crate::db::connect_test();
+        let tag = Uuid::new_v4().simple().to_string();
+        const RUNS: usize = 100;
+
+        let batched_runs: Vec<WorkflowRun> = (0..RUNS)
+            .map(|n| run(&format!("bench-{tag}-b{n}"), "2026-03-01T00:00:00Z"))
+            .collect();
+        let old_runs: Vec<WorkflowRun> = (0..RUNS)
+            .map(|n| run(&format!("bench-{tag}-o{n}"), "2026-03-01T00:00:00Z"))
+            .collect();
+
+        // Warm the pool.
+        let mut warm = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
+            .await
+            .unwrap();
+        sqlx::query("SELECT 1").execute(&mut *warm).await.unwrap();
+        warm.commit().await.unwrap();
+
+        // New: batched.
+        let started = std::time::Instant::now();
+        sync_workflow_runs(
+            &db,
+            |run_id: String| async move { Ok(merchant_account_fields(&run_id)) },
+            "merchant_account",
+            &batched_runs,
+            extract_merchant_account_people,
+            false,
+            RUN_BATCH_SIZE,
+            || {},
+        )
+        .await
+        .unwrap();
+        let batched_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+        // Old: replay the per-run statement pattern in one transaction.
+        let started = std::time::Instant::now();
+        let mut tx = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
+            .await
+            .unwrap();
+        for old_run in &old_runs {
+            let fields = merchant_account_fields(&old_run.id);
+            let people = extract_merchant_account_people(&fields);
+            sqlx::query(
+                "DELETE FROM clients.ps_person_index WHERE workflow = $1 AND ps_run_id = $2",
+            )
+            .bind("merchant_account")
+            .bind(&old_run.id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+            for person in &people {
+                sqlx::query(
+                    "INSERT INTO clients.ps_person_index
+                         (workflow, ps_run_id, run_name, full_name, email, phone, role)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                )
+                .bind("merchant_account")
+                .bind(&old_run.id)
+                .bind(&old_run.name)
+                .bind(&person.full_name)
+                .bind(&person.email)
+                .bind(&person.phone)
+                .bind(person.role)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            }
+            sqlx::query(
+                "INSERT INTO clients.ps_sync_state (workflow, ps_run_id, run_name, business_dba, ps_updated_at, last_synced_at)
+                 VALUES ($1, $2, $3, $4, $5, now())
+                 ON CONFLICT (workflow, ps_run_id) DO UPDATE SET
+                     run_name = EXCLUDED.run_name, business_dba = EXCLUDED.business_dba,
+                     ps_updated_at = EXCLUDED.ps_updated_at, last_synced_at = now()",
+            )
+            .bind("merchant_account")
+            .bind(&old_run.id)
+            .bind(&old_run.name)
+            .bind(Some("dba"))
+            .bind(old_run.updated_at())
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+        let old_ms = started.elapsed().as_secs_f64() * 1000.0;
+
+        println!(
+            "write phase for {RUNS} changed runs (2 people each): old per-row pattern {old_ms:.0} ms, batched {batched_ms:.0} ms ({:.1}x faster)",
+            old_ms / batched_ms
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs the local test-db -- see this module's doc comment"]
+    async fn sync_db_a_failed_fetch_stops_the_sync_but_keeps_what_already_committed() {
+        let _ = dotenvy::from_filename(".env.local");
+        let db = crate::db::connect_test();
+        let tag = Uuid::new_v4().simple().to_string();
+        let (first, second) = (format!("sync-{tag}-first"), format!("sync-{tag}-second"));
+        let runs = vec![
+            run(&first, "2026-03-01T00:00:00Z"),
+            run(&second, "2026-03-01T00:00:00Z"),
+        ];
+
+        let mut processed = 0usize;
+        let failing = second.clone();
+        let result = sync_workflow_runs(
+            &db,
+            move |run_id: String| {
+                let failing = failing.clone();
+                async move {
+                    if run_id == failing {
+                        Err(ProcessStreetError::Api {
+                            status: 500,
+                            body: "boom".to_string(),
+                        })
+                    } else {
+                        Ok(merchant_account_fields(&run_id))
+                    }
+                }
+            },
+            "merchant_account",
+            &runs,
+            extract_merchant_account_people,
+            false,
+            1, // one run per batch, so the first commits before the second's fetch fails
+            || processed += 1,
+        )
+        .await;
+
+        assert!(
+            matches!(result, Err(SyncError::ProcessStreet(_))),
+            "a failed Process Street fetch must stop the sync"
+        );
+        assert_eq!(
+            processed, 1,
+            "only the committed batch is reported processed"
+        );
+        assert_eq!(
+            index_rows(&db, &first).await.len(),
+            2,
+            "the first run's batch was committed and must stay"
+        );
+        assert!(
+            index_rows(&db, &second).await.is_empty(),
+            "the failed run must not be recorded at all"
+        );
+        let mut read = begin_rls_transaction(&db, SYSTEM_USER_ID, &[SYSTEM_ROLE.to_string()])
+            .await
+            .unwrap();
+        let first_state: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM clients.ps_sync_state WHERE workflow = 'merchant_account' AND ps_run_id = $1",
+        )
+        .bind(&first)
+        .fetch_one(&mut *read)
+        .await
+        .unwrap();
+        read.commit().await.unwrap();
+        assert_eq!(first_state, 1, "so the next delta check will skip it");
     }
 }

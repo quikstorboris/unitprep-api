@@ -90,7 +90,7 @@ pub struct MerchantAccountRunInfo {
     pub run_name: String,
     /// This run's own `Business_DBA` form field (falling back to the
     /// `Facility_Name_in_CRM`/`Facility_Name_in_Zoho` key-drift variants
-    /// -- see `sync::orchestrator::sync_one_run`'s own extraction),
+    /// -- see `sync::orchestrator::apply_fetched_runs`'s own extraction),
     /// persisted at sync time so this stays a purely-local lookup. A
     /// second, more direct correlation signal alongside the run's own
     /// title -- see `correlate_by_title`'s own doc comment for why

@@ -56,7 +56,7 @@ pub struct StartSyncResponse {
     started: bool,
 }
 
-/// `?force=true` -- see `sync::orchestrator::sync_runs_within`'s own
+/// `?force=true` -- see `sync::orchestrator::sync_workflow_runs`'s own
 /// doc comment for exactly what this changes (every run in every
 /// workflow is treated as never-synced-before, not just the ones PS
 /// itself says changed) and why it costs real Process Street API
