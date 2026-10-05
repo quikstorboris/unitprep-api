@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.64] - 2026-10-05
+
+Efficiency refactor chunk A3: indexes for the Process Street run-id lookups.
+
+### Changed
+- **Index the PS run-id columns that are searched with `= ANY($1)`** (migration `20261005110000`): `clients.facilities.ps_intake_run_id`, `clients.companies.ps_intake_run_id` and `clients.facility_merchant_accounts.ps_new_merchant_run_id`. Client search, import preview and create-from-Process-Street ask "which of these run ids are already imported?" on every call, and none of the three columns had an index, so each was a sequential scan that grows with every client onboarded. The indexes are partial (`WHERE ... IS NOT NULL`, so manually created rows are not indexed) and deliberately not unique (a sister-facility import may point two rows at one run).
+- Measured on 200,000 synthetic facilities (rolled-back transaction on the local test-db), a 30-id lookup went from a parallel sequential scan at 26.96 ms to an index-only scan at 0.31 ms (about 88x). Invisible at today's row counts; this keeps those lookups flat as the data grows.
+
+### Decided
+- **`pg_trgm` for the `ILIKE '%q%'` person/facility search is deferred**, as migration `20260831140000` already decided: the btree indexes on `lower(full_name)` / `lower(email)` cannot serve a leading wildcard, but the tables are small. Revisit when `ps_person_index` passes roughly 50k rows or search latency becomes visible.
+
 ## [1.9.63] - 2026-10-05
 
 Efficiency refactor chunk A2: one outbound-HTTP policy for Process Street, Dropbox and ClickUp. A hung or flaky upstream can no longer pin a request (or every Dropbox call) indefinitely.
