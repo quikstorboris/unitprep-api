@@ -20,7 +20,9 @@ use uuid::Uuid;
 
 use unitprep_dedup::{DedupReport, TemplateNoteComposer, TenantRecord, UnidentifiedMode};
 
-use crate::api::dedup::{generate_export, ExportFormat};
+use crate::api::blocking::run_blocking;
+use crate::api::dedup::ExportFormat;
+use crate::api::dedup_blocking;
 use crate::api::dedup_view::{build_report_view, DedupReportView};
 use crate::api::tool_runs::facility_belongs_to_company;
 use crate::api::{internal_error, not_found, session_not_found, AppState};
@@ -54,14 +56,27 @@ pub async fn set_unidentified_mode(
     user: AuthenticatedUser,
     Json(request): Json<SetUnidentifiedModeRequest>,
 ) -> Response {
-    let Some((report, records)) =
-        DedupSessionService::new(std::sync::Arc::clone(&state.dedup_sessions))
-            .set_unidentified_mode(&request.session_id, user.user_id, request.mode)
-    else {
+    // Re-runs the whole report over every tenant: CPU-bound, so off the
+    // async workers.
+    let service = DedupSessionService::new(std::sync::Arc::clone(&state.dedup_sessions));
+    let session_id = request.session_id.clone();
+    let (owner_id, mode) = (user.user_id, request.mode);
+    let recomputed = match run_blocking("re-check the session", move || {
+        service.set_unidentified_mode(&session_id, owner_id, mode)
+    })
+    .await
+    {
+        Ok(recomputed) => recomputed,
+        Err(response) => return response,
+    };
+    let Some((report, records)) = recomputed else {
         return session_not_found(&request.session_id);
     };
 
-    let view = build_report_view(&report, &records);
+    let (view, report, records) = match dedup_blocking::report_view(report, records).await {
+        Ok(built) => built,
+        Err(response) => return response,
+    };
     persist(&state, &user, &request.session_id, &view, &report, &records).await;
 
     Json(RematchResponse { report: view }).into_response()
@@ -149,9 +164,18 @@ pub async fn rematch_tool_run(
         }
     };
 
-    let report =
-        unitprep_dedup::run_with_options(records.clone(), &TemplateNoteComposer, request.mode);
-    let view = build_report_view(&report, &records);
+    // Recompute the report and its view: CPU-bound, so off the async workers.
+    let mode = request.mode;
+    let (report, view, records) = match run_blocking("re-check the run", move || {
+        let report = unitprep_dedup::run_with_options(records.clone(), &TemplateNoteComposer, mode);
+        let view = build_report_view(&report, &records);
+        (report, view, records)
+    })
+    .await
+    {
+        Ok(recomputed) => recomputed,
+        Err(response) => return response,
+    };
 
     persist(&state, &user, &session_id, &view, &report, &records).await;
 
@@ -227,8 +251,21 @@ async fn regenerate_output(
     let stem = file_name.strip_suffix(".zip").unwrap_or(&file_name);
     let inner = (format!("{stem}.csv"), format!("{stem}.xlsx"));
 
-    match generate_export(&format, session_id, report, records, (&inner.0, &inner.1)) {
-        Ok((bytes, content_type)) => Some((bytes, content_type.to_string(), file_name)),
+    // Cloned into the closure (the blocking pool needs owned data); the
+    // clone is cheap next to generating the file, and goes away with the
+    // clone-reduction work in the refactor plan.
+    match dedup_blocking::export(
+        format,
+        session_id.to_string(),
+        report.clone(),
+        records.to_vec(),
+        inner,
+    )
+    .await
+    {
+        Ok((bytes, content_type, _report, _records)) => {
+            Some((bytes, content_type.to_string(), file_name))
+        }
         Err(_) => {
             tracing::error!(
                 session_id,

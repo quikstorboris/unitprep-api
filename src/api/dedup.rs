@@ -24,7 +24,8 @@ use unitprep_dedup::file_selection::FileFormatMeta;
 use unitprep_dedup::{DedupReport, TenantRecord};
 
 use crate::api::blocking::run_blocking;
-use crate::api::dedup_view::{build_report_view, DedupReportView};
+use crate::api::dedup_blocking;
+use crate::api::dedup_view::DedupReportView;
 use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root, parent_folder};
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::application::dedup_session_service::DedupSessionService;
@@ -49,7 +50,7 @@ pub struct DedupSessionRequest {
 /// Which file format(s) `/dedup/export` should return. Defaults to
 /// `Csv` via `#[serde(default)]` on the field below, so an existing
 /// caller that doesn't send this field keeps today's behavior.
-#[derive(Debug, Deserialize, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ExportFormat {
     #[default]
@@ -248,7 +249,12 @@ pub async fn check(
     );
     crate::api::slow_operation::warn_if_slow("dedup_check", started.elapsed());
 
-    let report = build_report_view(&report, &records);
+    // The view assembles the whole export plan: CPU-bound, so off the
+    // async workers. `records` comes back for the tool-run record below.
+    let (report, _, records) = match dedup_blocking::report_view(report, records).await {
+        Ok(built) => built,
+        Err(response) => return response,
+    };
 
     tool_runs::create_dedup_run(
         &state.db,
@@ -411,7 +417,12 @@ pub async fn import_from_dropbox(
     );
     crate::api::slow_operation::warn_if_slow("dedup_check_dropbox", started.elapsed());
 
-    let report = build_report_view(&report, &records);
+    // The view assembles the whole export plan: CPU-bound, so off the
+    // async workers. `records` comes back for the tool-run record below.
+    let (report, _, records) = match dedup_blocking::report_view(report, records).await {
+        Ok(built) => built,
+        Err(response) => return response,
+    };
 
     tool_runs::create_dedup_run(
         &state.db,
@@ -562,7 +573,10 @@ pub async fn report(
         .with_owned_session(&request.session_id, user.user_id, |session| {
             (session.report.clone(), session.records.clone())
         }) {
-        Some((report, records)) => Json(build_report_view(&report, &records)).into_response(),
+        Some((report, records)) => match dedup_blocking::report_view(report, records).await {
+            Ok((view, _report, _records)) => Json(view).into_response(),
+            Err(response) => response,
+        },
         None => session_not_found(&request.session_id),
     }
 }
@@ -650,52 +664,54 @@ pub async fn export(
         Err(response) => return response,
     };
 
-    let response = match generate_export(
-        &request.format,
-        &request.session_id,
-        &report,
-        &records,
-        (&file_names.zip_csv, &file_names.zip_xlsx),
-    ) {
-        Ok((bytes, content_type)) => {
-            tool_runs::attach_output_bytes(
-                &state.db,
-                user.user_id,
-                &user.role_keys,
-                &request.session_id,
-                bytes.clone(),
-                content_type,
-                &file_names.outer,
-            )
-            .await;
-
-            audit_log::record(
-                &state.db,
-                audit_log::event::DEDUP_COMPLETED,
-                user.user_id,
-                "client",
-                request
-                    .client_id
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .as_deref(),
-                audit_log::Change::none(),
-                None,
-                None,
-                serde_json::json!({
-                    "session_id": request.session_id,
-                    "format": format!("{:?}", request.format),
-                    "flagged_groups": report.flagged_groups.len(),
-                    "duplicate_customer_records": report.duplicate_customer_records.len(),
-                    "typo_variant_candidates": report.typo_variant_candidates.len(),
-                    "related_tenant_candidates": report.related_tenant_candidates.len(),
-                }),
-            )
-            .await;
-            file_response(bytes, content_type, &file_names.outer)
-        }
-        Err(response) => response,
+    let (bytes, content_type, report, _records) = match dedup_blocking::export(
+        request.format,
+        request.session_id.clone(),
+        report,
+        records,
+        (file_names.zip_csv.clone(), file_names.zip_xlsx.clone()),
+    )
+    .await
+    {
+        Ok(generated) => generated,
+        Err(response) => return response,
     };
+
+    tool_runs::attach_output_bytes(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        &request.session_id,
+        bytes.clone(),
+        content_type,
+        &file_names.outer,
+    )
+    .await;
+
+    audit_log::record(
+        &state.db,
+        audit_log::event::DEDUP_COMPLETED,
+        user.user_id,
+        "client",
+        request
+            .client_id
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        audit_log::Change::none(),
+        None,
+        None,
+        serde_json::json!({
+            "session_id": request.session_id,
+            "format": format!("{:?}", request.format),
+            "flagged_groups": report.flagged_groups.len(),
+            "duplicate_customer_records": report.duplicate_customer_records.len(),
+            "typo_variant_candidates": report.typo_variant_candidates.len(),
+            "related_tenant_candidates": report.related_tenant_candidates.len(),
+        }),
+    )
+    .await;
+    let response = file_response(bytes, content_type, &file_names.outer);
 
     tracing::info!(
         session_id = %request.session_id,
@@ -781,13 +797,15 @@ pub async fn export_to_dropbox(
         Err(response) => return response,
     };
 
-    let (bytes, content_type) = match generate_export(
-        &request.format,
-        &request.session_id,
-        &report,
-        &records,
-        (&file_names.zip_csv, &file_names.zip_xlsx),
-    ) {
+    let (bytes, content_type, _report, _records) = match dedup_blocking::export(
+        request.format,
+        request.session_id.clone(),
+        report,
+        records,
+        (file_names.zip_csv.clone(), file_names.zip_xlsx.clone()),
+    )
+    .await
+    {
         Ok(generated) => generated,
         Err(response) => return response,
     };

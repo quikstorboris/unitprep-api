@@ -6,6 +6,16 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.67] - 2026-10-05
+
+Efficiency refactor chunk A5: the Dedup report view and export generation no longer run on the async worker threads.
+
+### Changed
+- **Dedup report-view building, export generation and re-checks run on tokio's blocking pool.** `build_report_view` assembles the whole export plan (grouping, typo-variant and related-tenant sections over every tenant) and `generate_export` writes an XLSX/CSV/ZIP in memory; both were called straight from `async fn` handlers. Now off the workers: `POST /dedup/check` and the Dropbox-import check (the view step; the report itself already moved in 1.9.66), `POST /dedup/report`, `POST /dedup/export`, `POST /dedup/export-to-dropbox`, the live-session "unidentified tenants" re-check (`set_unidentified_mode`, which re-runs the whole report), and the tool-run re-check including regenerating its stored output file.
+- New `api::dedup_blocking` (`report_view`, `export`) wraps the two pure functions for every Dedup handler. They take the report and records **by value and hand them back** (the blocking closure must own what it touches, and every caller still needs the data for the tool-run record, audit event or log line), so no extra clone is introduced -- except in the tool-run regeneration path, which already held borrowed data and now clones it once (to be removed by the clone-reduction work, plan chunk C2).
+- `ExportFormat` is now `Copy` (it is moved into the blocking closure).
+- A generation failure in `POST /dedup/export` now returns its error response directly; previously the handler also logged "Dedup export generated" for a failed export.
+
 ## [1.9.66] - 2026-10-05
 
 Efficiency refactor chunk A4: spreadsheet parsing no longer runs on the async worker threads.
