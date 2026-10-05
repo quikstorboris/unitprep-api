@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.71] - 2026-10-05
+
+Efficiency refactor chunk B2: client Re-sync no longer holds a database transaction open while it calls Process Street, and rebuilds the person index in two statements instead of dozens.
+
+### Changed
+- **No transaction is open during the Process Street calls.** `preview_resync`, and `apply_resync` when there is no cached preview, built their comparison (`load_comparisons`) inside a database transaction: the transaction read the rows, then sat open -- holding one of the pool's 20 connections idle -- while Process Street was called for every cited run's fields and every linked Merchant Account run's fields and tasks (seconds for a company with many facilities), then (for apply) did its writes. `load_comparisons` is now three phases in this order: a short read transaction that commits, the network fetch with nothing held, then pure assembly. `apply_resync` now builds the comparison (on a cache miss) *before* opening its write transaction. The rows an uncached apply acts on are therefore a few seconds old by the time the writes run -- the same staleness window the preview-cache path has always had, for up to five minutes.
+- **The person-index rebuild is two statements, not one per run plus one per person.** Apply refreshed `clients.ps_person_index` with a `DELETE` per run and an `INSERT` per person, each its own round trip inside the transaction (a company with ten runs and a few people each paid sixty-odd round trips before committing). It is now one `DELETE ... ps_run_id = ANY(...)` and one multi-row `INSERT ... SELECT FROM UNNEST(...)`, however many runs and people there are.
+
+### Added
+- Real-database test (`resync_db_apply_replaces_a_runs_person_index_and_leaves_other_runs_alone`, `#[ignore]`d, local `test-db`): seeds a preview into the cache (so no Process Street call is needed), applies it, and checks the run's index rows are exactly the fresh people (the stale one gone, each carrying the fallback run name) and another run's rows are untouched. It was written against the old per-row loop first and passes unchanged against the batched version.
+
 ## [1.9.70] - 2026-10-05
 
 Efficiency refactor chunk B1a: database pool tuning. Removes a hidden network round trip from every pooled database use.

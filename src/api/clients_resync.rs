@@ -422,32 +422,75 @@ fn usable_cache_entry(entry: Option<CachedComparisons>) -> Option<Comparisons> {
         .map(|cached| cached.comparisons)
 }
 
-async fn load_comparisons(
+/// What the database half of a comparison needs from Process Street's
+/// half: the rows as they are right now, plus which runs to fetch.
+struct ComparisonInputs {
+    company: CompanyRow,
+    facilities: Vec<FacilityRow>,
+    merchant_account_run_ids: HashMap<Uuid, String>,
+}
+
+/// The database-only half of building a comparison. Runs inside the
+/// caller's transaction, which must be committed BEFORE
+/// `fetch_ps_data` starts -- see `load_comparisons`.
+async fn read_comparison_inputs(
     tx: &mut Transaction<'_, Postgres>,
-    client: &crate::process_street::ProcessStreetClient,
     company_id: Uuid,
-) -> Result<Option<Comparisons>, sqlx::Error> {
+) -> Result<Option<ComparisonInputs>, sqlx::Error> {
     let Some((company, facilities)) = fetch_company_and_facilities(tx, company_id).await? else {
         return Ok(None);
     };
 
+    let facility_ids: Vec<Uuid> = facilities.iter().map(|f| f.id).collect();
+    let merchant_account_run_ids = fetch_linked_merchant_account_runs(tx, &facility_ids).await?;
+
+    Ok(Some(ComparisonInputs {
+        company,
+        facilities,
+        merchant_account_run_ids,
+    }))
+}
+
+/// The Process Street-only half: fetches every distinct intake run the
+/// company and its facilities cite, plus each linked Merchant Account
+/// run's fields and tasks, all concurrently. Touches no database, so no
+/// transaction (and no pooled connection) is held while it waits on the
+/// network.
+async fn fetch_ps_data(
+    client: &crate::process_street::ProcessStreetClient,
+    inputs: &ComparisonInputs,
+) -> (
+    HashMap<String, Vec<FormField>>,
+    HashMap<Uuid, MerchantAccountRefresh>,
+) {
     let mut run_ids: HashSet<String> = HashSet::new();
-    if let Some(id) = &company.ps_intake_run_id {
+    if let Some(id) = &inputs.company.ps_intake_run_id {
         run_ids.insert(id.clone());
     }
-    for facility in &facilities {
+    for facility in &inputs.facilities {
         if let Some(id) = &facility.ps_intake_run_id {
             run_ids.insert(id.clone());
         }
     }
 
-    let facility_ids: Vec<Uuid> = facilities.iter().map(|f| f.id).collect();
-    let merchant_account_run_ids = fetch_linked_merchant_account_runs(tx, &facility_ids).await?;
-
-    let (fields_by_run_id, merchant_account_refreshes) = tokio::join!(
+    tokio::join!(
         fetch_fresh_fields(client, run_ids),
-        fetch_fresh_merchant_account_data(client, merchant_account_run_ids)
-    );
+        fetch_fresh_merchant_account_data(client, inputs.merchant_account_run_ids.clone())
+    )
+}
+
+/// The pure half: pairs each database row with its freshly-fetched
+/// Process Street counterpart.
+fn assemble_comparisons(
+    inputs: ComparisonInputs,
+    fields_by_run_id: HashMap<String, Vec<FormField>>,
+    merchant_account_refreshes: HashMap<Uuid, MerchantAccountRefresh>,
+) -> Comparisons {
+    let ComparisonInputs {
+        company,
+        facilities,
+        ..
+    } = inputs;
 
     // Same `extract_intake_people` projection the scheduled/"Sync Now"
     // background sync writes into `clients.ps_person_index` (see
@@ -486,13 +529,47 @@ async fn load_comparisons(
         })
         .collect();
 
-    Ok(Some((
+    (
         CompanyComparison {
             row: company,
             fresh: company_fresh,
         },
         facility_comparisons,
         people_by_run_id,
+        merchant_account_refreshes,
+    )
+}
+
+/// Builds a comparison in three phases, in this order, so that **no
+/// database transaction is open while Process Street is being called**:
+/// a short read transaction (committed before it returns), then the
+/// network fetch, then pure assembly.
+///
+/// This used to run the whole thing inside the caller's transaction. The
+/// network phase fetches every cited run's fields and tasks (seconds for
+/// a company with many facilities), and a pooled Neon connection sat
+/// idle inside an open transaction for all of it -- one of only 20, and
+/// one more for every concurrent Re-sync.
+async fn load_comparisons(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    role_keys: &[String],
+    client: &crate::process_street::ProcessStreetClient,
+    company_id: Uuid,
+) -> Result<Option<Comparisons>, sqlx::Error> {
+    let mut tx = begin_rls_transaction(db, user_id, role_keys).await?;
+    let inputs = read_comparison_inputs(&mut tx, company_id).await?;
+    tx.commit().await?;
+
+    let Some(inputs) = inputs else {
+        return Ok(None);
+    };
+
+    let (fields_by_run_id, merchant_account_refreshes) = fetch_ps_data(client, &inputs).await;
+
+    Ok(Some(assemble_comparisons(
+        inputs,
+        fields_by_run_id,
         merchant_account_refreshes,
     )))
 }
@@ -585,15 +662,15 @@ pub async fn preview_resync(
         return process_street_not_configured();
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for resync preview");
-            return internal_error("Could not preview the re-sync");
-        }
-    };
-
-    let comparisons = match load_comparisons(&mut tx, &client, company_id).await {
+    let comparisons = match load_comparisons(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        &client,
+        company_id,
+    )
+    .await
+    {
         Ok(Some(comparisons)) => comparisons,
         Ok(None) => return not_found("company_not_found", "No such company.".to_string()),
         Err(err) => {
@@ -601,11 +678,6 @@ pub async fn preview_resync(
             return internal_error("Could not preview the re-sync");
         }
     };
-
-    if let Err(err) = tx.commit().await {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to commit resync preview transaction");
-        return internal_error("Could not preview the re-sync");
-    }
 
     let (company, facilities, people_by_run_id, merchant_account_refreshes) = comparisons;
     let (mut safe_update_count, mut conflicts) = classify_company_diff(&company);
@@ -707,22 +779,30 @@ pub async fn apply_resync(
         return process_street_not_configured();
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for resync apply");
-            return internal_error("Could not apply the re-sync");
-        }
-    };
-
     // Single-use: a hit is consumed here whether or not it's still
     // fresh enough to use, so a stale leftover never lingers to be
     // mistaken for a later preview's own result.
     let cached = usable_cache_entry(state.resync_preview_cache.write().remove(&company_id));
 
+    // On a miss the comparison is built HERE, before the write
+    // transaction opens: `load_comparisons` reads the rows in its own
+    // short transaction, calls Process Street with no transaction held,
+    // and only then does the write transaction below begin. (This used to
+    // open the write transaction first and call Process Street inside it.)
+    // The rows it read are then a few seconds old by the time the writes
+    // run -- the same staleness window the preview-cache path above has
+    // always had, for up to `PREVIEW_CACHE_TTL`.
     let (company, facilities, people_by_run_id, merchant_account_refreshes) = match cached {
         Some(comparisons) => comparisons,
-        None => match load_comparisons(&mut tx, &client, company_id).await {
+        None => match load_comparisons(
+            &state.db,
+            user.user_id,
+            &user.role_keys,
+            &client,
+            company_id,
+        )
+        .await
+        {
             Ok(Some(comparisons)) => comparisons,
             Ok(None) => return not_found("company_not_found", "No such company.".to_string()),
             Err(err) => {
@@ -730,6 +810,14 @@ pub async fn apply_resync(
                 return internal_error("Could not apply the re-sync");
             }
         },
+    };
+
+    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for resync apply");
+            return internal_error("Could not apply the re-sync");
+        }
     };
 
     let mut updated_count = 0;
@@ -874,45 +962,68 @@ pub async fn apply_resync(
         }
     }
 
-    let mut people_indexed = 0;
+    // One DELETE for every refreshed run, then one multi-row INSERT -- two
+    // statements however many runs and people there are. This used to be a
+    // DELETE per run and an INSERT per person, each its own round trip
+    // inside this transaction: a company with ten runs and a few people
+    // each paid sixty-odd network round trips here before committing.
+    let refreshed_run_ids: Vec<String> = people_by_run_id.keys().cloned().collect();
+
+    if let Err(err) = sqlx::query(
+        "DELETE FROM clients.ps_person_index WHERE workflow = 'intake' AND ps_run_id = ANY($1)",
+    )
+    .bind(&refreshed_run_ids)
+    .execute(&mut *tx)
+    .await
+    {
+        tracing::error!(error = %err, user_id = %user.user_id, "resync apply failed to clear ps_person_index");
+        let _ = tx.rollback().await;
+        return internal_error("Could not apply the re-sync");
+    }
+
+    let mut index_run_ids: Vec<&str> = Vec::new();
+    let mut index_run_names: Vec<&str> = Vec::new();
+    let mut index_full_names: Vec<&str> = Vec::new();
+    let mut index_emails: Vec<Option<&str>> = Vec::new();
+    let mut index_phones: Vec<Option<&str>> = Vec::new();
+    let mut index_roles: Vec<&str> = Vec::new();
     for (run_id, people) in &people_by_run_id {
         let run_name = run_names
             .get(run_id)
-            .cloned()
-            .unwrap_or_else(|| run_id.clone());
+            .map(String::as_str)
+            .unwrap_or(run_id.as_str());
 
+        for person in people {
+            index_run_ids.push(run_id);
+            index_run_names.push(run_name);
+            index_full_names.push(&person.full_name);
+            index_emails.push(person.email.as_deref());
+            index_phones.push(person.phone.as_deref());
+            index_roles.push(person.role);
+        }
+    }
+
+    let people_indexed = index_run_ids.len();
+    if people_indexed > 0 {
         if let Err(err) = sqlx::query(
-            "DELETE FROM clients.ps_person_index WHERE workflow = 'intake' AND ps_run_id = $1",
+            "INSERT INTO clients.ps_person_index
+                 (workflow, ps_run_id, run_name, full_name, email, phone, role)
+             SELECT 'intake', run_id, run_name, full_name, email, phone, role
+               FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[])
+                    AS t(run_id, run_name, full_name, email, phone, role)",
         )
-        .bind(run_id)
+        .bind(&index_run_ids)
+        .bind(&index_run_names)
+        .bind(&index_full_names)
+        .bind(&index_emails)
+        .bind(&index_phones)
+        .bind(&index_roles)
         .execute(&mut *tx)
         .await
         {
-            tracing::error!(error = %err, user_id = %user.user_id, run_id, "resync apply failed to clear ps_person_index for a run");
+            tracing::error!(error = %err, user_id = %user.user_id, "resync apply failed to index people");
             let _ = tx.rollback().await;
             return internal_error("Could not apply the re-sync");
-        }
-
-        for person in people {
-            if let Err(err) = sqlx::query(
-                "INSERT INTO clients.ps_person_index
-                     (workflow, ps_run_id, run_name, full_name, email, phone, role)
-                 VALUES ('intake', $1, $2, $3, $4, $5, $6)",
-            )
-            .bind(run_id)
-            .bind(&run_name)
-            .bind(&person.full_name)
-            .bind(&person.email)
-            .bind(&person.phone)
-            .bind(person.role)
-            .execute(&mut *tx)
-            .await
-            {
-                tracing::error!(error = %err, user_id = %user.user_id, run_id, "resync apply failed to index a person");
-                let _ = tx.rollback().await;
-                return internal_error("Could not apply the re-sync");
-            }
-            people_indexed += 1;
         }
     }
 
@@ -1378,5 +1489,155 @@ mod tests {
     #[test]
     fn no_cached_preview_at_all_is_not_reused() {
         assert!(usable_cache_entry(None).is_none());
+    }
+
+    /// Real-database test of the apply path's `ps_person_index` rebuild
+    /// (needs the local `test-db`; see `clickup_db_tests`' module doc for
+    /// the run command). Seeds a preview into the cache -- so no Process
+    /// Street call happens -- applies it, and checks the run's index rows
+    /// were replaced wholesale while another run's rows were left alone.
+    #[tokio::test]
+    #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+    async fn resync_db_apply_replaces_a_runs_person_index_and_leaves_other_runs_alone() {
+        use crate::api::clickup_db_tests::{caller, create_user, superuser_pool};
+        use crate::process_street::{ProcessStreetClient, ProcessStreetConfig};
+
+        let _ = dotenvy::from_filename(".env.local");
+        let superuser = superuser_pool();
+        let user_id = create_user(&superuser, "resync").await;
+        let run_id = format!("run-{}", Uuid::new_v4());
+        let other_run_id = format!("run-other-{}", Uuid::new_v4());
+        let legal_name = format!("Resync Co {}", Uuid::new_v4());
+
+        let company_id: Uuid = sqlx::query_scalar(
+            "INSERT INTO clients.companies (legal_name, source, ps_intake_run_id)
+             VALUES ($1, 'process_street', $2) RETURNING id",
+        )
+        .bind(&legal_name)
+        .bind(&run_id)
+        .fetch_one(&superuser)
+        .await
+        .unwrap();
+
+        // Stale rows apply must replace, and an unrelated run's row it must not touch.
+        for (run, name) in [
+            (&run_id, "Stale Person"),
+            (&other_run_id, "Untouched Person"),
+        ] {
+            sqlx::query(
+                "INSERT INTO clients.ps_person_index
+                     (workflow, ps_run_id, run_name, full_name, email, phone, role)
+                 VALUES ('intake', $1, 'Old Run Name', $2, NULL, NULL, 'owner')",
+            )
+            .bind(run)
+            .bind(name)
+            .execute(&superuser)
+            .await
+            .unwrap();
+        }
+
+        let mut row = company_row(&legal_name, vec![]);
+        row.id = company_id;
+        row.ps_intake_run_id = Some(run_id.clone());
+
+        let person = |name: &str, email: Option<&str>, phone: Option<&str>, role| ExtractedPerson {
+            full_name: name.to_string(),
+            email: email.map(String::from),
+            phone: phone.map(String::from),
+            role,
+        };
+        let mut people_by_run_id = HashMap::new();
+        people_by_run_id.insert(
+            run_id.clone(),
+            vec![
+                person("Jane Owner", Some("jane@example.test"), None, "owner"),
+                person("Sam Signer", None, Some("555-0101"), "signer"),
+                person(
+                    "Pat Poc",
+                    Some("pat@example.test"),
+                    Some("555-0102"),
+                    "onboarding_poc",
+                ),
+            ],
+        );
+
+        let state = AppState {
+            db: crate::db::connect_test(),
+            process_street: Some(Arc::new(ProcessStreetClient::new(ProcessStreetConfig {
+                api_key: "k1".to_string(),
+            }))),
+            ..empty_state()
+        };
+        state.resync_preview_cache.write().insert(
+            company_id,
+            CachedComparisons {
+                computed_at: Instant::now(),
+                comparisons: (
+                    CompanyComparison { row, fresh: None },
+                    Vec::new(),
+                    people_by_run_id,
+                    HashMap::new(),
+                ),
+            },
+        );
+
+        let response = apply_resync(
+            State(state),
+            caller(user_id, &["onboarding_manager"], &["client_ops.perform"]),
+            Path(company_id),
+            Json(ApplyResyncRequest {
+                resolutions: Vec::new(),
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        #[allow(clippy::type_complexity)]
+        let rows: Vec<(String, Option<String>, Option<String>, String, String)> = sqlx::query_as(
+            "SELECT full_name, email, phone, role, run_name
+               FROM clients.ps_person_index
+              WHERE workflow = 'intake' AND ps_run_id = $1
+              ORDER BY full_name",
+        )
+        .bind(&run_id)
+        .fetch_all(&superuser)
+        .await
+        .unwrap();
+
+        // The run's rows are exactly the three fresh people (the stale one is
+        // gone), each carrying the company's name as run_name (the fallback
+        // when there is no ps_sync_state row).
+        let expected = |name: &str, email: Option<&str>, phone: Option<&str>, role: &str| {
+            (
+                name.to_string(),
+                email.map(String::from),
+                phone.map(String::from),
+                role.to_string(),
+                legal_name.clone(),
+            )
+        };
+        assert_eq!(
+            rows,
+            vec![
+                expected("Jane Owner", Some("jane@example.test"), None, "owner"),
+                expected(
+                    "Pat Poc",
+                    Some("pat@example.test"),
+                    Some("555-0102"),
+                    "onboarding_poc"
+                ),
+                expected("Sam Signer", None, Some("555-0101"), "signer"),
+            ]
+        );
+
+        let untouched: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM clients.ps_person_index
+              WHERE ps_run_id = $1 AND full_name = 'Untouched Person'",
+        )
+        .bind(&other_run_id)
+        .fetch_one(&superuser)
+        .await
+        .unwrap();
+        assert_eq!(untouched, 1, "another run's index rows must not be touched");
     }
 }
