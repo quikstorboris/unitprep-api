@@ -15,13 +15,6 @@
 //! sensitive key already stripped out. `clients::repository` never
 //! imports `FacilitySecrets`/`PartyPii` and never sees a plaintext SSN.
 
-// `clients::create::create_company_and_facilities` is a real caller as
-// of 2026-09-03 (Elavon ingestion at Create time), but several helpers
-// here (e.g. `sanitize_fields_for_snapshot` outside a specific call
-// path) are still only exercised by this module's own tests -- kept
-// broad rather than narrowed item-by-item for now.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;

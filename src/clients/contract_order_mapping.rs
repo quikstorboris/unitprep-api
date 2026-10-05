@@ -33,11 +33,16 @@
 use crate::clients::fields::value_for;
 use crate::process_street::FormField;
 
+//  on this struct and :
+// Contract Order ingestion is deliberately ON HOLD (nothing constructs this
+// outside the live-DB test yet). Remove the allows when a caller exists.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct MappedContractOrder {
     pub migrating_from_system: Option<String>,
 }
 
+#[allow(dead_code)]
 pub fn map_contract_order_fields(fields: &[FormField]) -> MappedContractOrder {
     MappedContractOrder {
         migrating_from_system: value_for(

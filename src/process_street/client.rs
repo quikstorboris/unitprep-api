@@ -22,12 +22,13 @@ pub enum ProcessStreetError {
     Parse(serde_json::Error, String),
 }
 
-// Workflow/WorkflowRun and list_workflows/list_workflow_runs below have
-// no caller yet -- they're for the future search/discovery flow
-// (Phase 2+: finding a company/facility by name before importing it),
-// distinct from get_run_form_fields/get_run_tasks, which `clients::ingest`
-// already calls for real. Remove these allows once that flow exists.
-#[allow(dead_code)]
+// The shape of Process Street's workflow-TEMPLATE list. Nothing in the
+// app lists templates (every workflow id is a known constant in
+// `clients::known_workflows`), so the `list_workflows` method that used it
+// was removed; the type stays test-only because the pagination tests use it
+// as a convenient item type.
+#[cfg(test)]
+#[allow(dead_code)] // only some tests read every field
 #[derive(Debug, Clone, Deserialize)]
 pub struct Workflow {
     pub id: String,
@@ -212,14 +213,6 @@ impl ProcessStreetClient {
         }
 
         Ok(all)
-    }
-
-    // No caller yet -- for the future search/discovery flow (Phase 2+).
-    // See the doc comment on `Workflow` above.
-    #[allow(dead_code)]
-    pub async fn list_workflows(&self) -> Result<Vec<Workflow>, ProcessStreetError> {
-        self.paginate(format!("{BASE_URL}/workflows"), "workflows")
-            .await
     }
 
     /// Every run for a workflow, across every status PS actually uses

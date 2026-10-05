@@ -1,10 +1,6 @@
 //! Shared PS form-field lookup helpers used by both `intake_mapping`
 //! and `merchant_account_mapping`.
 
-// Phase 1 only -- no HTTP handler calls into `clients::*` yet. Remove
-// once a real caller exists.
-#![allow(dead_code)]
-
 use crate::process_street::FormField;
 
 /// Looks up a field by PS's own `key` and returns its value trimmed of

@@ -406,15 +406,11 @@ pub async fn resolve_clickup_url(
 
 #[cfg(test)]
 mod tests {
-    use std::net::SocketAddr;
 
     use axum::http::StatusCode;
 
     use super::*;
     use crate::api::test_support::{clickup_user, empty_state, test_user};
-
-    #[allow(dead_code)]
-    fn _unused(_: SocketAddr) {}
 
     #[tokio::test]
     async fn listing_refuses_a_caller_without_the_permission() {

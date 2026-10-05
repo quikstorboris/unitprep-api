@@ -17,12 +17,6 @@
 //! only ever binds the `Vec<u8>` ciphertext `encrypted_pii`/
 //! `encrypted_secrets` already produced by that module.
 
-// Contract Order ingestion has no real caller yet (on hold per Boris,
-// 2026-08-31 -- see the vault's own Implementation Plan) -- everything
-// else here is called for real by `clients::create` and
-// `api::clients_elavon`.
-#![allow(dead_code)]
-
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
@@ -266,11 +260,12 @@ pub async fn insert_facility_policies_and_people(
 /// people it parsed. Returns `(company_id, facility_id)`. A thin
 /// wrapper over `insert_company`/`insert_facility`/
 /// `insert_facility_policies_and_people` above -- the "one run, one
-/// company, one facility" shape `clients::ingest::ingest_facility`
-/// already uses and has proven live; the split-creation flow
+/// company, one facility" shape (test-only now: used by this module's
+/// live-DB test); the split-creation flow
 /// (`clients::create`) calls the three building blocks directly instead,
 /// since it needs a company created from a *different* run than some of
 /// its facilities.
+#[cfg(test)]
 pub async fn ingest_intake_run(
     tx: &mut Transaction<'_, Postgres>,
     mapped: &MappedIntakeRun,
@@ -754,6 +749,11 @@ async fn insert_party(
 /// Inserts a Contract Order run's data for an already-existing
 /// facility. Nothing here is encrypted -- this workflow has no
 /// sensitive fields, unlike New Merchant Account.
+///
+/// : Contract Order ingestion is deliberately ON HOLD
+/// (no endpoint calls this yet); it is kept, with its live-DB test, rather
+/// than deleted. Remove the allow when a caller exists.
+#[allow(dead_code)]
 pub async fn ingest_contract_order_run(
     tx: &mut Transaction<'_, Postgres>,
     facility_id: Uuid,

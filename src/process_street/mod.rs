@@ -10,19 +10,16 @@
 //! exactly this reason.
 //!
 //! The `clients` module (mapping/ingestion layer, `src/clients/`) is
-//! this module's real caller: `clients::ingest` calls
-//! `get_run_form_fields`/`get_run_tasks`, and `clients::search`/
+//! this module's real caller: `clients::create` and the Re-sync/Elavon
+//! handlers call `get_run_form_fields`/`get_run_tasks`, and `clients::search`/
 //! `clients::sync` call `list_workflow_runs`/`search_workflow_runs_by_name`
 //! for the two search paths `api::clients_search` exposes.
-//! `list_workflows`/`Workflow` (listing workflow *templates*, distinct
-//! from workflow *runs*) still have no caller -- see their own
-//! `#[allow(dead_code)]` in client.rs.
+//! (Listing workflow *templates*, distinct from workflow *runs*, was never
+//! needed -- every workflow id is a known constant -- and its unused method
+//! was removed.)
 
 mod client;
 mod config;
 
 pub use client::{FormField, ProcessStreetClient, ProcessStreetError, Task, WorkflowRun};
-// No caller yet -- see the doc comment on `Workflow` in client.rs.
-#[allow(unused_imports)]
-pub use client::Workflow;
 pub use config::ProcessStreetConfig;

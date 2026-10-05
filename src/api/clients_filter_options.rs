@@ -5,7 +5,8 @@
 //! ever show real, in-use options rather than a hardcoded enum. Every
 //! `staff` entry is real today only once Implementation Manager/Sales
 //! Rep assignment is actually wired up (PS field mapping + backfill --
-//! both a follow-up, see `clients::staff_resolution`'s own module doc);
+//! both a follow-up; the `staff_resolution` module meant to do it was never
+//! built and has been removed);
 //! until then this legitimately returns an empty `staff` list, same "not
 //! a bug" reasoning `CompanySummary`'s own doc comment gives.
 //!

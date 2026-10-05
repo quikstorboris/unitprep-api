@@ -11,10 +11,6 @@
 //! land in the right slot in the OO UI -- it never decomposes a value
 //! into a decimal/boolean/day-count.
 
-// Phase 1 only -- no HTTP handler calls into `clients::*` yet. Remove
-// once a real caller exists.
-#![allow(dead_code)]
-
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 

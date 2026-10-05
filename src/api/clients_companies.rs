@@ -111,8 +111,9 @@ pub struct CompanySummary {
     pub facility_names: Vec<String>,
     /// `None` for every company today -- Implementation Manager/Sales
     /// Rep assignment (PS field mapping + backfill) is a follow-up once
-    /// the exact PS field shape is confirmed; see
-    /// `clients::staff_resolution`'s own module doc. Not a bug.
+    /// the exact PS field shape is confirmed (the `staff_resolution`
+    /// module that was meant to do it was never built and has been
+    /// removed; the `clients.staff_identity_alias` table remains). Not a bug.
     pub implementation_manager: Option<StaffRef>,
     pub sales_rep: Option<StaffRef>,
 }

@@ -3,10 +3,6 @@
 //! [[Process Street Integration — Kickoff & Findings]] in the vault for
 //! why these three and not others.
 
-// No HTTP handler or CLI binary calls into `clients::search` (this
-// module's only caller) yet. Remove once one exists.
-#![allow(dead_code)]
-
 /// 🚂 Intake / Progress -- client info collection, one run per facility.
 pub const INTAKE_WORKFLOW_ID: &str = "tRh93HgRC5OLom3UxhJD3w";
 

@@ -4,8 +4,8 @@
 //! is configured, alongside `api::clients_search`, which reads what this
 //! writes. Also proven directly against the real API and real Postgres
 //! by `live_tests::sync_one_run_indexes_a_real_run_and_skips_an_unchanged_one`,
-//! the same "prove it, then roll back" discipline `clients::ingest`'s
-//! own live test uses.
+//! the same "prove it, then roll back" discipline `clients::repository`'s
+//! live-DB tests use.
 //!
 //! **The delta mechanism**: `list_workflow_runs` is cheap (one paginated
 //! list call, no per-run fetch) and every run PS returns carries its own
@@ -27,7 +27,7 @@
 //! `onboarding_manager`/`department_manager` -- but `begin_rls_transaction`
 //! never validates `role_keys` against a real roles table, it just sets
 //! them as the `app.current_user_roles` GUC verbatim (see
-//! `clients::ingest`'s own live test), so passing that role list
+//! `clients::repository`'s live-DB tests), so passing that role list
 //! directly satisfies the write policies too. There is no distinct
 //! "system" role in this app's RBAC, so reusing the same client-ops
 //! write gate every human write already goes through is the pragmatic

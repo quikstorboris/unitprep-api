@@ -42,10 +42,6 @@
 //! detects which format a given chunk of text uses (by whether its
 //! lines contain commas) rather than assuming one universally.
 
-// Phase 1 only -- no HTTP handler calls into `clients::*` yet. Remove
-// once a real caller exists.
-#![allow(dead_code)]
-
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

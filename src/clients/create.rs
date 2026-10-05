@@ -314,8 +314,7 @@ pub(crate) async fn check_not_already_imported(
 /// entry in `facility_selections` (`(run_id, reviewed fields,
 /// merchant_account_run_id)`), all attached to that company. Takes an
 /// already-open transaction -- the caller decides whether to commit or
-/// roll back, same discipline every other write in this domain uses
-/// (see `clients::ingest::ingest_facility`).
+/// roll back, same discipline every other write in this domain uses.
 ///
 /// **A facility's own Merchant Account data is only ever ingested here**
 /// (2026-09-03 fix): the correlation itself was already resolved by

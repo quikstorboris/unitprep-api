@@ -6,6 +6,23 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.74] - 2026-10-05
+
+Efficiency refactor chunk E1: dead code removed, and the compiler's dead-code detection turned back on for the `clients` module. Net -554 lines.
+
+### Removed
+- **`clients::ingest`** (280 lines) and **`clients::staff_resolution`** (236 lines): both were built as "Phase 1" modules that nothing ever called (their own headers said "no caller yet"); the only references were doc comments and their own tests. `ingest_facility` was superseded by `clients::create`; `resolve_staff_identifier` was a never-built follow-up (the `clients.staff_identity_alias` table it would have read remains, and is now a decision in plan chunk E3).
+- **`ProcessStreetClient::list_workflows`** and its public re-export: nothing lists workflow *templates* (every workflow id is a known constant). The `Workflow` type stays, test-only, as the item type the pagination tests use.
+- A stray unused test stub (`_unused`) in `api::clickup_lookup`.
+
+### Changed
+- **Seven stale module-level `#![allow(dead_code)]` removed** (`known_workflows`, `intake_mapping`, `merchant_account_mapping`, `people`, `encryption`, `fields`, `repository`). Their own headers said "remove once a real caller exists", and every module now has real callers; the blanket allows were hiding the genuinely dead items above. With the allows gone the compiler found exactly three more: `repository::ingest_intake_run` (now `#[cfg(test)]`, since only its live-DB test calls it) and the Contract Order pieces (`map_contract_order_fields`, `MappedContractOrder`, `repository::ingest_contract_order_run`), which are **deliberately on hold** -- kept, with a narrow item-level `#[allow(dead_code)]` and a comment saying why, instead of a module-wide one.
+- Doc comments that pointed at the deleted modules were updated.
+
+### Not changed (left deliberately)
+- Items that are `pub` in library crates but only called from tests (`dedup::ingest::records_from_csv_document`, `docx_surgeon::edit_docx`, `FlatDocument::run_containing`, `clickup::hierarchy::invalidate`): the compiler does not flag them and narrowing visibility is cosmetic.
+- `src/ai/` (the AI-integration placeholder), by instruction.
+
 ## [1.9.73] - 2026-10-05
 
 Efficiency refactor chunk B3: the Process Street background sync no longer holds a database transaction open for minutes, fetches runs concurrently, and writes in batches. The largest single change of the refactor.

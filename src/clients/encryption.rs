@@ -30,11 +30,6 @@
 //! also avoids it -- `tracing::info!`/`error!` on a decrypted SSN or
 //! password would defeat the entire point.
 
-// Phase 1 only -- nothing in the rest of the crate calls into this yet
-// (no HTTP handler ingests a Merchant Account run). Remove once a real
-// caller exists.
-#![allow(dead_code)]
-
 use chacha20poly1305::{
     aead::{Aead, KeyInit, Payload},
     ChaCha20Poly1305, Key, Nonce,
