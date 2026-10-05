@@ -3,7 +3,7 @@
 -- local test-db, via
 --   pg_dump --schema-only --no-owner --no-privileges
 -- Read-only reference, not applied by sqlx and not part of the migrations/
--- directory -- the 103 incremental migrations under migrations/
+-- directory -- the 105 incremental migrations under migrations/
 -- remain the actual source of truth and the real "how did we get here"
 -- history. This file exists so a newcomer (human or AI) can see current
 -- table/column/RLS/index shape in one place without reading them all in
@@ -1009,6 +1009,7 @@ CREATE TABLE client_ops.tool_runs (
     source_content_type text,
     source_encrypted boolean DEFAULT false NOT NULL,
     records_encrypted bytea,
+    output_dropbox_link text,
     CONSTRAINT tool_runs_output_bytes_fields_together CHECK ((((output_bytes IS NULL) = (output_content_type IS NULL)) AND ((output_bytes IS NULL) = (output_file_name IS NULL)))),
     CONSTRAINT tool_runs_source_bytes_fields_together CHECK (((source_bytes IS NULL) = (source_content_type IS NULL))),
     CONSTRAINT tool_runs_tool_check CHECK ((tool = ANY (ARRAY['dedup'::text, 'unit_group'::text, 'tagger'::text])))
@@ -1637,6 +1638,23 @@ CREATE TABLE integrations.clickup_settings (
 
 
 --
+-- Name: clickup_task_steps; Type: TABLE; Schema: integrations; Owner: -
+--
+
+CREATE TABLE integrations.clickup_task_steps (
+    step_key text NOT NULL,
+    label text NOT NULL,
+    ordinal integer NOT NULL,
+    phrases text[] NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_by uuid,
+    CONSTRAINT clickup_task_steps_label_check CHECK ((btrim(label) <> ''::text)),
+    CONSTRAINT clickup_task_steps_ordinal_check CHECK ((ordinal >= 1)),
+    CONSTRAINT clickup_task_steps_phrases_check CHECK ((cardinality(phrases) > 0))
+);
+
+
+--
 -- Name: dropbox_configuration; Type: TABLE; Schema: integrations; Owner: -
 --
 
@@ -2191,6 +2209,14 @@ ALTER TABLE ONLY integrations.clickup_settings
 
 
 --
+-- Name: clickup_task_steps clickup_task_steps_pkey; Type: CONSTRAINT; Schema: integrations; Owner: -
+--
+
+ALTER TABLE ONLY integrations.clickup_task_steps
+    ADD CONSTRAINT clickup_task_steps_pkey PRIMARY KEY (step_key);
+
+
+--
 -- Name: dropbox_configuration dropbox_configuration_pkey; Type: CONSTRAINT; Schema: integrations; Owner: -
 --
 
@@ -2549,6 +2575,13 @@ CREATE TRIGGER policy_taxes_set_updated_at BEFORE UPDATE ON clients.policy_taxes
 --
 
 CREATE TRIGGER clickup_settings_set_updated_at BEFORE UPDATE ON integrations.clickup_settings FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
+
+
+--
+-- Name: clickup_task_steps clickup_task_steps_set_updated_at; Type: TRIGGER; Schema: integrations; Owner: -
+--
+
+CREATE TRIGGER clickup_task_steps_set_updated_at BEFORE UPDATE ON integrations.clickup_task_steps FOR EACH ROW EXECUTE FUNCTION auth.set_updated_at();
 
 
 --
@@ -2914,6 +2947,14 @@ ALTER TABLE ONLY clients.staff_identity_alias
 
 ALTER TABLE ONLY integrations.clickup_settings
     ADD CONSTRAINT clickup_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: clickup_task_steps clickup_task_steps_updated_by_fkey; Type: FK CONSTRAINT; Schema: integrations; Owner: -
+--
+
+ALTER TABLE ONLY integrations.clickup_task_steps
+    ADD CONSTRAINT clickup_task_steps_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 
 
 --
@@ -4117,6 +4158,26 @@ CREATE POLICY clickup_settings_select_authenticated ON integrations.clickup_sett
 --
 
 CREATE POLICY clickup_settings_update_admin_or_developer ON integrations.clickup_settings FOR UPDATE USING ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text))) WITH CHECK ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text)));
+
+
+--
+-- Name: clickup_task_steps; Type: ROW SECURITY; Schema: integrations; Owner: -
+--
+
+ALTER TABLE integrations.clickup_task_steps ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: clickup_task_steps clickup_task_steps_select_authenticated; Type: POLICY; Schema: integrations; Owner: -
+--
+
+CREATE POLICY clickup_task_steps_select_authenticated ON integrations.clickup_task_steps FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
+
+
+--
+-- Name: clickup_task_steps clickup_task_steps_update_admin_or_developer; Type: POLICY; Schema: integrations; Owner: -
+--
+
+CREATE POLICY clickup_task_steps_update_admin_or_developer ON integrations.clickup_task_steps FOR UPDATE USING ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text))) WITH CHECK ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text)));
 
 
 --

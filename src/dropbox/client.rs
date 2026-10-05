@@ -755,6 +755,91 @@ impl DropboxClient {
 
         Ok(())
     }
+
+    /// A Dropbox link to the file at `path`, reusing the one that already
+    /// exists (a second request for the same file is answered by Dropbox
+    /// with `shared_link_already_exists`). No audience settings are sent,
+    /// so the link takes the account's own default (a team-only link in
+    /// a team account). Needs the app's `sharing.write` scope; without it
+    /// Dropbox answers with an error and the caller falls back to a
+    /// plain web path.
+    pub async fn shared_link(&self, path: &str) -> Result<String, DropboxError> {
+        let response = self
+            .send_authed(RetryPolicy::STANDARD, |token| {
+                self.http
+                    .post(
+                        self.endpoints
+                            .api_url("/2/sharing/create_shared_link_with_settings"),
+                    )
+                    .bearer_auth(token)
+                    .header("Dropbox-API-Path-Root", self.path_root_header())
+                    .json(&serde_json::json!({ "path": path }))
+            })
+            .await?;
+
+        let status = response.status();
+        let body = response.text().await?;
+
+        if status.is_success() {
+            return link_url(&body);
+        }
+
+        if status.as_u16() == 409 && body.contains("shared_link_already_exists") {
+            return self.existing_shared_link(path).await;
+        }
+
+        Err(DropboxError::Api {
+            status: status.as_u16(),
+            body,
+        })
+    }
+
+    async fn existing_shared_link(&self, path: &str) -> Result<String, DropboxError> {
+        let response = self
+            .send_authed(RetryPolicy::STANDARD, |token| {
+                self.http
+                    .post(self.endpoints.api_url("/2/sharing/list_shared_links"))
+                    .bearer_auth(token)
+                    .header("Dropbox-API-Path-Root", self.path_root_header())
+                    .json(&serde_json::json!({ "path": path, "direct_only": true }))
+            })
+            .await?;
+
+        let status = response.status();
+        let body = response.text().await?;
+
+        if !status.is_success() {
+            return Err(DropboxError::Api {
+                status: status.as_u16(),
+                body,
+            });
+        }
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&body).map_err(|err| DropboxError::Api {
+                status: status.as_u16(),
+                body: format!("failed to parse shared-link list ({err}): {body}"),
+            })?;
+
+        parsed["links"][0]["url"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or(DropboxError::Api {
+                status: status.as_u16(),
+                body: "no shared link in the list response".to_string(),
+            })
+    }
+}
+
+/// The `url` of a `create_shared_link_with_settings` response.
+fn link_url(body: &str) -> Result<String, DropboxError> {
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|parsed| parsed["url"].as_str().map(str::to_string))
+        .ok_or_else(|| DropboxError::Api {
+            status: 200,
+            body: format!("no url in the shared-link response: {body}"),
+        })
 }
 
 #[cfg(test)]

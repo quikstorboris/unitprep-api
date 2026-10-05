@@ -144,6 +144,18 @@ pub(crate) async fn load_user_token(
     state: &AppState,
     user: &AuthenticatedUser,
 ) -> Result<String, Response> {
+    load_user_credentials(state, user)
+        .await
+        .map(|(token, _)| token)
+}
+
+/// The caller's decrypted token plus their ClickUp user id (when ClickUp
+/// reported one), read in a single database round trip -- for endpoints
+/// that need both (adding the user as an assignee).
+pub(crate) async fn load_user_credentials(
+    state: &AppState,
+    user: &AuthenticatedUser,
+) -> Result<(String, Option<String>), Response> {
     let mut tx = begin_rls_transaction(&state.db, user.user_id, &user.role_keys)
         .await
         .map_err(|err| {
@@ -151,8 +163,8 @@ pub(crate) async fn load_user_token(
             internal_error("Could not use your ClickUp connection")
         })?;
 
-    let row: Option<(Vec<u8>, String)> = sqlx::query_as(
-        "SELECT token_ciphertext, status FROM integrations.user_clickup_credentials WHERE user_id = $1",
+    let row: Option<(Vec<u8>, String, Option<String>)> = sqlx::query_as(
+        "SELECT token_ciphertext, status, clickup_user_id FROM integrations.user_clickup_credentials WHERE user_id = $1",
     )
     .bind(user.user_id)
     .fetch_optional(&mut *tx)
@@ -167,7 +179,7 @@ pub(crate) async fn load_user_token(
         return Err(internal_error("Could not use your ClickUp connection"));
     }
 
-    let Some((ciphertext, status)) = row else {
+    let Some((ciphertext, status, clickup_user_id)) = row else {
         return Err(conflict(
             "clickup_not_connected",
             "Connect your ClickUp account first (My Integrations > ClickUp).".to_string(),
@@ -182,10 +194,12 @@ pub(crate) async fn load_user_token(
         ));
     }
 
-    secrets::decrypt(&aad(user.user_id), &ciphertext).map_err(|err| {
-        tracing::error!(error = %err, user_id = %user.user_id, "failed to decrypt stored ClickUp token");
-        internal_error("Could not use your ClickUp connection")
-    })
+    secrets::decrypt(&aad(user.user_id), &ciphertext)
+        .map(|token| (token, clickup_user_id))
+        .map_err(|err| {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to decrypt stored ClickUp token");
+            internal_error("Could not use your ClickUp connection")
+        })
 }
 
 /// Maps a failed ClickUp call made *with a token we believed valid* to

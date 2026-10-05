@@ -85,7 +85,7 @@ fn space_not_found(space_name: &str) -> Response {
     )
 }
 
-async fn onboarding_space_name(
+pub(crate) async fn onboarding_space_name(
     state: &AppState,
     user: &AuthenticatedUser,
 ) -> Result<String, Response> {
@@ -114,8 +114,10 @@ pub(crate) async fn token_and_hierarchy(
     state: &AppState,
     user: &AuthenticatedUser,
 ) -> Result<(String, std::sync::Arc<Hierarchy>), Response> {
-    let token = load_user_token(state, user).await?;
-    let space_name = onboarding_space_name(state, user).await?;
+    let (token, space_name) = tokio::try_join!(
+        load_user_token(state, user),
+        onboarding_space_name(state, user)
+    )?;
 
     match hierarchy::cached_or_load(user.user_id, &clickup_client(state), &token, &space_name).await
     {
@@ -310,6 +312,20 @@ pub(crate) async fn verify_list(
     hierarchy: &Hierarchy,
     list_id: &str,
 ) -> Result<ListOption, Response> {
+    // A list the (just fetched) onboarding hierarchy already holds is
+    // confirmed from it: same ClickUp data, no extra call per list. Only
+    // lists it does not hold (a pasted URL for a folderless list, or one
+    // in another space) are asked of ClickUp.
+    if let Some((folder, list)) = hierarchy.find_list(list_id) {
+        return Ok(ListOption {
+            list_id: list.id.clone(),
+            list_name: list.name.trim().to_string(),
+            folder_id: folder.id.clone(),
+            folder_name: folder.name.trim().to_string(),
+            url: hierarchy.list_url(&list.id),
+        });
+    }
+
     let detail = match clickup_client(state).list(token, list_id).await {
         Ok(detail) => detail,
         Err(ClickUpError::NotFound) => {

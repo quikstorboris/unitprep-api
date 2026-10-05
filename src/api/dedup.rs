@@ -702,6 +702,35 @@ pub async fn export_to_dropbox(
     )
     .await;
 
+    // Make the share link now, in the background, and keep it with the run:
+    // the ClickUp duplicate-check comment links this file, and asking
+    // Dropbox for the link then would add a second to that update. Not
+    // awaited -- the save is already done, and a missing link is simply
+    // made when it is first needed.
+    {
+        let (dropbox, db) = (state.dropbox.clone(), state.db.clone());
+        let (actor, roles) = (user.user_id, user.role_keys.clone());
+        let (session_id, path) = (request.session_id.clone(), dropbox_path.clone());
+        tokio::spawn(async move {
+            match dropbox.shared_link(&path).await {
+                Ok(link) => {
+                    tool_runs::store_output_dropbox_link(
+                        &db,
+                        actor,
+                        &roles,
+                        &session_id,
+                        &path,
+                        &link,
+                    )
+                    .await
+                }
+                Err(err) => {
+                    tracing::debug!(error = %err, path, "Dropbox share link not created at save time")
+                }
+            }
+        });
+    }
+
     audit_log::record(
         &state.db,
         audit_log::event::DEDUP_COMPLETED,

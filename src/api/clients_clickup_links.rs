@@ -287,23 +287,29 @@ pub async fn save_clickup_links(
     }
 
     // After the commit, not before -- see fees.rs's update_fees for why.
-    for (facility_id, previous_list_id, list) in &changes {
-        audit_log::record(
-            &state.db,
-            audit_log::event::FACILITY_CLICKUP_LINKED,
-            user.user_id,
-            "facility",
-            Some(&facility_id.to_string()),
-            audit_log::Change::from_to(
-                link_state(previous_list_id.as_deref(), None),
-                link_state(Some(&list.list_id), Some(&list.list_name)),
-            ),
-            user_agent,
-            None,
-            serde_json::json!({ "company_id": company_id }),
-        )
-        .await;
-    }
+    // One audit row per facility, written together (each is its own
+    // database round trip; nine in a row is seconds of waiting).
+    let (db, actor) = (&state.db, user.user_id);
+    futures::future::join_all(changes.iter().map(
+        |(facility_id, previous_list_id, list)| async move {
+            audit_log::record(
+                db,
+                audit_log::event::FACILITY_CLICKUP_LINKED,
+                actor,
+                "facility",
+                Some(&facility_id.to_string()),
+                audit_log::Change::from_to(
+                    link_state(previous_list_id.as_deref(), None),
+                    link_state(Some(&list.list_id), Some(&list.list_name)),
+                ),
+                user_agent,
+                None,
+                serde_json::json!({ "company_id": company_id }),
+            )
+            .await;
+        },
+    ))
+    .await;
 
     Json(SaveLinksResponse {
         linked: changes.len(),
@@ -418,11 +424,12 @@ async fn unlink(
         return internal_error("Could not remove the ClickUp link");
     }
 
-    for (id, list_id, list_name) in &linked {
+    let (db, actor) = (&state.db, user.user_id);
+    futures::future::join_all(linked.iter().map(|(id, list_id, list_name)| async move {
         audit_log::record(
-            &state.db,
+            db,
             audit_log::event::FACILITY_CLICKUP_UNLINKED,
-            user.user_id,
+            actor,
             "facility",
             Some(&id.to_string()),
             audit_log::Change::from_to(
@@ -434,7 +441,8 @@ async fn unlink(
             serde_json::json!({ "company_id": company_id }),
         )
         .await;
-    }
+    }))
+    .await;
 
     Json(UnlinkResponse {
         unlinked: linked.len(),

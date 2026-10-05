@@ -25,15 +25,16 @@ use super::super::{
     acknowledge_group_warnings, analyze, auth_audit_logs, auth_audit_logs_export,
     auth_configuration, auth_invites, auth_login, auth_logout, auth_passkey_reverify,
     auth_register, auth_roles, auth_totp, auth_user_permissions, auth_user_role, auth_user_status,
-    auth_users, cancel_session, clickup_connection, clickup_lookup, client_ops_activity_logs,
-    client_ops_activity_logs_export, client_ops_qms_tags, clients_clickup_links, clients_companies,
-    clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
-    clients_facility_people, clients_facility_policies_edit, clients_filter_options,
-    clients_manual_link, clients_onboarding_summary, clients_preview, clients_resync,
-    clients_search, clients_sync, correct, correct_group, dedup, dedup_files, dedup_rematch,
-    discover, dropbox_browse, dropbox_settings, exclude_group, exclude_groups, exempt, export,
-    group_file_confirm, group_file_upload, process_street_settings, resolve_unit_format,
-    select_group_file, select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
+    auth_users, cancel_session, clickup_connection, clickup_duplicate_check, clickup_lookup,
+    clickup_prefetch, client_ops_activity_logs, client_ops_activity_logs_export,
+    client_ops_qms_tags, clients_clickup_links, clients_companies, clients_create, clients_detail,
+    clients_dropbox_folder, clients_elavon, clients_facility_people,
+    clients_facility_policies_edit, clients_filter_options, clients_manual_link,
+    clients_onboarding_summary, clients_preview, clients_resync, clients_search, clients_sync,
+    correct, correct_group, dedup, dedup_files, dedup_rematch, discover, dropbox_browse,
+    dropbox_settings, exclude_group, exclude_groups, exempt, export, group_file_confirm,
+    group_file_upload, process_street_settings, resolve_unit_format, select_group_file,
+    select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
 };
 use super::rate_limit_exceeded_with_audit;
 
@@ -485,6 +486,52 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
                 RouteAccess::Permission {
                     keys: &["integrations.clickup"],
                     action: "unlink_facility_clickup",
+                },
+            )],
+        )
+        // Fire-and-forget cache warm-ups (read-only; answer 202 at once).
+        .gated_route(
+            "/integrations/clickup/prefetch",
+            post(clickup_prefetch::prefetch_hierarchy),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "prefetch_clickup_hierarchy",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/facilities/{facility_id}/clickup/prefetch-tasks",
+            post(clickup_prefetch::prefetch_facility_tasks),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "prefetch_clickup_tasks",
+                },
+            )],
+        )
+        // Posting a finished duplicate check to the facility's ClickUp task.
+        .gated_route(
+            "/clients/{company_id}/facilities/{facility_id}/clickup/duplicate-check-tasks",
+            get(clickup_duplicate_check::duplicate_check_tasks),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_duplicate_check_tasks",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/facilities/{facility_id}/clickup/duplicate-check-results",
+            post(clickup_duplicate_check::post_duplicate_check_results),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "post_clickup_duplicate_check_results",
                 },
             )],
         )

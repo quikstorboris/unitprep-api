@@ -18,6 +18,9 @@ pub mod assignment;
 mod client;
 pub mod hierarchy;
 pub mod matching;
+pub mod task_cache;
+pub mod task_matching;
+pub mod tasks;
 pub mod url;
 
 #[cfg(test)]

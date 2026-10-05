@@ -670,12 +670,13 @@ async fn clickup_links_db_unlinking_works_even_when_the_users_token_has_gone_bad
 
     // The user's token is revoked in ClickUp. A lookup that calls ClickUp
     // now fails with the actionable "token invalid" conflict and flips the
-    // stored status...
+    // stored status. (A list already in the cached hierarchy is confirmed
+    // without calling ClickUp, so ask about one that is not.)
     accepting.store(false, Ordering::SeqCst);
     let lookup = fx
         .resolve(&format!(
             "https://app.clickup.com/8413555/v/li/{}",
-            fx.ids.synott
+            fx.ids.other_space
         ))
         .await;
     assert_eq!(lookup.status(), StatusCode::CONFLICT);

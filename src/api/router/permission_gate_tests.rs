@@ -24,9 +24,10 @@ use crate::api::test_support::{empty_state, test_user};
 use crate::api::{
     auth_audit_logs, auth_audit_logs_export, auth_configuration, auth_invites,
     auth_user_permissions, auth_user_role, auth_user_status, auth_users, clickup_connection,
-    clickup_lookup, client_ops_activity_logs, client_ops_activity_logs_export, client_ops_qms_tags,
-    clients_clickup_links, clients_create, clients_elavon, clients_manual_link, clients_resync,
-    clients_sync, dedup_rematch, dropbox_settings, process_street_settings, tool_runs,
+    clickup_duplicate_check, clickup_lookup, clickup_prefetch, client_ops_activity_logs,
+    client_ops_activity_logs_export, client_ops_qms_tags, clients_clickup_links, clients_create,
+    clients_elavon, clients_manual_link, clients_resync, clients_sync, dedup_rematch,
+    dropbox_settings, process_street_settings, tool_runs,
 };
 
 use super::routes::build;
@@ -287,6 +288,57 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                     axum::extract::State(empty_state()),
                     test_user(),
                     HeaderMap::new(),
+                    Path((Uuid::new_v4(), Uuid::new_v4())),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/facilities/{facility_id}/clickup/duplicate-check-tasks",
+            Method::GET,
+            (|| {
+                Box::pin(clickup_duplicate_check::duplicate_check_tasks(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Path((Uuid::new_v4(), Uuid::new_v4())),
+                    axum::extract::Query(clickup_duplicate_check::CandidatesQuery {
+                        session_id: "s".to_string(),
+                    }),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/facilities/{facility_id}/clickup/duplicate-check-results",
+            Method::POST,
+            (|| {
+                Box::pin(clickup_duplicate_check::post_duplicate_check_results(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path((Uuid::new_v4(), Uuid::new_v4())),
+                    Json(clickup_duplicate_check::PostResultsRequest {
+                        session_id: "s".to_string(),
+                        task_id: "t".to_string(),
+                    }),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/integrations/clickup/prefetch",
+            Method::POST,
+            (|| {
+                Box::pin(clickup_prefetch::prefetch_hierarchy(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/facilities/{facility_id}/clickup/prefetch-tasks",
+            Method::POST,
+            (|| {
+                Box::pin(clickup_prefetch::prefetch_facility_tasks(
+                    axum::extract::State(empty_state()),
+                    test_user(),
                     Path((Uuid::new_v4(), Uuid::new_v4())),
                 ))
             }) as fn() -> BoxFuture,

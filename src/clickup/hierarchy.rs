@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use uuid::Uuid;
 
-use super::client::{ClickUpClient, ClickUpError, ClickUpFolder};
+use super::client::{ClickUpClient, ClickUpError, ClickUpFolder, ClickUpListRef};
 use super::matching::{is_facility_list, ListEntry};
 
 /// How long a fetched hierarchy is reused. Short: a list created in
@@ -42,6 +42,20 @@ impl Hierarchy {
     /// The URL that opens `list_id` in the ClickUp web app.
     pub fn list_url(&self, list_id: &str) -> String {
         list_url(&self.team_id, list_id)
+    }
+
+    /// The folder and list for `list_id` when it is one of this space's
+    /// foldered lists -- lets a caller confirm a list from the data it
+    /// already holds instead of asking ClickUp again. A folderless list
+    /// is not here (the hierarchy only walks folders).
+    pub fn find_list(&self, list_id: &str) -> Option<(&ClickUpFolder, &ClickUpListRef)> {
+        self.folders.iter().find_map(|folder| {
+            folder
+                .lists
+                .iter()
+                .find(|list| list.id == list_id)
+                .map(|list| (folder, list))
+        })
     }
 
     /// Every list that is an actual facility's onboarding list (see
@@ -103,6 +117,28 @@ fn cache() -> &'static Cache {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn fresh(user_id: Uuid) -> Option<Arc<Hierarchy>> {
+    let cache = cache().lock().expect("cache lock");
+    let (fetched_at, hierarchy) = cache.get(&user_id)?;
+    (fetched_at.elapsed() < CACHE_TTL).then(|| hierarchy.clone())
+}
+
+type Loads = Mutex<HashMap<Uuid, Arc<tokio::sync::Mutex<()>>>>;
+
+/// One lock per user, so requests that arrive together on a cold cache
+/// (the Link dialog fires its list catalog and its suggestions at once)
+/// share a single three-call ClickUp walk instead of each making their own.
+fn load_lock(user_id: Uuid) -> Arc<tokio::sync::Mutex<()>> {
+    static LOADS: OnceLock<Loads> = OnceLock::new();
+    LOADS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("load lock map")
+        .entry(user_id)
+        .or_default()
+        .clone()
+}
+
 /// The cached hierarchy for `user_id` if it is fresh, otherwise a newly
 /// fetched one (which is then cached).
 pub async fn cached_or_load(
@@ -111,10 +147,16 @@ pub async fn cached_or_load(
     token: &str,
     space_name: &str,
 ) -> Result<Arc<Hierarchy>, HierarchyError> {
-    if let Some((fetched_at, hierarchy)) = cache().lock().expect("cache lock").get(&user_id) {
-        if fetched_at.elapsed() < CACHE_TTL {
-            return Ok(hierarchy.clone());
-        }
+    if let Some(hierarchy) = fresh(user_id) {
+        return Ok(hierarchy);
+    }
+
+    let lock = load_lock(user_id);
+    let _guard = lock.lock().await;
+
+    // Whoever held the lock before us may have just loaded it.
+    if let Some(hierarchy) = fresh(user_id) {
+        return Ok(hierarchy);
     }
 
     let hierarchy = Arc::new(load(client, token, space_name).await?);

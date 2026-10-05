@@ -183,9 +183,40 @@ fn shared_http() -> reqwest::Client {
         .clone()
 }
 
+/// Maps a ClickUp HTTP answer to its body or the matching [`ClickUpError`].
+fn into_result(status: reqwest::StatusCode, body: String) -> Result<String, ClickUpError> {
+    if status.is_success() {
+        return Ok(body);
+    }
+
+    let ecode = serde_json::from_str::<ErrorBody>(&body)
+        .ok()
+        .and_then(|parsed| parsed.ecode);
+
+    if status == reqwest::StatusCode::UNAUTHORIZED {
+        return Err(
+            if ecode.as_deref() == Some(ECODE_NOT_AUTHORIZED_FOR_OBJECT) {
+                ClickUpError::NotFound
+            } else {
+                ClickUpError::Unauthorized
+            },
+        );
+    }
+
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(ClickUpError::NotFound);
+    }
+
+    Err(ClickUpError::Api {
+        status: status.as_u16(),
+        body,
+    })
+}
+
 pub struct ClickUpClient {
-    http: reqwest::Client,
-    base_url: String,
+    // `pub(super)` so `tasks.rs` (the task-level calls) can build on them.
+    pub(super) http: reqwest::Client,
+    pub(super) base_url: String,
 }
 
 impl ClickUpClient {
@@ -200,7 +231,7 @@ impl ClickUpClient {
     /// ClickUp personal tokens are sent as-is -- **no `Bearer` prefix**
     /// (confirmed against the live API 2026-10-02). The token never
     /// appears in logs or in a returned error.
-    async fn get(&self, token: &str, path: &str) -> Result<String, ClickUpError> {
+    pub(super) async fn get(&self, token: &str, path: &str) -> Result<String, ClickUpError> {
         // GET only, so repeating it on a transient failure is safe.
         let url = format!("{}{}", self.base_url, path);
         let response = send_with_retry(RetryPolicy::STANDARD, || {
@@ -212,36 +243,33 @@ impl ClickUpClient {
 
         let status = response.status();
         let body = response.text().await?;
-
-        if status.is_success() {
-            return Ok(body);
-        }
-
-        let ecode = serde_json::from_str::<ErrorBody>(&body)
-            .ok()
-            .and_then(|parsed| parsed.ecode);
-
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(
-                if ecode.as_deref() == Some(ECODE_NOT_AUTHORIZED_FOR_OBJECT) {
-                    ClickUpError::NotFound
-                } else {
-                    ClickUpError::Unauthorized
-                },
-            );
-        }
-
-        if status == reqwest::StatusCode::NOT_FOUND {
-            return Err(ClickUpError::NotFound);
-        }
-
-        Err(ClickUpError::Api {
-            status: status.as_u16(),
-            body,
-        })
+        into_result(status, body)
     }
 
-    async fn get_json<T: for<'de> Deserialize<'de>>(
+    /// Sends `body` as JSON with `method`, **once and never retried**: a
+    /// retried POST would post a second comment whenever the first
+    /// request reached ClickUp but its answer was lost.
+    pub(super) async fn send_json(
+        &self,
+        method: reqwest::Method,
+        token: &str,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<String, ClickUpError> {
+        let response = self
+            .http
+            .request(method, format!("{}{}", self.base_url, path))
+            .header(reqwest::header::AUTHORIZATION, token)
+            .json(body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        let text = response.text().await?;
+        into_result(status, text)
+    }
+
+    pub(super) async fn get_json<T: for<'de> Deserialize<'de>>(
         &self,
         token: &str,
         path: &str,

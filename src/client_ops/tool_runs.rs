@@ -426,6 +426,48 @@ pub struct OutputFile<'a> {
     pub file_name: &'a str,
 }
 
+/// Stores the Dropbox share link for the file saved at `dropbox_path`.
+/// Matches on the path too, so a link made for an earlier file is never
+/// attached to a newer save of the same run. Best-effort: a failure only
+/// means the link is made again when it is next needed.
+pub async fn store_output_dropbox_link(
+    db: &PgPool,
+    actor_user_id: Uuid,
+    role_keys: &[String],
+    session_id: &str,
+    dropbox_path: &str,
+    link: &str,
+) {
+    let mut tx = match begin_rls_transaction(db, actor_user_id, role_keys).await {
+        Ok(tx) => tx,
+        Err(err) => {
+            tracing::warn!(error = %err, session_id, "failed to open transaction to store a Dropbox share link");
+            return;
+        }
+    };
+
+    let result = sqlx::query(
+        "UPDATE client_ops.tool_runs SET output_dropbox_link = $3
+          WHERE session_id = $1 AND output_dropbox_path = $2",
+    )
+    .bind(session_id)
+    .bind(dropbox_path)
+    .bind(link)
+    .execute(&mut *tx)
+    .await;
+
+    match result {
+        Ok(_) => {
+            if let Err(err) = tx.commit().await {
+                tracing::warn!(error = %err, session_id, "failed to commit a stored Dropbox share link");
+            }
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, session_id, "failed to store a Dropbox share link");
+        }
+    }
+}
+
 /// Records that the run's output was saved to Dropbox AND keeps a copy of
 /// the same file in the database, so it stays downloadable from the
 /// Onboarding Work tab even if the Dropbox file is later moved or deleted.
@@ -447,7 +489,7 @@ pub async fn attach_output_dropbox(
 
     let result = sqlx::query(
         "UPDATE client_ops.tool_runs
-            SET output_dropbox_path = $2, output_bytes = $3,
+            SET output_dropbox_path = $2, output_dropbox_link = NULL, output_bytes = $3,
                 output_content_type = $4, output_file_name = $5,
                 completed_at = now()
           WHERE session_id = $1",

@@ -6,6 +6,20 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.80] - 2026-10-05
+
+First ClickUp automation: post a finished duplicate check to the facility's ClickUp task. Pairs with `unitprep-ui` 1.6.59. Needs migrations `20261005130000` and `20261005140000`.
+
+### Added
+- **Duplicate check -> ClickUp task** (`api::clickup_duplicate_check`). `GET /clients/{company}/facilities/{facility}/clickup/duplicate-check-tasks?session_id=` lists the tasks in the facility's linked ClickUp list that look like this check's (1st or 2nd, decided from the run's position among the facility's dedup runs); `POST .../clickup/duplicate-check-results` comments "Duplicate check results are here" (*here* links the saved Dropbox file), adds the user as an assignee and sets the task to the list's complete status. Third and later checks only add a comment. A check that was only downloaded comments without a link. The task is re-read from ClickUp and refused unless it is in the facility's linked list; nothing is written if the list has no complete status; each of the three writes reports its own outcome; audited as `facility_clickup_duplicate_check_posted`.
+- **Task names as data**: `integrations.clickup_task_steps` (migration `20261005130000`) holds the name phrases for each step; `clickup::task_matching` ranks tasks by word overlap, ignoring verbs, numbering, emoji and plurals, and penalizes a task naming a different ordinal.
+- **Share link captured at save time** (migration `20261005140000`, `tool_runs.output_dropbox_link`): saving a dedup export to Dropbox creates the file's share link in the background and stores it, so the ClickUp update does not ask Dropbox again. `DropboxClient::shared_link`; falls back to the file's plain web path when Dropbox will not make a link.
+- **Prefetch** (`api::clickup_prefetch`): `POST /integrations/clickup/prefetch` and `POST .../clickup/prefetch-tasks` answer 202 and warm the hierarchy / a facility's task list in the background (read-only, fire and forget).
+
+### Changed
+- **ClickUp calls are much faster**: independent reads and writes run together (the duplicate-check update went from ~15 s to ~1.7 s on the dev database), a list's tasks are fetched in parallel pages and cached 5 minutes, concurrent cold hierarchy loads share one load, a list already in the loaded hierarchy is confirmed without a ClickUp call, and the credentials read is one query. Saving links writes its audit rows together.
+- A ClickUp client `send_json` helper for writes that are never retried.
+
 ## [1.9.79] - 2026-10-05
 
 Efficiency refactor chunk E6: stale files and documentation. No code changed.
