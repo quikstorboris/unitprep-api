@@ -93,7 +93,7 @@ shipped since and what's genuinely still open.
 - Session creation and lookup both go through `SECURITY DEFINER`
   Postgres functions (`auth.create_session`, `auth.resolve_session`),
   which also validate the user is still active and non-deleted on every
-  request and bump `last_seen_at`.
+  request and bump `last_seen_at` (throttled, see the idle clock below).
 - Two independent expiry clocks (Phase II item 2): an **absolute**
   ceiling (`SESSION_LIFETIME_HOURS`, default 12h) fixed at login and
   never extended, and an **idle** timeout (`SESSION_IDLE_TIMEOUT_MINUTES`,
@@ -102,6 +102,14 @@ shipped since and what's genuinely still open.
   a revoked or nonexistent session — a session that is merely idle-expired
   is never resurrected by a later request, since `last_seen_at` is only
   advanced for rows the same query's `WHERE` clause already matched.
+  The bump is **throttled** (Efficiency Refactor A1, migration
+  `20261005100000`): `last_seen_at` is rewritten only when it is more than
+  `LEAST(60 s, 6 s per idle minute)` old, so a busy session does not write
+  to `auth.sessions` on every request. The stored value can lag real
+  activity by up to that interval, so a session can expire up to that
+  much **early**, never late — the effective idle window is
+  `[idle - throttle, idle]`. Validity itself (revocation, deactivation,
+  absolute expiry, idle) is still evaluated on every request.
 - Revocation is instant and complete: `auth.revoke_session` and
   `auth.revoke_all_sessions_for_token` are both keyed by a **token
   hash**, not a user id, which makes them self-authorizing — "sign this

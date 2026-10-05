@@ -261,6 +261,12 @@ mod clickup_links_db_tests;
 #[path = "clients_facility_people_db_tests.rs"]
 mod clients_facility_people_db_tests;
 
+/// Real-database tests for the throttled `resolve_session` bump and the
+/// single-statement RLS GUC setup; every test `#[ignore]`d, `test-db` only.
+#[cfg(test)]
+#[path = "session_resolution_db_tests.rs"]
+mod session_resolution_db_tests;
+
 #[cfg(test)]
 #[path = "dedup_test_support.rs"]
 pub(crate) mod dedup_test_support;

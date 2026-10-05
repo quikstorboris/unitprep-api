@@ -141,8 +141,15 @@ const STEP_UP_ALLOWED_PATHS: [&str; 2] = ["/auth/totp/step-up", "/health/whoami"
 /// extended) already bounds how long a session can exist at all; this
 /// bounds how long it can exist *unused*. A session left open and
 /// unattended for the rest of a 12-hour window was, before this, fully
-/// valid the whole time -- `resolve_session` bumps `last_seen_at` on every
-/// authenticated request, but nothing read it back to enforce a limit.
+/// valid the whole time -- `resolve_session` bumps `last_seen_at` on
+/// authenticated requests, but nothing read it back to enforce a limit.
+///
+/// The bump is throttled (migration `20261005100000`): `last_seen_at` is
+/// only rewritten when it is more than `LEAST(60 s, 6 s per idle minute)`
+/// old, so a busy session does not write to `auth.sessions` on every
+/// request. The stored value can therefore lag real activity by up to
+/// that interval, which makes a session expire up to that much EARLY --
+/// never late -- so the effective idle window is `[idle - throttle, idle]`.
 ///
 /// Same override-and-default shape as `session_lifetime_hours` in
 /// auth_login.rs, and the same reasoning for a floor of 1 rather than
@@ -413,6 +420,10 @@ fn internal_error() -> Response {
 /// the matching read side. A held role takes effect on this caller's
 /// very next request, since nothing here caches across requests; there is
 /// no separate cache to invalidate when an admin changes someone's roles.
+///
+/// Both GUCs are set in ONE statement (BEGIN plus a single round trip,
+/// not BEGIN plus two) -- this runs at the top of ~195 handlers, so each
+/// round trip saved here is saved on every endpoint.
 pub async fn begin_rls_transaction<'a>(
     pool: &'a PgPool,
     user_id: Uuid,
@@ -420,15 +431,14 @@ pub async fn begin_rls_transaction<'a>(
 ) -> Result<sqlx::Transaction<'a, sqlx::Postgres>, sqlx::Error> {
     let mut tx = pool.begin().await?;
 
-    sqlx::query("SELECT set_config('app.current_user_id', $1, true)")
-        .bind(user_id.to_string())
-        .execute(&mut *tx)
-        .await?;
-
-    sqlx::query("SELECT set_config('app.current_user_roles', $1, true)")
-        .bind(role_keys.join(","))
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "SELECT set_config('app.current_user_id', $1, true), \
+         set_config('app.current_user_roles', $2, true)",
+    )
+    .bind(user_id.to_string())
+    .bind(role_keys.join(","))
+    .execute(&mut *tx)
+    .await?;
 
     Ok(tx)
 }

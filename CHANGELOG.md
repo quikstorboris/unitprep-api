@@ -6,6 +6,23 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.62] - 2026-10-05
+
+First step of the efficiency refactor (plan: vault `work/active/UnitPrep/Efficiency Refactor/`, chunk A1): fewer database writes and round trips on every authenticated request. No behaviour change except the idle timeout can fire up to 60 s earlier than before (never later).
+
+### Changed
+- **`auth.resolve_session` no longer writes to `auth.sessions` on every request.** It used to be one `UPDATE ... SET last_seen_at = now() ... RETURNING`, so every authenticated request took a row lock and wrote WAL, and the SPA's parallel requests serialized on that lock. Lookup and bump are now separate CTEs (migration `20261005100000`): validity (token, not revoked, absolute expiry, idle window, user active and not deleted) is evaluated on every request exactly as before, but `last_seen_at` is rewritten only when it is more than `LEAST(60 s, 6 s per idle minute)` old. Revocation and deactivation still take effect on the very next request. The stored value can lag real activity by up to the throttle interval, so a session can expire up to that much **early**, never late (effective idle window `[idle - throttle, idle]`). Same signature, same returned columns, same `app_service` grant; the down migration restores the unconditional bump.
+- **`begin_rls_transaction` sets both identity GUCs in one statement** (`app.current_user_id` and `app.current_user_roles` in a single `SELECT set_config(...), set_config(...)`), saving one round trip at the top of every RLS-scoped handler (~195 call sites). Pre-handler overhead is now resolve + BEGIN + 1 `set_config` (+ COMMIT) instead of resolve + BEGIN + 2 `set_config` (+ COMMIT).
+
+### Measured
+- `pgbench`, 8 clients hammering one session on the local test-db (a worst case for row-lock contention; real gains over a network are smaller): `resolve_session` 10.8k -> 37.4k calls/s, average latency 0.74 -> 0.21 ms, and 86,650 session-row updates / 2,910 dead tuples -> 0 / 0.
+
+### Added
+- Real-database tests (`session_resolution_db_*`, `#[ignore]`d, local `test-db` only): a stale `last_seen_at` is bumped once then left alone inside the throttle interval (verified to FAIL against the old function); an idle session is rejected and never resurrected; revoked and deactivated sessions are rejected on the next request; the returned columns are unchanged; `begin_rls_transaction` sets both GUCs and they do not leak onto the pooled connection.
+
+### Docs
+- `AUTHENTICATION.md` and `THREAT_MODEL.md` now describe the throttled bump instead of "bumped on every request".
+
 ## [1.9.61] - 2026-10-05
 
 Stops sister facilities being offered the wrong Merchant Account form, and lets a facility without its own form borrow Legal Owners from a sister's.
