@@ -174,7 +174,30 @@ async fn main() {
     // that migration has run. A saved change on the settings page takes
     // effect on the next server start -- nothing re-reads this mid-run,
     // unlike Process Street's sync interval (see `clients::sync`).
-    let dropbox_config = match dropbox::DropboxConfig::from_db(&db_pool).await {
+    //
+    // The five independent startup reads (both integration configs and the
+    // three vendor-format snapshots) are issued TOGETHER here rather than one
+    // after another: against a remote or just-woken Neon each is at least a
+    // network round trip (and the config reads decrypt), so serially they
+    // were the bulk of boot time.
+    let (dropbox_from_db, process_street_from_db, unit_vendors, tenant_vendors, tenant_file_meta) = tokio::join!(
+        dropbox::DropboxConfig::from_db(&db_pool),
+        process_street::ProcessStreetConfig::from_db(&db_pool),
+        client_ops::vendor_format::initial_cache(
+            &db_pool,
+            unitprep_core::vendor_format::ContentType::Units,
+        ),
+        client_ops::vendor_format::initial_cache(
+            &db_pool,
+            unitprep_core::vendor_format::ContentType::Tenants,
+        ),
+        client_ops::vendor_file_meta::initial_cache(
+            &db_pool,
+            unitprep_core::vendor_format::ContentType::Tenants,
+        ),
+    );
+
+    let dropbox_config = match dropbox_from_db {
         Ok(Some(config)) => config,
         Ok(None) => dropbox::DropboxConfig::from_env().unwrap_or_else(|err| {
             panic!("Dropbox is not configured in the database or the environment: {err}");
@@ -199,7 +222,7 @@ async fn main() {
     // to configure a real key just to run the server. Endpoints that
     // need it return a clear error instead of silently no-op-ing; see
     // `api::clients_search`.
-    let process_street_config = match process_street::ProcessStreetConfig::from_db(&db_pool).await {
+    let process_street_config = match process_street_from_db {
         Ok(Some(config)) => Some(config),
         Ok(None) => process_street::ProcessStreetConfig::from_env().ok(),
         Err(err) => {
@@ -250,33 +273,18 @@ async fn main() {
     // above) and kept fresh by a background task, never queried per
     // request. See `client_ops::vendor_format`'s module doc comment for
     // the full reasoning.
-    let unit_vendors = client_ops::vendor_format::initial_cache(
-        &db_pool,
-        unitprep_core::vendor_format::ContentType::Units,
-    )
-    .await;
     client_ops::vendor_format::start_refresh_task(
         unit_vendors.clone(),
         db_pool.clone(),
         unitprep_core::vendor_format::ContentType::Units,
     );
 
-    let tenant_vendors = client_ops::vendor_format::initial_cache(
-        &db_pool,
-        unitprep_core::vendor_format::ContentType::Tenants,
-    )
-    .await;
     client_ops::vendor_format::start_refresh_task(
         tenant_vendors.clone(),
         db_pool.clone(),
         unitprep_core::vendor_format::ContentType::Tenants,
     );
 
-    let tenant_file_meta = client_ops::vendor_file_meta::initial_cache(
-        &db_pool,
-        unitprep_core::vendor_format::ContentType::Tenants,
-    )
-    .await;
     client_ops::vendor_file_meta::start_refresh_task(
         tenant_file_meta.clone(),
         db_pool.clone(),

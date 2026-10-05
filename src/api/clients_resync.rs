@@ -42,12 +42,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::integrations::http::join_all_bounded;
 use axum::{
     extract::{Json, Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use futures::future::join_all;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
@@ -241,7 +241,7 @@ async fn fetch_fresh_fields(
     });
 
     let mut fields_by_run_id = HashMap::new();
-    for (run_id, result) in join_all(fetches).await {
+    for (run_id, result) in join_all_bounded(fetches).await {
         match result {
             Ok(fields) => {
                 fields_by_run_id.insert(run_id, fields);
@@ -312,7 +312,7 @@ async fn fetch_fresh_merchant_account_data(
         });
 
     let mut refreshes = HashMap::new();
-    for (facility_id, run_id, fields_result, tasks_result) in join_all(fetches).await {
+    for (facility_id, run_id, fields_result, tasks_result) in join_all_bounded(fetches).await {
         let fields = match fields_result {
             Ok(fields) => fields,
             Err(err) => {

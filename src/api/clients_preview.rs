@@ -312,7 +312,8 @@ pub async fn preview_clients(
     let mut suggested_legal_names: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
 
-    for (kind, run_id, result) in futures::future::join_all(intake_fetches.chain(ma_fetches)).await
+    for (kind, run_id, result) in
+        crate::integrations::http::join_all_bounded(intake_fetches.chain(ma_fetches)).await
     {
         match kind {
             FetchKind::Intake => {

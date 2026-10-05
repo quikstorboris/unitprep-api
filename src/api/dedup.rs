@@ -355,9 +355,20 @@ pub async fn import_from_dropbox(
         }
     }
 
+    // Downloads run a few at a time instead of one after another;
+    // `buffered` keeps the results in selection order. The first failure
+    // (in that order) is what the caller sees, as before.
+    let state_ref = &state;
+    let downloads = crate::integrations::http::join_all_bounded(
+        paths
+            .iter()
+            .map(|path| async move { download_as_uploaded_file(state_ref, path).await }),
+    )
+    .await;
+
     let mut files = Vec::with_capacity(paths.len());
-    for path in &paths {
-        match download_as_uploaded_file(&state, path).await {
+    for result in downloads {
+        match result {
             Ok(file) => files.push(file),
             Err(response) => return response,
         }

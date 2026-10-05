@@ -54,7 +54,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use futures::future::join_all;
+use crate::integrations::http::join_all_bounded;
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::{Postgres, Transaction};
@@ -413,7 +413,7 @@ pub async fn fetch_create_data(
         (run_id.to_string(), result)
     });
     let mut fields_by_run_id: HashMap<String, Vec<FormField>> = HashMap::new();
-    for (run_id, result) in join_all(fetches).await {
+    for (run_id, result) in join_all_bounded(fetches).await {
         fields_by_run_id.insert(run_id, result?);
     }
 
@@ -433,7 +433,7 @@ pub async fn fetch_create_data(
         (run_id.to_string(), result)
     });
     let mut tasks_by_ma_run_id: HashMap<String, Vec<Task>> = HashMap::new();
-    for (run_id, result) in join_all(task_fetches).await {
+    for (run_id, result) in join_all_bounded(task_fetches).await {
         tasks_by_ma_run_id.insert(run_id, result?);
     }
 

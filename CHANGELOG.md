@@ -6,6 +6,23 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.72] - 2026-10-05
+
+Efficiency refactor chunk B4: independent work runs together, and every fan-out to an upstream API is bounded.
+
+### Changed
+- **Server boot reads run concurrently.** The five independent startup reads (the Dropbox and Process Street configs, which also decrypt, and the three vendor-format snapshots) were issued one after another; they are now one `tokio::join!`. **Measured** booting the real binary through a 20 ms round-trip database proxy: **0.63-0.72 s -> 0.32-0.35 s** to "listening" (about 2x; the gap grows with database latency and on a cold Neon compute).
+- **Process Street run listings fetch their three statuses together.** `list_or_search_workflow_runs` fetched Active, then Completed, then Archived; it is now one `try_join!`, so the interactive search path pays one round trip's latency instead of three. (The number of calls against Process Street's hourly limit is unchanged.)
+- **The two live Process Street searches in `GET /clients/search` run together** (facility-name and Merchant-Account-name searches were awaited one after the other although neither depends on the other).
+- **Dropbox folder imports download a few files at a time** (unit-group `import_from_dropbox` and the Dedup Dropbox check) instead of one by one, keeping results in folder/selection order.
+- **Every data-driven fan-out to an upstream API is bounded.** The `join_all` batches in client search, import preview, Re-sync (fields and Merchant Account runs) and create-from-Process-Street fired one request per cited run all at once -- risking Process Street's ~2,500 requests/hour limit, which retries (1.9.63) would then make worse. They now go through `integrations::http::join_all_bounded`: at most 6 in flight, results in input order (a drop-in for `join_all`).
+
+### Added
+- `integrations::http::join_all_bounded` and `MAX_CONCURRENT_UPSTREAM_CALLS`, with a test that concurrency never exceeds the limit, actually exceeds 1, and results stay in input order. (It is a plain function that collects its futures up front, like `join_all`: an `async fn` version held the lazy iterator across the await and tripped the compiler's higher-ranked-lifetime check inside axum handlers.)
+
+### Not changed
+- `GET /clients/filter-options`' three queries and the per-search read of every Process Street run title (`merchant_account_run_titles` / `all_intake_run_titles`) -- low value here, tracked in the plan.
+
 ## [1.9.71] - 2026-10-05
 
 Efficiency refactor chunk B2: client Re-sync no longer holds a database transaction open while it calls Process Street, and rebuilds the person index in two statements instead of dozens.

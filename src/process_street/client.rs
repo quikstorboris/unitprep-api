@@ -286,17 +286,23 @@ impl ProcessStreetClient {
             })
             .unwrap_or_default();
 
-        let mut all = Vec::new();
-        for status in ["Active", "Completed", "Archived"] {
-            let mut page = self
-                .paginate(
-                    format!("{BASE_URL}/workflow-runs?workflowId={workflow_id}&status={status}{name_param}"),
-                    "workflowRuns",
-                )
-                .await?;
-            all.append(&mut page);
-        }
-        Ok(all)
+        let listing = |status: &str| {
+            format!("{BASE_URL}/workflow-runs?workflowId={workflow_id}&status={status}{name_param}")
+        };
+
+        // The three statuses are independent listings, so they are fetched
+        // together instead of one after another -- three times fewer
+        // sequential round trips on the interactive search path. (The call
+        // count against Process Street's hourly limit is unchanged.)
+        let (mut active, mut completed, mut archived) = tokio::try_join!(
+            self.paginate::<WorkflowRun>(listing("Active"), "workflowRuns"),
+            self.paginate::<WorkflowRun>(listing("Completed"), "workflowRuns"),
+            self.paginate::<WorkflowRun>(listing("Archived"), "workflowRuns"),
+        )?;
+
+        active.append(&mut completed);
+        active.append(&mut archived);
+        Ok(active)
     }
 
     pub async fn get_run_tasks(&self, run_id: &str) -> Result<Vec<Task>, ProcessStreetError> {

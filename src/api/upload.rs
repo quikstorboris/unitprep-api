@@ -280,10 +280,23 @@ pub async fn import_from_dropbox(
             .into_response();
     }
 
+    // Downloads run a few at a time instead of one after another (a folder
+    // can hold dozens of files); `buffered` keeps the results in folder
+    // order.
+    let state_ref = &state;
+    let downloads =
+        crate::integrations::http::join_all_bounded(file_entries.iter().map(|entry| async move {
+            (
+                entry,
+                download_as_uploaded_file(state_ref, &entry.path_display).await,
+            )
+        }))
+        .await;
+
     let mut uploaded_files = Vec::with_capacity(file_entries.len());
     let mut files_failed = 0usize;
-    for entry in &file_entries {
-        match download_as_uploaded_file(&state, &entry.path_display).await {
+    for (entry, result) in downloads {
+        match result {
             Ok(file) => uploaded_files.push(file),
             Err(_) => {
                 files_failed += 1;

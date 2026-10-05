@@ -409,7 +409,18 @@ pub async fn search_clients(
         return process_street_not_configured();
     };
 
-    let facility_results = match search_by_facility_name(client, q).await {
+    // The two live searches are independent of each other, so they run
+    // together (this is the interactive search box: its latency is the
+    // slower of the two, not their sum). See this module's own doc comment
+    // (2026-09-14) -- a facility can have a real, live Merchant Account
+    // run with no discoverable Intake run, so the second must be its own
+    // live search, not something inferred from the first's results.
+    let (facility_results, merchant_account_results) = tokio::join!(
+        search_by_facility_name(client, q),
+        search_by_merchant_account_name(client, q),
+    );
+
+    let facility_results = match facility_results {
         Ok(results) => results,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, query = %q, "Process Street facility-name search failed");
@@ -417,11 +428,7 @@ pub async fn search_clients(
         }
     };
 
-    // See this module's own doc comment (2026-09-14) -- a facility can
-    // have a real, live Merchant Account run with no discoverable
-    // Intake run, so this must be its own live search, not something
-    // inferred from `facility_results` alone.
-    let merchant_account_results = match search_by_merchant_account_name(client, q).await {
+    let merchant_account_results = match merchant_account_results {
         Ok(results) => results,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, query = %q, "Process Street merchant-account-name search failed");
@@ -640,7 +647,7 @@ pub async fn search_clients(
         .iter()
         .map(|ma_run_id| async move { (*ma_run_id, client.get_run_form_fields(ma_run_id).await) });
     let mut ma_display: HashMap<String, MaDisplayInfo> = HashMap::new();
-    for (ma_run_id, result) in futures::future::join_all(ma_fetches).await {
+    for (ma_run_id, result) in crate::integrations::http::join_all_bounded(ma_fetches).await {
         let display = match result {
             Ok(fields) => {
                 let mapped = map_merchant_account_fields(&fields);
@@ -711,7 +718,7 @@ pub async fn search_clients(
         )
     });
     let mut standalone_display: HashMap<String, MaDisplayInfo> = HashMap::new();
-    for (run_id, result) in futures::future::join_all(standalone_fetches).await {
+    for (run_id, result) in crate::integrations::http::join_all_bounded(standalone_fetches).await {
         let display = match result {
             Ok(fields) => {
                 let mapped = map_merchant_account_fields(&fields);

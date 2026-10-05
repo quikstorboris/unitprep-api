@@ -20,7 +20,10 @@
 //! upload deliberately does not use it).
 
 use std::borrow::Cow;
+use std::future::Future;
 use std::time::Duration;
+
+use futures::stream::{self, StreamExt};
 
 use reqwest::{RequestBuilder, Response, StatusCode};
 
@@ -170,6 +173,36 @@ where
             }
         }
     }
+}
+
+/// The most calls to ONE third-party API this process makes at the same
+/// time from one fan-out. Process Street allows ~2,500 requests an hour and
+/// each Re-sync / import preview can cite dozens of runs; an unbounded
+/// `join_all` fires them all at once, which risks a 429 and (with retries)
+/// makes it worse. Six keeps the wall-clock win of running them together
+/// without a burst.
+pub const MAX_CONCURRENT_UPSTREAM_CALLS: usize = 6;
+
+/// Runs `futures` with at most [`MAX_CONCURRENT_UPSTREAM_CALLS`] in flight
+/// and returns their outputs **in input order** -- a drop-in replacement
+/// for `join_all` wherever the number of futures is data-driven (one per
+/// run, per facility, per file) and each one is a call to an upstream API.
+pub fn join_all_bounded<I, Fut>(futures: I) -> impl Future<Output = Vec<Fut::Output>>
+where
+    I: IntoIterator<Item = Fut>,
+    Fut: Future,
+{
+    // Collected up front and returned as a plain (non-) future,
+    // exactly as  does. An  would keep its argument --
+    // the lazy iterator and the closures that build the futures -- in its
+    // state until it completes, and that trips the compiler's
+    // higher-ranked-lifetime checks in axum handlers ("implementation of
+    //  is not general enough").
+    let futures: Vec<Fut> = futures.into_iter().collect();
+
+    stream::iter(futures)
+        .buffered(MAX_CONCURRENT_UPSTREAM_CALLS)
+        .collect()
 }
 
 /// Longest upstream response body written to a log line. Upstream error
@@ -406,6 +439,42 @@ mod tests {
         let err = send_with_retry(FAST, || http.get(&url)).await.unwrap_err();
 
         assert!(err.is_connect());
+    }
+
+    #[tokio::test]
+    async fn bounded_fan_out_never_exceeds_the_limit_and_keeps_input_order() {
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+
+        let work = (0..40usize).map(|n| {
+            let (in_flight, peak) = (in_flight.clone(), peak.clone());
+            async move {
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                // Later items finish sooner, so an unordered collector would
+                // return them out of order.
+                tokio::time::sleep(Duration::from_millis(((40 - n) % 7) as u64 + 1)).await;
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                n
+            }
+        });
+
+        let results = join_all_bounded(work).await;
+
+        assert_eq!(
+            results,
+            (0..40usize).collect::<Vec<_>>(),
+            "input order kept"
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) <= MAX_CONCURRENT_UPSTREAM_CALLS,
+            "at most {MAX_CONCURRENT_UPSTREAM_CALLS} in flight, saw {}",
+            peak.load(Ordering::SeqCst)
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) > 1,
+            "and it must actually run them concurrently, not one by one"
+        );
     }
 
     #[test]
