@@ -3,7 +3,7 @@
 -- local test-db, via
 --   pg_dump --schema-only --no-owner --no-privileges
 -- Read-only reference, not applied by sqlx and not part of the migrations/
--- directory -- the 105 incremental migrations under migrations/
+-- directory -- the 106 incremental migrations under migrations/
 -- remain the actual source of truth and the real "how did we get here"
 -- history. This file exists so a newcomer (human or AI) can see current
 -- table/column/RLS/index shape in one place without reading them all in
@@ -14,7 +14,7 @@
 -- psql's per-dump \restrict/\unrestrict guard lines (a random token that
 -- changes on every dump) are stripped so a regeneration only shows real
 -- schema changes in the diff.
--- Generated 2026-10-05.
+-- Generated 2026-10-06.
 
 --
 -- PostgreSQL database dump
@@ -1568,6 +1568,7 @@ CREATE TABLE clients.ps_task_status (
     task_name text NOT NULL,
     status text NOT NULL,
     last_synced_at timestamp with time zone DEFAULT now() NOT NULL,
+    hidden boolean DEFAULT false NOT NULL,
     CONSTRAINT ps_task_status_workflow_check CHECK ((workflow = ANY (ARRAY['intake'::text, 'merchant_account'::text, 'contract_order'::text])))
 );
 
@@ -1689,6 +1690,20 @@ CREATE TABLE integrations.process_street_settings (
     CONSTRAINT process_street_settings_schedule_mode_check CHECK ((schedule_mode = ANY (ARRAY['interval'::text, 'daily_time'::text]))),
     CONSTRAINT process_street_settings_sync_interval_hours_check CHECK (((sync_interval_hours >= 1) AND (sync_interval_hours <= 168))),
     CONSTRAINT process_street_settings_sync_timezone_check CHECK (((sync_timezone IS NULL) OR (sync_timezone = ANY (ARRAY['America/Los_Angeles'::text, 'America/Denver'::text, 'America/Chicago'::text, 'America/New_York'::text, 'UTC'::text, 'Europe/Belgrade'::text]))))
+);
+
+
+--
+-- Name: ps_task_role_name; Type: TABLE; Schema: integrations; Owner: -
+--
+
+CREATE TABLE integrations.ps_task_role_name (
+    id uuid DEFAULT gen_random_uuid() NOT NULL,
+    role text NOT NULL,
+    task_name text NOT NULL,
+    created_by uuid,
+    created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ps_task_role_name_task_name_check CHECK ((btrim(task_name) <> ''::text))
 );
 
 
@@ -2233,6 +2248,14 @@ ALTER TABLE ONLY integrations.process_street_settings
 
 
 --
+-- Name: ps_task_role_name ps_task_role_name_pkey; Type: CONSTRAINT; Schema: integrations; Owner: -
+--
+
+ALTER TABLE ONLY integrations.ps_task_role_name
+    ADD CONSTRAINT ps_task_role_name_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: user_clickup_credentials user_clickup_credentials_pkey; Type: CONSTRAINT; Schema: integrations; Owner: -
 --
 
@@ -2442,6 +2465,13 @@ CREATE INDEX ps_person_index_full_name_idx ON clients.ps_person_index USING btre
 --
 
 CREATE INDEX ps_person_index_run_idx ON clients.ps_person_index USING btree (workflow, ps_run_id);
+
+
+--
+-- Name: ps_task_role_name_role_name_idx; Type: INDEX; Schema: integrations; Owner: -
+--
+
+CREATE UNIQUE INDEX ps_task_role_name_role_name_idx ON integrations.ps_task_role_name USING btree (role, lower(btrim(task_name)));
 
 
 --
@@ -2971,6 +3001,14 @@ ALTER TABLE ONLY integrations.dropbox_configuration
 
 ALTER TABLE ONLY integrations.process_street_settings
     ADD CONSTRAINT process_street_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: ps_task_role_name ps_task_role_name_created_by_fkey; Type: FK CONSTRAINT; Schema: integrations; Owner: -
+--
+
+ALTER TABLE ONLY integrations.ps_task_role_name
+    ADD CONSTRAINT ps_task_role_name_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE SET NULL;
 
 
 --
@@ -4218,6 +4256,33 @@ CREATE POLICY process_street_settings_select_authenticated ON integrations.proce
 --
 
 CREATE POLICY process_street_settings_update_admin_only ON integrations.process_street_settings FOR UPDATE USING ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text))) WITH CHECK ((auth.current_user_has_role('admin'::text) OR auth.current_user_has_role('developer'::text)));
+
+
+--
+-- Name: ps_task_role_name; Type: ROW SECURITY; Schema: integrations; Owner: -
+--
+
+ALTER TABLE integrations.ps_task_role_name ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: ps_task_role_name ps_task_role_name_delete_admin_only; Type: POLICY; Schema: integrations; Owner: -
+--
+
+CREATE POLICY ps_task_role_name_delete_admin_only ON integrations.ps_task_role_name FOR DELETE USING (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: ps_task_role_name ps_task_role_name_insert_admin_only; Type: POLICY; Schema: integrations; Owner: -
+--
+
+CREATE POLICY ps_task_role_name_insert_admin_only ON integrations.ps_task_role_name FOR INSERT WITH CHECK (auth.current_user_has_role('admin'::text));
+
+
+--
+-- Name: ps_task_role_name ps_task_role_name_select_authenticated; Type: POLICY; Schema: integrations; Owner: -
+--
+
+CREATE POLICY ps_task_role_name_select_authenticated ON integrations.ps_task_role_name FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
 
 
 --

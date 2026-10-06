@@ -21,7 +21,7 @@
 //! so `ORDER BY id ASC` stays a stable proxy for step order across
 //! resyncs, not just at first sync.
 //!
-//! **Capped at "Add Credentials to QMS", not the run's last task**
+//! **Capped at the QMS-credentials step, not the run's last task**
 //! (2026-09-23, Boris, against a real run): a real Merchant Account run
 //! carries far more tasks than the customer-facing approval sequence --
 //! confirmed live on the Katy-Flewellen facility's own run, 27 tasks
@@ -37,6 +37,17 @@
 //! in which case the walk below is intentionally left uncapped rather
 //! than guessing) and `next_step` only ever considers tasks at or
 //! before it.
+//!
+//! **Which task that is, and hidden tasks** (2026-10-06): the cap task is
+//! whichever *visible* task matches one of the names mapped to
+//! `ps_task_roles::QMS_CREDENTIALS_ROLE` (`integrations.ps_task_role_name`,
+//! edited on the Process Street settings page) -- not a hardcoded string.
+//! A 2026-10 template change renamed the step to "Document Credentials"
+//! and left the old "Add Credentials to QMS" task in the run but hidden
+//! by PS conditional logic; `ps_task_status.hidden` mirrors PS's flag
+//! and every read here ignores hidden tasks, both as the cap and as
+//! candidate "next steps", since a task the coordinator can't see is not
+//! one anybody is waiting on.
 
 use axum::{
     extract::{Path, State},
@@ -57,18 +68,26 @@ pub struct FacilityOnboardingSummary {
     /// distinguishes "not started" from "fully complete" when
     /// `elavon_next_step` is `None` for both.
     pub elavon_linked: bool,
-    /// The first still-incomplete task's name at or before "Add
-    /// Credentials to QMS" in PS checklist order, or `None` when either
+    /// The first still-incomplete visible task's name at or before the
+    /// QMS-credentials step (see this module's doc) in PS checklist order, or `None` when either
     /// nothing is linked yet or every task up to and including that one
     /// is already `Completed` (later, PS-internal-only tasks are not
     /// consulted -- see this module's own doc comment).
     pub elavon_next_step: Option<String>,
-    /// Whether `elavon_next_step` *is* "Add Credentials to QMS" itself
+    /// Whether `elavon_next_step` *is* the QMS-credentials step itself
     /// -- lets the frontend show a reminder that this one is a manual
     /// action nobody but a person adding it to QMS ever completes, not
     /// something that resolves itself once the PS application is
     /// approved.
     pub elavon_awaiting_credentials: bool,
+    /// Whether the QMS-credentials step (every visible task mapped to
+    /// `ps_task_roles::QMS_CREDENTIALS_ROLE`) is Completed -- the sole
+    /// definition of "Complete" here (2026-10-06, Boris), independent
+    /// of `elavon_next_step`: an earlier step left open (e.g.
+    /// "Application Signed & Submitted to Elavon") does not stop a
+    /// facility whose credentials step is done from reading Complete.
+    /// Same rule as `ps_task_roles::role_is_satisfied`.
+    pub elavon_complete: bool,
     /// `client_ops.tool_runs` rows for this facility (`tool = 'dedup'`)
     /// -- a row only exists once a check has actually succeeded, so this
     /// is already a completed-check count, not something that needs
@@ -99,14 +118,26 @@ pub async fn get_onboarding_summary(
                 (fma.facility_id IS NOT NULL) AS elavon_linked,
                 next_step.task_name AS elavon_next_step,
                 (next_step.id IS NOT NULL AND next_step.id = qms_task.id) AS elavon_awaiting_credentials,
+                (qms_task.id IS NOT NULL AND NOT EXISTS (
+                   SELECT 1 FROM clients.ps_task_status
+                    WHERE facility_id = f.id AND workflow = 'merchant_account'
+                      AND NOT hidden AND status <> 'Completed'
+                      AND lower(btrim(task_name)) IN (
+                            SELECT lower(btrim(task_name))
+                              FROM integrations.ps_task_role_name
+                             WHERE role = 'qms_credentials')
+                )) AS elavon_complete,
                 COALESCE(dedup_counts.run_count, 0) AS duplicate_checks_completed
            FROM clients.facilities f
            LEFT JOIN clients.facility_merchant_accounts fma ON fma.facility_id = f.id
            LEFT JOIN LATERAL (
              SELECT id
                FROM clients.ps_task_status
-              WHERE facility_id = f.id AND workflow = 'merchant_account'
-                AND trim(task_name) ILIKE 'Add Credentials to QMS'
+              WHERE facility_id = f.id AND workflow = 'merchant_account' AND NOT hidden
+                AND lower(btrim(task_name)) IN (
+                      SELECT lower(btrim(task_name))
+                        FROM integrations.ps_task_role_name
+                       WHERE role = 'qms_credentials')
               ORDER BY id ASC
               LIMIT 1
            ) qms_task ON true
@@ -114,6 +145,7 @@ pub async fn get_onboarding_summary(
              SELECT id, task_name
                FROM clients.ps_task_status
               WHERE facility_id = f.id AND workflow = 'merchant_account' AND status <> 'Completed'
+                AND NOT hidden
                 AND (qms_task.id IS NULL OR id <= qms_task.id)
               ORDER BY id ASC
               LIMIT 1

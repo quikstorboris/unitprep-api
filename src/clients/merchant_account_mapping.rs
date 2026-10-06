@@ -603,19 +603,21 @@ pub fn map_merchant_account_fields(fields: &[FormField]) -> MappedMerchantAccoun
 /// `credentials_added_to_qms` isn't a form field anywhere on New
 /// Merchant Account -- confirmed 2026-09-03, live against the real API
 /// (`GET /workflow-runs/{id}/tasks`), after Boris flagged the Elavon
-/// tab showing "No" for a facility whose "Add Credentials to QMS" step
-/// he'd already completed in PS. It's a checklist *task*, same
-/// `/tasks` shape `ps_task_status` already tracks for Intake -- this
-/// facility never had it checked at all (`ingest_merchant_account_run`
-/// never took a value for the column, so every real row defaulted to
-/// the schema's own `false`), not a mismapped field.
-pub fn credentials_added_to_qms_from_tasks(tasks: &[crate::process_street::Task]) -> bool {
-    tasks.iter().any(|task| {
-        task.name
-            .trim()
-            .eq_ignore_ascii_case("Add Credentials to QMS")
-            && task.status == "Completed"
-    })
+/// tab showing "No" for a facility whose credentials step he'd already
+/// completed in PS. It's a checklist *task*, same `/tasks` shape
+/// `ps_task_status` already tracks -- never a mismapped field.
+///
+/// Which task names count is data, not a constant (2026-10-06: the step
+/// was renamed "Document Credentials" in new templates, with the old
+/// "Add Credentials to QMS" left in place but hidden) -- `names` is
+/// `ps_task_roles::QMS_CREDENTIALS_ROLE`'s current mapping, loaded by
+/// the caller. See `ps_task_roles::role_is_satisfied` for the matching
+/// rules (hidden tasks never count).
+pub fn credentials_added_to_qms_from_tasks(
+    tasks: &[crate::process_street::Task],
+    names: &[String],
+) -> bool {
+    super::ps_task_roles::role_is_satisfied(tasks, names)
 }
 
 #[cfg(test)]
@@ -636,41 +638,6 @@ mod tests {
     fn real_fields() -> Vec<FormField> {
         serde_json::from_str(HIGHWAY20_NMA_FIELDS_SANITIZED)
             .expect("fixture must parse as Vec<FormField>")
-    }
-
-    fn task(name: &str, status: &str) -> crate::process_street::Task {
-        crate::process_street::Task {
-            id: "t1".to_string(),
-            name: name.to_string(),
-            status: status.to_string(),
-        }
-    }
-
-    #[test]
-    fn credentials_added_to_qms_from_tasks_is_true_when_that_task_is_completed() {
-        let tasks = vec![
-            task("Facility Information (Pre-App)", "Completed"),
-            task("Add Credentials to QMS", "Completed"),
-        ];
-        assert!(credentials_added_to_qms_from_tasks(&tasks));
-    }
-
-    #[test]
-    fn credentials_added_to_qms_from_tasks_is_false_when_that_task_is_not_completed() {
-        let tasks = vec![task("Add Credentials to QMS", "NotCompleted")];
-        assert!(!credentials_added_to_qms_from_tasks(&tasks));
-    }
-
-    #[test]
-    fn credentials_added_to_qms_from_tasks_is_false_when_the_task_is_absent() {
-        let tasks = vec![task("Facility Information (Pre-App)", "Completed")];
-        assert!(!credentials_added_to_qms_from_tasks(&tasks));
-    }
-
-    #[test]
-    fn credentials_added_to_qms_from_tasks_matches_case_insensitively() {
-        let tasks = vec![task("add credentials to qms", "Completed")];
-        assert!(credentials_added_to_qms_from_tasks(&tasks));
     }
 
     fn set_test_key() {

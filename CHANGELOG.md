@@ -6,6 +6,18 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.84] - 2026-10-06
+
+Process Street task roles and hidden tasks: the Elavon and Onboarding Summary views no longer depend on one hardcoded task name. Pairs with `unitprep-ui` 1.6.61. **Needs migration `20261006120000`** (the code queries `ps_task_status.hidden` and `integrations.ps_task_role_name`).
+
+### Added
+- `ps_task_status.hidden` mirrors Process Street's own `hidden` flag (a 2026-10 template change renamed the credentials step to "Document Credentials" and left the old "Add Credentials to QMS" task on new runs, hidden). Every Onboarding Summary read ignores hidden tasks, as the cap and as the next step. Existing rows read as visible until their next resync.
+- `integrations.ps_task_role_name` (admin-editable, RLS: any signed-in user reads, admin writes) maps a role to its Process Street task names; seeded with `qms_credentials` = "Document Credentials", "Add Credentials to QMS". `clients::ps_task_roles` loads and matches them; `GET /integrations/process-street/task-roles` and `PUT .../task-roles/{role}` (both `integrations.manage`).
+- Onboarding Summary `elavon_complete`: the credentials step being Completed is the sole definition of Complete, independent of earlier open steps.
+
+### Changed
+- `credentials_added_to_qms_from_tasks` takes the role's names instead of a hardcoded string; the five callers (Elavon link/resync, manual link, client resync, client create) load them.
+
 ## [1.9.83] - 2026-10-06
 
 Efficiency refactor chunk C0: dedup performance baseline. Test code only.

@@ -65,6 +65,7 @@ use crate::clients::merchant_account_mapping::{
     credentials_added_to_qms_from_tasks, map_merchant_account_fields,
 };
 use crate::clients::people::PersonAssignment;
+use crate::clients::ps_task_roles;
 use crate::clients::repository::{
     ingest_merchant_account_run, insert_company, insert_facility,
     insert_facility_policies_and_people,
@@ -489,6 +490,9 @@ pub async fn write_create_data(
     )
     .await?;
 
+    let qms_credential_task_names =
+        ps_task_roles::load_task_names(tx, ps_task_roles::QMS_CREDENTIALS_ROLE).await?;
+
     let mut facility_ids = Vec::with_capacity(facility_selections.len());
     for (run_id, overrides, merchant_account_run_id) in facility_selections {
         let fields = fetched
@@ -522,7 +526,8 @@ pub async fn write_create_data(
                 .tasks_by_ma_run_id
                 .get(ma_run_id.as_str())
                 .expect("every resolved Merchant Account run's tasks were fetched above");
-            let credentials_added_to_qms = credentials_added_to_qms_from_tasks(ma_tasks);
+            let credentials_added_to_qms =
+                credentials_added_to_qms_from_tasks(ma_tasks, &qms_credential_task_names);
             ingest_merchant_account_run(
                 tx,
                 facility_id,

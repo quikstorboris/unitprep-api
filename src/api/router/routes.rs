@@ -33,8 +33,8 @@ use super::super::{
     clients_onboarding_summary, clients_preview, clients_resync, clients_search, clients_sync,
     correct, correct_group, dedup, dedup_files, dedup_rematch, discover, dropbox_browse,
     dropbox_settings, exclude_group, exclude_groups, exempt, export, group_file_confirm,
-    group_file_upload, process_street_settings, resolve_unit_format, select_group_file,
-    select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
+    group_file_upload, process_street_settings, process_street_task_roles, resolve_unit_format,
+    select_group_file, select_unit_file, tagger, tool_runs, unit_file_upload, upload, validate,
 };
 use super::rate_limit_exceeded_with_audit;
 
@@ -988,6 +988,30 @@ pub(super) fn build(state: AppState) -> GatedRouter<()> {
                     },
                 ),
             ],
+        )
+        // Which PS task names each role resolves through ("Task mapping"
+        // section of the same page). Admin-only like its neighbors.
+        .gated_route(
+            "/integrations/process-street/task-roles",
+            get(process_street_task_roles::get_task_roles),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.manage"],
+                    action: "get_process_street_task_roles",
+                },
+            )],
+        )
+        .gated_route(
+            "/integrations/process-street/task-roles/{role}",
+            put(process_street_task_roles::update_task_role),
+            [(
+                Method::PUT,
+                RouteAccess::Permission {
+                    keys: &["integrations.manage"],
+                    action: "update_process_street_task_role",
+                },
+            )],
         )
         // Admin-only (integrations.manage) read and write -- this one
         // holds the Dropbox app's own secrets, so unlike the Process

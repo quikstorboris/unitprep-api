@@ -54,6 +54,7 @@ use crate::clients::merchant_account_mapping::{
     credentials_added_to_qms_from_tasks, map_merchant_account_fields,
 };
 use crate::clients::person_index::extract_intake_people;
+use crate::clients::ps_task_roles;
 use crate::clients::repository::{
     ingest_merchant_account_run, upsert_task_status, IngestMerchantAccountError,
 };
@@ -211,7 +212,22 @@ async fn manual_link_merchant_account(
         }
     };
     let mapped = map_merchant_account_fields(&fields);
-    let credentials_added_to_qms = credentials_added_to_qms_from_tasks(&tasks);
+    let qms_credential_task_names = match ps_task_roles::load_task_names_as(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        ps_task_roles::QMS_CREDENTIALS_ROLE,
+    )
+    .await
+    {
+        Ok(names) => names,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to load the Process Street task mapping");
+            return internal_error("Could not load the Process Street task mapping");
+        }
+    };
+    let credentials_added_to_qms =
+        credentials_added_to_qms_from_tasks(&tasks, &qms_credential_task_names);
 
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,

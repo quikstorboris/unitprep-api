@@ -78,6 +78,13 @@ pub struct Task {
     /// is a value PS controls, not this codebase, and it can add a new
     /// one at any time.
     pub status: String,
+    /// PS's own conditional-logic flag: a hidden task is one the run's
+    /// conditions removed from the checklist a coordinator sees (the
+    /// 2026-10 template change left the old "Add Credentials to QMS"
+    /// task hidden on new runs, replaced by "Document Credentials").
+    /// Absent on older API responses, so it defaults to visible.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// One form field value from a workflow run. `data` is PS's own wrapper

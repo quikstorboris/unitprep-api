@@ -63,6 +63,7 @@ use crate::clients::merchant_account_mapping::{
     credentials_added_to_qms_from_tasks, map_merchant_account_fields, MappedMerchantAccount,
 };
 use crate::clients::person_index::{extract_intake_people, ExtractedPerson};
+use crate::clients::ps_task_roles;
 use crate::clients::repository::{
     resync_merchant_account_run, upsert_task_status, IngestMerchantAccountError,
 };
@@ -275,6 +276,7 @@ async fn fetch_linked_merchant_account_runs(
 async fn fetch_fresh_merchant_account_data(
     client: &crate::process_street::ProcessStreetClient,
     run_ids_by_facility: HashMap<Uuid, String>,
+    qms_credential_task_names: &[String],
 ) -> HashMap<Uuid, MerchantAccountRefresh> {
     let fetches = run_ids_by_facility
         .into_iter()
@@ -304,7 +306,8 @@ async fn fetch_fresh_merchant_account_data(
         };
 
         let mapped = map_merchant_account_fields(&fields);
-        let credentials_added_to_qms = credentials_added_to_qms_from_tasks(&tasks);
+        let credentials_added_to_qms =
+            credentials_added_to_qms_from_tasks(&tasks, qms_credential_task_names);
         refreshes.insert(
             facility_id,
             MerchantAccountRefresh {
@@ -403,6 +406,9 @@ struct ComparisonInputs {
     company: CompanyRow,
     facilities: Vec<FacilityRow>,
     merchant_account_run_ids: HashMap<Uuid, String>,
+    /// `ps_task_roles::QMS_CREDENTIALS_ROLE`'s mapped task names, read
+    /// with the rest of the database half so the PS half stays DB-free.
+    qms_credential_task_names: Vec<String>,
 }
 
 /// The database-only half of building a comparison. Runs inside the
@@ -418,11 +424,14 @@ async fn read_comparison_inputs(
 
     let facility_ids: Vec<Uuid> = facilities.iter().map(|f| f.id).collect();
     let merchant_account_run_ids = fetch_linked_merchant_account_runs(tx, &facility_ids).await?;
+    let qms_credential_task_names =
+        ps_task_roles::load_task_names(tx, ps_task_roles::QMS_CREDENTIALS_ROLE).await?;
 
     Ok(Some(ComparisonInputs {
         company,
         facilities,
         merchant_account_run_ids,
+        qms_credential_task_names,
     }))
 }
 
@@ -450,7 +459,11 @@ async fn fetch_ps_data(
 
     tokio::join!(
         fetch_fresh_fields(client, run_ids),
-        fetch_fresh_merchant_account_data(client, inputs.merchant_account_run_ids.clone())
+        fetch_fresh_merchant_account_data(
+            client,
+            inputs.merchant_account_run_ids.clone(),
+            &inputs.qms_credential_task_names,
+        )
     )
 }
 

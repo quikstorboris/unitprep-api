@@ -61,6 +61,7 @@ mod group_file_upload;
 mod health;
 mod manual_file_upload;
 mod process_street_settings;
+mod process_street_task_roles;
 mod resolve_unit_format;
 mod route_access;
 mod router;
@@ -298,6 +299,14 @@ mod clickup_duplicate_check_db_tests;
 #[cfg(test)]
 #[path = "clients_facility_people_db_tests.rs"]
 mod clients_facility_people_db_tests;
+
+#[cfg(test)]
+#[path = "clients_onboarding_summary_db_tests.rs"]
+mod clients_onboarding_summary_db_tests;
+
+#[cfg(test)]
+#[path = "process_street_task_roles_db_tests.rs"]
+mod process_street_task_roles_db_tests;
 
 /// Real-database tests for the throttled `resolve_session` bump and the
 /// single-statement RLS GUC setup; every test `#[ignore]`d, `test-db` only.

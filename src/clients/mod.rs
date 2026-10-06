@@ -24,6 +24,7 @@ pub mod merchant_account_mapping;
 pub mod people;
 pub mod person_index;
 pub mod policy_exemption;
+pub mod ps_task_roles;
 pub mod repository;
 pub mod search;
 pub mod sync;

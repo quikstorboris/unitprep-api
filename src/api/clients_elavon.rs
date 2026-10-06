@@ -41,6 +41,7 @@ use crate::clients::merchant_account_mapping::{
     credentials_added_to_qms_from_tasks, decrypt_elavon_credentials, decrypt_facility_secrets,
     decrypt_party_pii, map_merchant_account_fields, mask_bank_number,
 };
+use crate::clients::ps_task_roles;
 use crate::clients::repository::{
     ingest_merchant_account_run, resync_merchant_account_run, upsert_task_status,
     IngestMerchantAccountError,
@@ -701,7 +702,22 @@ pub async fn link_facility_elavon(
         }
     };
     let mapped = map_merchant_account_fields(&fields);
-    let credentials_added_to_qms = credentials_added_to_qms_from_tasks(&tasks);
+    let qms_credential_task_names = match ps_task_roles::load_task_names_as(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        ps_task_roles::QMS_CREDENTIALS_ROLE,
+    )
+    .await
+    {
+        Ok(names) => names,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to load the Process Street task mapping");
+            return internal_error("Could not load the Process Street task mapping");
+        }
+    };
+    let credentials_added_to_qms =
+        credentials_added_to_qms_from_tasks(&tasks, &qms_credential_task_names);
 
     // --- Phase 3: the actual write, in a fresh transaction opened only
     // now that nothing left to do is network-bound. A concurrent second
@@ -1035,7 +1051,22 @@ pub async fn resync_elavon_data(
         }
     };
     let mapped = map_merchant_account_fields(&fields);
-    let credentials_added_to_qms = credentials_added_to_qms_from_tasks(&tasks);
+    let qms_credential_task_names = match ps_task_roles::load_task_names_as(
+        &state.db,
+        user.user_id,
+        &user.role_keys,
+        ps_task_roles::QMS_CREDENTIALS_ROLE,
+    )
+    .await
+    {
+        Ok(names) => names,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to load the Process Street task mapping");
+            return internal_error("Could not load the Process Street task mapping");
+        }
+    };
+    let credentials_added_to_qms =
+        credentials_added_to_qms_from_tasks(&tasks, &qms_credential_task_names);
 
     // --- Phase 3: the write, in a fresh transaction opened only now
     // that nothing left to do is network-bound. ---

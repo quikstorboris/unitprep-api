@@ -27,7 +27,7 @@ use crate::api::{
     clickup_duplicate_check, clickup_lookup, clickup_prefetch, client_ops_activity_logs,
     client_ops_activity_logs_export, client_ops_qms_tags, clients_clickup_links, clients_create,
     clients_elavon, clients_manual_link, clients_resync, clients_sync, dedup_rematch,
-    dropbox_settings, process_street_settings, tool_runs,
+    dropbox_settings, process_street_settings, process_street_task_roles, tool_runs,
 };
 
 use super::routes::build;
@@ -646,6 +646,31 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                 ),
             ))
         }),
+        (
+            "/integrations/process-street/task-roles",
+            Method::GET,
+            || {
+                Box::pin(process_street_task_roles::get_task_roles(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                ))
+            },
+        ),
+        (
+            "/integrations/process-street/task-roles/{role}",
+            Method::PUT,
+            || {
+                Box::pin(process_street_task_roles::update_task_role(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    axum::extract::Path("qms_credentials".to_string()),
+                    Json(process_street_task_roles::UpdateTaskRoleRequest {
+                        task_names: vec!["x".to_string()],
+                    }),
+                ))
+            },
+        ),
         ("/integrations/dropbox/settings", Method::GET, || {
             Box::pin(dropbox_settings::get_settings(
                 axum::extract::State(empty_state()),

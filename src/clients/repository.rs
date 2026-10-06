@@ -790,11 +790,12 @@ pub async fn upsert_task_status(
     for task in tasks {
         sqlx::query(
             "INSERT INTO clients.ps_task_status
-                (facility_id, workflow, ps_task_id, task_name, status, last_synced_at)
-             VALUES ($1, $2, $3, $4, $5, now())
+                (facility_id, workflow, ps_task_id, task_name, status, hidden, last_synced_at)
+             VALUES ($1, $2, $3, $4, $5, $6, now())
              ON CONFLICT (facility_id, workflow, ps_task_id)
              DO UPDATE SET task_name = EXCLUDED.task_name,
                            status = EXCLUDED.status,
+                           hidden = EXCLUDED.hidden,
                            last_synced_at = now()",
         )
         .bind(facility_id)
@@ -802,6 +803,7 @@ pub async fn upsert_task_status(
         .bind(&task.id)
         .bind(&task.name)
         .bind(&task.status)
+        .bind(task.hidden)
         .execute(&mut **tx)
         .await?;
     }
