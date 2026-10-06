@@ -21,7 +21,8 @@ use sqlx::types::ipnetwork::IpNetwork;
 use sqlx::QueryBuilder;
 use uuid::Uuid;
 
-use crate::api::client_ops_activity_logs::{bad_request, push_actor_filter, push_in_filter};
+use crate::api::bad_request;
+use crate::api::client_ops_activity_logs::{push_actor_filter, push_in_filter};
 use crate::api::{internal_error, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::infrastructure::audit_log_pdf::{

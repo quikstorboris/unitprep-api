@@ -69,13 +69,12 @@ use std::collections::{HashMap, HashSet};
 
 use axum::{
     extract::{Json, Query, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::api::{bad_request, internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, process_street_not_configured, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::company_naming::resolve_company_name;
 use crate::clients::merchant_account_correlation::{
@@ -224,18 +223,6 @@ struct MaDisplayInfo {
     company_name: Option<String>,
     ein_last_4: Option<String>,
     business_address: Option<String>,
-}
-
-fn process_street_not_configured() -> Response {
-    tracing::warn!("client search attempted with Process Street not configured");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "process_street_not_configured",
-            message: "Process Street integration is not configured on this server.".to_string(),
-        }),
-    )
-        .into_response()
 }
 
 /// A run pulled into `facility_matches` only because a person on it
@@ -406,6 +393,7 @@ pub async fn search_clients(
     }
 
     let Some(client) = state.process_street.as_ref() else {
+        tracing::warn!("client search attempted with Process Street not configured");
         return process_street_not_configured();
     };
 
@@ -789,6 +777,7 @@ pub async fn search_clients(
 mod tests {
     use super::*;
     use crate::api::test_support::{empty_state, test_user};
+    use axum::http::StatusCode;
 
     #[tokio::test]
     async fn blank_query_is_rejected_without_touching_anything() {

@@ -19,7 +19,6 @@ use std::collections::BTreeMap;
 
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use std::time::Instant;
@@ -35,7 +34,7 @@ use unitprep_dedup::file_selection::{
 };
 
 use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root};
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, AppState};
 use crate::auth::AuthenticatedUser;
 
 /// Upper bounds on a classify request. A real folder is dozens of files;
@@ -162,14 +161,6 @@ fn classify_to_response(state: &AppState, files: &[FileHeaders]) -> ClassifyResp
             alternatives: alternatives.into_iter().collect(),
         },
     }
-}
-
-fn bad_request(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
 }
 
 pub async fn classify_files(

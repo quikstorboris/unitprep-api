@@ -22,15 +22,9 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::api::{internal_error, not_found, AppState};
+use crate::api::{internal_error, not_found, user_agent_from, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
-
-fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-}
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateDropboxFolderRequest {
@@ -48,7 +42,7 @@ pub async fn update_facility_dropbox_folder(
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<UpdateDropboxFolderRequest>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,

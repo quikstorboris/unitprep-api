@@ -14,31 +14,11 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::{ApiErrorBody, AppState};
+use crate::api::{process_street_not_configured, user_agent_from, ApiErrorBody, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::clients::sync::{run_all_workflows_with_progress, try_claim_running, SyncState};
 
 const PERMISSION: &str = "client_ops.perform";
-
-/// Same shape as `client_ops_qms_tags`'s own local helper -- this route
-/// carries no `ConnectInfo<SocketAddr>` extractor, so the shared
-/// `api::request_context` (which also reports an IP) doesn't apply.
-fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-}
-
-fn process_street_not_configured() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "process_street_not_configured",
-            message: "Process Street integration is not configured on this server.".to_string(),
-        }),
-    )
-        .into_response()
-}
 
 fn already_running() -> Response {
     (
@@ -81,7 +61,7 @@ pub async fn start_sync(
     headers: HeaderMap,
     Query(query): Query<StartSyncQuery>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(

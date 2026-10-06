@@ -18,14 +18,14 @@ use std::net::SocketAddr;
 
 use axum::{
     extract::{ConnectInfo, Json, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, AppState};
 use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser, ADD_PASSKEY};
 
 #[derive(Debug, Serialize)]
@@ -45,14 +45,6 @@ pub struct UpdateAuthConfigurationRequest {
 /// between a client-side typo and a JSONB array silently accumulating
 /// dead entries that `action_requires_step_up` will never match against.
 const KNOWN_STEP_UP_ACTIONS: &[&str] = &[ADD_PASSKEY];
-
-fn bad_request(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
-}
 
 pub async fn get_configuration(
     State(state): State<AppState>,

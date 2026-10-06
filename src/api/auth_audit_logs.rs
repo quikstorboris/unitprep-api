@@ -17,7 +17,6 @@
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
@@ -26,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::QueryBuilder;
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, AppState};
 use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser};
 
 const DEFAULT_LIMIT: i64 = 50;
@@ -307,22 +306,12 @@ pub async fn list_event_types(State(state): State<AppState>, admin: Authenticate
     .into_response()
 }
 
-/// Shared by `list_audit_logs` above and every filter-validation path in
-/// `auth_audit_logs_export` -- one `{error, message}` 400 shape for every
-/// malformed-input rejection in this file and its sibling.
-pub(super) fn bad_request(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::test_support::{admin_user, empty_state, onboarding_manager_user};
     use axum::extract::Query as AxumQuery;
+    use axum::http::StatusCode;
 
     #[tokio::test]
     async fn refuses_a_non_admin_role_without_touching_the_database() {

@@ -43,7 +43,7 @@ use chrono::{DateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{bad_request, internal_error, AppState};
+use crate::api::{bad_request, internal_error, user_agent_from, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::integrations::secrets;
 
@@ -82,12 +82,6 @@ const AAD: &[u8] = b"process_street_settings:1";
 /// constraint-violation error.
 const MIN_INTERVAL_HOURS: i16 = 1;
 const MAX_INTERVAL_HOURS: i16 = 168;
-
-fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-}
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -227,7 +221,7 @@ pub async fn update_settings(
     headers: HeaderMap,
     Json(request): Json<UpdateProcessStreetSettingsRequest>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(

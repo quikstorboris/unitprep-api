@@ -6,15 +6,12 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{internal_error, AppState};
+use crate::api::{internal_error, user_agent_from, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::policy_exemption::{mark_exempt_if_qsx_and_was_empty, PolicyCategory};
 
-use super::{
-    bad_request, count_and_delete_existing, ensure_facility_and_policies_row, not_found,
-    request_context,
-};
+use super::{bad_request, count_and_delete_existing, ensure_facility_and_policies_row, not_found};
 
 const TAX_TYPES: &[&str] = &["fixed", "marginal", "percentage"];
 const TAX_NAMES: &[&str] = &["sales", "rental"];
@@ -48,7 +45,7 @@ pub async fn update_taxes(
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<UpdateTaxesRequest>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Some(tax) = request
         .taxes

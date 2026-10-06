@@ -45,7 +45,6 @@ use std::time::{Duration, Instant};
 use crate::integrations::http::join_all_bounded;
 use axum::{
     extract::{Json, Path, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use parking_lot::RwLock;
@@ -53,7 +52,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use crate::api::{internal_error, not_found, ApiErrorBody, AppState};
+use crate::api::{
+    encryption_not_configured, internal_error, not_found, process_street_not_configured, AppState,
+};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::create::diff_company_fields;
@@ -72,32 +73,6 @@ use crate::clients::sync::{
 use crate::process_street::{FormField, Task};
 
 const PERMISSION: &str = "client_ops.perform";
-
-fn process_street_not_configured() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "process_street_not_configured",
-            message: "Process Street integration is not configured on this server.".to_string(),
-        }),
-    )
-        .into_response()
-}
-
-/// Same shape as `api::clients_elavon`'s own -- this endpoint now writes
-/// `clients.facility_merchant_accounts` too (see `MerchantAccountRefresh`),
-/// which can hit the same missing-`CLIENT_PII_ENCRYPTION_KEY` case that
-/// module already surfaces this way.
-fn encryption_not_configured() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "encryption_not_configured",
-            message: "CLIENT_PII_ENCRYPTION_KEY is not configured on this server.".to_string(),
-        }),
-    )
-        .into_response()
-}
 
 #[derive(sqlx::FromRow)]
 struct CompanyRow {
@@ -1100,6 +1075,7 @@ pub async fn apply_resync(
 mod tests {
     use super::*;
     use crate::api::test_support::{empty_state, onboarding_manager_user, test_user};
+    use axum::http::StatusCode;
 
     fn company_row(legal_name: &str, manually_edited_fields: Vec<&str>) -> CompanyRow {
         CompanyRow {

@@ -60,7 +60,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{bad_request, internal_error, not_found, AppState};
+use crate::api::{bad_request, internal_error, not_found, user_agent_from, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::legal_owner::{
@@ -73,12 +73,6 @@ use crate::clients::repository::{
 };
 
 const SOURCES: &[&str] = &["process_street", "manual"];
-
-fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-}
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct FacilityPerson {
@@ -481,7 +475,7 @@ pub async fn add_facility_person(
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<AddPersonRequest>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if request.full_name.trim().is_empty() {
         return bad_request(
@@ -595,7 +589,7 @@ pub async fn edit_facility_person(
     Path((company_id, facility_id, person_id)): Path<(Uuid, Uuid, Uuid)>,
     Json(request): Json<EditPersonRequest>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if request.full_name.trim().is_empty() {
         return bad_request(
@@ -731,7 +725,7 @@ pub async fn unlink_facility_person(
     Path((company_id, facility_id, person_id)): Path<(Uuid, Uuid, Uuid)>,
     axum::extract::Query(query): axum::extract::Query<UnlinkFacilityPersonQuery>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
         Ok(tx) => tx,

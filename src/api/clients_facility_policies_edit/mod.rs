@@ -23,7 +23,7 @@
 //! line file. Only the facility lookup and the standard error responses
 //! below are actually shared.
 
-use axum::{http::HeaderMap, response::Response};
+use axum::response::Response;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
@@ -38,12 +38,6 @@ pub use delinquency::update_delinquency;
 pub use fees::update_fees;
 pub use specials::update_specials;
 pub use taxes::update_taxes;
-
-pub(super) fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-}
 
 pub(super) fn not_found() -> Response {
     crate::api::not_found("not_found", "No such facility.".to_string())

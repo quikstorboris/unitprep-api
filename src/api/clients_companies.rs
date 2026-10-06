@@ -21,17 +21,11 @@ use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::api::client_ops_activity_logs::push_actor_filter;
-use crate::api::{bad_request, internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, user_agent_from, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 
 const PERMISSION: &str = "client_ops.perform";
-
-fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-}
 
 fn parse_comma_separated(raw: &str) -> Vec<String> {
     raw.split(',')
@@ -351,7 +345,7 @@ async fn set_archived(
     company_id: Uuid,
     archive: bool,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(
@@ -482,7 +476,7 @@ pub async fn delete_company(
     headers: HeaderMap,
     Path(company_id): Path<Uuid>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(&state.db, PERMISSION, "delete_company", user_agent, None)

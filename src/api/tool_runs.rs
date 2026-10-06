@@ -30,18 +30,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::dedup::file_response;
-use crate::api::{internal_error, not_found, AppState};
+use crate::api::{internal_error, not_found, user_agent_from, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 
 const DEFAULT_LIMIT: i64 = 20;
 const PERMISSION: &str = "client_ops.perform";
 
-fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-}
 const MAX_LIMIT: i64 = 100;
 
 #[derive(Debug, Deserialize)]
@@ -259,7 +254,7 @@ pub async fn download_tool_run_output(
     // Tenant names and contact details: same client-ops-only posture as
     // the source file, so downloads are consistently limited to the roles
     // that run the tools.
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
     if let Err(response) = user
         .require_permission(
             &state.db,
@@ -343,7 +338,7 @@ pub async fn download_tool_run_source(
     // The stored source is the raw upload and can carry card ciphertext,
     // tokens, gate codes and SSNs, so unlike the report it is limited to
     // the client-ops roles (onboarding manager, department manager).
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
     if let Err(response) = user
         .require_permission(
             &state.db,
@@ -434,7 +429,7 @@ pub async fn delete_tool_run(
     headers: HeaderMap,
     Path((company_id, facility_id, run_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(&state.db, PERMISSION, "delete_tool_run", user_agent, None)

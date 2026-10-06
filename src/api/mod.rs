@@ -218,6 +218,32 @@ pub(crate) fn internal_error(context: &str) -> Response {
         .into_response()
 }
 
+/// 503 for any Process Street-backed endpoint when the integration has no
+/// credentials configured.
+pub(crate) fn process_street_not_configured() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiErrorBody {
+            error: "process_street_not_configured",
+            message: "Process Street integration is not configured on this server.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
+/// 503 for any endpoint that must seal client PII when
+/// `CLIENT_PII_ENCRYPTION_KEY` is missing.
+pub(crate) fn encryption_not_configured() -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ApiErrorBody {
+            error: "encryption_not_configured",
+            message: "CLIENT_PII_ENCRYPTION_KEY is not configured on this server.".to_string(),
+        }),
+    )
+        .into_response()
+}
+
 /// The browser/IP pair nearly every auth handler pulls out of the request
 /// to pass into `audit_log::record` -- `user_agent` borrows from `headers`,
 /// which is why this takes a reference rather than an owned `HeaderMap`.

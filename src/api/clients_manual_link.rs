@@ -36,14 +36,17 @@
 
 use axum::{
     extract::{Json, Path, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::api::{internal_error, not_found, ApiErrorBody, AppState};
+use crate::api::{
+    bad_request, encryption_not_configured, internal_error, not_found,
+    process_street_not_configured, user_agent_from, AppState,
+};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::intake_mapping::{map_intake_fields, MappedFacility};
@@ -57,45 +60,6 @@ use crate::clients::repository::{
 use crate::clients::sync::apply_facility_refresh;
 
 const PERMISSION: &str = "client_ops.perform";
-
-fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-}
-
-fn process_street_not_configured() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "process_street_not_configured",
-            message: "Process Street integration is not configured on this server.".to_string(),
-        }),
-    )
-        .into_response()
-}
-
-fn encryption_not_configured() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "encryption_not_configured",
-            message: "CLIENT_PII_ENCRYPTION_KEY is not configured on this server.".to_string(),
-        }),
-    )
-        .into_response()
-}
-
-fn bad_request(message: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "invalid_request",
-            message: message.to_string(),
-        }),
-    )
-        .into_response()
-}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -138,7 +102,7 @@ pub async fn manual_link(
     Path(company_id): Path<Uuid>,
     Json(request): Json<ManualLinkRequest>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(&state.db, PERMISSION, "manual_link", user_agent, None)
@@ -149,7 +113,10 @@ pub async fn manual_link(
 
     let run_id = request.run_id.trim().to_string();
     if run_id.is_empty() {
-        return bad_request("A Process Street run id is required.");
+        return bad_request(
+            "invalid_request",
+            "A Process Street run id is required.".to_string(),
+        );
     }
 
     let Some(client) = state.process_street.clone() else {

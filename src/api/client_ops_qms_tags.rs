@@ -21,7 +21,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::{bad_request, conflict, internal_error, not_found, AppState};
+use crate::api::{bad_request, conflict, internal_error, not_found, user_agent_from, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log::{self, Change};
 
@@ -52,12 +52,6 @@ pub struct CreateQmsTagRequest {
 pub struct UpdateQmsTagRequest {
     pub label: String,
     pub category: String,
-}
-
-fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
 }
 
 /// Any authenticated caller -- catalog data, no permission gate, same
@@ -103,7 +97,7 @@ pub async fn create_qms_tag(
     headers: HeaderMap,
     Json(request): Json<CreateQmsTagRequest>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(&state.db, PERMISSION, "create_qms_tag", user_agent, None)
@@ -226,7 +220,7 @@ pub async fn update_qms_tag(
     Path(tag_key): Path<String>,
     Json(request): Json<UpdateQmsTagRequest>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(&state.db, PERMISSION, "update_qms_tag", user_agent, None)
@@ -452,7 +446,7 @@ pub async fn deactivate_qms_tag(
     headers: HeaderMap,
     Path(tag_key): Path<String>,
 ) -> Response {
-    set_active(&state, &user, request_context(&headers), &tag_key, false).await
+    set_active(&state, &user, user_agent_from(&headers), &tag_key, false).await
 }
 
 pub async fn reactivate_qms_tag(
@@ -461,7 +455,7 @@ pub async fn reactivate_qms_tag(
     headers: HeaderMap,
     Path(tag_key): Path<String>,
 ) -> Response {
-    set_active(&state, &user, request_context(&headers), &tag_key, true).await
+    set_active(&state, &user, user_agent_from(&headers), &tag_key, true).await
 }
 
 #[cfg(test)]

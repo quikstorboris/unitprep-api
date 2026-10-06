@@ -27,7 +27,10 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{internal_error, not_found, ApiErrorBody, AppState};
+use crate::api::{
+    encryption_not_configured, internal_error, not_found, process_street_not_configured,
+    user_agent_from, ApiErrorBody, AppState,
+};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::merchant_account_correlation::{
@@ -65,34 +68,6 @@ fn not_linked() -> Response {
         }),
     )
         .into_response()
-}
-
-fn process_street_not_configured() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "process_street_not_configured",
-            message: "Process Street integration is not configured on this server.".to_string(),
-        }),
-    )
-        .into_response()
-}
-
-fn encryption_not_configured() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "encryption_not_configured",
-            message: "CLIENT_PII_ENCRYPTION_KEY is not configured on this server.".to_string(),
-        }),
-    )
-        .into_response()
-}
-
-fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
 }
 
 #[derive(Debug, Serialize)]
@@ -604,7 +579,7 @@ pub async fn link_facility_elavon(
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Json(request): Json<LinkElavonRequest>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(
@@ -815,7 +790,7 @@ pub async fn unlink_facility_elavon(
     headers: HeaderMap,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(
@@ -961,7 +936,7 @@ pub async fn resync_elavon_data(
     headers: HeaderMap,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(

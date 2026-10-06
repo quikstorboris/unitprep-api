@@ -19,7 +19,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{
+    internal_error, process_street_not_configured, user_agent_from, ApiErrorBody, AppState,
+};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
 use crate::clients::create::{
@@ -29,23 +31,6 @@ use crate::clients::create::{
 use crate::clients::intake_mapping::MappedCompany;
 
 const PERMISSION: &str = "client_ops.perform";
-
-fn request_context(headers: &HeaderMap) -> Option<&str> {
-    headers
-        .get(axum::http::header::USER_AGENT)
-        .and_then(|value| value.to_str().ok())
-}
-
-fn process_street_not_configured() -> Response {
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "process_street_not_configured",
-            message: "Process Street integration is not configured on this server.".to_string(),
-        }),
-    )
-        .into_response()
-}
 
 fn already_imported(run_ids: Vec<String>) -> Response {
     (
@@ -94,7 +79,7 @@ pub async fn create_client(
     headers: HeaderMap,
     Json(request): Json<CreateClientRequest>,
 ) -> Response {
-    let user_agent = request_context(&headers);
+    let user_agent = user_agent_from(&headers);
 
     if let Err(response) = user
         .require_permission(

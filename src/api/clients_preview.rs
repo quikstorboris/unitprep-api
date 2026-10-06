@@ -50,12 +50,11 @@
 
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::{bad_request, internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, process_street_not_configured, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clients::company_naming::resolve_company_name;
 use crate::clients::intake_mapping::{map_intake_fields, MappedCompany, MappedFacility};
@@ -138,18 +137,6 @@ pub struct PreviewClientsResponse {
     pub runs: Vec<PreviewedRun>,
 }
 
-fn process_street_not_configured() -> Response {
-    tracing::warn!("client preview attempted with Process Street not configured");
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "process_street_not_configured",
-            message: "Process Street integration is not configured on this server.".to_string(),
-        }),
-    )
-        .into_response()
-}
-
 /// Lets each request row's own explicit `merchant_account_run_id` --
 /// the user's actual pick from `clients_search`'s "Potential
 /// Duplicates" rows, when present -- override whatever
@@ -200,6 +187,7 @@ pub async fn preview_clients(
     }
 
     let Some(client) = state.process_street.as_ref() else {
+        tracing::warn!("client preview attempted with Process Street not configured");
         return process_street_not_configured();
     };
 
@@ -376,6 +364,7 @@ pub async fn preview_clients(
 mod tests {
     use super::*;
     use crate::api::test_support::{empty_state, test_user};
+    use axum::http::StatusCode;
 
     #[tokio::test]
     async fn empty_runs_is_rejected_without_touching_anything() {

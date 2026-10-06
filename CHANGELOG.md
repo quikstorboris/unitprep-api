@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.81] - 2026-10-06
+
+Efficiency refactor chunk D1: copy-pasted handler helpers consolidated. No behaviour change.
+
+### Changed
+- Deleted 12 byte-identical `request_context(headers)` copies (now `api::user_agent_from`), 7 `process_street_not_configured` and 3 `encryption_not_configured` copies (now shared in `api/mod.rs`), and 6 `bad_request` redefinitions (now `api::bad_request`; `clients_manual_link` passes its `invalid_request` code explicitly). The search/preview handlers keep their warn log at the call site. `clients_facility_policies_edit::bad_request` stays as a one-line wrapper that fixes the `invalid_request` code. About 200 lines removed.
+
 ## [1.9.80] - 2026-10-05
 
 First ClickUp automation: post a finished duplicate check to the facility's ClickUp task. Pairs with `unitprep-ui` 1.6.59. Needs migrations `20261005130000` and `20261005140000`.

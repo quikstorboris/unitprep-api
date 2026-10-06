@@ -20,7 +20,6 @@
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
@@ -29,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::QueryBuilder;
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, AppState};
 use crate::auth::begin_rls_transaction;
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
@@ -291,19 +290,12 @@ pub async fn list_event_types(State(state): State<AppState>, user: Authenticated
     .into_response()
 }
 
-pub(super) fn bad_request(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::api::test_support::{admin_user, empty_state, test_user};
     use axum::extract::Query as AxumQuery;
+    use axum::http::StatusCode;
 
     #[tokio::test]
     async fn refuses_a_caller_without_the_permission_without_touching_the_database() {
