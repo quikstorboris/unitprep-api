@@ -39,5 +39,8 @@ pub use report::{run, run_with_composer, run_with_options, DedupReport};
 pub use types::TenantRecord;
 pub use unidentified::{UnidentifiedMode, UnidentifiedTenants};
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod synthetic;
+
 #[cfg(test)]
 mod performance_tests;

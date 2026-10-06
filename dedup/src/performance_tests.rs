@@ -16,159 +16,7 @@
 use std::time::{Duration, Instant};
 
 use crate::report::run;
-use crate::types::TenantRecord;
-
-const FIRST_NAMES: [&str; 40] = [
-    "James",
-    "Mary",
-    "Robert",
-    "Patricia",
-    "John",
-    "Jennifer",
-    "Michael",
-    "Linda",
-    "David",
-    "Elizabeth",
-    "William",
-    "Barbara",
-    "Richard",
-    "Susan",
-    "Joseph",
-    "Jessica",
-    "Thomas",
-    "Sarah",
-    "Charles",
-    "Karen",
-    "Daniel",
-    "Nancy",
-    "Matthew",
-    "Lisa",
-    "Anthony",
-    "Betty",
-    "Mark",
-    "Helen",
-    "Donald",
-    "Sandra",
-    "Steven",
-    "Donna",
-    "Paul",
-    "Carol",
-    "Andrew",
-    "Ruth",
-    "Joshua",
-    "Sharon",
-    "Kenneth",
-    "Michelle",
-];
-
-const LAST_NAMES: [&str; 40] = [
-    "Smith",
-    "Johnson",
-    "Williams",
-    "Brown",
-    "Jones",
-    "Garcia",
-    "Miller",
-    "Davis",
-    "Rodriguez",
-    "Martinez",
-    "Hernandez",
-    "Lopez",
-    "Gonzalez",
-    "Wilson",
-    "Anderson",
-    "Thomas",
-    "Taylor",
-    "Moore",
-    "Jackson",
-    "Martin",
-    "Lee",
-    "Perez",
-    "Thompson",
-    "White",
-    "Harris",
-    "Sanchez",
-    "Clark",
-    "Ramirez",
-    "Lewis",
-    "Robinson",
-    "Walker",
-    "Young",
-    "Allen",
-    "King",
-    "Wright",
-    "Scott",
-    "Torres",
-    "Nguyen",
-    "Hill",
-    "Flores",
-];
-
-/// A tiny deterministic generator, so the dataset (and therefore the work
-/// the pipeline does) is identical on every machine and run.
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self, bound: usize) -> usize {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        ((self.0 >> 33) as usize) % bound
-    }
-}
-
-/// `rows` unit records for roughly `rows * 0.8` distinct tenants: a mix of
-/// single- and multi-unit tenants, some tenants carrying a vendor tenant
-/// id and some not, a few near-duplicate names (typos), and contact
-/// details that mostly agree.
-fn synthetic_facility(rows: usize) -> Vec<TenantRecord> {
-    let mut rng = Lcg(0x5EED);
-    let mut records = Vec::with_capacity(rows);
-    let mut tenant = 0usize;
-
-    while records.len() < rows {
-        tenant += 1;
-        let first = FIRST_NAMES[rng.next(FIRST_NAMES.len())];
-        let mut last = LAST_NAMES[rng.next(LAST_NAMES.len())].to_string();
-        if rng.next(30) == 0 {
-            last.push('s'); // a typo-style near duplicate of another tenant
-        }
-        let units = if rng.next(5) == 0 { 2 } else { 1 };
-        let has_id = rng.next(2) == 0;
-
-        for unit in 0..units {
-            if records.len() >= rows {
-                break;
-            }
-            records.push(TenantRecord {
-                cust_numb: format!("C{}", records.len()),
-                unit_number: format!("{}-{}", tenant, unit),
-                tenant_id: if has_id {
-                    format!("T{tenant}")
-                } else {
-                    String::new()
-                },
-                first_last: format!("{first} {last}").to_lowercase(),
-                first_name: first.to_string(),
-                last_name: last.clone(),
-                phone_number: format!("575555{:04}", tenant % 10_000),
-                email: format!(
-                    "{}.{}{}@example.com",
-                    first.to_lowercase(),
-                    last.to_lowercase(),
-                    tenant
-                ),
-                address_street1: format!("{} Main St", 100 + tenant),
-                address_city: "Alamogordo".to_string(),
-                address_state: "NM".to_string(),
-                address_postal_code: "88310".to_string(),
-                ..Default::default()
-            });
-        }
-    }
-    records
-}
+use crate::synthetic::synthetic_facility;
 
 /// Times the whole run in both modes for tenants that have no customer id
 /// (the synthetic facility has some): the default listing, and the heavier
@@ -222,4 +70,25 @@ fn a_large_facility_still_scales_within_budget() {
         elapsed < Duration::from_secs(8),
         "analyzing 2400 rows took {elapsed:?} (budget 8s)"
     );
+}
+
+/// Prints the report-stage timings for the efficiency-refactor baseline
+/// (`cargo test --release -p unitprep-dedup -- --ignored --nocapture print_baseline`,
+/// and the same without `--release`). Best of three per size.
+#[test]
+#[ignore = "prints timings; run with --nocapture"]
+fn print_baseline() {
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    for rows in [800, 2400, 5000] {
+        let runs: Vec<_> = (0..3).map(|_| time_run(rows)).collect();
+        let default_run = runs.iter().map(|r| r.0).min().unwrap();
+        let matched_run = runs.iter().map(|r| r.1).min().unwrap();
+        println!(
+            "BASELINE {profile} rows={rows} default={default_run:?} matched_by_name={matched_run:?}"
+        );
+    }
 }

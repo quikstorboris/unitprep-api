@@ -45,6 +45,10 @@ mod dedup_blocking;
 mod dedup_files;
 mod dedup_rematch;
 mod dedup_view;
+
+#[cfg(test)]
+mod dedup_pipeline_performance_tests;
+
 pub(crate) mod discover;
 mod dropbox_browse;
 mod dropbox_settings;

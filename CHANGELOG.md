@@ -6,6 +6,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.83] - 2026-10-06
+
+Efficiency refactor chunk C0: dedup performance baseline. Test code only.
+
+### Added
+- `unitprep-dedup` `test-support` feature exposing `synthetic::synthetic_facility` (moved out of `performance_tests.rs`; deterministic fake tenants), enabled for the root crate's tests only.
+- `api/dedup_pipeline_performance_tests.rs`: a budget test for the stages after the report (export plan, report view, CSV, XLSX at 2,400 rows) and an ignored `print_baseline` benchmark; `dedup` gained its own `print_baseline` (800 / 2,400 / 5,000 rows, best of three).
+
 ## [1.9.82] - 2026-10-06
 
 Efficiency refactor chunk D4a: large inline test blocks moved out. No behaviour change.

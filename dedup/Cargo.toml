@@ -3,6 +3,11 @@ name = "unitprep-dedup"
 version = "0.1.0"
 edition.workspace = true
 
+[features]
+# Exposes `synthetic` (deterministic fake facility data) to other crates'
+# tests and benchmarks; never enabled in a normal build.
+test-support = []
+
 [dependencies]
 # File ingestion — CsvDocument / header_index, so this crate never grows
 # its own ad hoc header-name parser.
