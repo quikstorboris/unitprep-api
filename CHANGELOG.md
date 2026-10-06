@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.82] - 2026-10-06
+
+Efficiency refactor chunk D4a: large inline test blocks moved out. No behaviour change.
+
+### Changed
+- Moved the inline test modules of `api/clients_resync.rs` (541 lines), `api/clients_search.rs` (519) and `clients/repository.rs` (758, the live-DB integration tests) into `clients_resync_tests.rs`, `clients_search_tests.rs` and `repository_db_tests.rs`, wired with `#[cfg(test)] #[path = ...]` like the existing `*_tests.rs` files. Test counts unchanged. Production files are now 1,076 / 778 / 813 lines.
+
 ## [1.9.81] - 2026-10-06
 
 Efficiency refactor chunk D1: copy-pasted handler helpers consolidated. No behaviour change.
