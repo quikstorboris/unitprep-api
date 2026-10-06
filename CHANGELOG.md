@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.85] - 2026-10-06
+
+Efficiency refactor chunk D3a: the 1,311-line route table is split. No behaviour change.
+
+### Changed
+- `api/router/routes.rs` became `routes/`: `mod.rs` (`build()`, 50 lines, merges the groups), `rate_limited.rs` (the two per-IP limiters, their cleanup task and the routes behind them), and per-domain `account`, `clickup`, `client_ops`, `clients`, `integrations`, `tools` modules. The tagger-check body limit moved next to its route. Proved identical by dumping the route manifest (136 method/path/access entries) before and after: same set. The permission-gate tests are unchanged and green.
+
 ## [1.9.84] - 2026-10-06
 
 Process Street task roles and hidden tasks: the Elavon and Onboarding Summary views no longer depend on one hardcoded task name. Pairs with `unitprep-ui` 1.6.61. **Needs migration `20261006120000`** (the code queries `ps_task_status.hidden` and `integrations.ps_task_role_name`).
