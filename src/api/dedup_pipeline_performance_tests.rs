@@ -68,8 +68,9 @@ fn time_stages(rows: usize) -> (Stages, DedupReport, Vec<TenantRecord>) {
 fn the_stages_after_the_report_stay_within_budget_at_a_large_facility() {
     let (stages, report, records) = time_stages(2400);
 
+    let held_out = report.unidentified.as_ref().map_or(0, |u| u.tenants.len());
     assert!(
-        report.unique_tenants > 1000,
+        report.unique_tenants + held_out > 1000,
         "the synthetic facility should have well over a thousand tenants"
     );
     assert_eq!(records.len(), 2400);
