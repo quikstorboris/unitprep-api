@@ -25,10 +25,10 @@ use crate::api::{
     auth_audit_logs, auth_audit_logs_export, auth_configuration, auth_invites,
     auth_user_permissions, auth_user_role, auth_user_status, auth_users, clickup_connection,
     clickup_duplicate_check, clickup_lookup, clickup_prefetch, client_ops_activity_logs,
-    client_ops_activity_logs_export, client_ops_qms_tags, clients_clickup_links, clients_create,
-    clients_elavon, clients_implementation_status, clients_manual_link, clients_resync,
-    clients_sync, dedup_rematch, dropbox_settings, process_street_settings,
-    process_street_task_roles, tool_runs,
+    client_ops_activity_logs_export, client_ops_qms_tags, clients_clickup_links,
+    clients_clickup_parent, clients_create, clients_elavon, clients_implementation_status,
+    clients_manual_link, clients_resync, clients_sync, dedup_rematch, dropbox_settings,
+    process_street_settings, process_street_task_roles, tool_runs,
 };
 
 use super::routes::build;
@@ -470,6 +470,7 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                     company_intake_run_id: "abc123".to_string(),
                     company: Default::default(),
                     facilities: vec![],
+                    clickup_waived: false,
                 }),
             ))
         }),
@@ -489,6 +490,35 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                 Path(Uuid::new_v4()),
             ))
         }),
+        ("/clients/{company_id}/clickup-parent", Method::PUT, || {
+            Box::pin(clients_clickup_parent::set_clickup_parent(
+                axum::extract::State(empty_state()),
+                test_user(),
+                HeaderMap::new(),
+                Path(Uuid::new_v4()),
+                axum::Json(clients_clickup_parent::SetParentRequest { facility_id: None }),
+            ))
+        }),
+        ("/clients/{company_id}/clickup-waiver", Method::PUT, || {
+            Box::pin(clients_clickup_parent::waive_clickup_project(
+                axum::extract::State(empty_state()),
+                test_user(),
+                HeaderMap::new(),
+                Path(Uuid::new_v4()),
+            ))
+        }),
+        (
+            "/clients/{company_id}/clickup-waiver",
+            Method::DELETE,
+            || {
+                Box::pin(clients_clickup_parent::clear_clickup_waiver(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                ))
+            },
+        ),
         (
             "/clients/{company_id}/implementation-completed",
             Method::PUT,

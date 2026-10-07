@@ -23,6 +23,19 @@ pub struct FacilitySummary {
     pub clickup_list_url: Option<String>,
 }
 
+/// One designation of the company's ClickUp parent facility, newest
+/// last. Names are snapshots taken at the time, so the history still
+/// reads correctly after a facility is renamed or deleted.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct ClickUpParentChange {
+    pub from_facility_id: Option<Uuid>,
+    pub from_facility_name: Option<String>,
+    pub to_facility_id: Option<Uuid>,
+    pub to_facility_name: Option<String>,
+    pub changed_by_name: Option<String>,
+    pub changed_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct OwnerInfo {
     pub facility_id: Uuid,
@@ -65,6 +78,14 @@ pub struct CompanyDetailResponse {
     /// See `clients_implementation_status`; drives the company page's
     /// "Implementation Completed" toggle.
     pub implementation_completed_at: Option<DateTime<Utc>>,
+    /// The facility whose ClickUp list is the source for ClickUp Copy
+    /// (see `clients_clickup_parent`); `None` until one is designated.
+    pub clickup_parent_facility_id: Option<Uuid>,
+    /// Set when the company was deliberately created without a ClickUp
+    /// project, which silences the "no ClickUp link" warning.
+    pub clickup_waived_at: Option<DateTime<Utc>>,
+    /// Every parent designation, oldest first.
+    pub clickup_parent_history: Vec<ClickUpParentChange>,
     /// Whether any of this company's facilities has a Merchant Account
     /// record at all -- computed at read time, not stored (see the
     /// vault's own note: "no new schema needed... a read-time query

@@ -153,6 +153,16 @@ pub mod event {
     /// existing pair for.
     pub const FACILITY_INTAKE_RELINKED: &str = "facility_intake_relinked";
 
+    /// A company's parent ClickUp facility (the source its comments are
+    /// copied from) was designated or changed
+    /// (`api::clients_clickup_parent::set_clickup_parent`). `Change`
+    /// carries the facility id before and after.
+    pub const CLIENT_CLICKUP_PARENT_CHANGED: &str = "client_clickup_parent_changed";
+    /// A company was marked "no ClickUp project" or that waiver was
+    /// cleared (`api::clients_clickup_parent::set_clickup_waiver`, or the
+    /// Create screen's checkbox).
+    pub const CLIENT_CLICKUP_WAIVER_CHANGED: &str = "client_clickup_waiver_changed";
+
     /// Every event type this module writes, for the Activity Logs admin
     /// filter dropdown -- mirrors `auth::audit_log::event::ALL`'s own
     /// reasoning: straight from this list, so the frontend can never
@@ -189,6 +199,8 @@ pub mod event {
         CLIENT_DELETED,
         TOOL_RUN_DELETED,
         FACILITY_INTAKE_RELINKED,
+        CLIENT_CLICKUP_PARENT_CHANGED,
+        CLIENT_CLICKUP_WAIVER_CHANGED,
     ];
 }
 

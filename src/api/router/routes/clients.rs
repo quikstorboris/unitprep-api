@@ -7,11 +7,11 @@ use axum::{
 
 use crate::api::route_access::{GatedRouter, RouteAccess};
 use crate::api::{
-    clients_companies, clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
-    clients_facility_people, clients_facility_policies_edit, clients_filter_options,
-    clients_implementation_status, clients_manual_link, clients_onboarding_summary,
-    clients_preview, clients_resync, clients_search, clients_sync, dedup_rematch, tool_runs,
-    AppState,
+    clients_clickup_parent, clients_companies, clients_create, clients_detail,
+    clients_dropbox_folder, clients_elavon, clients_facility_people,
+    clients_facility_policies_edit, clients_filter_options, clients_implementation_status,
+    clients_manual_link, clients_onboarding_summary, clients_preview, clients_resync,
+    clients_search, clients_sync, dedup_rematch, tool_runs, AppState,
 };
 
 /// Client search/create/list/archive/resync/detail and the onboarding summary.
@@ -99,6 +99,42 @@ pub(super) fn client_routes() -> GatedRouter<AppState> {
                     RouteAccess::Permission {
                         keys: &["client_ops.perform"],
                         action: "reopen_implementation",
+                    },
+                ),
+            ],
+        )
+        // Requires client_ops.perform -- see clients_clickup_parent's own
+        // module doc. The designated parent facility for ClickUp Copy.
+        .gated_route(
+            "/clients/{company_id}/clickup-parent",
+            put(clients_clickup_parent::set_clickup_parent),
+            [(
+                Method::PUT,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "set_clickup_parent",
+                },
+            )],
+        )
+        // Requires client_ops.perform. PUT marks "no ClickUp project",
+        // DELETE clears it; both idempotent.
+        .gated_route(
+            "/clients/{company_id}/clickup-waiver",
+            put(clients_clickup_parent::waive_clickup_project)
+                .delete(clients_clickup_parent::clear_clickup_waiver),
+            [
+                (
+                    Method::PUT,
+                    RouteAccess::Permission {
+                        keys: &["client_ops.perform"],
+                        action: "waive_clickup_project",
+                    },
+                ),
+                (
+                    Method::DELETE,
+                    RouteAccess::Permission {
+                        keys: &["client_ops.perform"],
+                        action: "clear_clickup_waiver",
                     },
                 ),
             ],

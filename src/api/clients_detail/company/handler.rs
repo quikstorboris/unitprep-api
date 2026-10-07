@@ -2,7 +2,8 @@
 
 use super::dto::{CompanyDetailResponse, OwnerInfo};
 use super::queries::{
-    fetch_company_facilities, fetch_company_row, fetch_elavon_active, fetch_owner_parties,
+    fetch_clickup_parent_history, fetch_company_facilities, fetch_company_row, fetch_elavon_active,
+    fetch_owner_parties,
 };
 use crate::api::{internal_error, not_found, AppState};
 use crate::auth::AuthenticatedUser;
@@ -31,11 +32,12 @@ pub async fn get_company_detail(
     user: AuthenticatedUser,
     Path(company_id): Path<Uuid>,
 ) -> Response {
-    let (company_result, facilities_result, elavon_result, owners_result) = tokio::join!(
+    let (company_result, facilities_result, elavon_result, owners_result, history_result) = tokio::join!(
         fetch_company_row(&state.db, user.user_id, &user.role_keys, company_id),
         fetch_company_facilities(&state.db, user.user_id, &user.role_keys, company_id),
         fetch_elavon_active(&state.db, user.user_id, &user.role_keys, company_id),
         fetch_owner_parties(&state.db, user.user_id, &user.role_keys, company_id),
+        fetch_clickup_parent_history(&state.db, user.user_id, &user.role_keys, company_id),
     );
 
     let company = match company_result {
@@ -61,6 +63,14 @@ pub async fn get_company_detail(
         Ok(active) => active,
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "elavon-active query failed");
+            return internal_error("Could not load this company");
+        }
+    };
+
+    let clickup_parent_history = match history_result {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::error!(error = %err, user_id = %user.user_id, "ClickUp parent history query failed");
             return internal_error("Could not load this company");
         }
     };
@@ -133,6 +143,9 @@ pub async fn get_company_detail(
         website_url: company.website_url,
         archived_at: company.archived_at,
         implementation_completed_at: company.implementation_completed_at,
+        clickup_parent_facility_id: company.clickup_parent_facility_id,
+        clickup_waived_at: company.clickup_waived_at,
+        clickup_parent_history,
         elavon_active,
         facilities,
         owners,

@@ -3,7 +3,7 @@
 -- local test-db, via
 --   pg_dump --schema-only --no-owner --no-privileges
 -- Read-only reference, not applied by sqlx and not part of the migrations/
--- directory -- the 107 incremental migrations under migrations/
+-- directory -- the 108 incremental migrations under migrations/
 -- remain the actual source of truth and the real "how did we get here"
 -- history. This file exists so a newcomer (human or AI) can see current
 -- table/column/RLS/index shape in one place without reading them all in
@@ -1089,7 +1089,40 @@ CREATE TABLE clients.companies (
     implementation_manager_user_id uuid,
     sales_rep_user_id uuid,
     implementation_completed_at timestamp with time zone,
+    clickup_parent_facility_id uuid,
+    clickup_waived_at timestamp with time zone,
+    clickup_waived_by uuid,
     CONSTRAINT companies_source_check CHECK ((source = ANY (ARRAY['process_street'::text, 'manual'::text])))
+);
+
+
+--
+-- Name: company_clickup_parent_history; Type: TABLE; Schema: clients; Owner: -
+--
+
+CREATE TABLE clients.company_clickup_parent_history (
+    id bigint NOT NULL,
+    company_id uuid NOT NULL,
+    from_facility_id uuid,
+    from_facility_name text,
+    to_facility_id uuid,
+    to_facility_name text,
+    changed_by uuid,
+    changed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: company_clickup_parent_history_id_seq; Type: SEQUENCE; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.company_clickup_parent_history ALTER COLUMN id ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME clients.company_clickup_parent_history_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -2025,6 +2058,14 @@ ALTER TABLE ONLY clients.companies
 
 
 --
+-- Name: company_clickup_parent_history company_clickup_parent_history_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.company_clickup_parent_history
+    ADD CONSTRAINT company_clickup_parent_history_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: facilities facilities_pkey; Type: CONSTRAINT; Schema: clients; Owner: -
 --
 
@@ -2382,6 +2423,13 @@ CREATE INDEX companies_active_idx ON clients.companies USING btree (legal_name) 
 --
 
 CREATE INDEX companies_ps_intake_run_id_idx ON clients.companies USING btree (ps_intake_run_id) WHERE (ps_intake_run_id IS NOT NULL);
+
+
+--
+-- Name: company_clickup_parent_history_company_idx; Type: INDEX; Schema: clients; Owner: -
+--
+
+CREATE INDEX company_clickup_parent_history_company_idx ON clients.company_clickup_parent_history USING btree (company_id, changed_at);
 
 
 --
@@ -2813,6 +2861,22 @@ ALTER TABLE ONLY client_ops.vendor_format
 
 
 --
+-- Name: companies companies_clickup_parent_facility_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.companies
+    ADD CONSTRAINT companies_clickup_parent_facility_id_fkey FOREIGN KEY (clickup_parent_facility_id) REFERENCES clients.facilities(id) ON DELETE SET NULL;
+
+
+--
+-- Name: companies companies_clickup_waived_by_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.companies
+    ADD CONSTRAINT companies_clickup_waived_by_fkey FOREIGN KEY (clickup_waived_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
 -- Name: companies companies_implementation_manager_user_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
 --
 
@@ -2826,6 +2890,22 @@ ALTER TABLE ONLY clients.companies
 
 ALTER TABLE ONLY clients.companies
     ADD CONSTRAINT companies_sales_rep_user_id_fkey FOREIGN KEY (sales_rep_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: company_clickup_parent_history company_clickup_parent_history_changed_by_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.company_clickup_parent_history
+    ADD CONSTRAINT company_clickup_parent_history_changed_by_fkey FOREIGN KEY (changed_by) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: company_clickup_parent_history company_clickup_parent_history_company_id_fkey; Type: FK CONSTRAINT; Schema: clients; Owner: -
+--
+
+ALTER TABLE ONLY clients.company_clickup_parent_history
+    ADD CONSTRAINT company_clickup_parent_history_company_id_fkey FOREIGN KEY (company_id) REFERENCES clients.companies(id) ON DELETE CASCADE;
 
 
 --
@@ -3531,6 +3611,26 @@ CREATE POLICY companies_select_authenticated ON clients.companies FOR SELECT USI
 --
 
 CREATE POLICY companies_update_client_ops_roles ON clients.companies FOR UPDATE USING (auth.current_user_is_client_ops_role()) WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: company_clickup_parent_history; Type: ROW SECURITY; Schema: clients; Owner: -
+--
+
+ALTER TABLE clients.company_clickup_parent_history ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: company_clickup_parent_history company_clickup_parent_history_insert_client_ops_roles; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY company_clickup_parent_history_insert_client_ops_roles ON clients.company_clickup_parent_history FOR INSERT WITH CHECK (auth.current_user_is_client_ops_role());
+
+
+--
+-- Name: company_clickup_parent_history company_clickup_parent_history_select_authenticated; Type: POLICY; Schema: clients; Owner: -
+--
+
+CREATE POLICY company_clickup_parent_history_select_authenticated ON clients.company_clickup_parent_history FOR SELECT USING ((NULLIF(current_setting('app.current_user_id'::text, true), ''::text) IS NOT NULL));
 
 
 --

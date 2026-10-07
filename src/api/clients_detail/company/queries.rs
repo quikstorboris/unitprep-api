@@ -1,6 +1,6 @@
 //! The read queries behind the company page: the company row, its facilities, Elavon status and owner parties.
 
-use super::dto::FacilitySummary;
+use super::dto::{ClickUpParentChange, FacilitySummary};
 use crate::auth::begin_rls_transaction;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -24,6 +24,8 @@ pub(super) struct CompanyDetailRow {
     pub(super) website_url: Option<String>,
     pub(super) archived_at: Option<DateTime<Utc>>,
     pub(super) implementation_completed_at: Option<DateTime<Utc>>,
+    pub(super) clickup_parent_facility_id: Option<Uuid>,
+    pub(super) clickup_waived_at: Option<DateTime<Utc>>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -51,7 +53,8 @@ pub(super) async fn fetch_company_row(
         "SELECT id, legal_name, corporate_email, corporate_phone, corporate_address_street, \
          corporate_address_city, corporate_address_state, corporate_address_zip, subdomain, \
          accepted_payment_methods, accounting_basis, payment_scheme, offers_tenant_insurance_raw, \
-         insurance_provider, website_url, archived_at, implementation_completed_at \
+         insurance_provider, website_url, archived_at, implementation_completed_at, \
+         clickup_parent_facility_id, clickup_waived_at \
          FROM clients.companies WHERE id = $1",
     )
     .bind(company_id)
@@ -72,6 +75,29 @@ pub(super) async fn fetch_company_facilities(
         "SELECT id, name, dropbox_folder_url, clickup_list_id, clickup_list_name, \
          clickup_folder_name, clickup_list_url \
          FROM clients.facilities WHERE company_id = $1 ORDER BY name",
+    )
+    .bind(company_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(rows)
+}
+
+pub(super) async fn fetch_clickup_parent_history(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    role_keys: &[String],
+    company_id: Uuid,
+) -> Result<Vec<ClickUpParentChange>, sqlx::Error> {
+    let mut tx = begin_rls_transaction(db, user_id, role_keys).await?;
+    // changed_by_name is best-effort: a user row the caller cannot read,
+    // or one since deleted, shows as no name rather than failing the page.
+    let rows = sqlx::query_as(
+        "SELECT h.from_facility_id, h.from_facility_name, h.to_facility_id, h.to_facility_name, \
+         NULLIF(btrim(u.first_name || ' ' || u.last_name), '') AS changed_by_name, h.changed_at \
+         FROM clients.company_clickup_parent_history h \
+         LEFT JOIN auth.users u ON u.id = h.changed_by \
+         WHERE h.company_id = $1 ORDER BY h.changed_at, h.id",
     )
     .bind(company_id)
     .fetch_all(&mut *tx)

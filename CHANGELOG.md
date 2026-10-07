@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.92] - 2026-10-07
+
+ClickUp Copy, phase 1: the prerequisites. Needs migration `20261007130000`.
+
+### Added
+- A company's **ClickUp parent facility** (the source ClickUp Copy will copy comments from): `clients.companies.clickup_parent_facility_id` and `PUT /clients/{id}/clickup-parent` (`client_ops.perform`, idempotent, audited as `client_clickup_parent_changed`). The parent must belong to the company and have a ClickUp list linked. Every change, including the first designation, is appended to the append-only `clients.company_clickup_parent_history` (names are snapshots, so history survives a rename or delete); the company detail response carries the parent id and the history.
+- A **"no ClickUp project" waiver**: `clients.companies.clickup_waived_at`/`clickup_waived_by`, `PUT`/`DELETE /clients/{id}/clickup-waiver`, and a `clickup_waived` flag on `POST /clients` recorded in the create transaction. Lets a deliberate "no ClickUp" read differently from "nobody linked it yet".
+- 10 real-database tests for both (`clients_clickup_parent_db_tests`).
+
 ## [1.9.91] - 2026-10-07
 
 Efficiency refactor chunk D4f: `clients_detail.rs` (942 lines) split. No behaviour change.

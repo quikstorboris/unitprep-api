@@ -61,6 +61,11 @@ pub struct CreateClientRequest {
     pub company: MappedCompany,
     #[serde(default)]
     pub facilities: Vec<CreateFacilitySelection>,
+    /// The Create screen's "Create without ClickUp project" checkbox.
+    /// Recorded on the company (who/when) so a deliberate "no ClickUp"
+    /// reads differently from "nobody linked it yet" afterwards.
+    #[serde(default)]
+    pub clickup_waived: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -229,9 +234,43 @@ pub async fn create_client(
         }
     };
 
+    // Same transaction as the create, so a company is never left created
+    // but missing the waiver the person asked for.
+    if request.clickup_waived {
+        let waived = sqlx::query(
+            "UPDATE clients.companies SET clickup_waived_at = now(), clickup_waived_by = $2 \
+              WHERE id = $1",
+        )
+        .bind(created.company_id)
+        .bind(user.user_id)
+        .execute(&mut *tx)
+        .await;
+
+        if let Err(err) = waived {
+            let _ = tx.rollback().await;
+            tracing::error!(error = %err, user_id = %user.user_id, "failed to record the ClickUp waiver during client creation");
+            return internal_error("Could not create this client");
+        }
+    }
+
     if let Err(err) = tx.commit().await {
         tracing::error!(error = %err, user_id = %user.user_id, "failed to commit client creation");
         return internal_error("Could not create this client");
+    }
+
+    if request.clickup_waived {
+        audit_log::record(
+            &state.db,
+            audit_log::event::CLIENT_CLICKUP_WAIVER_CHANGED,
+            user.user_id,
+            "company",
+            Some(&created.company_id.to_string()),
+            audit_log::Change::none(),
+            user_agent,
+            None,
+            serde_json::json!({ "waived": true, "at_creation": true }),
+        )
+        .await;
     }
 
     audit_log::record(
@@ -283,6 +322,7 @@ mod tests {
                 company_intake_run_id: "abc123".to_string(),
                 company: MappedCompany::default(),
                 facilities: vec![],
+                clickup_waived: false,
             }),
         )
         .await;
@@ -300,6 +340,7 @@ mod tests {
                 company_intake_run_id: "   ".to_string(),
                 company: MappedCompany::default(),
                 facilities: vec![],
+                clickup_waived: false,
             }),
         )
         .await;
@@ -317,6 +358,7 @@ mod tests {
                 company_intake_run_id: "abc123".to_string(),
                 company: MappedCompany::default(),
                 facilities: vec![],
+                clickup_waived: false,
             }),
         )
         .await;

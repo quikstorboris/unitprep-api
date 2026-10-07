@@ -24,6 +24,7 @@ mod client_ops_activity_logs;
 mod client_ops_activity_logs_export;
 mod client_ops_qms_tags;
 mod clients_clickup_links;
+mod clients_clickup_parent;
 mod clients_companies;
 mod clients_create;
 mod clients_detail;
@@ -304,6 +305,10 @@ mod clients_facility_people_db_tests;
 #[cfg(test)]
 #[path = "clients_onboarding_summary_db_tests.rs"]
 mod clients_onboarding_summary_db_tests;
+
+#[cfg(test)]
+#[path = "clients_clickup_parent_db_tests.rs"]
+mod clients_clickup_parent_db_tests;
 
 #[cfg(test)]
 #[path = "clients_implementation_status_db_tests.rs"]
