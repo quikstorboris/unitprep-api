@@ -6,6 +6,18 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.99] - 2026-10-07
+
+Efficiency refactor chunk D4i: the Dropbox client gets one JSON-call helper and is split; the sync schedule and the Merchant Account secrets move out of their large files. No behaviour change.
+
+### Changed
+- `dropbox/client.rs` (1,406 lines) became `dropbox/client/`: `mod` (the client, token refresh, the 401 refresh-and-retry, and the new private `rpc` helper), `dto` (response shapes and `DropboxError`), `folders` (list, search, shared-link resolution, folder creation), `files` (download, upload, shared links), `tests`, `live_tests` (the `#[ignore]`d real-account tests). `rpc` replaces seven copies of the same "build request with token and path-root header, send with retry, read status and body" sequence; `Reply::parse` and `Reply::into_error` replace the repeated error mapping. The upload path is still deliberately not retried.
+- `clients/sync/orchestrator.rs` (1,555 lines): the schedule (`ScheduleConfig`, `next_daily_occurrence`, `sleep_until_next_scheduled_sync`, `start_background_sync_task`) moved to `orchestrator/schedule.rs`; the three inline test modules became `tests`, `live_tests` and `batch_tests` files.
+- `clients/merchant_account_mapping.rs` (940 lines) became `merchant_account_mapping/`: `mapping` (field mapping and parties) and `secrets` (sealing and decrypting facility secrets and party PII, masking). The facility-secrets and Elavon-credentials AAD (the facility id) is untouched -- the two are told apart only by plaintext shape, and changing the AAD would break stored data.
+
+### Added
+- Six hermetic mock-Dropbox tests for the calls that used to have only real-account tests: folder search (folders only, scoped to the root, namespace header), shared-link resolution (the two-step bridge; a file link or a failure degrades to `None`), "folder already exists" counting as success, and a new-or-existing shared link; plus a failed listing surfacing its status and body.
+
 ## [1.9.98] - 2026-10-07
 
 Efficiency refactor chunk D4h (first part): three more large files split, two row tuples named. No behaviour change.
