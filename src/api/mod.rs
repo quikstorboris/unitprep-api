@@ -316,6 +316,10 @@ mod clickup_copy_db_tests;
 mod clients_clickup_parent_db_tests;
 
 #[cfg(test)]
+#[path = "auth_register_db_tests.rs"]
+mod auth_register_db_tests;
+
+#[cfg(test)]
 #[path = "clients_implementation_status_db_tests.rs"]
 mod clients_implementation_status_db_tests;
 
