@@ -16,6 +16,9 @@
 
 pub mod assignment;
 mod client;
+pub mod comments;
+pub mod copy_pairing;
+pub mod copy_text;
 pub mod hierarchy;
 pub mod matching;
 pub mod task_cache;

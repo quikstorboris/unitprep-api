@@ -17,6 +17,7 @@ mod auth_users;
 pub(crate) mod blocking;
 mod cancel_session;
 mod clickup_connection;
+mod clickup_copy;
 mod clickup_duplicate_check;
 mod clickup_lookup;
 mod clickup_prefetch;
@@ -305,6 +306,10 @@ mod clients_facility_people_db_tests;
 #[cfg(test)]
 #[path = "clients_onboarding_summary_db_tests.rs"]
 mod clients_onboarding_summary_db_tests;
+
+#[cfg(test)]
+#[path = "clickup_copy_db_tests.rs"]
+mod clickup_copy_db_tests;
 
 #[cfg(test)]
 #[path = "clients_clickup_parent_db_tests.rs"]

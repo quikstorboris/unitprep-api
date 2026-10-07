@@ -37,6 +37,24 @@ pub struct ClickUpTask {
     pub assignees: Vec<ClickUpAssignee>,
     pub url: String,
     pub list_id: Option<String>,
+    /// The task's dropdown custom fields that have a value, resolved to
+    /// the chosen option (Onboarding Phase and Corp/Fac are dropdowns).
+    pub dropdowns: Vec<TaskDropdown>,
+}
+
+/// One dropdown custom field's selection on a task.
+///
+/// ClickUp sends a dropdown's value as the option's *index*, not its name
+/// or id (confirmed 2026-10-02, see the vault's ClickUp design log), so it
+/// is resolved here through the field's own option list. Matching later
+/// goes by `option_id` where it can: emoji in option *names* come back as
+/// broken surrogate pairs from the API, which makes names unreliable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskDropdown {
+    pub field_id: String,
+    pub field_name: String,
+    pub option_id: String,
+    pub option_name: String,
 }
 
 impl ClickUpTask {
@@ -44,6 +62,27 @@ impl ClickUpTask {
     pub fn is_finished(&self) -> bool {
         matches!(self.status_type.as_str(), "done" | "closed")
     }
+
+    /// The task's selection in the dropdown named `field_name`
+    /// (compared by [`compact_label`], so case, spacing and emoji do not
+    /// matter).
+    pub fn dropdown(&self, field_name: &str) -> Option<&TaskDropdown> {
+        let wanted = compact_label(field_name);
+        self.dropdowns
+            .iter()
+            .find(|dropdown| compact_label(&dropdown.field_name) == wanted)
+    }
+}
+
+/// A label reduced to its lowercase letters and digits, so "Set Up",
+/// "SETUP", "🛠 Setup" and "Corp/Fac" vs "corp fac" all compare equal.
+/// The templates spell the same group both "Set Up" and "Setup".
+pub fn compact_label(label: &str) -> String {
+    label
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 /// One status a list offers.
@@ -72,6 +111,62 @@ struct TaskBody {
     #[serde(default)]
     url: String,
     list: Option<ListRef>,
+    #[serde(default)]
+    custom_fields: Vec<CustomFieldBody>,
+}
+
+#[derive(Deserialize)]
+struct CustomFieldBody {
+    id: String,
+    #[serde(default)]
+    name: String,
+    #[serde(rename = "type", default)]
+    kind: String,
+    type_config: Option<TypeConfigBody>,
+    value: Option<serde_json::Value>,
+}
+
+#[derive(Deserialize)]
+struct TypeConfigBody {
+    #[serde(default)]
+    options: Vec<OptionBody>,
+}
+
+#[derive(Deserialize)]
+struct OptionBody {
+    id: String,
+    #[serde(default)]
+    name: String,
+    orderindex: Option<serde_json::Number>,
+}
+
+impl CustomFieldBody {
+    /// The selected option of a dropdown, or `None` for any other field
+    /// type, an unset dropdown, or a value matching no option. ClickUp
+    /// sends the option's `orderindex` as a number; an option id string
+    /// is accepted too, in case a workspace returns that form.
+    fn selection(self) -> Option<TaskDropdown> {
+        if self.kind != "drop_down" {
+            return None;
+        }
+        let value = self.value?;
+        let options = self.type_config?.options;
+
+        let chosen = match &value {
+            serde_json::Value::Number(index) => options
+                .into_iter()
+                .find(|option| option.orderindex.as_ref() == Some(index)),
+            serde_json::Value::String(id) => options.into_iter().find(|option| &option.id == id),
+            _ => None,
+        }?;
+
+        Some(TaskDropdown {
+            field_id: self.id,
+            field_name: self.name,
+            option_id: chosen.id,
+            option_name: chosen.name,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -119,6 +214,11 @@ impl From<TaskBody> for ClickUpTask {
                 .collect(),
             url: body.url,
             list_id: body.list.map(|l| l.id),
+            dropdowns: body
+                .custom_fields
+                .into_iter()
+                .filter_map(CustomFieldBody::selection)
+                .collect(),
         }
     }
 }
@@ -295,6 +395,69 @@ mod tests {
             name: name.to_string(),
             kind: kind.to_string(),
         }
+    }
+
+    /// A task as ClickUp sends it, carrying one Onboarding Phase dropdown
+    /// whose value is `value` (an option *index*, as the live API does).
+    fn task_with_phase(value: Value) -> ClickUpTask {
+        let body: TaskBody = serde_json::from_value(json!({
+            "id": "t1", "name": "ADD Recurring Fees",
+            "custom_fields": [
+                { "id": "f-phase", "name": "Onboarding Phase", "type": "drop_down",
+                  "type_config": { "options": [
+                      { "id": "o-setup", "name": "Set Up", "orderindex": 0 },
+                      { "id": "o-mig", "name": "Migration", "orderindex": 1 }
+                  ] },
+                  "value": value },
+                { "id": "f-text", "name": "Business Name", "type": "short_text", "value": "Acme" }
+            ]
+        }))
+        .unwrap();
+        body.into()
+    }
+
+    #[test]
+    fn a_dropdown_value_is_resolved_through_the_options_order_index() {
+        let task = task_with_phase(json!(1));
+
+        let phase = task.dropdown("Onboarding Phase").unwrap();
+        assert_eq!(phase.option_id, "o-mig");
+        assert_eq!(phase.option_name, "Migration");
+        assert_eq!(phase.field_id, "f-phase");
+    }
+
+    #[test]
+    fn a_dropdown_value_that_is_an_option_id_is_resolved_too() {
+        let task = task_with_phase(json!("o-setup"));
+
+        assert_eq!(
+            task.dropdown("Onboarding Phase").unwrap().option_name,
+            "Set Up"
+        );
+    }
+
+    #[test]
+    fn dropdown_lookup_ignores_case_spacing_and_emoji_in_the_field_name() {
+        let task = task_with_phase(json!(0));
+
+        assert!(task.dropdown("onboarding  PHASE").is_some());
+        assert!(task.dropdown("🚀 Onboarding Phase").is_some());
+        assert!(task.dropdown("Corp/Fac").is_none());
+    }
+
+    #[test]
+    fn unset_unmatched_and_non_dropdown_fields_resolve_to_nothing() {
+        assert!(task_with_phase(Value::Null).dropdowns.is_empty());
+        assert!(task_with_phase(json!(9)).dropdowns.is_empty());
+        // The short_text field is never reported as a dropdown.
+        assert_eq!(task_with_phase(json!(0)).dropdowns.len(), 1);
+    }
+
+    #[test]
+    fn compact_label_makes_the_two_spellings_of_a_group_equal() {
+        assert_eq!(compact_label("Set Up"), compact_label("SETUP"));
+        assert_eq!(compact_label("🛠 Setup"), "setup");
+        assert_ne!(compact_label("Migration"), compact_label("Set Up"));
     }
 
     #[test]

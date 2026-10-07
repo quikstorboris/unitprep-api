@@ -309,6 +309,43 @@ async fn clickup_dupcheck_db_first_and_second_checks_are_offered_their_own_tasks
     std::env::remove_var("INTEGRATION_SECRETS_ENCRYPTION_KEY");
 }
 
+/// The Onboarding Work tab lists runs by their row id, not their session
+/// id; a check can be posted later from there, and posts exactly as it
+/// would have by session id.
+#[tokio::test]
+#[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
+async fn clickup_dupcheck_db_a_run_can_be_found_by_its_row_id_as_well() {
+    let _ = dotenvy::from_filename(".env.local");
+    let fx = Fixture::new().await;
+    fx.link_facility().await;
+    let first = fx.run(true, 10).await;
+    let second = fx.run(true, 5).await;
+
+    let row_id: Uuid =
+        sqlx::query_scalar("SELECT id FROM client_ops.tool_runs WHERE session_id = $1")
+            .bind(&second)
+            .fetch_one(&fx.superuser)
+            .await
+            .unwrap();
+
+    // Found by row id, and still the *second* check (its place among the
+    // facility's runs does not depend on which id named it).
+    let body = body_json(fx.candidates(&row_id.to_string()).await).await;
+    assert_eq!(body["step_label"], "2nd Duplicate Check");
+    assert_eq!(body["candidates"][0]["task_id"], "c2");
+
+    let response = fx.post(&row_id.to_string(), "c2").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(fx.writes()[0].0, "COMMENT c2");
+
+    // The session id of the other run still works too.
+    let body = body_json(fx.candidates(&first).await).await;
+    assert_eq!(body["step_label"], "1st Duplicate Check");
+
+    std::env::remove_var("INTEGRATION_SECRETS_ENCRYPTION_KEY");
+}
+
 #[tokio::test]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 #[serial_test::serial(integration_secrets_encryption_key_env)]

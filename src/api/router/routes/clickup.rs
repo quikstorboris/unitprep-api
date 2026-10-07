@@ -7,7 +7,7 @@ use axum::{
 
 use crate::api::route_access::{GatedRouter, RouteAccess};
 use crate::api::{
-    clickup_connection, clickup_duplicate_check, clickup_lookup, clickup_prefetch,
+    clickup_connection, clickup_copy, clickup_duplicate_check, clickup_lookup, clickup_prefetch,
     clients_clickup_links, AppState,
 };
 
@@ -172,6 +172,42 @@ pub(super) fn clickup_routes() -> GatedRouter<AppState> {
                 RouteAccess::Permission {
                     keys: &["integrations.clickup"],
                     action: "post_clickup_duplicate_check_results",
+                },
+            )],
+        )
+        // ClickUp Copy: copying a comment from a task in another facility's
+        // list to its counterpart in this facility's list. See clickup_copy's
+        // own module doc.
+        .gated_route(
+            "/clients/{company_id}/facilities/{facility_id}/clickup/copy-pairs",
+            get(clickup_copy::copy_pairs),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_copy_pairs",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/facilities/{facility_id}/clickup/copy-comments",
+            get(clickup_copy::copy_comments),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_copy_comments",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/facilities/{facility_id}/clickup/copy",
+            post(clickup_copy::copy_comments_to_tasks),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_copy_comments",
                 },
             )],
         )

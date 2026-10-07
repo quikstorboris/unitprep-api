@@ -95,6 +95,11 @@ pub mod event {
     /// records the task id and how each of the three writes went.
     pub const FACILITY_CLICKUP_DUPLICATE_CHECK_POSTED: &str =
         "facility_clickup_duplicate_check_posted";
+    /// Comments were copied from another facility's ClickUp list onto this
+    /// facility's tasks (`api::clickup_copy`). `metadata` records the
+    /// source facility and how many rows copied, failed and got the
+    /// main-list pointer.
+    pub const FACILITY_CLICKUP_COMMENTS_COPIED: &str = "facility_clickup_comments_copied";
 
     /// A person was added to a facility's Users tab roster
     /// (`api::clients_facility_people::add_facility_person`) -- either an
@@ -184,6 +189,7 @@ pub mod event {
         FACILITY_CLICKUP_LINKED,
         FACILITY_CLICKUP_UNLINKED,
         FACILITY_CLICKUP_DUPLICATE_CHECK_POSTED,
+        FACILITY_CLICKUP_COMMENTS_COPIED,
         FACILITY_PERSON_ADDED,
         FACILITY_PERSON_UPDATED,
         FACILITY_PERSON_UNLINKED,

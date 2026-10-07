@@ -60,6 +60,8 @@ struct Prepared {
     list_id: String,
     list_name: String,
     list_url: String,
+    /// The run's own session id, whichever of its two ids the request used.
+    session_id: String,
     sequence_number: i64,
     /// Where the summary file was saved in Dropbox, if it was.
     output_path: Option<String>,
@@ -203,13 +205,16 @@ async fn prepare(
     .await
     .map_err(fail)?;
 
-    let run: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT sequence_number, output_dropbox_path, output_dropbox_link FROM (
-             SELECT session_id, output_dropbox_path, output_dropbox_link,
+    // `session_id` may be the run's own session id (right after a check) or
+    // the run's row id (what the Onboarding Work tab lists), so a check can
+    // be posted later from either place.
+    let run: Option<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT sequence_number, session_id, output_dropbox_path, output_dropbox_link FROM (
+             SELECT id, session_id, output_dropbox_path, output_dropbox_link,
                     ROW_NUMBER() OVER (PARTITION BY facility_id, tool ORDER BY created_at ASC) AS sequence_number
                FROM client_ops.tool_runs
               WHERE facility_id = $1 AND tool = 'dedup'
-         ) runs WHERE session_id = $2",
+         ) runs WHERE session_id = $2 OR id::text = $2",
     )
     .bind(facility_id)
     .bind(session_id)
@@ -218,7 +223,7 @@ async fn prepare(
     .map_err(fail)?;
 
     let step_key = match &run {
-        Some((1, _, _)) => FIRST_STEP,
+        Some((1, _, _, _)) => FIRST_STEP,
         _ => LATER_STEP,
     };
     let step: Option<(String, String, i32, Vec<String>)> = sqlx::query_as(
@@ -240,7 +245,7 @@ async fn prepare(
         ));
     };
 
-    let Some((sequence_number, output_path, output_link)) = run else {
+    let Some((sequence_number, session_id, output_path, output_link)) = run else {
         return Err(not_found(
             "not_found",
             "No duplicate check with that session was recorded for this facility.".to_string(),
@@ -256,6 +261,7 @@ async fn prepare(
         list_id,
         list_name,
         list_url,
+        session_id,
         sequence_number,
         output_path,
         output_link,
@@ -502,7 +508,7 @@ pub async fn post_duplicate_check_results(
                         let (db, actor, roles) =
                             (state.db.clone(), user.user_id, user.role_keys.clone());
                         let (session_id, path, link) =
-                            (request.session_id.clone(), path.clone(), made.0.clone());
+                            (prepared.session_id.clone(), path.clone(), made.0.clone());
                         tokio::spawn(async move {
                             run_store::store_output_dropbox_link(
                                 &db,

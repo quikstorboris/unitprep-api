@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.93] - 2026-10-07
+
+ClickUp Copy, phase 2a: pairing two facilities' lists and copying comments between them. No migration.
+
+### Added
+- **`clickup_copy`**, three endpoints on the *target* facility (`integrations.clickup`, the caller's own ClickUp token): `GET .../clickup/copy-pairs` (the source and target lists' Set Up and Migration tasks, paired; optional `source_facility_id`, defaulting to the company's parent, and a Corp/Fac `scope` filter), `GET .../clickup/copy-comments` (one row's source comment for the prefill, plus whether the target looks already copied or already has the pointer -- read per row so opening the dialog does not read every task's comments) and `POST .../clickup/copy` (posts the edited comments; rows succeed or fail independently; up to 30 per request until the background queue exists). Audited as `facility_clickup_comments_copied`.
+- **Main-list pointer.** Whenever a comment is copied, a separate generic comment "Main task list for this client is {parent's list}" (the name linked) is posted on the target task -- once per task, and never on the parent's own tasks or when no parent is designated.
+- ClickUp client: dropdown **custom fields** on tasks resolved to the chosen option (Onboarding Phase, Corp/Fac), and `task_comments` (paged, newest first). Task pairing (`clickup::copy_pairing`) scores name and parent name, only within the same phase, one-to-one; "Set Up" and "Setup" are one phase.
+- The duplicate-check ClickUp endpoints accept a run's **row id** as well as its session id (the Onboarding Work tab lists runs by row id), so a check can be posted to ClickUp later, from there. The run is still resolved to its own session id internally, so a captured Dropbox share link is stored against the right run.
+- No marker is stored on what is copied, so "already copied" and "pointer already there" match on **wording** (`clickup::copy_text`); every such place is tagged `MARKER-TODO` for when an "Auto-added by OO" marker is added.
+
 ## [1.9.92] - 2026-10-07
 
 ClickUp Copy, phase 1: the prerequisites. Needs migration `20261007130000`.

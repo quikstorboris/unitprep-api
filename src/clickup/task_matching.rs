@@ -61,7 +61,7 @@ pub struct RankedTask<'a> {
 /// Lowercased words of `name` with filler and bare numbering ("2.")
 /// removed, ordinal words unified ("second" -> "2nd") and a plural "s"
 /// trimmed, so "Corrections" and "correction" compare equal.
-fn tokens(name: &str) -> Vec<String> {
+pub(super) fn tokens(name: &str) -> Vec<String> {
     name.split(|c: char| !c.is_alphanumeric())
         .filter(|word| !word.is_empty())
         .map(str::to_lowercase)
@@ -97,7 +97,7 @@ fn ordinal_value(token: &str) -> Option<i32> {
 }
 
 /// Sorensen-Dice overlap of two token sets.
-fn dice(a: &[String], b: &[String]) -> f64 {
+pub(super) fn dice(a: &[String], b: &[String]) -> f64 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
@@ -194,6 +194,7 @@ mod tests {
             assignees: Vec::new(),
             url: String::new(),
             list_id: None,
+            dropdowns: Vec::new(),
         }
     }
 
