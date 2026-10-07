@@ -186,14 +186,14 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             internal_error()
         })?;
 
-        let Some((
+        let Some(SessionRow {
             user_id,
             role_keys,
             permission_keys,
             elevated_until,
             requires_step_up,
             passkey_reverified_until,
-        )) = row
+        }) = row
         else {
             record_expired_access_attempt(state, &token_hash, parts).await;
             return Err(unauthorized());
@@ -218,6 +218,18 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
     }
 }
 
+/// One row of `auth.resolve_session`, named instead of the six-element tuple
+/// it used to be.
+#[derive(Debug, PartialEq, sqlx::FromRow)]
+pub(crate) struct SessionRow {
+    pub(crate) user_id: Uuid,
+    pub(crate) role_keys: Option<Vec<String>>,
+    pub(crate) permission_keys: Option<Vec<String>>,
+    pub(crate) elevated_until: Option<DateTime<Utc>>,
+    pub(crate) requires_step_up: bool,
+    pub(crate) passkey_reverified_until: Option<DateTime<Utc>>,
+}
+
 /// The one query behind session resolution -- shared by the mandatory
 /// extractor above and by `try_authenticated_user` below so there is
 /// exactly one place that knows resolve_session's shape. `role_keys` and
@@ -225,21 +237,10 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
 /// empty array when a user holds no roles at all -- `array_agg` over zero
 /// matching rows, not something expected in practice but not a crash
 /// either.
-#[allow(clippy::type_complexity)]
 pub(crate) async fn query_session(
     token_hash: &[u8],
     db: &PgPool,
-) -> Result<
-    Option<(
-        Uuid,
-        Option<Vec<String>>,
-        Option<Vec<String>>,
-        Option<DateTime<Utc>>,
-        bool,
-        Option<DateTime<Utc>>,
-    )>,
-    sqlx::Error,
-> {
+) -> Result<Option<SessionRow>, sqlx::Error> {
     sqlx::query_as(
         "SELECT user_id, role_keys, permission_keys, elevated_until, requires_step_up, \
          passkey_reverified_until FROM auth.resolve_session($1, $2)",
@@ -324,14 +325,14 @@ pub async fn try_authenticated_user(
     // an anonymous caller, with zero trace of the real cause. Logged now,
     // matching the mandatory extractor's own pattern; the None-collapsing
     // behavior itself (this function's own doc comment above) is unchanged.
-    let (
+    let SessionRow {
         user_id,
         role_keys,
         permission_keys,
         elevated_until,
         requires_step_up,
         passkey_reverified_until,
-    ) = match query_session(&token_hash, &state.db).await {
+    } = match query_session(&token_hash, &state.db).await {
         Ok(Some(row)) => row,
         Ok(None) => return None,
         Err(err) => {

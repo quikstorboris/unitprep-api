@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.98] - 2026-10-07
+
+Efficiency refactor chunk D4h (first part): three more large files split, two row tuples named. No behaviour change.
+
+### Changed
+- `api/auth_invites.rs` (1,085 lines) became `auth_invites/`: `invite` (create/re-issue an invite), `recovery` (admin account recovery), `tests`.
+- `api/clients_facility_people.rs` (945) became `clients_facility_people/`: `dto`, `owners` (where a facility's legal owners come from), `get`, `add`, `edit`, `unlink`, `tests`.
+- `clients/repository.rs` (815) became `clients/repository/`: `facility`, `people`, `merchant_account`, `contract_order`, `task_status`, `tests` (its 97 real-database tests pass unchanged).
+- `resolve_session`'s six-element tuple is now `SessionRow`, and `DropboxConfig::from_db`'s five-element tuple a private `ConfigRow` (two `type_complexity` allows gone).
+- Deliberately NOT changed: the `too_many_arguments` allows on `edit_person_and_facility_link` (its own comment records why a parameter struct was rejected: eight independent fields of one form submission, three call sites) and on `client_ops::audit_log::record` (one stable nine-argument shape used identically at 73 call sites; a struct would only rename positional arguments).
+
 ## [1.9.97] - 2026-10-07
 
 Efficiency refactor chunk D4c (split half; the v1.9.96 tag points at an incomplete commit that does not compile - this release is the real one): `dedup.rs` (988 lines) and `tagger.rs` (947 lines) split into modules. No behaviour change.

@@ -1,23 +1,30 @@
-use serde_json::Value;
 use serial_test::serial;
-use uuid::Uuid;
 
 use crate::clients::contract_order_mapping::map_contract_order_fields;
 use crate::clients::intake_mapping::map_intake_fields;
 use crate::clients::merchant_account_mapping::map_merchant_account_fields;
-use crate::process_street::{FormField, Task};
+use crate::process_street::FormField;
 
-use super::*;
+use serde_json::Value;
+use uuid::Uuid;
+
+use super::contract_order::*;
+use super::facility::*;
+use super::merchant_account::*;
+use super::people::*;
+use super::task_status::*;
+use crate::clients::people::PersonAssignment;
+use crate::process_street::Task;
 
 // Same fixtures the unit tests in intake_mapping/merchant_account_mapping
 // use -- see those modules' own doc comments on why each is safe to
 // commit (Intake has no sensitive data at all; the Merchant Account
 // fixture has every sensitive value replaced with an obvious fake
 // before it was ever written to disk).
-const HIGHWAY20_INTAKE_FIELDS: &str = include_str!("testdata/highway20_intake_fields.json");
-const HIGHWAY20_INTAKE_TASKS: &str = include_str!("testdata/highway20_intake_tasks.json");
+const HIGHWAY20_INTAKE_FIELDS: &str = include_str!("../testdata/highway20_intake_fields.json");
+const HIGHWAY20_INTAKE_TASKS: &str = include_str!("../testdata/highway20_intake_tasks.json");
 const HIGHWAY20_NMA_FIELDS_SANITIZED: &str =
-    include_str!("testdata/highway20_merchant_account_fields_sanitized.json");
+    include_str!("../testdata/highway20_merchant_account_fields_sanitized.json");
 // A real Contract Order run for a different real client (Tri County
 // Mini Storage). Highway 20 does actually have its own real Contract
 // Order run too (discovered 2026-08-31 while testing clients::search
@@ -31,7 +38,7 @@ const HIGHWAY20_NMA_FIELDS_SANITIZED: &str =
 // auth::authenticated_user's own `query_sessions_own_sql_is_valid_
 // against_the_real_schema` test uses.
 const TRI_COUNTY_CONTRACT_ORDER_FIELDS: &str =
-    include_str!("testdata/tri_county_contract_order_fields.json");
+    include_str!("../testdata/tri_county_contract_order_fields.json");
 
 fn set_test_key() {
     std::env::set_var(

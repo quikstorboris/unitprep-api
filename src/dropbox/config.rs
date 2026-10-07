@@ -55,14 +55,18 @@ impl DropboxConfig {
     /// failure should check the `Err` case separately -- this only
     /// collapses "no row"/"incomplete row"/"query failed" into `None`.
     pub async fn from_db(pool: &sqlx::PgPool) -> Result<Option<Self>, String> {
-        #[allow(clippy::type_complexity)]
-        let row: Option<(
-            Option<String>,
-            Option<Vec<u8>>,
-            Option<Vec<u8>>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
+        // Every column is nullable: a row exists from the first migration but
+        // only counts once all five are filled in on the settings page.
+        #[derive(sqlx::FromRow)]
+        struct ConfigRow {
+            app_key: Option<String>,
+            app_secret_ciphertext: Option<Vec<u8>>,
+            refresh_token_ciphertext: Option<Vec<u8>>,
+            root_namespace_id: Option<String>,
+            root_path: Option<String>,
+        }
+
+        let row: Option<ConfigRow> = sqlx::query_as(
             "SELECT app_key, app_secret_ciphertext, refresh_token_ciphertext, root_namespace_id, root_path
                FROM integrations.dropbox_configuration WHERE id = 1",
         )
@@ -70,13 +74,13 @@ impl DropboxConfig {
         .await
         .map_err(|err| err.to_string())?;
 
-        let Some((
-            Some(app_key),
-            Some(app_secret_ciphertext),
-            Some(refresh_token_ciphertext),
-            Some(root_namespace_id),
-            Some(root_path),
-        )) = row
+        let Some(ConfigRow {
+            app_key: Some(app_key),
+            app_secret_ciphertext: Some(app_secret_ciphertext),
+            refresh_token_ciphertext: Some(refresh_token_ciphertext),
+            root_namespace_id: Some(root_namespace_id),
+            root_path: Some(root_path),
+        }) = row
         else {
             return Ok(None);
         };
