@@ -38,6 +38,8 @@ struct Mock {
     /// Further lists (list id -> task-id prefix) for the bulk copy's extra
     /// facilities; each behaves like the source and target lists.
     extra: Arc<Mutex<HashMap<String, String>>>,
+    /// Whether the lists offer a complete status (they do unless a test says not).
+    has_complete_status: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// A task as ClickUp sends it, with the Onboarding Phase and Corp/Fac
@@ -86,6 +88,7 @@ fn comment_json(id: String, text: &str, date_ms: i64) -> Value {
 
 async fn spawn_clickup(mock: Mock) -> String {
     let (m_tasks, m_get, m_post) = (mock.clone(), mock.clone(), mock.clone());
+    let (m_statuses, m_put) = (mock.clone(), mock.clone());
 
     let app = Router::new()
         .route(
@@ -111,6 +114,31 @@ async fn spawn_clickup(mock: Mock) -> String {
                         Some(prefix) => Json(list_tasks(&id, &prefix)),
                         None => Json(json!({ "last_page": true, "tasks": [] })),
                     }
+                }
+            }),
+        )
+        .route(
+            "/list/{id}",
+            get(move |Path(_id): Path<String>| {
+                let has_complete = m_statuses
+                    .has_complete_status
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                async move {
+                    let mut statuses = vec![json!({ "status": "to do", "type": "open" })];
+                    if has_complete {
+                        statuses.push(json!({ "status": "complete", "type": "closed" }));
+                    }
+                    Json(json!({ "id": "L", "name": "list", "statuses": statuses }))
+                }
+            }),
+        )
+        .route(
+            "/task/{id}",
+            axum::routing::put(move |Path(id): Path<String>, Json(body): Json<Value>| {
+                let writes = m_put.writes.clone();
+                async move {
+                    writes.lock().unwrap().push((id.clone(), body));
+                    Json(json!({ "id": id }))
                 }
             }),
         )
@@ -186,6 +214,7 @@ impl Fixture {
             writes: Writes::default(),
             clock: Arc::new(AtomicI64::new(1_000)),
             extra: Arc::default(),
+            has_complete_status: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
         let base_url = spawn_clickup(mock.clone()).await;
         let superuser = superuser_pool();
@@ -334,6 +363,7 @@ impl Fixture {
             Path((self.company_id, self.target)),
             Json(clickup_copy::CopyRequest {
                 source_facility_id: None,
+                complete_tasks: false,
                 items: items
                     .iter()
                     .map(|(task, comment)| clickup_copy::CopyItem {
@@ -539,6 +569,7 @@ async fn copy_db_the_parents_own_tasks_get_no_pointer() {
         HeaderMap::new(),
         Path((f.company_id, f.parent)),
         Json(clickup_copy::CopyRequest {
+            complete_tasks: false,
             source_facility_id: Some(sibling),
             items: vec![clickup_copy::CopyItem {
                 // A task in the parent's (source) list.
@@ -569,6 +600,7 @@ async fn copy_db_without_a_parent_no_pointer_is_posted() {
         HeaderMap::new(),
         Path((f.company_id, f.target)),
         Json(clickup_copy::CopyRequest {
+            complete_tasks: false,
             source_facility_id: Some(f.parent),
             items: vec![clickup_copy::CopyItem {
                 target_task_id: "Tfees".to_string(),
@@ -689,6 +721,26 @@ impl Fixture {
         comment: &str,
         destinations: &[(Uuid, &str)],
     ) -> axum::response::Response {
+        self.bulk_copy_full(source_task_id, false, comment, destinations)
+            .await
+    }
+
+    /// A bulk copy that also asks for the destination tasks to be completed.
+    async fn bulk_copy_completing(
+        &self,
+        comment: &str,
+        destinations: &[(Uuid, &str)],
+    ) -> axum::response::Response {
+        self.bulk_copy_full(None, true, comment, destinations).await
+    }
+
+    async fn bulk_copy_full(
+        &self,
+        source_task_id: Option<&str>,
+        complete_tasks: bool,
+        comment: &str,
+        destinations: &[(Uuid, &str)],
+    ) -> axum::response::Response {
         clickup_copy::bulk_copy(
             State(self.state.clone()),
             Self::user_for(self.user_id),
@@ -698,6 +750,7 @@ impl Fixture {
                 source_facility_id: None,
                 source_task_name: "CONFIGURE Fees".to_string(),
                 source_task_id: source_task_id.map(str::to_string),
+                complete_tasks,
                 comment: comment.to_string(),
                 destinations: destinations
                     .iter()
@@ -1003,6 +1056,7 @@ async fn copy_db_a_dialog_copy_ends_with_a_link_to_the_source_task() {
         HeaderMap::new(),
         Path((f.company_id, f.target)),
         Json(clickup_copy::CopyRequest {
+            complete_tasks: false,
             source_facility_id: Some(f.parent),
             items: vec![clickup_copy::CopyItem {
                 target_task_id: "Tfees".to_string(),
@@ -1062,4 +1116,119 @@ async fn bulk_db_a_source_task_outside_the_source_list_is_refused_and_nothing_is
         "task_not_in_source_list"
     );
     assert!(f.mock.writes.lock().unwrap().is_empty());
+}
+
+/// Status changes the mock recorded (comment writes have a `comment` key).
+fn status_writes(f: &Fixture) -> Vec<(String, Value)> {
+    f.mock
+        .writes
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, body)| body.get("status").is_some())
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+#[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+async fn bulk_db_only_comments_unless_completing_is_asked_for() {
+    let f = Fixture::new().await;
+
+    let response = f.bulk_copy("Fees are set.", &[(f.target, "Tfees")]).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+
+    assert!(status_writes(&f).is_empty());
+    assert!(body["results"][0].get("completed").is_none());
+}
+
+#[tokio::test]
+#[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+async fn bulk_db_completes_each_destination_task_when_asked() {
+    let f = Fixture::new().await;
+
+    let response = f
+        .bulk_copy_completing("Fees are set.", &[(f.target, "Tfees")])
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+
+    assert_eq!(body["results"][0]["comment"]["ok"], true);
+    assert_eq!(body["results"][0]["completed"]["ok"], true);
+    let statuses = status_writes(&f);
+    assert_eq!(statuses.len(), 1);
+    assert_eq!(statuses[0].0, "Tfees");
+    assert_eq!(statuses[0].1, json!({ "status": "complete" }));
+}
+
+#[tokio::test]
+#[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+async fn bulk_db_a_list_with_no_complete_status_still_gets_the_comment() {
+    let f = Fixture::new().await;
+    f.mock
+        .has_complete_status
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
+    let response = f
+        .bulk_copy_completing("Fees are set.", &[(f.target, "Tfees")])
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+
+    assert_eq!(body["results"][0]["comment"]["ok"], true);
+    assert_eq!(body["results"][0]["completed"]["ok"], false);
+    assert_eq!(
+        body["results"][0]["completed"]["message"],
+        "This list has no complete status."
+    );
+    assert!(status_writes(&f).is_empty());
+}
+
+#[tokio::test]
+#[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+async fn bulk_db_a_task_that_cannot_be_commented_on_is_not_completed() {
+    let f = Fixture::new().await;
+
+    // Tdelinq refuses comments in the mock.
+    let response = f
+        .bulk_copy_completing("Delinquency set.", &[(f.target, "Tdelinq")])
+        .await;
+    let body = body_json(response).await;
+
+    assert_eq!(body["results"][0]["comment"]["ok"], false);
+    assert!(body["results"][0].get("completed").is_none());
+    assert!(status_writes(&f).is_empty());
+}
+
+#[tokio::test]
+#[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+async fn copy_db_the_dialog_completes_the_target_task_only_when_asked() {
+    let f = Fixture::new().await;
+    let request = |complete_tasks: bool| clickup_copy::CopyRequest {
+        source_facility_id: Some(f.parent),
+        complete_tasks,
+        items: vec![clickup_copy::CopyItem {
+            target_task_id: "Tfees".to_string(),
+            comment: "Hello.".to_string(),
+            source_task_id: None,
+        }],
+    };
+    let post = |complete_tasks: bool| {
+        clickup_copy::copy_comments_to_tasks(
+            State(f.state.clone()),
+            Fixture::user_for(f.user_id),
+            HeaderMap::new(),
+            Path((f.company_id, f.target)),
+            Json(request(complete_tasks)),
+        )
+    };
+
+    let without = body_json(post(false).await).await;
+    assert!(without["results"][0].get("completed").is_none());
+    assert!(status_writes(&f).is_empty());
+
+    let with = body_json(post(true).await).await;
+    assert_eq!(with["results"][0]["completed"]["ok"], true);
+    assert_eq!(status_writes(&f).len(), 1);
 }

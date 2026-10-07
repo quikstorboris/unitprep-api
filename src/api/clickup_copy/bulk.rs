@@ -448,6 +448,10 @@ pub struct BulkCopyRequest {
     /// The comment as the person edited it; the same for every destination.
     pub comment: String,
     pub destinations: Vec<BulkDestination>,
+    /// Also set each destination task to its list's complete status once its
+    /// comment is posted. Off unless asked for.
+    #[serde(default)]
+    pub complete_tasks: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -464,6 +468,7 @@ pub struct BulkCopyResponse {
 
 /// After the writes: the cached lists changed, and each destination
 /// facility's activity log records what was copied onto it.
+#[allow(clippy::too_many_arguments)]
 async fn finish_copy(
     state: &AppState,
     user_id: Uuid,
@@ -471,6 +476,7 @@ async fn finish_copy(
     source_facility_id: Uuid,
     items: &[BulkItem],
     results: &[ItemResult],
+    complete_requested: bool,
     user_agent: Option<&str>,
 ) {
     for list_id in items
@@ -481,7 +487,7 @@ async fn finish_copy(
         task_cache::invalidate_list(list_id);
     }
 
-    let mut per_facility: HashMap<Uuid, (usize, usize, usize)> = HashMap::new();
+    let mut per_facility: HashMap<Uuid, (usize, usize, usize, usize)> = HashMap::new();
     for result in results {
         if let Some(id) = result.facility_id {
             let entry = per_facility.entry(id).or_default();
@@ -493,9 +499,12 @@ async fn finish_copy(
             if result.pointer.state == "posted" {
                 entry.2 += 1;
             }
+            if result.completed.as_ref().is_some_and(|outcome| outcome.ok) {
+                entry.3 += 1;
+            }
         }
     }
-    for (facility_id, (copied, failed, pointers)) in per_facility {
+    for (facility_id, (copied, failed, pointers, completed)) in per_facility {
         audit_log::record(
             &state.db,
             audit_log::event::FACILITY_CLICKUP_COMMENTS_COPIED,
@@ -512,6 +521,8 @@ async fn finish_copy(
                 "copied": copied,
                 "failed": failed,
                 "pointers_posted": pointers,
+                "complete_requested": complete_requested,
+                "tasks_completed": completed,
             }),
         )
         .await;
@@ -527,6 +538,7 @@ async fn run_job(
     token: String,
     comment: String,
     source: Option<SourceLink>,
+    complete: bool,
     items: Vec<BulkItem>,
     job_id: Uuid,
     company_id: Uuid,
@@ -538,8 +550,18 @@ async fn run_job(
 
     let mut results: Vec<ItemResult> = Vec::with_capacity(items.len());
     for chunk in items.chunks(CHUNK_SIZE) {
-        results
-            .extend(copy_chunk(&client, &limiter, &token, &comment, source.as_ref(), chunk).await);
+        results.extend(
+            copy_chunk(
+                &client,
+                &limiter,
+                &token,
+                &comment,
+                source.as_ref(),
+                complete,
+                chunk,
+            )
+            .await,
+        );
         jobs::record_progress(&state.db, user_id, &role_keys, job_id, &results).await;
     }
 
@@ -550,6 +572,7 @@ async fn run_job(
         source_facility_id,
         &items,
         &results,
+        complete,
         user_agent.as_deref(),
     )
     .await;
@@ -675,7 +698,9 @@ pub async fn bulk_copy(
     let total = items.len();
     let source_facility_id = ctx.source.facility_id;
 
-    if estimated_calls(total, ctx.parent.is_some()) <= INLINE_CALL_BUDGET {
+    let complete = request.complete_tasks;
+
+    if estimated_calls(total, ctx.parent.is_some(), complete) <= INLINE_CALL_BUDGET {
         let client = clickup_client(&state);
         let limiter = rate_limit::for_user(user.user_id);
         let mut results = Vec::with_capacity(total);
@@ -687,6 +712,7 @@ pub async fn bulk_copy(
                     &token,
                     &comment,
                     source_link.as_ref(),
+                    complete,
                     chunk,
                 )
                 .await,
@@ -699,6 +725,7 @@ pub async fn bulk_copy(
             source_facility_id,
             &items,
             &results,
+            complete,
             user_agent,
         )
         .await;
@@ -741,6 +768,7 @@ pub async fn bulk_copy(
         token,
         comment,
         source_link,
+        complete,
         items,
         job_id,
         company_id,

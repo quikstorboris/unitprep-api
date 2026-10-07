@@ -45,6 +45,11 @@ pub struct CopyItem {
 pub struct CopyRequest {
     pub source_facility_id: Option<Uuid>,
     pub items: Vec<CopyItem>,
+    /// Also set each target task to its list's complete status once its
+    /// comment is posted. Off unless asked for: copying only comments is
+    /// the normal case.
+    #[serde(default)]
+    pub complete_tasks: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -192,6 +197,9 @@ pub async fn copy_comments_to_tasks(
                     &item.comment,
                     link.as_ref(),
                     pointer_list,
+                    request
+                        .complete_tasks
+                        .then_some(prepared.target.list_id.as_str()),
                 )
             }))
             .await,
@@ -219,6 +227,11 @@ pub async fn copy_comments_to_tasks(
             "copied": copied,
             "failed": failed,
             "pointers_posted": results.iter().filter(|r| r.pointer.state == "posted").count(),
+            "complete_requested": request.complete_tasks,
+            "tasks_completed": results
+                .iter()
+                .filter(|r| r.completed.as_ref().is_some_and(|outcome| outcome.ok))
+                .count(),
         }),
     )
     .await;

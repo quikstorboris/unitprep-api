@@ -364,6 +364,7 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                     HeaderMap::new(),
                     Path((Uuid::new_v4(), Uuid::new_v4())),
                     Json(clickup_copy::CopyRequest {
+                        complete_tasks: false,
                         source_facility_id: None,
                         items: vec![],
                     }),
@@ -431,6 +432,7 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                         source_task_id: None,
                         comment: "c".to_string(),
                         destinations: vec![],
+                        complete_tasks: false,
                     }),
                 ))
             }) as fn() -> BoxFuture,

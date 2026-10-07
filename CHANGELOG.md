@@ -6,6 +6,18 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.95] - 2026-10-07
+
+ClickUp Copy can also complete the destination tasks (opt-in), and passkey registration is split into a module under new real-database tests. No migration.
+
+### Changed
+- `api/auth_register.rs` (1,102 lines) became `auth_register/`: `dto`, `responses`, `begin`, `finish`, `enrol` and `tests` (refactor chunk D4g). No behaviour change: the characterization tests below pass unchanged.
+
+### Added
+- Real-database characterization tests for passkey registration (`auth_register_db_tests`), written before the split: the invite path, failed verification, mid-ceremony expiry, credential-insert failure, invite reuse and the signed-in path. A mutation (committing instead of rolling back on an unconsumable invite) fails one of them.
+- **ClickUp Copy can also complete the destination tasks.** `POST .../clickup/copy` and `POST .../clickup/bulk-copy` take an optional `complete_tasks` (default false: copying only comments is unchanged). When true, after a comment is posted the destination list's statuses are read (they differ per list) and the task is set to its complete status (`complete`/`completed`, else the list's `closed` class, else `done`). Each result carries `completed: {ok, message}` (absent when not asked for or when the comment failed); a list with no complete status says so and the comment still stands. Completing is only attempted after the comment succeeded. Costs two more ClickUp calls a destination, so the inline budget now fits about 10 facilities with the pointer note and completing (about 16 without completing); bigger copies run as background jobs as before. The activity log records `complete_requested` and `tasks_completed`.
+- 5 new real-DB tests (off by default, completes when asked, no complete status, a refused comment is never completed, the dialog's option) and 2 call-budget unit tests.
+
 ## [1.9.94] - 2026-10-07
 
 ClickUp Copy, phase 3 and 4: the client's bulk copy, and a rate limit with background jobs; the `Main tracker task` footer on copied comments; and dedup support for QuikStor Cloud's second header variant. Needs migrations `20261007140000` and `20261007150000`.

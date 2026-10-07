@@ -14,7 +14,7 @@ use super::lists::ListInfo;
 use crate::clickup::comments::ClickUpComment;
 use crate::clickup::copy_text;
 use crate::clickup::rate_limit::RateLimiter;
-use crate::clickup::tasks::ClickUpTask;
+use crate::clickup::tasks::{completion_status, ClickUpTask};
 use crate::clickup::{ClickUpClient, ClickUpError};
 
 /// A bulk copy whose ClickUp calls fit in this many runs inside the
@@ -22,19 +22,16 @@ use crate::clickup::{ClickUpClient, ClickUpError};
 /// person is notified about. (About a minute of work at the rate limit.)
 pub(super) const INLINE_CALL_BUDGET: usize = 50;
 
-/// ClickUp calls one row costs: its comment, and -- when a pointer may be
-/// needed -- reading the task's comments to see whether it is already
-/// there, then posting it. The estimate is the worst case.
-pub(super) fn calls_per_row(pointer_possible: bool) -> usize {
-    if pointer_possible {
-        3
-    } else {
-        1
-    }
+/// ClickUp calls one row costs: its comment; when a pointer may be needed,
+/// reading the task's comments to see whether it is already there, then
+/// posting it; and, when the task is to be completed, reading the list's
+/// statuses and setting the status. The estimate is the worst case.
+pub(super) fn calls_per_row(pointer_possible: bool, complete: bool) -> usize {
+    1 + if pointer_possible { 2 } else { 0 } + if complete { 2 } else { 0 }
 }
 
-pub(super) fn estimated_calls(rows: usize, pointer_possible: bool) -> usize {
-    rows * calls_per_row(pointer_possible)
+pub(super) fn estimated_calls(rows: usize, pointer_possible: bool, complete: bool) -> usize {
+    rows * calls_per_row(pointer_possible, complete)
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
@@ -112,6 +109,10 @@ pub struct ItemResult {
     pub target_task_id: String,
     pub comment: Outcome,
     pub pointer: PointerOutcome,
+    /// Whether the task was set to its list's complete status. Only
+    /// present when completing was asked for and the comment went through.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed: Option<Outcome>,
     /// Which facility's task this was, for a copy to several facilities.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub facility_id: Option<uuid::Uuid>,
@@ -139,9 +140,42 @@ fn has_pointer(comments: &[ClickUpComment]) -> bool {
         .any(|comment| copy_text::is_pointer_comment(&comment.text))
 }
 
+/// Sets `task_id` to the complete status of `list_id` (statuses differ per
+/// list, so they are read from it, never assumed).
+async fn complete_task(
+    client: &ClickUpClient,
+    limiter: &RateLimiter,
+    token: &str,
+    task_id: &str,
+    list_id: &str,
+) -> Outcome {
+    limiter.acquire().await;
+    let statuses = match client.list_statuses(token, list_id).await {
+        Ok(statuses) => statuses,
+        Err(err) => {
+            return Outcome::failed(format!(
+                "Could not read the list's statuses: {}",
+                failure_message(&err)
+            ))
+        }
+    };
+    let Some(status) = completion_status(&statuses) else {
+        return Outcome::failed("This list has no complete status.");
+    };
+
+    limiter.acquire().await;
+    match client.set_status(token, task_id, &status.name).await {
+        Ok(()) => Outcome::done(),
+        Err(err) => Outcome::failed(failure_message(&err)),
+    }
+}
+
 /// Posts `comment` on `task_id` (ending with the source-task footer when
 /// `source` is known), then -- if it went through, a pointer applies and
-/// the task does not have one yet -- the pointer.
+/// the task does not have one yet -- the pointer, then -- when
+/// `complete_in_list` names the task's list -- sets the task complete.
+/// Completing is only attempted once the comment is posted.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn copy_one(
     client: &ClickUpClient,
     limiter: &RateLimiter,
@@ -150,6 +184,7 @@ pub(super) async fn copy_one(
     comment: &str,
     source: Option<&SourceLink>,
     pointer_list: Option<&ListInfo>,
+    complete_in_list: Option<&str>,
 ) -> ItemResult {
     limiter.acquire().await;
     let parts = copy_text::comment_parts(
@@ -191,10 +226,16 @@ pub(super) async fn copy_one(
         }
     };
 
+    let completed = match complete_in_list.filter(|_| comment.ok) {
+        Some(list_id) => Some(complete_task(client, limiter, token, task_id, list_id).await),
+        None => None,
+    };
+
     ItemResult {
         target_task_id: task_id.to_string(),
         comment,
         pointer,
+        completed,
         facility_id: None,
         facility_name: None,
     }
@@ -220,6 +261,7 @@ pub(super) async fn copy_chunk(
     token: &str,
     comment: &str,
     source: Option<&SourceLink>,
+    complete: bool,
     chunk: &[BulkItem],
 ) -> Vec<ItemResult> {
     futures::future::join_all(chunk.iter().map(|item| async move {
@@ -231,6 +273,7 @@ pub(super) async fn copy_chunk(
             comment,
             source,
             item.pointer.as_ref(),
+            complete.then_some(item.facility.list_id.as_str()),
         )
         .await;
         result.facility_id = Some(item.facility.facility_id);
@@ -246,13 +289,25 @@ mod tests {
 
     #[test]
     fn a_row_costs_one_call_without_a_pointer_and_three_with() {
-        assert_eq!(estimated_calls(10, false), 10);
-        assert_eq!(estimated_calls(10, true), 30);
+        assert_eq!(estimated_calls(10, false, false), 10);
+        assert_eq!(estimated_calls(10, true, false), 30);
+    }
+
+    #[test]
+    fn completing_adds_two_calls_a_row() {
+        assert_eq!(estimated_calls(10, false, true), 30);
+        assert_eq!(estimated_calls(10, true, true), 50);
     }
 
     #[test]
     fn about_sixteen_rows_with_pointers_fit_the_inline_budget() {
-        assert!(estimated_calls(16, true) <= INLINE_CALL_BUDGET);
-        assert!(estimated_calls(17, true) > INLINE_CALL_BUDGET);
+        assert!(estimated_calls(16, true, false) <= INLINE_CALL_BUDGET);
+        assert!(estimated_calls(17, true, false) > INLINE_CALL_BUDGET);
+    }
+
+    #[test]
+    fn ten_rows_with_pointers_and_completing_fit_the_inline_budget() {
+        assert!(estimated_calls(10, true, true) <= INLINE_CALL_BUDGET);
+        assert!(estimated_calls(11, true, true) > INLINE_CALL_BUDGET);
     }
 }
