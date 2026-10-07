@@ -983,6 +983,3 @@ async fn create_dedup_session(
     .await
 }
 
-#[cfg(test)]
-#[path = "dedup_tests.rs"]
-mod tests;

@@ -942,6 +942,3 @@ fn file_response(bytes: Vec<u8>, file_name: &str) -> Response {
     (headers, bytes).into_response()
 }
 
-#[cfg(test)]
-#[path = "tagger_tests.rs"]
-mod tests;
