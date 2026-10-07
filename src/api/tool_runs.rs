@@ -29,7 +29,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::dedup::file_response;
+use crate::api::session_io::attachment_response;
 use crate::api::{internal_error, not_found, user_agent_from, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::client_ops::audit_log;
@@ -315,7 +315,7 @@ pub async fn download_tool_run_output(
 
     match row {
         Some((Some(bytes), Some(content_type), Some(file_name))) => {
-            file_response(bytes, &content_type, &file_name)
+            attachment_response(bytes, &content_type, &file_name)
         }
         _ => not_found(
             "tool_run_output_not_found",
@@ -403,7 +403,7 @@ pub async fn download_tool_run_source(
     match row {
         Some((Some(bytes), Some(content_type), file_name, session_id, encrypted)) => {
             match crate::client_ops::tool_runs::open_source(&session_id, bytes, encrypted) {
-                Ok(plain) => file_response(plain, &content_type, &file_name),
+                Ok(plain) => attachment_response(plain, &content_type, &file_name),
                 Err(err) => {
                     tracing::error!(error = %err, user_id = %user.user_id, "tool run source could not be decrypted");
                     internal_error("Could not download this run's source file")

@@ -5,27 +5,16 @@ use super::apply::{
 };
 use super::views::TaggerSessionRequest;
 use crate::api::dropbox_browse::{ensure_path_in_root, parent_folder};
+use crate::api::session_io::SaveLocationResponse;
 use crate::api::{internal_error, session_not_found, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::tool_runs;
 use axum::extract::{Json, State};
-use axum::http::{header, HeaderMap};
 use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use unitprep_core::session_store::SessionStoreExt;
 
 pub(super) const TAGGED_TEMPLATES_FOLDER_NAME: &str = "Tagged Templates";
-
-#[derive(Debug, Serialize)]
-pub struct TaggerSaveLocationResponse {
-    /// `Some(path)` when this session's source file was imported from
-    /// Dropbox -- the `Tagged Templates` subfolder next to wherever that
-    /// file actually came from, which the frontend's save-to-Dropbox
-    /// picker should default `initialPath` to. `None` for a
-    /// locally-uploaded session. Mirrors `dedup::save_location`'s own
-    /// response shape exactly.
-    pub default_folder_path: Option<String>,
-}
 
 /// Mirrors `dedup::save_location` -- computes (but does not create)
 /// this session's default save-to-Dropbox location.
@@ -43,12 +32,10 @@ pub async fn save_location(
         None => return session_not_found(&request.session_id),
     };
 
-    let default_folder_path =
-        source_folder.map(|folder| format!("{folder}/{TAGGED_TEMPLATES_FOLDER_NAME}"));
-
-    Json(TaggerSaveLocationResponse {
-        default_folder_path,
-    })
+    Json(SaveLocationResponse::next_to(
+        source_folder,
+        TAGGED_TEMPLATES_FOLDER_NAME,
+    ))
     .into_response()
 }
 
@@ -147,21 +134,4 @@ pub(super) fn tagged_file_name(original: &str) -> String {
         Some((stem, ext)) => format!("{stem}-tagged.{ext}"),
         None => format!("{original}-tagged"),
     }
-}
-
-pub(super) fn file_response(bytes: Vec<u8>, file_name: &str) -> Response {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            .parse()
-            .unwrap(),
-    );
-    headers.insert(
-        header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{file_name}\"")
-            .parse()
-            .unwrap(),
-    );
-    (headers, bytes).into_response()
 }

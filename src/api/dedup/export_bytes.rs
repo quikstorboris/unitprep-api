@@ -6,8 +6,7 @@ use crate::auth::AuthenticatedUser;
 use crate::clients::dedup_filename;
 use crate::infrastructure::csv_export::{build_zip, ExportFile};
 use crate::infrastructure::{dedup_csv_export, dedup_xlsx_export};
-use axum::http::{header, HeaderMap};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use chrono::Utc;
 use unitprep_dedup::{DedupReport, TenantRecord};
 
@@ -177,18 +176,6 @@ pub(super) async fn compute_export_file_names(
         zip_csv: dedup_filename::format_export_filename(&facility_name, sequence, "csv", now),
         zip_xlsx: dedup_filename::format_export_filename(&facility_name, sequence, "xlsx", now),
     })
-}
-
-pub(crate) fn file_response(bytes: Vec<u8>, content_type: &str, file_name: &str) -> Response {
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
-    headers.insert(
-        header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{file_name}\"")
-            .parse()
-            .unwrap(),
-    );
-    (headers, bytes).into_response()
 }
 
 /// What `DedupSessionService::create_session` hands back on success: the

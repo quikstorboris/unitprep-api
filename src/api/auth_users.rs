@@ -8,9 +8,9 @@
 //! -- see the `AUTHORIZATION_FAILURE` arm below -- since that is an
 //! action someone took, not a view of existing state.
 
+use crate::api::session_io::attachment_headers;
 use axum::{
     extract::{Json, State},
-    http::{header, HeaderMap},
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
@@ -243,14 +243,7 @@ pub async fn export_users(State(state): State<AppState>, admin: AuthenticatedUse
 
     let filename = format!("unitprep-users-{}.csv", Utc::now().format("%Y-%m-%d"));
 
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "text/csv".parse().unwrap());
-    headers.insert(
-        header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{filename}\"")
-            .parse()
-            .unwrap(),
-    );
+    let headers = attachment_headers("text/csv", &filename);
 
     tracing::info!(
         admin_user_id = %admin.user_id,

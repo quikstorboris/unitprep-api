@@ -5,11 +5,12 @@
 //! rather than duplicating them, since both modules run variations of the
 //! same underlying filtered query against `auth.auth_audit_logs`.
 
+use crate::api::session_io::attachment_headers;
 use std::net::SocketAddr;
 
 use axum::{
     extract::{ConnectInfo, State},
-    http::{header, HeaderMap},
+    http::HeaderMap,
     response::{IntoResponse, Response},
     Json,
 };
@@ -420,14 +421,7 @@ pub async fn export_audit_logs(
 
     let filename = format!("unitprep-audit-log-{}.pdf", Utc::now().format("%Y-%m-%d"));
 
-    let mut response_headers = HeaderMap::new();
-    response_headers.insert(header::CONTENT_TYPE, "application/pdf".parse().unwrap());
-    response_headers.insert(
-        header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{filename}\"")
-            .parse()
-            .unwrap(),
-    );
+    let response_headers = attachment_headers("application/pdf", &filename);
 
     audit_log::record(
         &state.db,

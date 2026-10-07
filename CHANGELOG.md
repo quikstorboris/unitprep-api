@@ -6,6 +6,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.100] - 2026-10-07
+
+Efficiency refactor chunk D4c (shared session IO): the file-download response and the save-location answer, copied across the three tools and four exports, are now one module. No behaviour change.
+
+### Changed
+- New `api/session_io.rs`: `attachment_headers` / `attachment_response` (content type plus `Content-Disposition: attachment`) replace the seven hand-built copies in the Duplicate Check export, the Tagger apply, the Group Prep ZIP, tool-run downloads, the users CSV and the two PDF logs; `SaveLocationResponse::next_to` replaces three identical `*SaveLocationResponse` structs and the three `format!("{folder}/{NAME}")` blocks in the Duplicate Check, Tagger and Group Prep `save_location` handlers. About 95 lines removed.
+- Deliberately NOT merged: the three Dropbox import handlers and `first_uploaded_file` / `all_uploaded_files`. They look alike but take different inputs (a folder of files versus one template versus a unit-group pair), write different session types and different audit shapes; a shared abstraction would need a trait over all three and would hide more than it saves.
+
 ## [1.9.99] - 2026-10-07
 
 Efficiency refactor chunk D4i: the Dropbox client gets one JSON-call helper and is split; the sync schedule and the Merchant Account secrets move out of their large files. No behaviour change.

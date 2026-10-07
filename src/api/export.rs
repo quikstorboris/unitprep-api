@@ -19,11 +19,12 @@
 //!
 //! No files are written to disk.
 
+use crate::api::session_io::{attachment_response, SaveLocationResponse};
 use std::time::Instant;
 
 use axum::{
     extract::{Json, State},
-    http::{header, HeaderMap, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
@@ -316,32 +317,10 @@ pub async fn export(
     )
     .await;
 
-    let mut headers = HeaderMap::new();
-
-    headers.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
-
-    headers.insert(
-        header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{}\"", generated.filename)
-            .parse()
-            .unwrap(),
-    );
-
-    (headers, generated.zip_bytes).into_response()
+    attachment_response(generated.zip_bytes, "application/zip", &generated.filename)
 }
 
 const GROUP_PREP_OUTPUT_FOLDER_NAME: &str = "Group Prep Output";
-
-#[derive(Debug, Serialize)]
-pub struct ExportSaveLocationResponse {
-    /// Mirrors `dedup::DedupSaveLocationResponse`/`tagger::
-    /// TaggerSaveLocationResponse` -- `Some(path)` when this session was
-    /// imported from Dropbox (the one folder the user picked, not a
-    /// per-file provenance model -- see `SessionData::
-    /// source_dropbox_folder_path`'s own doc comment), `None` for a
-    /// local upload.
-    pub default_folder_path: Option<String>,
-}
 
 /// Mirrors `dedup::save_location`/`tagger::save_location`.
 pub async fn save_location(
@@ -358,12 +337,10 @@ pub async fn save_location(
         None => return session_not_found(&request.session_id),
     };
 
-    let default_folder_path =
-        source_folder.map(|folder| format!("{folder}/{GROUP_PREP_OUTPUT_FOLDER_NAME}"));
-
-    Json(ExportSaveLocationResponse {
-        default_folder_path,
-    })
+    Json(SaveLocationResponse::next_to(
+        source_folder,
+        GROUP_PREP_OUTPUT_FOLDER_NAME,
+    ))
     .into_response()
 }
 

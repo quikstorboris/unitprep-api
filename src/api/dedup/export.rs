@@ -1,13 +1,13 @@
 //! Download exports: where the saved file goes, and `POST /dedup/export`.
 
 use super::dto::{DedupExportRequest, DedupSessionRequest};
-use super::export_bytes::{compute_export_file_names, file_response};
+use super::export_bytes::compute_export_file_names;
+use crate::api::session_io::{attachment_response, SaveLocationResponse};
 use crate::api::{dedup_blocking, session_not_found, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::{audit_log, tool_runs};
 use axum::extract::{Json, State};
 use axum::response::{IntoResponse, Response};
-use serde::Serialize;
 use std::time::Instant;
 use unitprep_core::session_store::SessionStoreExt;
 
@@ -18,17 +18,6 @@ use unitprep_core::session_store::SessionStoreExt;
 /// across clients -- see `DedupSession::source_dropbox_folder_path`'s
 /// own doc comment). This name is the one thing OO actually controls.
 pub(super) const DUPLICATE_CHECK_FOLDER_NAME: &str = "Duplicate Check";
-
-#[derive(Debug, Serialize)]
-pub struct DedupSaveLocationResponse {
-    /// `Some(path)` when this session's source file was imported from
-    /// Dropbox -- the `Duplicate Check` subfolder next to wherever that
-    /// file actually came from, which the frontend's save-to-Dropbox
-    /// picker should default `initialPath` to. `None` for a
-    /// locally-uploaded session, which has no Dropbox origin to anchor a
-    /// default to; the picker falls back to its own existing behavior.
-    pub default_folder_path: Option<String>,
-}
 
 /// Computes (but does not yet create -- `export_to_dropbox` creates it
 /// at the moment it's actually needed, not speculatively here) this
@@ -50,12 +39,10 @@ pub async fn save_location(
         None => return session_not_found(&request.session_id),
     };
 
-    let default_folder_path =
-        source_folder.map(|folder| format!("{folder}/{DUPLICATE_CHECK_FOLDER_NAME}"));
-
-    Json(DedupSaveLocationResponse {
-        default_folder_path,
-    })
+    Json(SaveLocationResponse::next_to(
+        source_folder,
+        DUPLICATE_CHECK_FOLDER_NAME,
+    ))
     .into_response()
 }
 
@@ -141,7 +128,7 @@ pub async fn export(
         }),
     )
     .await;
-    let response = file_response(bytes, content_type, &file_names.outer);
+    let response = attachment_response(bytes, content_type, &file_names.outer);
 
     tracing::info!(
         session_id = %request.session_id,

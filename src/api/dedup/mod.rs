@@ -15,7 +15,7 @@ mod upload;
 
 pub use dto::ExportFormat;
 pub use export::{export, save_location};
-pub(crate) use export_bytes::{file_response, generate_export};
+pub(crate) use export_bytes::generate_export;
 pub use export_dropbox::export_to_dropbox;
 pub use import_dropbox::import_from_dropbox;
 pub use report::report;

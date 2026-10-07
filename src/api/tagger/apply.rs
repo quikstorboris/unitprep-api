@@ -1,6 +1,7 @@
 //! `POST /tagger/apply` -- writes the confirmed substitutions into a copy of the template.
 
-use super::dropbox::{file_response, tagged_file_name};
+use super::dropbox::tagged_file_name;
+use crate::api::session_io::attachment_response;
 use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::tool_runs;
@@ -106,7 +107,7 @@ pub async fn apply(
     )
     .await;
 
-    file_response(edited_bytes, &file_name)
+    attachment_response(edited_bytes, DOCX_CONTENT_TYPE, &file_name)
 }
 
 pub(super) const DOCX_CONTENT_TYPE: &str =
