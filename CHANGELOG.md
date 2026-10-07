@@ -6,6 +6,18 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.90] - 2026-10-07
+
+Efficiency refactor chunk D4e: `clients_search.rs` split, `search_clients` (384 lines) broken up. Same responses.
+
+### Changed
+- `api/clients_search.rs` became `clients_search/`: `dto` (shapes), `matching` (person-derived facilities, Merchant Account correlation rows, near-miss names), `lookup` (the local database half, one RLS transaction), `display` (the live Merchant Account detail fetches), `handler` (`search_clients`, now ~120 lines of orchestration), `tests`, `lookup_db_tests`.
+- `facility_matches_for` took nine arguments (`#[allow(clippy::too_many_arguments)]`); it now takes a `FacilityHit`, the correlation and a `DisplayLookups` struct, and the allow is gone.
+- A failed local lookup is logged in one place. Every lookup failure now logs the user id and the query (some used to omit the query); the messages and the caller-facing errors are unchanged.
+
+### Added
+- A real-database test for `lookup::load` (people found by name, the rest of a matched facility's contacts folded in, already-imported detection); the lookups had no test beyond the hermetic ones, which stop at the live Process Street call.
+
 ## [1.9.89] - 2026-10-07
 
 Efficiency refactor chunk D4d: `clients_resync.rs` split and `apply_resync` broken into steps. No behaviour change.

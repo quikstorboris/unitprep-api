@@ -1,5 +1,17 @@
-use super::*;
+use std::collections::HashMap;
+
+use chrono::DateTime;
+
+use axum::extract::{Query, State};
+
+use super::dto::{MatchedVia, PersonMatch};
+use super::matching::{
+    derive_facilities_from_person_matches, facility_matches_for, similar_facility_names_for,
+    DisplayLookups, FacilityHit, MaDisplayInfo,
+};
+use super::{search_clients, SearchClientsQuery};
 use crate::api::test_support::{empty_state, test_user};
+use crate::clients::merchant_account_correlation::Correlation;
 use axum::http::StatusCode;
 
 #[tokio::test]
@@ -163,15 +175,19 @@ fn no_correlation_produces_one_row_with_no_company_name_or_duplicate() {
     let (ma_display, ma_updated_at) = no_correlation_context();
 
     let matches = facility_matches_for(
-        "run-solo".to_string(),
-        "Solo Storage - QMS Onboarding".to_string(),
-        Some("Active".to_string()),
-        MatchedVia::Name,
-        false,
+        FacilityHit {
+            run_id: "run-solo".to_string(),
+            run_name: "Solo Storage - QMS Onboarding".to_string(),
+            status: Some("Active".to_string()),
+            matched_via: MatchedVia::Name,
+            already_imported: false,
+            last_activity_at: None,
+        },
         None,
-        None,
-        &ma_display,
-        &ma_updated_at,
+        &DisplayLookups {
+            ma_display: &ma_display,
+            merchant_account_updated_at: &ma_updated_at,
+        },
     );
 
     assert_eq!(matches.len(), 1);
@@ -190,15 +206,19 @@ fn an_unambiguous_correlation_produces_one_row_with_a_resolved_company_name() {
     let correlation = Correlation::Unambiguous("ma-highway-20".to_string());
 
     let matches = facility_matches_for(
-        "run-highway-20".to_string(),
-        "Highway 20 Self Storage - QMS Onboarding".to_string(),
-        Some("Active".to_string()),
-        MatchedVia::Name,
-        false,
-        None,
+        FacilityHit {
+            run_id: "run-highway-20".to_string(),
+            run_name: "Highway 20 Self Storage - QMS Onboarding".to_string(),
+            status: Some("Active".to_string()),
+            matched_via: MatchedVia::Name,
+            already_imported: false,
+            last_activity_at: None,
+        },
         Some(&correlation),
-        &ma_display,
-        &ma_updated_at,
+        &DisplayLookups {
+            ma_display: &ma_display,
+            merchant_account_updated_at: &ma_updated_at,
+        },
     );
 
     assert_eq!(matches.len(), 1);
@@ -238,15 +258,19 @@ fn an_ambiguous_correlation_produces_one_row_per_candidate_sharing_the_same_faci
     ]);
 
     let matches = facility_matches_for(
-        "run-carpentersville".to_string(),
-        "Carpentersville Self Storage - QMS Onboarding".to_string(),
-        Some("Active".to_string()),
-        MatchedVia::Name,
-        false,
-        None,
+        FacilityHit {
+            run_id: "run-carpentersville".to_string(),
+            run_name: "Carpentersville Self Storage - QMS Onboarding".to_string(),
+            status: Some("Active".to_string()),
+            matched_via: MatchedVia::Name,
+            already_imported: false,
+            last_activity_at: None,
+        },
         Some(&correlation),
-        &ma_display,
-        &ma_updated_at,
+        &DisplayLookups {
+            ma_display: &ma_display,
+            merchant_account_updated_at: &ma_updated_at,
+        },
     );
 
     assert_eq!(matches.len(), 2);
@@ -315,15 +339,19 @@ fn ambiguous_candidates_with_matching_addresses_report_addresses_agree_true() {
     let correlation = Correlation::Ambiguous(vec!["ma-1".to_string(), "ma-2".to_string()]);
 
     let matches = facility_matches_for(
-        "run-x".to_string(),
-        "Some Facility".to_string(),
-        None,
-        MatchedVia::Name,
-        false,
-        None,
+        FacilityHit {
+            run_id: "run-x".to_string(),
+            run_name: "Some Facility".to_string(),
+            status: None,
+            matched_via: MatchedVia::Name,
+            already_imported: false,
+            last_activity_at: None,
+        },
         Some(&correlation),
-        &ma_display,
-        &ma_updated_at,
+        &DisplayLookups {
+            ma_display: &ma_display,
+            merchant_account_updated_at: &ma_updated_at,
+        },
     );
 
     assert!(matches
@@ -361,15 +389,19 @@ fn ambiguous_candidates_with_different_addresses_report_addresses_agree_false() 
     ]);
 
     let matches = facility_matches_for(
-        "run-x".to_string(),
-        "Some Facility".to_string(),
-        None,
-        MatchedVia::Name,
-        false,
-        None,
+        FacilityHit {
+            run_id: "run-x".to_string(),
+            run_name: "Some Facility".to_string(),
+            status: None,
+            matched_via: MatchedVia::Name,
+            already_imported: false,
+            last_activity_at: None,
+        },
         Some(&correlation),
-        &ma_display,
-        &ma_updated_at,
+        &DisplayLookups {
+            ma_display: &ma_display,
+            merchant_account_updated_at: &ma_updated_at,
+        },
     );
 
     assert!(matches
@@ -395,15 +427,19 @@ fn ambiguous_candidates_report_no_addresses_agreement_when_fewer_than_two_answer
     let correlation = Correlation::Ambiguous(vec!["ma-1".to_string(), "ma-2".to_string()]);
 
     let matches = facility_matches_for(
-        "run-x".to_string(),
-        "Some Facility".to_string(),
-        None,
-        MatchedVia::Name,
-        false,
-        None,
+        FacilityHit {
+            run_id: "run-x".to_string(),
+            run_name: "Some Facility".to_string(),
+            status: None,
+            matched_via: MatchedVia::Name,
+            already_imported: false,
+            last_activity_at: None,
+        },
         Some(&correlation),
-        &ma_display,
-        &ma_updated_at,
+        &DisplayLookups {
+            ma_display: &ma_display,
+            merchant_account_updated_at: &ma_updated_at,
+        },
     );
 
     assert!(matches
@@ -430,15 +466,19 @@ fn ein_last_4_and_business_address_carry_through_to_the_duplicate_candidate() {
     let correlation = Correlation::Ambiguous(vec!["ma-1".to_string(), "ma-2".to_string()]);
 
     let matches = facility_matches_for(
-        "run-x".to_string(),
-        "Some Facility".to_string(),
-        None,
-        MatchedVia::Name,
-        false,
-        None,
+        FacilityHit {
+            run_id: "run-x".to_string(),
+            run_name: "Some Facility".to_string(),
+            status: None,
+            matched_via: MatchedVia::Name,
+            already_imported: false,
+            last_activity_at: None,
+        },
         Some(&correlation),
-        &ma_display,
-        &ma_updated_at,
+        &DisplayLookups {
+            ma_display: &ma_display,
+            merchant_account_updated_at: &ma_updated_at,
+        },
     );
 
     let candidate_1 = matches
