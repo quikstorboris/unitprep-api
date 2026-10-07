@@ -138,7 +138,7 @@ async fn every_rejection_reason_returns_an_identical_response() {
 /// into bug reports.
 #[tokio::test]
 async fn a_refusal_never_echoes_the_invite_token() {
-    let secret = "not-a-real-token-abc123";
+    let invite_token = "not-a-real-token-abc123";
 
     let response = register_begin(
         State(empty_state()),
@@ -146,7 +146,7 @@ async fn a_refusal_never_echoes_the_invite_token() {
         CookieJar::new(),
         HeaderMap::new(),
         Json(RegisterBeginRequest {
-            invite_token: Some(secret.to_string()),
+            invite_token: Some(invite_token.to_string()),
         }),
     )
     .await;
@@ -157,7 +157,7 @@ async fn a_refusal_never_echoes_the_invite_token() {
     let body = String::from_utf8_lossy(&bytes);
 
     assert!(
-        !body.contains(secret),
+        !body.contains(invite_token),
         "the refusal body must not contain the submitted token: {body}"
     );
 }
