@@ -22,6 +22,54 @@ fn file(name: &str, headers: &[&str]) -> FileHeaders {
     }
 }
 
+/// Davidson Road's QuikStor Cloud pull (2026-10-07): same files, but the
+/// address columns are AddressStreet1 ... AddressPostalCode and there is a
+/// Gender column.
+const QC_STREET_TENANTS: [&str; 33] = [
+    "Email",
+    "FirstName",
+    "MiddleName",
+    "LastName",
+    "CompanyName",
+    "AccountType",
+    "Gender",
+    "CellPhoneNumberPrefix",
+    "CellPhoneNumber",
+    "HomePhoneNumberPrefix",
+    "HomePhoneNumber",
+    "WorkPhoneNumberPrefix",
+    "WorkPhoneNumber",
+    "LegacyTenantId",
+    "OtherEmail",
+    "AddressStreet1",
+    "AddressStreet2",
+    "AddressCity",
+    "AddressState",
+    "AddressPostalCode",
+    "AddressCountry",
+    "SpecialTenantNote",
+    "DriversLicense",
+    "DriversLicenseState",
+    "DateOfBirth",
+    "Source",
+    "Language",
+    "MilesFromSite",
+    "NSFCounter",
+    "ETSDate",
+    "UnitName",
+    "UnitPhoneNumber",
+    "CommandingOfficer",
+];
+
+const QC_LEASES: [&str; 6] = [
+    "LegacyLeaseId",
+    "LegacyTenantId",
+    "LegacyUnitId",
+    "UnitNumber",
+    "SecurityDepositPaid",
+    "Rent",
+];
+
 const QC_TENANTS: [&str; 32] = [
     "Email",
     "FirstName",
@@ -132,6 +180,22 @@ async fn the_seeded_registry_classifies_real_export_headers() {
                 "Email",
             ],
         ),
+        file("Davidson Tenants.csv", &QC_STREET_TENANTS),
+        file(
+            "Davidson AlternateTenants.csv",
+            &with(
+                &QC_STREET_TENANTS,
+                &[
+                    "Relationship",
+                    "OtherAllowedAccess",
+                    "LegacyAlternateTenantId",
+                ],
+            )
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ),
+        file("Davidson Leases.csv", &QC_LEASES),
     ];
 
     let (classified, _) = classify(&files, &vendors, &metas);
@@ -154,6 +218,27 @@ async fn the_seeded_registry_classifies_real_export_headers() {
             FileRole::Supporting
         )),
         "the alternate-contacts file must not be mistaken for the tenant file"
+    );
+    // The street-address header variant (Davidson Road) is a QuikStor Cloud
+    // pull too: tenants file primary, alternate contacts and leases
+    // supporting (and the alternate file is not mistaken for the tenants).
+    assert_eq!(
+        format_of("Davidson Tenants.csv"),
+        Some((
+            "QuikStor Cloud (street address headers)".to_string(),
+            FileRole::Primary
+        ))
+    );
+    assert_eq!(
+        format_of("Davidson AlternateTenants.csv"),
+        Some((
+            "QuikStor Cloud Alternate Tenants (street address headers)".to_string(),
+            FileRole::Supporting
+        ))
+    );
+    assert_eq!(
+        format_of("Davidson Leases.csv"),
+        Some(("QuikStor Cloud Leases".to_string(), FileRole::Supporting))
     );
     assert_eq!(format_of("Units.csv"), None);
     assert_eq!(
@@ -212,6 +297,10 @@ async fn the_seeded_registry_classifies_real_export_headers() {
     );
     assert_eq!(
         source_of_tenant_id("QuikStor Cloud"),
+        Some("LegacyTenantId".to_string())
+    );
+    assert_eq!(
+        source_of_tenant_id("QuikStor Cloud (street address headers)"),
         Some("LegacyTenantId".to_string())
     );
     assert_eq!(source_of_tenant_id("QSX"), None);

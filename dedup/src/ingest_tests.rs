@@ -748,3 +748,161 @@ fn a_run_without_the_id_report_holds_nothing_out() {
     assert!(report.unidentified.is_none());
     assert_eq!(report.unique_tenants, 1);
 }
+
+/// The second QuikStor Cloud header variant (Davidson Road, 2026-10-07):
+/// address columns are `AddressStreet1` ... `AddressPostalCode`. Mirrors
+/// `20261007150000_seed_quikstor_cloud_street_header_formats` exactly.
+fn quikstor_cloud_street_vendor() -> VendorFormat {
+    let mapping = [
+        ("CustNumb", "LegacyTenantId"),
+        ("UnitNumber", "LegacyTenantId"),
+        ("TenantId", "LegacyTenantId"),
+        ("FirtLast", "FirtLast"),
+        ("FirstName", "FirstName"),
+        ("LastName", "LastName"),
+        ("CompanyName", "CompanyName"),
+        ("PhoneNumber", "PhoneNumber"),
+        ("PhoneNumberPrefix", "PhoneNumberPrefix"),
+        ("Email", "Email"),
+        ("AddressStreet1", "AddressStreet1"),
+        ("AddressStreet2", "AddressStreet2"),
+        ("AddressCity", "AddressCity"),
+        ("AddressState", "AddressState"),
+        ("AddressPostalCode", "AddressPostalCode"),
+    ];
+
+    VendorFormat {
+        name: "QuikStor Cloud (street address headers)".to_string(),
+        content_type: ContentType::Tenants,
+        signature_headers: [
+            "LegacyTenantId",
+            "AccountType",
+            "FirstName",
+            "LastName",
+            "AddressStreet1",
+            "CellPhoneNumber",
+        ]
+        .iter()
+        .map(|h| h.to_string())
+        .collect(),
+        field_mapping: mapping
+            .iter()
+            .map(|(t, s)| (t.to_string(), s.to_string()))
+            .collect(),
+        transform_key: Some("derive_quikstor_cloud_tenant_fields".to_string()),
+    }
+}
+
+fn quikstor_cloud_street_document(rows: Vec<Vec<&str>>) -> CsvDocument {
+    document(
+        vec![
+            "Email",
+            "FirstName",
+            "MiddleName",
+            "LastName",
+            "CompanyName",
+            "AccountType",
+            "Gender",
+            "CellPhoneNumberPrefix",
+            "CellPhoneNumber",
+            "HomePhoneNumberPrefix",
+            "HomePhoneNumber",
+            "WorkPhoneNumberPrefix",
+            "WorkPhoneNumber",
+            "LegacyTenantId",
+            "AddressStreet1",
+            "AddressStreet2",
+            "AddressCity",
+            "AddressState",
+            "AddressPostalCode",
+        ],
+        rows,
+    )
+}
+
+/// The street-address variant is recognized, its address columns land in
+/// the right fields, and the Freeland-style row does NOT claim it (it
+/// requires `AddressLine`).
+#[test]
+fn detects_and_normalizes_a_quikstor_cloud_street_header_row() {
+    let doc = quikstor_cloud_street_document(vec![vec![
+        "jamesb@example.test",
+        "James",
+        "A",
+        "Byassrascoe",
+        "",
+        "Individual",
+        "M",
+        "+1",
+        "4126120540",
+        "+1",
+        "4126120540",
+        "",
+        "",
+        "168311",
+        "750 Presque Isle Dr APT G",
+        "",
+        "Pittsburgh",
+        "Pennsylvania",
+        "15239",
+    ]]);
+
+    // Both rows registered, original first, as in the real registry: the
+    // original must not match, the variant must.
+    let vendors = [quikstor_cloud_vendor(), quikstor_cloud_street_vendor()];
+    let records =
+        records_from_csv_document(&doc, &vendors).expect("known-good street-header document");
+
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].first_last, "James Byassrascoe");
+    assert_eq!(records[0].cust_numb, "168311");
+    assert_eq!(records[0].phone_number, "4126120540");
+    assert_eq!(records[0].address_street1, "750 Presque Isle Dr APT G");
+    assert_eq!(records[0].address_city, "Pittsburgh");
+    assert_eq!(records[0].address_state, "Pennsylvania");
+    assert_eq!(records[0].address_postal_code, "15239");
+}
+
+/// Same person under two tenant ids with a mistyped phone is a duplicate
+/// customer record on this variant too.
+#[test]
+fn quikstor_cloud_street_rows_with_two_tenant_ids_become_a_duplicate_customer_record() {
+    let row = |tenant_id: &'static str, phone: &'static str| {
+        vec![
+            "britt@example.test",
+            "Britt",
+            "",
+            "Campbell",
+            "",
+            "Individual",
+            "M",
+            "+1",
+            phone,
+            "",
+            "",
+            "",
+            "",
+            tenant_id,
+            "460 Colonial Dr.",
+            "",
+            "Monroeville",
+            "Pennsylvania",
+            "15146",
+        ]
+    };
+    let doc = quikstor_cloud_street_document(vec![
+        row("168314", "4123894067"),
+        row("168400", "4123894076"),
+    ]);
+
+    let records = records_from_csv_document(&doc, &[quikstor_cloud_street_vendor()])
+        .expect("known-good street-header document");
+    let report = crate::report::run(records);
+
+    assert_eq!(report.duplicate_customer_records.len(), 1);
+    assert_eq!(
+        report.duplicate_customer_records[0].display_name,
+        "Britt Campbell"
+    );
+    assert_eq!(report.duplicate_customer_records[0].tenants.len(), 2);
+}
