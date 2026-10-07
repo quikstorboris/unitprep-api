@@ -6,6 +6,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.89] - 2026-10-07
+
+Efficiency refactor chunk D4d: `clients_resync.rs` split and `apply_resync` broken into steps. No behaviour change.
+
+### Changed
+- `api/clients_resync.rs` became `clients_resync/`: `rows` (DB row shapes), `fetch` (database and Process Street reads), `compare` (comparison types, the short-lived preview cache, conflict classification), `preview`, `apply`, `write` and `tests`. Public paths (`preview_resync`, `apply_resync`, `ResyncPreviewCache`) are unchanged.
+- `apply_resync` (a 300-line function) now validates, loads the comparison, opens the transaction and calls `write::write_all`, which runs four named steps -- `update_company`, `update_facilities`, `rebuild_person_index`, `refresh_merchant_accounts` -- each returning an `ApplyError` that names the step. One place logs the failure, rolls back and chooses the response (a missing PII key is still its own 503). The SQL, the order of the statements and the log messages are unchanged; the real-database apply test passes unchanged.
+
 ## [1.9.88] - 2026-10-07
 
 Efficiency refactor chunk D4b: `clients_elavon.rs` (1,233 lines) split. No behaviour change.
