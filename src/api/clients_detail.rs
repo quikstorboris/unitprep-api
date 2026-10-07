@@ -86,6 +86,9 @@ pub struct CompanyDetailResponse {
     pub insurance_provider: Option<String>,
     pub website_url: Option<String>,
     pub archived_at: Option<DateTime<Utc>>,
+    /// See `clients_implementation_status`; drives the company page's
+    /// "Implementation Completed" toggle.
+    pub implementation_completed_at: Option<DateTime<Utc>>,
     /// Whether any of this company's facilities has a Merchant Account
     /// record at all -- computed at read time, not stored (see the
     /// vault's own note: "no new schema needed... a read-time query
@@ -117,6 +120,7 @@ struct CompanyDetailRow {
     insurance_provider: Option<String>,
     website_url: Option<String>,
     archived_at: Option<DateTime<Utc>>,
+    implementation_completed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -144,7 +148,7 @@ async fn fetch_company_row(
         "SELECT id, legal_name, corporate_email, corporate_phone, corporate_address_street, \
          corporate_address_city, corporate_address_state, corporate_address_zip, subdomain, \
          accepted_payment_methods, accounting_basis, payment_scheme, offers_tenant_insurance_raw, \
-         insurance_provider, website_url, archived_at \
+         insurance_provider, website_url, archived_at, implementation_completed_at \
          FROM clients.companies WHERE id = $1",
     )
     .bind(company_id)
@@ -344,6 +348,7 @@ pub async fn get_company_detail(
         insurance_provider: company.insurance_provider,
         website_url: company.website_url,
         archived_at: company.archived_at,
+        implementation_completed_at: company.implementation_completed_at,
         elavon_active,
         facilities,
         owners,

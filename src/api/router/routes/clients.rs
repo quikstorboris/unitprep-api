@@ -9,8 +9,9 @@ use crate::api::route_access::{GatedRouter, RouteAccess};
 use crate::api::{
     clients_companies, clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
     clients_facility_people, clients_facility_policies_edit, clients_filter_options,
-    clients_manual_link, clients_onboarding_summary, clients_preview, clients_resync,
-    clients_search, clients_sync, dedup_rematch, tool_runs, AppState,
+    clients_implementation_status, clients_manual_link, clients_onboarding_summary,
+    clients_preview, clients_resync, clients_search, clients_sync, dedup_rematch, tool_runs,
+    AppState,
 };
 
 /// Client search/create/list/archive/resync/detail and the onboarding summary.
@@ -77,6 +78,30 @@ pub(super) fn client_routes() -> GatedRouter<AppState> {
                     action: "unarchive_company",
                 },
             )],
+        )
+        // Requires client_ops.perform -- see clients_implementation_status's
+        // own module doc. PUT marks the implementation completed, DELETE
+        // reopens it; both idempotent.
+        .gated_route(
+            "/clients/{company_id}/implementation-completed",
+            put(clients_implementation_status::mark_implementation_completed)
+                .delete(clients_implementation_status::reopen_implementation),
+            [
+                (
+                    Method::PUT,
+                    RouteAccess::Permission {
+                        keys: &["client_ops.perform"],
+                        action: "mark_implementation_completed",
+                    },
+                ),
+                (
+                    Method::DELETE,
+                    RouteAccess::Permission {
+                        keys: &["client_ops.perform"],
+                        action: "reopen_implementation",
+                    },
+                ),
+            ],
         )
         // Requires client_ops.perform -- see clients_resync's own module doc.
         .gated_route(

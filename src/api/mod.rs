@@ -32,6 +32,7 @@ mod clients_elavon;
 mod clients_facility_people;
 mod clients_facility_policies_edit;
 mod clients_filter_options;
+mod clients_implementation_status;
 mod clients_manual_link;
 mod clients_onboarding_summary;
 mod clients_preview;
@@ -303,6 +304,10 @@ mod clients_facility_people_db_tests;
 #[cfg(test)]
 #[path = "clients_onboarding_summary_db_tests.rs"]
 mod clients_onboarding_summary_db_tests;
+
+#[cfg(test)]
+#[path = "clients_implementation_status_db_tests.rs"]
+mod clients_implementation_status_db_tests;
 
 #[cfg(test)]
 #[path = "process_street_task_roles_db_tests.rs"]

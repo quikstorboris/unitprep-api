@@ -96,6 +96,10 @@ pub struct CompanySummary {
     pub legal_name: String,
     pub created_at: DateTime<Utc>,
     pub archived_at: Option<DateTime<Utc>>,
+    /// Set once a person marks the implementation completed (see
+    /// `clients_implementation_status`); the Clients page groups such
+    /// companies under "Completed Implementations".
+    pub implementation_completed_at: Option<DateTime<Utc>>,
     /// Ordered, possibly empty -- enough for the list page to show
     /// "3 facilities: Highway 20, Carpentersville, Pyott Road" without
     /// a second round trip. Not paginated: this mirrors `facility_names`
@@ -118,6 +122,7 @@ struct CompanyRow {
     legal_name: String,
     created_at: DateTime<Utc>,
     archived_at: Option<DateTime<Utc>>,
+    implementation_completed_at: Option<DateTime<Utc>>,
     facility_names: Vec<String>,
     im_id: Option<Uuid>,
     im_first_name: Option<String>,
@@ -134,6 +139,7 @@ impl From<CompanyRow> for CompanySummary {
             legal_name: row.legal_name,
             created_at: row.created_at,
             archived_at: row.archived_at,
+            implementation_completed_at: row.implementation_completed_at,
             facility_names: row.facility_names,
             implementation_manager: staff_ref(row.im_id, row.im_first_name, row.im_last_name),
             sales_rep: staff_ref(row.sr_id, row.sr_first_name, row.sr_last_name),
@@ -289,7 +295,7 @@ pub async fn list_companies(
     };
 
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
-        "SELECT c.id, c.legal_name, c.created_at, c.archived_at, \
+        "SELECT c.id, c.legal_name, c.created_at, c.archived_at, c.implementation_completed_at, \
              COALESCE(array_agg(DISTINCT f.name) FILTER (WHERE f.name IS NOT NULL), '{}') AS facility_names, \
              im.id AS im_id, im.first_name AS im_first_name, im.last_name AS im_last_name, \
              sr.id AS sr_id, sr.first_name AS sr_first_name, sr.last_name AS sr_last_name \

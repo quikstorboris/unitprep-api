@@ -125,6 +125,12 @@ pub mod event {
     pub const CLIENT_ARCHIVED: &str = "client_archived";
     /// A client company was unarchived (`api::clients_companies::unarchive_company`).
     pub const CLIENT_UNARCHIVED: &str = "client_unarchived";
+    /// A client company's implementation was marked completed
+    /// (`api::clients_implementation_status::mark_implementation_completed`).
+    pub const CLIENT_IMPLEMENTATION_COMPLETED: &str = "client_implementation_completed";
+    /// A completed implementation was reopened
+    /// (`api::clients_implementation_status::reopen_implementation`).
+    pub const CLIENT_IMPLEMENTATION_REOPENED: &str = "client_implementation_reopened";
     /// A client company was **permanently** deleted, cascading its
     /// facilities/policies/people-links/Elavon data
     /// (`api::clients_companies::delete_company`) -- the most severe of
@@ -178,6 +184,8 @@ pub mod event {
         FACILITY_SPECIALS_UPDATED,
         CLIENT_ARCHIVED,
         CLIENT_UNARCHIVED,
+        CLIENT_IMPLEMENTATION_COMPLETED,
+        CLIENT_IMPLEMENTATION_REOPENED,
         CLIENT_DELETED,
         TOOL_RUN_DELETED,
         FACILITY_INTAKE_RELINKED,

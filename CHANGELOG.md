@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.87] - 2026-10-07
+
+"Implementation Completed" for a client company. Pairs with `unitprep-ui` 1.6.63. **Needs migration `20261007120000`** (the code reads and writes `clients.companies.implementation_completed_at`).
+
+### Added
+- `clients.companies.implementation_completed_at` (nullable timestamp, a soft flag like `archived_at`).
+- `PUT /clients/{company_id}/implementation-completed` marks the implementation completed and `DELETE` reopens it; both need `client_ops.perform`, both are idempotent (re-marking keeps the original time; only an unknown id is a 404), both write an audit event (`client_implementation_completed` / `client_implementation_reopened`).
+- `implementation_completed_at` on the Clients directory list and on the company detail response, so the Clients page can group completed companies and the company page can show the toggle.
+
 ## [1.9.86] - 2026-10-07
 
 Efficiency refactor chunk D3b: `main()` split. Startup behaviour unchanged except one error path (below).

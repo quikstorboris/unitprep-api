@@ -3,7 +3,7 @@
 -- local test-db, via
 --   pg_dump --schema-only --no-owner --no-privileges
 -- Read-only reference, not applied by sqlx and not part of the migrations/
--- directory -- the 106 incremental migrations under migrations/
+-- directory -- the 107 incremental migrations under migrations/
 -- remain the actual source of truth and the real "how did we get here"
 -- history. This file exists so a newcomer (human or AI) can see current
 -- table/column/RLS/index shape in one place without reading them all in
@@ -14,7 +14,7 @@
 -- psql's per-dump \restrict/\unrestrict guard lines (a random token that
 -- changes on every dump) are stripped so a regeneration only shows real
 -- schema changes in the diff.
--- Generated 2026-10-06.
+-- Generated 2026-10-07.
 
 --
 -- PostgreSQL database dump
@@ -1088,6 +1088,7 @@ CREATE TABLE clients.companies (
     website_url text,
     implementation_manager_user_id uuid,
     sales_rep_user_id uuid,
+    implementation_completed_at timestamp with time zone,
     CONSTRAINT companies_source_check CHECK ((source = ANY (ARRAY['process_street'::text, 'manual'::text])))
 );
 
