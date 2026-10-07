@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.88] - 2026-10-07
+
+Efficiency refactor chunk D4b: `clients_elavon.rs` (1,233 lines) split. No behaviour change.
+
+### Changed
+- `api/clients_elavon.rs` became `clients_elavon/`: `mod.rs` (docs, shared `PERMISSION` and the two 409 responses, re-exports), `dto.rs` (response shapes), `build.rs` (decrypting a stored Merchant Account row into financials, credentials and parties), `get.rs`, `link.rs`, `unlink.rs`, `resync.rs` (one handler each, 150-250 lines), `tests.rs`. Handler paths (`clients_elavon::get_facility_elavon` etc.) are unchanged, so routes and the permission-gate tests are untouched.
+
 ## [1.9.87] - 2026-10-07
 
 "Implementation Completed" for a client company. Pairs with `unitprep-ui` 1.6.63. **Needs migration `20261007120000`** (the code reads and writes `clients.companies.implementation_completed_at`).
