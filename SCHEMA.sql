@@ -3,7 +3,7 @@
 -- local test-db, via
 --   pg_dump --schema-only --no-owner --no-privileges
 -- Read-only reference, not applied by sqlx and not part of the migrations/
--- directory -- the 108 incremental migrations under migrations/
+-- directory -- the 110 incremental migrations under migrations/
 -- remain the actual source of truth and the real "how did we get here"
 -- history. This file exists so a newcomer (human or AI) can see current
 -- table/column/RLS/index shape in one place without reading them all in
@@ -932,6 +932,32 @@ CREATE TABLE client_ops.audit_log (
     ip_address inet,
     metadata jsonb DEFAULT '{}'::jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: clickup_copy_jobs; Type: TABLE; Schema: client_ops; Owner: -
+--
+
+CREATE TABLE client_ops.clickup_copy_jobs (
+    id uuid DEFAULT uuidv7() NOT NULL,
+    company_id uuid NOT NULL,
+    created_by uuid NOT NULL,
+    source_facility_id uuid NOT NULL,
+    source_task_name text NOT NULL,
+    status text DEFAULT 'running'::text NOT NULL,
+    total integer NOT NULL,
+    copied integer DEFAULT 0 NOT NULL,
+    failed integer DEFAULT 0 NOT NULL,
+    results jsonb DEFAULT '[]'::jsonb NOT NULL,
+    message text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT clickup_copy_jobs_copied_check CHECK ((copied >= 0)),
+    CONSTRAINT clickup_copy_jobs_failed_check CHECK ((failed >= 0)),
+    CONSTRAINT clickup_copy_jobs_status_check CHECK ((status = ANY (ARRAY['running'::text, 'done'::text, 'failed'::text]))),
+    CONSTRAINT clickup_copy_jobs_total_check CHECK ((total > 0))
 );
 
 
@@ -2010,6 +2036,14 @@ ALTER TABLE ONLY client_ops.audit_log
 
 
 --
+-- Name: clickup_copy_jobs clickup_copy_jobs_pkey; Type: CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.clickup_copy_jobs
+    ADD CONSTRAINT clickup_copy_jobs_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: qms_tag qms_tag_pkey; Type: CONSTRAINT; Schema: client_ops; Owner: -
 --
 
@@ -2381,6 +2415,13 @@ CREATE INDEX user_invites_user_id_idx ON auth.user_invites USING btree (user_id)
 --
 
 CREATE INDEX webauthn_credentials_user_id_idx ON auth.webauthn_credentials USING btree (user_id);
+
+
+--
+-- Name: clickup_copy_jobs_owner_idx; Type: INDEX; Schema: client_ops; Owner: -
+--
+
+CREATE INDEX clickup_copy_jobs_owner_idx ON client_ops.clickup_copy_jobs USING btree (created_by, created_at DESC);
 
 
 --
@@ -2826,6 +2867,22 @@ ALTER TABLE ONLY auth.webauthn_credentials
 
 ALTER TABLE ONLY client_ops.audit_log
     ADD CONSTRAINT audit_log_actor_user_id_fkey FOREIGN KEY (actor_user_id) REFERENCES auth.users(id) ON DELETE SET NULL;
+
+
+--
+-- Name: clickup_copy_jobs clickup_copy_jobs_company_id_fkey; Type: FK CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.clickup_copy_jobs
+    ADD CONSTRAINT clickup_copy_jobs_company_id_fkey FOREIGN KEY (company_id) REFERENCES clients.companies(id) ON DELETE CASCADE;
+
+
+--
+-- Name: clickup_copy_jobs clickup_copy_jobs_created_by_fkey; Type: FK CONSTRAINT; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE ONLY client_ops.clickup_copy_jobs
+    ADD CONSTRAINT clickup_copy_jobs_created_by_fkey FOREIGN KEY (created_by) REFERENCES auth.users(id) ON DELETE CASCADE;
 
 
 --
@@ -3428,6 +3485,33 @@ CREATE POLICY webauthn_credentials_owner_only ON auth.webauthn_credentials USING
 --
 
 ALTER TABLE client_ops.audit_log ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: clickup_copy_jobs; Type: ROW SECURITY; Schema: client_ops; Owner: -
+--
+
+ALTER TABLE client_ops.clickup_copy_jobs ENABLE ROW LEVEL SECURITY;
+
+--
+-- Name: clickup_copy_jobs clickup_copy_jobs_insert_own; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY clickup_copy_jobs_insert_own ON client_ops.clickup_copy_jobs FOR INSERT WITH CHECK ((created_by = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid));
+
+
+--
+-- Name: clickup_copy_jobs clickup_copy_jobs_select_own; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY clickup_copy_jobs_select_own ON client_ops.clickup_copy_jobs FOR SELECT USING ((created_by = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid));
+
+
+--
+-- Name: clickup_copy_jobs clickup_copy_jobs_update_own; Type: POLICY; Schema: client_ops; Owner: -
+--
+
+CREATE POLICY clickup_copy_jobs_update_own ON client_ops.clickup_copy_jobs FOR UPDATE USING ((created_by = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid)) WITH CHECK ((created_by = (NULLIF(current_setting('app.current_user_id'::text, true), ''::text))::uuid));
+
 
 --
 -- Name: audit_log client_ops_audit_log_insert_unconditional; Type: POLICY; Schema: client_ops; Owner: -

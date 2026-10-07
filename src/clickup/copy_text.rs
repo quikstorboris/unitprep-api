@@ -18,6 +18,40 @@ use super::tasks::compact_label;
 /// link.
 const POINTER_LEAD: &str = "Main task list for this client is ";
 
+/// What follows the comment body on every copied comment: three line
+/// breaks, then this label and a link to the task it was copied from.
+const FOOTER_LEAD: &str = "\n\n\nMain tracker task - ";
+
+/// The footer's label as it reads in ClickUp (without the line breaks),
+/// used to take the footer back off when comparing a posted comment.
+const FOOTER_LABEL: &str = "main tracker task - ";
+
+/// The parts of a copied comment: `comment`, then -- when the source task
+/// is known -- the "Main tracker task - {source task}" footer, the task's
+/// name linking to it.
+pub fn comment_parts<'a>(
+    comment: &'a str,
+    source: Option<(&'a str, &'a str)>,
+) -> Vec<(&'a str, Option<&'a str>)> {
+    let mut parts = vec![(comment, None)];
+    if let Some((name, url)) = source {
+        parts.push((FOOTER_LEAD, None));
+        parts.push((name, Some(url)));
+    }
+    parts
+}
+
+/// `comment` without a trailing "Main tracker task - ..." footer.
+fn without_footer(comment: &str) -> &str {
+    match comment.to_lowercase().rfind(FOOTER_LABEL) {
+        // Lowercasing can change byte offsets only for characters whose
+        // lowercase differs in length; the label itself is ASCII, so the
+        // offset is only trusted when it lands on a char boundary.
+        Some(at) if comment.is_char_boundary(at) => &comment[..at],
+        _ => comment,
+    }
+}
+
 /// The pointer comment: a generic note, posted once on a target task,
 /// saying which facility's list is the client's main one. `list_url` makes
 /// the list's name a link.
@@ -47,7 +81,9 @@ pub fn is_pointer_comment(comment: &str) -> bool {
 /// instead once one is added.
 pub fn looks_already_copied(existing: &str, candidate: &str) -> bool {
     let candidate = compact_label(candidate);
-    !candidate.is_empty() && compact_label(existing) == candidate
+    // A copy Orchestrator posted ends with the "Main tracker task" footer,
+    // which the source comment never has.
+    !candidate.is_empty() && compact_label(without_footer(existing)) == candidate
 }
 
 #[cfg(test)]
@@ -63,6 +99,45 @@ mod tests {
             parts[1],
             ("Acme Main St", Some("https://app.clickup.com/1/v/li/9"))
         );
+    }
+
+    #[test]
+    fn a_copied_comment_ends_with_three_line_breaks_and_the_source_link() {
+        let parts = comment_parts(
+            "Fees done.",
+            Some(("CONFIGURE Fees", "https://app.clickup.com/t/abc")),
+        );
+
+        assert_eq!(
+            parts,
+            vec![
+                ("Fees done.", None),
+                ("\n\n\nMain tracker task - ", None),
+                ("CONFIGURE Fees", Some("https://app.clickup.com/t/abc")),
+            ]
+        );
+        assert_eq!(parts[1].0.matches('\n').count(), 3);
+    }
+
+    #[test]
+    fn without_a_known_source_the_comment_is_posted_as_is() {
+        assert_eq!(
+            comment_parts("Fees done.", None),
+            vec![("Fees done.", None)]
+        );
+    }
+
+    #[test]
+    fn a_footered_copy_still_counts_as_already_copied() {
+        assert!(looks_already_copied(
+            "Fees done.\n\n\nMain tracker task - CONFIGURE Fees",
+            "Fees done."
+        ));
+        // ...but a different comment with a footer does not.
+        assert!(!looks_already_copied(
+            "Specials done.\n\n\nMain tracker task - CONFIGURE Fees",
+            "Fees done."
+        ));
     }
 
     #[test]

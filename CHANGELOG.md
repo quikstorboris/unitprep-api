@@ -6,6 +6,22 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.94] - 2026-10-07
+
+ClickUp Copy, phase 3 and 4: the client's bulk copy, and a rate limit with background jobs; the `Main tracker task` footer on copied comments; and dedup support for QuikStor Cloud's second header variant. Needs migrations `20261007140000` and `20261007150000`.
+
+### Added
+- **Bulk copy** (`api::clickup_copy::bulk`): one comment copied from a task in a source facility's list (the parent by default) to the counterpart task in any of the client's other facilities. `GET /clients/{id}/clickup/bulk-tasks` (the source's Set Up/Migration tasks, the facilities that can be destinations, and those with no list), `GET .../bulk-pairs` (each destination's suggested counterpart for the chosen task, with its tasks to choose by hand), `GET .../bulk-comment` (the prefill) and `POST .../bulk-copy`. A destination whose list cannot be read is reported on its own and does not fail the rest.
+- **Per-user rate limit** (`clickup::rate_limit`): every ClickUp call a copy makes first takes a slot from a sliding 60-second window of 80 calls, under ClickUp's ~100/minute per token, shared by everything that user has running. Over the limit, calls wait their turn instead of failing rows with 429s.
+- **Background jobs.** A bulk copy whose ClickUp calls fit in 50 (about 16 facilities with the pointer comment) runs inside the request. A bigger one is recorded in `client_ops.clickup_copy_jobs` and run by a background task, paced by the rate limit, saving progress after each batch; `POST` answers 202 with the job id and `GET .../copy-jobs[/{id}]` reports progress and per-facility results. Jobs are visible only to whoever started them (RLS). A job that says "running" but has not advanced for 5 minutes (the server restarted) is reported as `interrupted` when read -- there is no startup sweep, which would need to read every user's rows.
+- The facility dialog's copy and the bulk copy now share one executor (`clickup_copy::exec`), so both go through the rate limiter and post the pointer the same way. `clickup_copy.rs` (about 700 lines) became a module: `lists`, `pairs`, `comments`, `copy`, `exec`, `bulk`, `jobs`.
+- Each destination facility's activity log records what was copied onto it, for bulk copies too (`facility_clickup_comments_copied`, metadata `bulk: true`).
+- 7 rate-limiter unit tests (a paused clock) and 8 bulk DB tests, including a real 17-facility background job and the owner-only visibility of jobs. `tokio`'s `test-util` feature is enabled for tests only.
+
+### Dedup: QuikStor Cloud's street-address header variant and `Leases.csv`
+- Davidson Road Self Storage's pull is the same QuikStor Cloud export as Freeland's but names the address columns `AddressStreet1/2`, `AddressCity`, `AddressState`, `AddressPostalCode` (plus a `Gender` column). The original row requires `AddressLine`, so **no file was recognized** and dedup refused a manual selection. Migration `20261007150000` adds three registry rows and leaves the originals untouched: `QuikStor Cloud Alternate Tenants (street address headers)` (supporting, inserted first because it is a header superset), `QuikStor Cloud (street address headers)` (primary, same `derive_quikstor_cloud_tenant_fields` transform, `LegacyTenantId` -> `TenantId`) and `QuikStor Cloud Leases` (supporting; the tenant-to-unit link, recognized but not joined yet). The original row's guidance no longer says leases are unsupported. The registry is cached 4 hours: restart the API after applying.
+- 2 ingest tests and the real-migration-chain `the_seeded_registry_classifies_real_export_headers` now cover Davidson's headers. Davidson's real `Tenants.csv` through the real pipeline: 291 records, 291 tenants, 0 flagged, 4 duplicate customer records, 2 typo variants, 5 related candidates.
+
 ## [1.9.93] - 2026-10-07
 
 ClickUp Copy, phase 2a: pairing two facilities' lists and copying comments between them. No migration.
@@ -16,6 +32,10 @@ ClickUp Copy, phase 2a: pairing two facilities' lists and copying comments betwe
 - ClickUp client: dropdown **custom fields** on tasks resolved to the chosen option (Onboarding Phase, Corp/Fac), and `task_comments` (paged, newest first). Task pairing (`clickup::copy_pairing`) scores name and parent name, only within the same phase, one-to-one; "Set Up" and "Setup" are one phase.
 - The duplicate-check ClickUp endpoints accept a run's **row id** as well as its session id (the Onboarding Work tab lists runs by row id), so a check can be posted to ClickUp later, from there. The run is still resolved to its own session id internally, so a captured Dropbox share link is stored against the right run.
 - No marker is stored on what is copied, so "already copied" and "pointer already there" match on **wording** (`clickup::copy_text`); every such place is tagged `MARKER-TODO` for when an "Auto-added by OO" marker is added.
+
+### Changed (after the first live test, AffStor)
+- **Every copied comment now ends with a link to the task it came from**: three line breaks, then `Main tracker task - {source task name}`, the name linking to the source task. Added server-side (`clickup::copy_text::comment_parts`) so the facility dialog, the client's bulk copy and the background jobs all do it. `POST .../clickup/copy` items and `POST .../clickup/bulk-copy` take an optional `source_task_id` (looked up in the source facility's list, so the link is ClickUp's own; a task outside that list is refused with `task_not_in_source_list` and nothing is posted). The "already copied?" check ignores the footer. The separate once-per-task "main task list" note is unchanged.
+- 3 new real-DB tests (dialog footer and link, bulk footer and link, a source task outside the source list is refused) and 3 footer unit tests.
 
 ## [1.9.92] - 2026-10-07
 

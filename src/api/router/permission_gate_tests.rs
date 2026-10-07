@@ -371,6 +371,93 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
             }) as fn() -> BoxFuture,
         ),
         (
+            "/clients/{company_id}/clickup/bulk-tasks",
+            Method::GET,
+            (|| {
+                Box::pin(clickup_copy::bulk_tasks(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Path(Uuid::new_v4()),
+                    axum::extract::Query(clickup_copy::BulkTasksQuery {
+                        source_facility_id: None,
+                        scope: None,
+                    }),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/clickup/bulk-pairs",
+            Method::GET,
+            (|| {
+                Box::pin(clickup_copy::bulk_pairs(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Path(Uuid::new_v4()),
+                    axum::extract::Query(clickup_copy::BulkPairsQuery {
+                        source_facility_id: None,
+                        source_task_id: "t".to_string(),
+                        scope: None,
+                    }),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/clickup/bulk-comment",
+            Method::GET,
+            (|| {
+                Box::pin(clickup_copy::bulk_comment(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Path(Uuid::new_v4()),
+                    axum::extract::Query(clickup_copy::BulkCommentQuery {
+                        source_facility_id: None,
+                        source_task_id: "t".to_string(),
+                    }),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/clickup/bulk-copy",
+            Method::POST,
+            (|| {
+                Box::pin(clickup_copy::bulk_copy(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                    Json(clickup_copy::BulkCopyRequest {
+                        source_facility_id: None,
+                        source_task_name: "t".to_string(),
+                        source_task_id: None,
+                        comment: "c".to_string(),
+                        destinations: vec![],
+                    }),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/clickup/copy-jobs",
+            Method::GET,
+            (|| {
+                Box::pin(clickup_copy::list_copy_jobs(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Path(Uuid::new_v4()),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
+            "/clients/{company_id}/clickup/copy-jobs/{job_id}",
+            Method::GET,
+            (|| {
+                Box::pin(clickup_copy::get_copy_job(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Path((Uuid::new_v4(), Uuid::new_v4())),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
             "/integrations/clickup/prefetch",
             Method::POST,
             (|| {

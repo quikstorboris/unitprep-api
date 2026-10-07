@@ -21,6 +21,7 @@ pub mod copy_pairing;
 pub mod copy_text;
 pub mod hierarchy;
 pub mod matching;
+pub mod rate_limit;
 pub mod task_cache;
 pub mod task_matching;
 pub mod tasks;

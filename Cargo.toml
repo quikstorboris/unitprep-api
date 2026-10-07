@@ -315,6 +315,11 @@ ts-rs = { workspace = true }
 
 [dev-dependencies]
 
+# Paused-clock tests (`#[tokio::test(start_paused = true)]`) for the ClickUp
+# rate limiter, which would otherwise have to really wait out a minute.
+# The same tokio already in [dependencies], just with its test-util feature.
+tokio = { workspace = true, features = ["test-util"] }
+
 # The pipeline benchmarks reuse the dedup crate's synthetic facility data.
 unitprep-dedup = { path = "dedup", features = ["test-support"] }
 

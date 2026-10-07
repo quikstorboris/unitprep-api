@@ -211,4 +211,72 @@ pub(super) fn clickup_routes() -> GatedRouter<AppState> {
                 },
             )],
         )
+        // ClickUp Copy, client level: one comment to many facilities. Big
+        // copies run as background jobs the person polls.
+        .gated_route(
+            "/clients/{company_id}/clickup/bulk-tasks",
+            get(clickup_copy::bulk_tasks),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_bulk_tasks",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/clickup/bulk-pairs",
+            get(clickup_copy::bulk_pairs),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_bulk_pairs",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/clickup/bulk-comment",
+            get(clickup_copy::bulk_comment),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_bulk_comment",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/clickup/bulk-copy",
+            post(clickup_copy::bulk_copy),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_bulk_copy",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/clickup/copy-jobs",
+            get(clickup_copy::list_copy_jobs),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_copy_jobs",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/clickup/copy-jobs/{job_id}",
+            get(clickup_copy::get_copy_job),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_copy_jobs",
+                },
+            )],
+        )
 }
