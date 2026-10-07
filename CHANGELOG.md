@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.91] - 2026-10-07
+
+Efficiency refactor chunk D4f: `clients_detail.rs` (942 lines) split. No behaviour change.
+
+### Changed
+- `api/clients_detail.rs` became `clients_detail/`: `company/` (`dto`, `queries`, `handler`), `facility`, `policy_dto`, `policy_queries` (the per-table policy reads), `policies` (the handler that assembles them) and `tests`. `get_company_detail`, `get_facility_detail` and `get_facility_policies` keep their paths. The overlapping row structs shared with `clients_companies` and `clients_resync` were left alone (merging them is a separate, riskier change).
+
 ## [1.9.90] - 2026-10-07
 
 Efficiency refactor chunk D4e: `clients_search.rs` split, `search_clients` (384 lines) broken up. Same responses.
