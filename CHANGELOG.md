@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.86] - 2026-10-07
+
+Efficiency refactor chunk D3b: `main()` split. Startup behaviour unchanged except one error path (below).
+
+### Changed
+- `main.rs` (486 lines, a 397-line `main()`) is now a 21-line entry point calling `startup::run()`. New `src/startup/`: `cli` (subcommand dispatch, `run_bootstrap`), `config` (session timeout, ceremony timeout, WebAuthn settings, host/port), `logging` (tracing subscriber and panic hook), `state` (builds `AppState`; the Dropbox / Process Street config fallbacks and the WebAuthn backend are their own functions), `tasks` (every background task, started from the finished state), `serve` (bind, serve, graceful shutdown).
+- A failure inside `axum::serve` used to `unwrap()` (a panic, exit 101); it now logs `server stopped with an error` and exits 1.
+- Verified by booting the real binary from a cleared environment against the test database: `/health` and `/health/db` answer, SIGTERM logs the graceful shutdown and exits 0, a second instance on the same port prints the "already in use" guidance and exits 1, `--help` prints the usage.
+
 ## [1.9.85] - 2026-10-06
 
 Efficiency refactor chunk D3a: the 1,311-line route table is split. No behaviour change.
