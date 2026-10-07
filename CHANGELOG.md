@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.97] - 2026-10-07
+
+Efficiency refactor chunk D4c (split half; the v1.9.96 tag points at an incomplete commit that does not compile - this release is the real one): `dedup.rs` (988 lines) and `tagger.rs` (947 lines) split into modules. No behaviour change.
+
+### Changed
+- `api/dedup.rs` became `dedup/`: `dto`, `upload` (`/dedup/check`), `import_dropbox`, `report`, `export` (save location and download), `export_dropbox`, `export_bytes` (CSV/XLSX/ZIP builders, file names, the download response), `session`, `tests`. `file_response`, `generate_export` and `ExportFormat` keep their `api::dedup::` paths for the callers that use them.
+- `api/tagger.rs` became `tagger/`: `views`, `files`, `patterns`, `recognize` (check, Dropbox import, session creation), `report`, `apply` (substitutions and the edited `.docx`), `dropbox`, `tests`.
+- Not done here: sharing the session-IO helpers the two tools duplicate (`first_uploaded_file`, `save_location`, the Dropbox import/save pairs, `file_response`) - that needs a design pass, tracked as the remaining part of D4c.
+
 ## [1.9.95] - 2026-10-07
 
 ClickUp Copy can also complete the destination tasks (opt-in), and passkey registration is split into a module under new real-database tests. No migration.
