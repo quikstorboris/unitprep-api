@@ -42,7 +42,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 [package]
 name = "unitprep"
-version = "1.9.88"
+version = "1.9.89"
 edition.workspace = true
 
 authors = ["Boris Maksimov <bmaksimov@quikstor.com>"]
