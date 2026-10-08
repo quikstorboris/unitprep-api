@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::QueryBuilder;
 use uuid::Uuid;
 
+use crate::api::paging::clamp_limit;
 use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, AppState};
 use crate::auth::AuthenticatedUser;
@@ -151,7 +152,7 @@ pub async fn list_activity_logs(
         return response;
     }
 
-    let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
 
     let actor_ids = match query.actor_user_id.as_deref().map(parse_actor_ids) {
         Some(Ok(ids)) => ids,

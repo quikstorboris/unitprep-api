@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::rls::{begin_for, try_response};
-use crate::api::{bad_request, conflict, internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, conflict, error_response, internal_error, AppState};
 use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser};
 use crate::clickup::{ClickUpClient, ClickUpError, ClickUpIdentity};
 use crate::integrations::secrets;
@@ -125,14 +125,11 @@ const STATUS_COLUMNS: &str = "status, clickup_user_id, clickup_username, last_va
 /// 502 for "ClickUp itself could not be reached / misbehaved" -- the
 /// user's token may be perfectly fine, so this is not a 4xx.
 pub(crate) fn clickup_unavailable(err: &ClickUpError) -> Response {
-    (
+    error_response(
         StatusCode::BAD_GATEWAY,
-        Json(ApiErrorBody {
-            error: "clickup_unavailable",
-            message: format!("Could not complete the request to ClickUp: {err}"),
-        }),
+        "clickup_unavailable",
+        format!("Could not complete the request to ClickUp: {err}"),
     )
-        .into_response()
 }
 
 /// The calling user's decrypted ClickUp token, for the endpoints that

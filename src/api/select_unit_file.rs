@@ -1,14 +1,14 @@
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
+use crate::api::bad_request;
 use crate::api::blocking::with_owned_session_mut_blocking;
 use crate::{
-    api::{discover::compute_discovery, session_not_found, stage_conflict, ApiErrorBody, AppState},
+    api::{discover::compute_discovery, session_not_found, stage_conflict, AppState},
     application::unit_group_session::{StageError, WorkflowStage},
     auth::AuthenticatedUser,
 };
@@ -131,24 +131,14 @@ pub async fn select_unit_file(
     match result {
         Some(Ok(response)) => Json(response).into_response(),
         Some(Err(SelectNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
-        Some(Err(SelectNotReady::EmptySelection)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "unit_file_selection_empty",
-                message: "At least one unit file must be selected.".to_string(),
-            }),
-        )
-            .into_response(),
-        Some(Err(SelectNotReady::FileNotDiscovered(name))) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "unit_file_invalid",
-                message: format!(
-                    "'{name}' was not found among this session's discovered unit file candidates."
-                ),
-            }),
-        )
-            .into_response(),
+        Some(Err(SelectNotReady::EmptySelection)) => bad_request(
+            "unit_file_selection_empty",
+            "At least one unit file must be selected.".to_string(),
+        ),
+        Some(Err(SelectNotReady::FileNotDiscovered(name))) => bad_request(
+            "unit_file_invalid",
+            format!("'{name}' was not found among this session's discovered unit file candidates."),
+        ),
         None => session_not_found(&request.session_id),
     }
 }

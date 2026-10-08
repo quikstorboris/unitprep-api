@@ -14,21 +14,17 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::{process_street_not_configured, user_agent_from, ApiErrorBody, AppState};
+use crate::api::{conflict, process_street_not_configured, user_agent_from, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::clients::sync::{run_all_workflows_with_progress, try_claim_running, SyncState};
 
 const PERMISSION: &str = "client_ops.perform";
 
 fn already_running() -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(ApiErrorBody {
-            error: "sync_already_running",
-            message: "A Process Street sync is already running.".to_string(),
-        }),
+    conflict(
+        "sync_already_running",
+        "A Process Street sync is already running.".to_string(),
     )
-        .into_response()
 }
 
 #[derive(Debug, Serialize)]

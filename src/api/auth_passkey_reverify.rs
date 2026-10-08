@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use unitprep_core::session_store::SessionStoreExt;
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, error_response, internal_error, AppState};
 use crate::auth::{
     audit_log, clear_ceremony_cookie, issue_ceremony_cookie, read_ceremony_cookie,
     AuthenticatedUser, AuthenticationCeremony, REVERIFY_CEREMONY_COOKIE,
@@ -61,48 +61,33 @@ pub struct ReverifyFinishResponse {
 }
 
 fn ceremony_not_found() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "ceremony_not_found",
-            message: "This verification attempt has expired or was never started. Try again."
-                .to_string(),
-        }),
+    bad_request(
+        "ceremony_not_found",
+        "This verification attempt has expired or was never started. Try again.".to_string(),
     )
-        .into_response()
 }
 
 fn ceremony_failed() -> Response {
-    (
+    error_response(
         StatusCode::UNAUTHORIZED,
-        Json(ApiErrorBody {
-            error: "reverify_failed",
-            message: "That passkey could not be verified.".to_string(),
-        }),
+        "reverify_failed",
+        "That passkey could not be verified.".to_string(),
     )
-        .into_response()
 }
 
 fn no_passkey_registered() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "no_passkey_registered",
-            message: "No passkey is registered on this account to verify against.".to_string(),
-        }),
+    bad_request(
+        "no_passkey_registered",
+        "No passkey is registered on this account to verify against.".to_string(),
     )
-        .into_response()
 }
 
 fn unauthorized_session_gone() -> Response {
-    (
+    error_response(
         StatusCode::UNAUTHORIZED,
-        Json(ApiErrorBody {
-            error: "unauthorized",
-            message: "Your session ended. Sign in again.".to_string(),
-        }),
+        "unauthorized",
+        "Your session ended. Sign in again.".to_string(),
     )
-        .into_response()
 }
 
 pub async fn reverify_begin(

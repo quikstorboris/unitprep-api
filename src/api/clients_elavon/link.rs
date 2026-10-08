@@ -3,8 +3,8 @@
 use super::{already_linked, PERMISSION};
 use crate::api::rls::{begin_for, try_response};
 use crate::api::{
-    encryption_not_configured, internal_error, not_found, process_street_not_configured,
-    user_agent_from, ApiErrorBody, AppState,
+    bad_request, encryption_not_configured, internal_error, not_found,
+    process_street_not_configured, user_agent_from, AppState,
 };
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
@@ -58,14 +58,10 @@ pub async fn link_facility_elavon(
 
     let ma_run_id = request.merchant_account_run_id.trim();
     if ma_run_id.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "invalid_request",
-                message: "merchant_account_run_id is required.".to_string(),
-            }),
-        )
-            .into_response();
+        return bad_request(
+            "invalid_request",
+            "merchant_account_run_id is required.".to_string(),
+        );
     }
 
     let Some(client) = state.process_street.clone() else {

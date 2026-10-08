@@ -60,7 +60,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, error_response, internal_error, AppState};
 use crate::auth::{
     audit_log, base32_secret, begin_owner_rls_transaction, encrypt_secret, generate_secret,
     provisioning_uri, totp_configured, verify_code, AuthenticatedUser,
@@ -106,27 +106,18 @@ const STEP_UP_MINUTES: i32 = 5;
 /// path -- the sign-in path folds it into the opaque 401 instead, since
 /// "TOTP is switched off here" is not something an anonymous caller needs.
 fn not_configured() -> Response {
-    (
+    error_response(
         StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "totp_not_configured",
-            message: "TOTP is not available: the server has no TOTP_ENCRYPTION_KEY configured."
-                .to_string(),
-        }),
+        "totp_not_configured",
+        "TOTP is not available: the server has no TOTP_ENCRYPTION_KEY configured.".to_string(),
     )
-        .into_response()
 }
 
 fn wrong_code() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "totp_code_rejected",
-            message: "That code is not valid. Check your authenticator app and try again."
-                .to_string(),
-        }),
+    bad_request(
+        "totp_code_rejected",
+        "That code is not valid. Check your authenticator app and try again.".to_string(),
     )
-        .into_response()
 }
 
 /// The caller is signed in, but has no confirmed TOTP credential to step up
@@ -135,14 +126,10 @@ fn wrong_code() -> Response {
 /// caller is already authenticated as themselves, so telling them their own
 /// account's TOTP state leaks nothing they don't already know.
 fn not_enrolled() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "totp_not_enrolled",
-            message: "Set up an authenticator app before confirming this action.".to_string(),
-        }),
+    bad_request(
+        "totp_not_enrolled",
+        "Set up an authenticator app before confirming this action.".to_string(),
     )
-        .into_response()
 }
 
 /// Same reasoning as `not_enrolled`: the caller is already authenticated as
@@ -150,14 +137,11 @@ fn not_enrolled() -> Response {
 /// the old anonymous login path, where this had to fold into an opaque
 /// rejection.
 fn locked_out() -> Response {
-    (
+    error_response(
         StatusCode::TOO_MANY_REQUESTS,
-        Json(ApiErrorBody {
-            error: "totp_locked_out",
-            message: "Too many incorrect codes. Try again in a few minutes.".to_string(),
-        }),
+        "totp_locked_out",
+        "Too many incorrect codes. Try again in a few minutes.".to_string(),
     )
-        .into_response()
 }
 
 /// Self-service TOTP *re*-enrolment (an account that already has a
@@ -167,14 +151,11 @@ fn locked_out() -> Response {
 /// nothing yet for a hijacked session to be replacing, and first-time
 /// setup happens at admin-driven onboarding, not self-service.
 fn passkey_reverification_required() -> Response {
-    (
+    error_response(
         StatusCode::FORBIDDEN,
-        Json(ApiErrorBody {
-            error: "passkey_reverification_required",
-            message: "Verify your passkey before replacing your authenticator app.".to_string(),
-        }),
+        "passkey_reverification_required",
+        "Verify your passkey before replacing your authenticator app.".to_string(),
     )
-        .into_response()
 }
 
 pub async fn enroll_begin(
@@ -507,14 +488,11 @@ pub async fn step_up(
 }
 
 fn unauthorized_session_gone() -> Response {
-    (
+    error_response(
         StatusCode::UNAUTHORIZED,
-        Json(ApiErrorBody {
-            error: "unauthorized",
-            message: "Your session ended. Sign in again.".to_string(),
-        }),
+        "unauthorized",
+        "Your session ended. Sign in again.".to_string(),
     )
-        .into_response()
 }
 
 struct LoadedSecret {

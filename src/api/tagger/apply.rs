@@ -2,7 +2,7 @@
 
 use super::dropbox::tagged_file_name;
 use crate::api::session_io::attachment_response;
-use crate::api::{internal_error, session_not_found, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, session_not_found, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::tool_runs;
 use axum::extract::{Json, State};
@@ -188,17 +188,13 @@ pub(super) async fn build_edited_docx(
     let mut failed = Vec::new();
     for confirmed in &request.confirmed {
         let Some(candidate) = candidates.get(confirmed.candidate_index) else {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "invalid_candidate_index",
-                    message: format!(
-                        "No candidate at index {} in this session",
-                        confirmed.candidate_index
-                    ),
-                }),
-            )
-                .into_response());
+            return Err(bad_request(
+                "invalid_candidate_index",
+                format!(
+                    "No candidate at index {} in this session",
+                    confirmed.candidate_index
+                ),
+            ));
         };
 
         let applied = to_edit(candidate, format!("{{{{{}}}}}", confirmed.tag_key), style);
@@ -257,14 +253,10 @@ pub(super) async fn build_edited_docx(
         Ok(bytes) => bytes,
         Err(err) => {
             tracing::warn!(session_id = %request.session_id, error = ?err, "Tagger apply failed");
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "apply_failed",
-                    message: "Could not apply the confirmed substitutions".to_string(),
-                }),
-            )
-                .into_response());
+            return Err(bad_request(
+                "apply_failed",
+                "Could not apply the confirmed substitutions".to_string(),
+            ));
         }
     };
 

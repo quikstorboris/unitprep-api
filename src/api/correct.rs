@@ -1,6 +1,5 @@
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -8,7 +7,7 @@ use serde::Deserialize;
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{
-    session_not_found, stage_conflict, validate::run_validation, ApiErrorBody, AppState,
+    bad_request, conflict, session_not_found, stage_conflict, validate::run_validation, AppState,
 };
 use crate::application::unit_group_session::StageError;
 use crate::auth::AuthenticatedUser;
@@ -109,29 +108,15 @@ pub async fn correct(
 
         Some(Err(CorrectNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
 
-        Some(Err(CorrectNotReady::UnknownUnit)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "unknown_unit",
-                message: format!(
+        Some(Err(CorrectNotReady::UnknownUnit)) => bad_request("unknown_unit", format!(
                     "No row in '{}' currently has unit number '{}'.",
                     request.file_name, request.unit_number
-                ),
-            }),
-        )
-            .into_response(),
+                )),
 
-        Some(Err(CorrectNotReady::AmbiguousUnitNumber { occurrences })) => (
-            StatusCode::CONFLICT,
-            Json(ApiErrorBody {
-                error: "ambiguous_unit_number",
-                message: format!(
+        Some(Err(CorrectNotReady::AmbiguousUnitNumber { occurrences })) => conflict("ambiguous_unit_number", format!(
                     "{occurrences} rows in this file share unit number '{}' — this correction can't be targeted to a single row. Resolve the duplicate unit numbers in the source file first.",
                     request.unit_number
-                ),
-            }),
-        )
-            .into_response(),
+                )),
 
         None => session_not_found(&request.session_id),
     }

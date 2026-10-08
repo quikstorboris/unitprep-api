@@ -4,14 +4,13 @@ use std::time::Instant;
 
 use axum::{
     extract::{Json, Multipart, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 
 use crate::api::blocking::run_blocking;
 use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root};
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, AppState};
 use crate::application::session_service::SessionService;
 use crate::auth::AuthenticatedUser;
 use unitprep_core::uploaded_file::UploadedFile;
@@ -211,14 +210,7 @@ pub async fn upload(
             "Upload rejected — no files were successfully uploaded"
         );
 
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "no_file_uploaded",
-                message: "No file was uploaded".to_string(),
-            }),
-        )
-            .into_response();
+        return bad_request("no_file_uploaded", "No file was uploaded".to_string());
     }
 
     // Parses every uploaded file: CPU-bound, so off the async workers.
@@ -297,14 +289,10 @@ pub async fn import_from_dropbox(
         .collect();
 
     if file_entries.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "no_file_uploaded",
-                message: "This Dropbox folder has no files.".to_string(),
-            }),
-        )
-            .into_response();
+        return bad_request(
+            "no_file_uploaded",
+            "This Dropbox folder has no files.".to_string(),
+        );
     }
 
     // Downloads run a few at a time instead of one after another (a folder

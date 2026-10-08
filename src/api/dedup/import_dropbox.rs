@@ -4,11 +4,10 @@ use super::dto::DedupCheckResponse;
 use super::session::create_dedup_session;
 use super::upload::guess_content_type;
 use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root, parent_folder};
-use crate::api::{dedup_blocking, ApiErrorBody, AppState};
+use crate::api::{bad_request, dedup_blocking, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::tool_runs;
 use axum::extract::{Json, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::time::Instant;
@@ -52,14 +51,7 @@ pub async fn import_from_dropbox(
 
     let paths = request.selected_paths();
     if paths.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "no_file_uploaded",
-                message: "No file was selected".to_string(),
-            }),
-        )
-            .into_response();
+        return bad_request("no_file_uploaded", "No file was selected".to_string());
     }
 
     for path in &paths {
@@ -115,14 +107,7 @@ pub async fn import_from_dropbox(
         Ok(created) => created,
         Err(err) => {
             tracing::warn!(files = files.len(), error = %err, "Dedup import-from-dropbox failed to ingest the selected files");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "invalid_file",
-                    message: err.to_string(),
-                }),
-            )
-                .into_response();
+            return bad_request("invalid_file", err.to_string());
         }
     };
 

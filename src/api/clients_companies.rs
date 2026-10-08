@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::api::client_ops_activity_logs::push_actor_filter;
 use crate::api::rls::{begin_for, try_response};
-use crate::api::{bad_request, internal_error, user_agent_from, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, not_found, user_agent_from, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 
@@ -394,14 +394,10 @@ async fn set_archived(
         // state -- either way there's nothing to report beyond 404, the
         // same "don't distinguish a real 404 from an RLS-filtered row"
         // reasoning this codebase already applies elsewhere.
-        return (
-            StatusCode::NOT_FOUND,
-            Json(ApiErrorBody {
-                error: "not_found",
-                message: "Client not found, or already in the requested state.".to_string(),
-            }),
-        )
-            .into_response();
+        return not_found(
+            "not_found",
+            "Client not found, or already in the requested state.".to_string(),
+        );
     };
 
     if let Err(err) = tx.commit().await {
@@ -498,14 +494,7 @@ pub async fn delete_company(
 
     let Some((_, legal_name)) = deleted else {
         let _ = tx.rollback().await;
-        return (
-            StatusCode::NOT_FOUND,
-            Json(ApiErrorBody {
-                error: "not_found",
-                message: "Client not found.".to_string(),
-            }),
-        )
-            .into_response();
+        return not_found("not_found", "Client not found.".to_string());
     };
 
     if let Err(err) = tx.commit().await {

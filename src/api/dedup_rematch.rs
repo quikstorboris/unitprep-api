@@ -132,15 +132,10 @@ pub async fn rematch_tool_run(
     let (session_id, blob) = match row {
         Ok(Some((session_id, Some(blob)))) => (session_id, blob),
         Ok(Some((_, None))) => {
-            return (
-                axum::http::StatusCode::CONFLICT,
-                Json(crate::api::ApiErrorBody {
-                    error: "rematch_unavailable",
-                    message: "This run was recorded before re-checking was available, so it can't be re-checked. Run the check again."
-                        .to_string(),
-                }),
-            )
-                .into_response();
+            return crate::api::conflict(
+                "rematch_unavailable",
+                "This run was recorded before re-checking was available, so it can't be re-checked. Run the check again.".to_string(),
+            );
         }
         Ok(None) => {
             return not_found("tool_run_not_found", "No such run.".to_string());

@@ -1,19 +1,19 @@
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
 use crate::api::blocking::with_owned_session_mut_blocking;
+use crate::api::{bad_request, conflict};
 use crate::{
     api::{
         discover::{
             compute_discovery, current_unit_file_to_resolve, resolve_confirm_action,
             validate_manual_mapping, DiscoverResponse,
         },
-        session_not_found, stage_conflict, ApiErrorBody, AppState,
+        session_not_found, stage_conflict, AppState,
     },
     application::unit_group_session::{Session, StageError, WorkflowStage},
     auth::AuthenticatedUser,
@@ -221,69 +221,27 @@ fn not_ready_response(err: ResolveNotReady, session_id: &str) -> Response {
     match err {
         ResolveNotReady::Stage(err) => stage_conflict(session_id, err),
 
-        ResolveNotReady::NoFileSelected => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "no_unit_file_selected",
-                message: "No unit file has been selected for this session yet — call /unit-file/select first.".to_string(),
-            }),
-        )
-            .into_response(),
+        ResolveNotReady::NoFileSelected => bad_request("no_unit_file_selected", "No unit file has been selected for this session yet — call /unit-file/select first.".to_string()),
 
-        ResolveNotReady::VendorNotDetected => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "vendor_not_detected",
-                message: "The selected file doesn't match a known vendor format — use \"map\" instead of \"confirm\".".to_string(),
-            }),
-        )
-            .into_response(),
+        ResolveNotReady::VendorNotDetected => bad_request("vendor_not_detected", "The selected file doesn't match a known vendor format — use \"map\" instead of \"confirm\".".to_string()),
 
-        ResolveNotReady::HeaderMismatch(files) => (
-            StatusCode::CONFLICT,
-            Json(ApiErrorBody {
-                error: "unit_file_header_mismatch",
-                message: format!(
+        ResolveNotReady::HeaderMismatch(files) => conflict("unit_file_header_mismatch", format!(
                     "The confirmed unit files don't all share the same columns, so they can't be confirmed as one vendor together. Files that don't match the rest: {}. Return to Unit Files Selection and remove them, or map each file's columns manually.",
                     files.join(", ")
-                ),
-            }),
-        )
-            .into_response(),
+                )),
 
-        ResolveNotReady::UnknownTargetField(target) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "unknown_target_field",
-                message: format!(
+        ResolveNotReady::UnknownTargetField(target) => bad_request("unknown_target_field", format!(
                     "'{target}' is not one of the canonical target fields."
-                ),
-            }),
-        )
-            .into_response(),
+                )),
 
-        ResolveNotReady::UnknownSourceHeader { target, source } => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "unknown_source_header",
-                message: format!(
+        ResolveNotReady::UnknownSourceHeader { target, source } => bad_request("unknown_source_header", format!(
                     "'{source}' (mapped to '{target}') is not a header in the selected file."
-                ),
-            }),
-        )
-            .into_response(),
+                )),
 
-        ResolveNotReady::MissingRequiredFields(fields) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "mapping_incomplete",
-                message: format!(
+        ResolveNotReady::MissingRequiredFields(fields) => bad_request("mapping_incomplete", format!(
                     "The following required fields must be mapped to a source column: {}.",
                     fields.join(", ")
-                ),
-            }),
-        )
-            .into_response(),
+                )),
 
     }
 }

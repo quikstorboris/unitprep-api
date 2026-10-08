@@ -19,7 +19,6 @@
 
 use axum::{
     extract::{Json, Path, Query, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -28,7 +27,7 @@ use uuid::Uuid;
 use unitprep_core::uploaded_file::UploadedFile;
 
 use crate::api::rls::{begin_for, try_response};
-use crate::api::{internal_error, not_found, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, not_found, AppState};
 use crate::auth::AuthenticatedUser;
 
 /// The directory portion of a Dropbox path -- `None` for a bare
@@ -93,14 +92,10 @@ pub struct ListFolderResponse {
 }
 
 fn path_outside_root(path: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "path_outside_dropbox_root",
-            message: format!("{path} is outside the configured Dropbox root"),
-        }),
+    bad_request(
+        "path_outside_dropbox_root",
+        format!("{path} is outside the configured Dropbox root"),
     )
-        .into_response()
 }
 
 /// Shared boundary check for every Dropbox-touching endpoint in the app,
@@ -372,6 +367,7 @@ pub async fn facility_dropbox_folder(
 mod tests {
     use super::*;
     use crate::api::test_support::{empty_state, test_user};
+    use axum::http::StatusCode;
 
     // Deliberately the only test here: a path within the configured root
     // would reach the real network via `state.dropbox.list_folder` (see

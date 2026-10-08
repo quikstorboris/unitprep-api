@@ -29,7 +29,9 @@ use uuid::Uuid;
 
 use crate::api::clickup_lookup::{token_and_hierarchy, verify_list, ListOption};
 use crate::api::rls::{begin_for, try_response};
-use crate::api::{bad_request, internal_error, not_found, user_agent_from, ApiErrorBody, AppState};
+use crate::api::{
+    bad_request, error_response, internal_error, not_found, user_agent_from, AppState,
+};
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 
@@ -73,14 +75,11 @@ pub struct UnlinkResponse {
 }
 
 fn insufficient_role() -> Response {
-    (
+    error_response(
         StatusCode::FORBIDDEN,
-        Json(ApiErrorBody {
-            error: "insufficient_role",
-            message: "Your role cannot change a facility's ClickUp link.".to_string(),
-        }),
+        "insufficient_role",
+        "Your role cannot change a facility's ClickUp link.".to_string(),
     )
-        .into_response()
 }
 
 fn link_state(list_id: Option<&str>, list_name: Option<&str>) -> serde_json::Value {

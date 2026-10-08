@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::QueryBuilder;
 use uuid::Uuid;
 
+use crate::api::paging::clamp_limit;
 use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, AppState};
 use crate::auth::{audit_log, AuthenticatedUser};
@@ -173,7 +174,7 @@ pub async fn list_audit_logs(
         return response;
     }
 
-    let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
 
     // Validated before the transaction opens, same reasoning as every
     // other handler in this codebase: a malformed value should cost a

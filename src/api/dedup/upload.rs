@@ -2,11 +2,10 @@
 
 use super::dto::DedupCheckResponse;
 use super::session::create_dedup_session;
-use crate::api::{dedup_blocking, ApiErrorBody, AppState};
+use crate::api::{bad_request, dedup_blocking, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::tool_runs;
 use axum::extract::{Json, Multipart, Query, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use std::time::Instant;
@@ -65,25 +64,11 @@ pub async fn check(
     let files = match all_uploaded_files(&mut multipart).await {
         Ok(files) if !files.is_empty() => files,
         Ok(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "no_file_uploaded",
-                    message: "No file was uploaded".to_string(),
-                }),
-            )
-                .into_response();
+            return bad_request("no_file_uploaded", "No file was uploaded".to_string());
         }
         Err(err) => {
             tracing::error!(error = %err, "Multipart parser error during dedup check");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "multipart_error",
-                    message: err.to_string(),
-                }),
-            )
-                .into_response();
+            return bad_request("multipart_error", err.to_string());
         }
     };
 
@@ -116,14 +101,7 @@ pub async fn check(
             // malformed CSV) -- a data-quality issue safe to surface
             // directly, not an internal fault.
             tracing::warn!(files = files.len(), error = %err, "Dedup check failed to ingest the selected files");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "invalid_file",
-                    message: err.to_string(),
-                }),
-            )
-                .into_response();
+            return bad_request("invalid_file", err.to_string());
         }
     };
 

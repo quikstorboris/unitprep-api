@@ -1,6 +1,5 @@
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -8,7 +7,7 @@ use serde::Deserialize;
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{
-    session_not_found, stage_conflict, validate::run_validation, ApiErrorBody, AppState,
+    bad_request, session_not_found, stage_conflict, validate::run_validation, AppState,
 };
 use crate::application::unit_group_session::StageError;
 use crate::auth::AuthenticatedUser;
@@ -78,17 +77,13 @@ pub async fn exempt_dimensions(
 
         Some(Err(ExemptNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
 
-        Some(Err(ExemptNotReady::UnknownUnit)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "unknown_unit",
-                message: format!(
-                    "No row in '{}' currently has unit number '{}'.",
-                    request.file_name, request.unit_number
-                ),
-            }),
-        )
-            .into_response(),
+        Some(Err(ExemptNotReady::UnknownUnit)) => bad_request(
+            "unknown_unit",
+            format!(
+                "No row in '{}' currently has unit number '{}'.",
+                request.file_name, request.unit_number
+            ),
+        ),
 
         None => session_not_found(&request.session_id),
     }

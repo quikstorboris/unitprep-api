@@ -1,10 +1,9 @@
 //! The refusal and failure responses, and the audit row every refusal writes.
 
-use crate::api::{ApiErrorBody, AppState};
+use crate::api::{bad_request, error_response, AppState};
 use crate::auth::audit_log;
-use axum::extract::Json;
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 use uuid::Uuid;
 
 /// Deliberately identical for "no such invite", "invite expired",
@@ -14,14 +13,11 @@ use uuid::Uuid;
 /// aren't worth carving out, since carving them out is precisely what
 /// reveals the others by elimination.
 pub(super) fn registration_unavailable() -> Response {
-    (
+    error_response(
         StatusCode::FORBIDDEN,
-        Json(ApiErrorBody {
-            error: "registration_not_available",
-            message: "Passkey registration is not available for this account.".to_string(),
-        }),
+        "registration_not_available",
+        "Passkey registration is not available for this account.".to_string(),
     )
-        .into_response()
 }
 
 /// The rejection above, plus the audit row that makes it visible to an
@@ -76,24 +72,15 @@ pub(super) async fn reject_registration(
 }
 
 pub(super) fn ceremony_not_found() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "ceremony_not_found",
-            message: "This registration attempt has expired or was never started. Start again."
-                .to_string(),
-        }),
+    bad_request(
+        "ceremony_not_found",
+        "This registration attempt has expired or was never started. Start again.".to_string(),
     )
-        .into_response()
 }
 
 pub(super) fn ceremony_failed() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "registration_failed",
-            message: "The passkey could not be verified. Start again.".to_string(),
-        }),
+    bad_request(
+        "registration_failed",
+        "The passkey could not be verified. Start again.".to_string(),
     )
-        .into_response()
 }

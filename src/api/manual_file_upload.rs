@@ -8,13 +8,11 @@
 
 use axum::extract::multipart::MultipartError;
 use axum::extract::Multipart;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::response::Response;
 
 use unitprep_core::uploaded_file::UploadedFile;
 
-use crate::api::ApiErrorBody;
+use crate::api::bad_request;
 
 pub(crate) struct ManualUploadFields {
     pub session_id: String,
@@ -80,40 +78,21 @@ pub(crate) async fn extract_manual_upload_fields(
 
 pub(crate) fn manual_upload_error_response(err: ManualUploadError) -> Response {
     match err {
-        ManualUploadError::Multipart(err) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "multipart_error",
-                message: format!("Failed reading the uploaded file: {err}"),
-            }),
-        )
-            .into_response(),
+        ManualUploadError::Multipart(err) => bad_request(
+            "multipart_error",
+            format!("Failed reading the uploaded file: {err}"),
+        ),
 
-        ManualUploadError::MissingSessionId => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "missing_session_id",
-                message: "Request is missing the session_id field.".to_string(),
-            }),
-        )
-            .into_response(),
+        ManualUploadError::MissingSessionId => bad_request(
+            "missing_session_id",
+            "Request is missing the session_id field.".to_string(),
+        ),
 
-        ManualUploadError::MissingFile => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "missing_file",
-                message: "Request is missing the file field.".to_string(),
-            }),
-        )
-            .into_response(),
+        ManualUploadError::MissingFile => bad_request(
+            "missing_file",
+            "Request is missing the file field.".to_string(),
+        ),
 
-        ManualUploadError::ParseFailed(context) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "file_parse_failed",
-                message: context,
-            }),
-        )
-            .into_response(),
+        ManualUploadError::ParseFailed(context) => bad_request("file_parse_failed", context),
     }
 }

@@ -40,7 +40,7 @@ use uuid::Uuid;
 
 use unitprep_core::session_store::SessionStoreExt;
 
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, error_response, internal_error, AppState};
 use crate::auth::{
     audit_log, begin_owner_rls_transaction, clear_ceremony_cookie, generate_token,
     issue_ceremony_cookie, issue_session_cookie, read_ceremony_cookie, session_lifetime_hours,
@@ -93,37 +93,26 @@ pub struct LoginFinishResponse {
 /// account like that" and "that account cannot use this method" should not
 /// be separable by status code any more than by message.
 fn login_unavailable() -> Response {
-    (
+    error_response(
         StatusCode::UNAUTHORIZED,
-        Json(ApiErrorBody {
-            error: "login_unavailable",
-            message: "Could not sign in with that address.".to_string(),
-        }),
+        "login_unavailable",
+        "Could not sign in with that address.".to_string(),
     )
-        .into_response()
 }
 
 fn ceremony_not_found() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody {
-            error: "ceremony_not_found",
-            message: "This sign-in attempt has expired or was never started. Start again."
-                .to_string(),
-        }),
+    bad_request(
+        "ceremony_not_found",
+        "This sign-in attempt has expired or was never started. Start again.".to_string(),
     )
-        .into_response()
 }
 
 fn ceremony_failed() -> Response {
-    (
+    error_response(
         StatusCode::UNAUTHORIZED,
-        Json(ApiErrorBody {
-            error: "login_failed",
-            message: "That passkey could not be verified.".to_string(),
-        }),
+        "login_failed",
+        "That passkey could not be verified.".to_string(),
     )
-        .into_response()
 }
 
 pub async fn login_begin(

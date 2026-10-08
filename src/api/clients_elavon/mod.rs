@@ -35,34 +35,22 @@ pub use link::LinkElavonRequest;
 pub use resync::resync_elavon_data;
 pub use unlink::unlink_facility_elavon;
 
-use axum::{
-    extract::Json,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
+use axum::response::Response;
 
-use crate::api::ApiErrorBody;
+use crate::api::conflict;
 
 pub(super) const PERMISSION: &str = "client_ops.perform";
 
 pub(super) fn already_linked() -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(ApiErrorBody {
-            error: "already_linked",
-            message: "This facility already has a linked Merchant Account run.".to_string(),
-        }),
+    conflict(
+        "already_linked",
+        "This facility already has a linked Merchant Account run.".to_string(),
     )
-        .into_response()
 }
 
 pub(super) fn not_linked() -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(ApiErrorBody {
-            error: "not_linked",
-            message: "This facility has no linked Merchant Account run yet.".to_string(),
-        }),
+    conflict(
+        "not_linked",
+        "This facility has no linked Merchant Account run yet.".to_string(),
     )
-        .into_response()
 }

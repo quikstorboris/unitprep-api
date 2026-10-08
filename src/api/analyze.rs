@@ -3,16 +3,16 @@ use std::time::Instant;
 
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 
 use unitprep_core::session_store::SessionStoreExt;
 
+use crate::api::conflict;
 use crate::{
     api::blocking::{run_blocking, with_owned_session_blocking},
-    api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
+    api::{internal_error, session_not_found, stage_conflict, AppState},
     application::unit_group_session::{StageError, WorkflowStage},
     auth::AuthenticatedUser,
     client_ops::tool_runs,
@@ -204,14 +204,7 @@ async fn read_inputs(
     match read {
         Some(Ok(inputs)) => Ok(inputs),
         Some(Err(AnalyzeNotReady::Stage(err))) => Err(stage_conflict(&request.session_id, err)),
-        Some(Err(AnalyzeNotReady::GroupFileNotSelected)) => Err((
-            StatusCode::CONFLICT,
-            Json(ApiErrorBody {
-                error: "group_file_not_selected",
-                message: "Multiple candidate master group files were found; select one via /group-file/select before analyzing.".to_string(),
-            }),
-        )
-            .into_response()),
+        Some(Err(AnalyzeNotReady::GroupFileNotSelected)) => Err(conflict("group_file_not_selected", "Multiple candidate master group files were found; select one via /group-file/select before analyzing.".to_string())),
         None => Err(session_not_found(&request.session_id)),
     }
 }

@@ -63,6 +63,7 @@ mod group_file_confirm;
 mod group_file_upload;
 mod health;
 mod manual_file_upload;
+mod paging;
 mod process_street_settings;
 mod process_street_task_roles;
 mod resolve_unit_format;
@@ -104,14 +105,11 @@ pub(crate) fn session_not_found(session_id: &str) -> Response {
     // entirely on whether that specific handler happened to log first.
     tracing::warn!(session_id = %session_id, "session not found or expired");
 
-    (
+    error_response(
         StatusCode::NOT_FOUND,
-        Json(ApiErrorBody {
-            error: "session_not_found",
-            message: "Session not found or expired".to_string(),
-        }),
+        "session_not_found",
+        "Session not found or expired",
     )
-        .into_response()
 }
 
 /// Structured shape for every non-2xx JSON error response below —
@@ -152,17 +150,14 @@ pub(crate) fn stage_conflict(
         "stage conflict"
     );
 
-    (
+    error_response(
         StatusCode::CONFLICT,
-        Json(ApiErrorBody {
-            error: "stage_conflict",
-            message: format!(
+        "stage_conflict",
+        format!(
                 "This action requires the session to have reached the {:?} stage; it is currently at {:?}.",
                 err.required, err.current
-            ),
-        }),
+        ),
     )
-        .into_response()
 }
 
 /// Shared response shape for the common "stage-gated mutation" pattern:
@@ -185,23 +180,39 @@ pub(crate) fn respond<T: Serialize>(
     }
 }
 
+/// The one place an `{error, message}` JSON error body is built: any status,
+/// a machine-readable `error` code and a caller-facing message. The named
+/// helpers below (`bad_request`, `not_found`, `conflict`, `internal_error`)
+/// and every handler that needs another status go through it, so the error
+/// shape the frontend parses cannot drift between handlers.
+pub(crate) fn error_response(
+    status: StatusCode,
+    error: &'static str,
+    message: impl Into<String>,
+) -> Response {
+    (
+        status,
+        Json(ApiErrorBody {
+            error,
+            message: message.into(),
+        }),
+    )
+        .into_response()
+}
+
 /// Bad-request response, error code and message both supplied by the
 /// caller -- consolidates the identical
 /// `(StatusCode::BAD_REQUEST, Json(ApiErrorBody { error, message }))`
 /// literal that 14 handler files each separately defined their own copy
 /// of (2026-09-09).
 pub(crate) fn bad_request(error: &'static str, message: String) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(ApiErrorBody { error, message }),
-    )
-        .into_response()
+    error_response(StatusCode::BAD_REQUEST, error, message)
 }
 
 /// Not-found response, error code and message both supplied by the
 /// caller -- same consolidation as `bad_request` above.
 pub(crate) fn not_found(error: &'static str, message: String) -> Response {
-    (StatusCode::NOT_FOUND, Json(ApiErrorBody { error, message })).into_response()
+    error_response(StatusCode::NOT_FOUND, error, message)
 }
 
 /// Conflict response, error code and message both supplied by the
@@ -209,7 +220,7 @@ pub(crate) fn not_found(error: &'static str, message: String) -> Response {
 /// `stage_conflict`, which is specifically about a unit-group session's
 /// workflow stage.
 pub(crate) fn conflict(error: &'static str, message: String) -> Response {
-    (StatusCode::CONFLICT, Json(ApiErrorBody { error, message })).into_response()
+    error_response(StatusCode::CONFLICT, error, message)
 }
 
 /// A genuine internal failure while processing an otherwise-valid
@@ -218,40 +229,31 @@ pub(crate) fn conflict(error: &'static str, message: String) -> Response {
 /// belongs in the `tracing::error!` call the caller already makes
 /// alongside this, not in the response body.
 pub(crate) fn internal_error(context: &str) -> Response {
-    (
+    error_response(
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ApiErrorBody {
-            error: "internal_error",
-            message: format!("{context} — check server logs for details.",),
-        }),
+        "internal_error",
+        format!("{context} — check server logs for details."),
     )
-        .into_response()
 }
 
 /// 503 for any Process Street-backed endpoint when the integration has no
 /// credentials configured.
 pub(crate) fn process_street_not_configured() -> Response {
-    (
+    error_response(
         StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "process_street_not_configured",
-            message: "Process Street integration is not configured on this server.".to_string(),
-        }),
+        "process_street_not_configured",
+        "Process Street integration is not configured on this server.",
     )
-        .into_response()
 }
 
 /// 503 for any endpoint that must seal client PII when
 /// `CLIENT_PII_ENCRYPTION_KEY` is missing.
 pub(crate) fn encryption_not_configured() -> Response {
-    (
+    error_response(
         StatusCode::SERVICE_UNAVAILABLE,
-        Json(ApiErrorBody {
-            error: "encryption_not_configured",
-            message: "CLIENT_PII_ENCRYPTION_KEY is not configured on this server.".to_string(),
-        }),
+        "encryption_not_configured",
+        "CLIENT_PII_ENCRYPTION_KEY is not configured on this server.",
     )
-        .into_response()
 }
 
 /// The browser/IP pair nearly every auth handler pulls out of the request

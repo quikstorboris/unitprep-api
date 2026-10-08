@@ -1,7 +1,7 @@
 //! Admin account recovery: revokes and reissues every credential on the target account.
 
 use super::invite::CreateInviteResponse;
-use crate::api::{bad_request, conflict, internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, conflict, internal_error, not_found, AppState};
 use crate::auth::{audit_log, begin_rls_transaction, generate_token, AuthenticatedUser};
 use crate::bootstrap::invite_hours;
 use axum::extract::{ConnectInfo, Json, State};
@@ -21,14 +21,10 @@ pub struct RecoverAccountRequest {
 /// to be told plainly, same reasoning `conflict` already applies to every
 /// other refusal on this endpoint.
 pub(super) fn account_not_found(email: &str) -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(ApiErrorBody {
-            error: "account_not_found",
-            message: format!("No account found for {email}."),
-        }),
+    not_found(
+        "account_not_found",
+        format!("No account found for {email}."),
     )
-        .into_response()
 }
 
 /// Revokes every existing access path on an already-active account and

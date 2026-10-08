@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use crate::api::rls::{begin_for, try_response};
 use crate::api::{
-    internal_error, process_street_not_configured, user_agent_from, ApiErrorBody, AppState,
+    bad_request, conflict, internal_error, process_street_not_configured, user_agent_from, AppState,
 };
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
@@ -34,14 +34,10 @@ use crate::clients::intake_mapping::MappedCompany;
 const PERMISSION: &str = "client_ops.perform";
 
 fn already_imported(run_ids: Vec<String>) -> Response {
-    (
-        StatusCode::CONFLICT,
-        Json(ApiErrorBody {
-            error: "already_imported",
-            message: format!("Already in OO, not imported again: {}", run_ids.join(", ")),
-        }),
+    conflict(
+        "already_imported",
+        format!("Already in OO, not imported again: {}", run_ids.join(", ")),
     )
-        .into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -102,14 +98,10 @@ pub async fn create_client(
 
     let company_intake_run_id = request.company_intake_run_id.trim();
     if company_intake_run_id.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "invalid_request",
-                message: "company_intake_run_id is required.".to_string(),
-            }),
-        )
-            .into_response();
+        return bad_request(
+            "invalid_request",
+            "company_intake_run_id is required.".to_string(),
+        );
     }
 
     let Some(client) = state.process_street.clone() else {

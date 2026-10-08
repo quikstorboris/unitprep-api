@@ -3,14 +3,13 @@ use std::collections::HashSet;
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::response::Response;
 use axum_extra::extract::cookie::CookieJar;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::api::{ApiErrorBody, AppState};
+use crate::api::{error_response, AppState};
 use crate::auth::audit_log;
 
 use super::{hash_token, read_session_cookie};
@@ -357,28 +356,22 @@ pub async fn try_authenticated_user(
 }
 
 fn unauthorized() -> Response {
-    (
+    error_response(
         StatusCode::UNAUTHORIZED,
-        Json(ApiErrorBody {
-            error: "unauthorized",
-            message: "Sign in required".to_string(),
-        }),
+        "unauthorized",
+        "Sign in required".to_string(),
     )
-        .into_response()
 }
 
 /// Shared with any handler gating part of itself behind
 /// `AuthenticatedUser::is_elevated` -- e.g. `register_begin`'s
 /// authenticated add-a-passkey branch (see auth_register.rs).
 pub fn step_up_required() -> Response {
-    (
+    error_response(
         StatusCode::FORBIDDEN,
-        Json(ApiErrorBody {
-            error: "step_up_required",
-            message: "Enter your authenticator app code to confirm this action.".to_string(),
-        }),
+        "step_up_required",
+        "Enter your authenticator app code to confirm this action.".to_string(),
     )
-        .into_response()
 }
 
 /// Shared 403 for an authenticated caller whose permissions do not permit
@@ -387,25 +380,19 @@ pub fn step_up_required() -> Response {
 /// single shared response, not a per-handler one, so the body stays
 /// consistent across every place this can happen.
 pub fn insufficient_role() -> Response {
-    (
+    error_response(
         StatusCode::FORBIDDEN,
-        Json(ApiErrorBody {
-            error: "insufficient_role",
-            message: "Your role does not permit this action.".to_string(),
-        }),
+        "insufficient_role",
+        "Your role does not permit this action.".to_string(),
     )
-        .into_response()
 }
 
 fn internal_error() -> Response {
-    (
+    error_response(
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(ApiErrorBody {
-            error: "internal_error",
-            message: "Failed to verify session -- check server logs for details.".to_string(),
-        }),
+        "internal_error",
+        "Failed to verify session -- check server logs for details.".to_string(),
     )
-        .into_response()
 }
 
 /// Begins a transaction and sets the per-request RLS GUCs on it via

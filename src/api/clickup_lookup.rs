@@ -13,7 +13,6 @@
 
 use axum::{
     extract::{Json, Path, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -21,7 +20,7 @@ use uuid::Uuid;
 
 use crate::api::clickup_connection::{clickup_client, clickup_failure_response, load_user_token};
 use crate::api::rls::{begin_for, try_response};
-use crate::api::{bad_request, internal_error, not_found, ApiErrorBody, AppState};
+use crate::api::{bad_request, internal_error, not_found, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clickup::assignment::assign_unique;
 use crate::clickup::hierarchy::{self, Hierarchy, HierarchyError};
@@ -334,14 +333,11 @@ pub(crate) async fn verify_list(
     };
 
     if detail.space_id.as_deref() != Some(hierarchy.space_id.as_str()) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "clickup_list_outside_onboarding_space",
-                message: "That list is not in the QMS Onboarding space. Only onboarding lists can be linked.".to_string(),
-            }),
-        )
-            .into_response());
+        return Err(bad_request(
+            "clickup_list_outside_onboarding_space",
+            "That list is not in the QMS Onboarding space. Only onboarding lists can be linked."
+                .to_string(),
+        ));
     }
 
     Ok(ListOption {

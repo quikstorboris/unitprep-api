@@ -6,6 +6,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.103] - 2026-10-08
+
+Efficiency refactor chunks D2b and D2c: one place builds error responses, one place clamps list limits. No behaviour change.
+
+### Changed
+- `api::error_response(status, code, message)` is now the only place that builds the `{error, message}` JSON error body; `bad_request`, `not_found`, `conflict`, `internal_error`, `session_not_found`, `stage_conflict`, the two "not configured" 503s, the rate-limit 429 and the body-rejection mapper all go through it. 74 hand-written `(StatusCode::X, Json(ApiErrorBody { .. })).into_response()` literals in 32 files became calls to the named helper for their status (`bad_request` 42, `conflict` 8, `not_found` 4) or to `error_response` (the other statuses). `ApiErrorBody` is now constructed in exactly one function. Handlers keep returning `Response` (hundreds of tests call them directly and read `.status()`), so this is a helper, not a `Result<_, ApiError>` return type.
+- `api::paging::clamp_limit(requested, default, max)` replaces the three copies of `limit.unwrap_or(DEFAULT).clamp(1, MAX)` in the audit-log, activity-log and tool-run lists, with four unit tests.
+
 ## [1.9.102] - 2026-10-08
 
 Efficiency refactor chunk D2a: opening the caller's RLS transaction is one line. No behaviour change.

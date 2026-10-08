@@ -1,11 +1,10 @@
 use axum::extract::{Json, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
 use crate::api::blocking::with_owned_session_mut_blocking;
 use crate::api::{
-    discover::compute_discovery, session_not_found, stage_conflict, ApiErrorBody, AppState,
+    bad_request, discover::compute_discovery, session_not_found, stage_conflict, AppState,
 };
 use crate::application::unit_group_session::{StageError, WorkflowStage};
 use crate::auth::AuthenticatedUser;
@@ -119,23 +118,9 @@ pub async fn confirm_group_file(
 
         Some(Err(ConfirmNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
 
-        Some(Err(ConfirmNotReady::NoFileSelected)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "no_group_file_selected",
-                message: "No master group file has been selected yet — call /group-file/upload first.".to_string(),
-            }),
-        )
-            .into_response(),
+        Some(Err(ConfirmNotReady::NoFileSelected)) => bad_request("no_group_file_selected", "No master group file has been selected yet — call /group-file/upload first.".to_string()),
 
-        Some(Err(ConfirmNotReady::InvalidFormat)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "group_file_format_invalid",
-                message: "The selected file doesn't have the required columns (Name/Description/Active, or the full Name/Description/Assigned To/Status/Last Updated set) — select a different file.".to_string(),
-            }),
-        )
-            .into_response(),
+        Some(Err(ConfirmNotReady::InvalidFormat)) => bad_request("group_file_format_invalid", "The selected file doesn't have the required columns (Name/Description/Active, or the full Name/Description/Assigned To/Status/Last Updated set) — select a different file.".to_string()),
 
         None => session_not_found(&request.session_id),
     }

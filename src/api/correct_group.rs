@@ -1,6 +1,5 @@
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use serde::Deserialize;
@@ -8,7 +7,7 @@ use serde::Deserialize;
 use unitprep_core::session_store::SessionStoreExt;
 
 use crate::api::{
-    session_not_found, stage_conflict, validate::run_validation, ApiErrorBody, AppState,
+    bad_request, session_not_found, stage_conflict, validate::run_validation, AppState,
 };
 use crate::application::unit_group_session::StageError;
 use crate::auth::AuthenticatedUser;
@@ -198,15 +197,10 @@ pub async fn correct_group(
 
         Some(Err(CorrectGroupNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
 
-        Some(Err(CorrectGroupNotReady::UnknownGroup)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "unknown_group",
-                message: "No unit in the selected files currently has that UnitGroup value."
-                    .to_string(),
-            }),
-        )
-            .into_response(),
+        Some(Err(CorrectGroupNotReady::UnknownGroup)) => bad_request(
+            "unknown_group",
+            "No unit in the selected files currently has that UnitGroup value.".to_string(),
+        ),
 
         None => session_not_found(&request.session_id),
     }

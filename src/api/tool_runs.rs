@@ -29,6 +29,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::paging::clamp_limit;
 use crate::api::rls::{begin_for, try_response};
 use crate::api::session_io::attachment_response;
 use crate::api::{internal_error, not_found, user_agent_from, AppState};
@@ -170,7 +171,7 @@ pub async fn list_facility_tool_runs(
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Query(query): Query<ListToolRunsQuery>,
 ) -> Response {
-    let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
+    let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
 
     let mut tx = try_response!(
         begin_for(

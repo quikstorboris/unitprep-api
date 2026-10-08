@@ -7,7 +7,7 @@ use super::views::{
 };
 use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root, parent_folder};
 use crate::api::rls::{begin_for, try_response};
-use crate::api::{internal_error, ApiErrorBody, AppState};
+use crate::api::{bad_request, error_response, internal_error, AppState};
 use crate::application::tagger_session_service::TaggerSessionService;
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::tool_runs;
@@ -36,25 +36,11 @@ pub async fn check(
     let file = match first_uploaded_file(&mut multipart).await {
         Ok(Some(file)) => file,
         Ok(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "no_file_uploaded",
-                    message: "No file was uploaded".to_string(),
-                }),
-            )
-                .into_response();
+            return bad_request("no_file_uploaded", "No file was uploaded".to_string());
         }
         Err(err) => {
             tracing::error!(error = %err, "Multipart parser error during tagger check");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "multipart_error",
-                    message: err.to_string(),
-                }),
-            )
-                .into_response();
+            return bad_request("multipart_error", err.to_string());
         }
     };
 
@@ -126,14 +112,10 @@ pub(super) async fn recognize_and_create_session(
         Ok(doc) => doc,
         Err(err) => {
             tracing::warn!(file = %file.file_name, error = ?err, "Tagger check failed to read .docx");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ApiErrorBody {
-                    error: "invalid_docx",
-                    message: "Could not read this file as a .docx".to_string(),
-                }),
-            )
-                .into_response();
+            return bad_request(
+                "invalid_docx",
+                "Could not read this file as a .docx".to_string(),
+            );
         }
     };
 
@@ -160,19 +142,16 @@ pub(super) async fn recognize_and_create_session(
             candidate_count = candidates.len(),
             "Tagger check rejected -- candidate count exceeds MAX_CANDIDATES"
         );
-        return (
+        return error_response(
             StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ApiErrorBody {
-                error: "too_many_candidates",
-                message: format!(
-                    "This document has too many potential matches to review ({} found, {} max). \
+            "too_many_candidates",
+            format!(
+                "This document has too many potential matches to review ({} found, {} max). \
                      It may not be a template intended for tagging.",
-                    candidates.len(),
-                    MAX_CANDIDATES
-                ),
-            }),
-        )
-            .into_response();
+                candidates.len(),
+                MAX_CANDIDATES
+            ),
+        );
     }
 
     let candidate_views = build_candidate_views(&doc, &candidates);

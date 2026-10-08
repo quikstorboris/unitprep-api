@@ -5,8 +5,8 @@ use axum::{
     extract::Request,
     http::{header, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
-    Json, Router,
+    response::Response,
+    Router,
 };
 
 use tower_governor::GovernorError;
@@ -17,7 +17,7 @@ use tower_http::request_id::{
 };
 use tower_http::trace::TraceLayer;
 
-use super::{internal_error, ApiErrorBody, AppState};
+use super::{error_response, internal_error, AppState};
 
 /// The full route table (every path, paired with the `RouteAccess` that
 /// authorizes it) -- split out on its own, see that file's own module doc
@@ -199,14 +199,11 @@ fn with_response_layers(router: Router) -> Router {
 fn rate_limit_exceeded(error: GovernorError) -> Response {
     match error {
         GovernorError::TooManyRequests { wait_time, headers } => {
-            let mut response = (
+            let mut response = error_response(
                 StatusCode::TOO_MANY_REQUESTS,
-                Json(ApiErrorBody {
-                    error: "rate_limited",
-                    message: format!("Too many requests. Try again in {wait_time} second(s)."),
-                }),
-            )
-                .into_response();
+                "rate_limited",
+                format!("Too many requests. Try again in {wait_time} second(s)."),
+            );
 
             if let Some(headers) = headers {
                 response.headers_mut().extend(headers);
@@ -308,7 +305,7 @@ async fn normalize_extraction_rejection_body(request: Request, next: Next) -> Re
         _ => "invalid_request_body",
     };
 
-    (parts.status, Json(ApiErrorBody { error, message })).into_response()
+    error_response(parts.status, error, message)
 }
 
 /// Turns a caught handler panic into a logged event plus the project's

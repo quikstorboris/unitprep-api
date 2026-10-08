@@ -1,11 +1,10 @@
 use axum::extract::{Json, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
 use crate::api::blocking::with_owned_session_mut_blocking;
 use crate::api::{
-    discover::compute_discovery, session_not_found, stage_conflict, ApiErrorBody, AppState,
+    bad_request, discover::compute_discovery, session_not_found, stage_conflict, AppState,
 };
 use crate::application::unit_group_session::{StageError, WorkflowStage};
 use crate::auth::AuthenticatedUser;
@@ -108,14 +107,7 @@ pub async fn select_group_file(
 
         Some(Err(SelectNotReady::Stage(err))) => stage_conflict(&request.session_id, err),
 
-        Some(Err(SelectNotReady::UnknownCandidate)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "unknown_group_file_candidate",
-                message: "That file isn't one of the auto-discovered master group file candidates for this session.".to_string(),
-            }),
-        )
-            .into_response(),
+        Some(Err(SelectNotReady::UnknownCandidate)) => bad_request("unknown_group_file_candidate", "That file isn't one of the auto-discovered master group file candidates for this session.".to_string()),
 
         None => session_not_found(&request.session_id),
     }

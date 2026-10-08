@@ -19,12 +19,12 @@
 //!
 //! No files are written to disk.
 
+use crate::api::bad_request;
 use crate::api::session_io::{attachment_response, SaveLocationResponse};
 use std::time::Instant;
 
 use axum::{
     extract::{Json, State},
-    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use chrono::Utc;
@@ -35,7 +35,7 @@ use unitprep_core::session_store::SessionStoreExt;
 use crate::api::blocking::run_blocking;
 use crate::{
     api::dropbox_browse::{ensure_path_in_root, parent_folder},
-    api::{internal_error, session_not_found, stage_conflict, ApiErrorBody, AppState},
+    api::{internal_error, session_not_found, stage_conflict, AppState},
     application::unit_group_session::WorkflowStage,
     auth::AuthenticatedUser,
     client_ops::{audit_log, tool_runs},
@@ -131,14 +131,10 @@ async fn generate_export_zip(
             "Export blocked by validation failures"
         );
 
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "validation_unresolved",
-                message: "Validation issues must be resolved before export".to_string(),
-            }),
-        )
-            .into_response());
+        return Err(bad_request(
+            "validation_unresolved",
+            "Validation issues must be resolved before export".to_string(),
+        ));
     }
 
     let has_exportable_content = !analysis.batch_run.facilities.is_empty()
@@ -152,14 +148,10 @@ async fn generate_export_zip(
             "Export attempted with no exportable data"
         );
 
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ApiErrorBody {
-                error: "no_exportable_data",
-                message: "No exportable data available".to_string(),
-            }),
-        )
-            .into_response());
+        return Err(bad_request(
+            "no_exportable_data",
+            "No exportable data available".to_string(),
+        ));
     }
 
     // Rendering the CSVs and zipping them is CPU-bound: off the async
