@@ -17,7 +17,8 @@ use super::{bad_request, count_and_delete_existing, ensure_facility_and_policies
 const TAX_TYPES: &[&str] = &["fixed", "marginal", "percentage"];
 const TAX_NAMES: &[&str] = &["sales", "rental"];
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct TaxEntryInput {
     pub tax_type: String,
     pub tax_name: String,

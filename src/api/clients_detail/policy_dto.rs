@@ -2,7 +2,8 @@
 
 use serde::Serialize;
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct FeeRow {
     pub fee_type: String,
     pub label: Option<String>,
@@ -14,7 +15,8 @@ pub struct FeeRow {
 /// dropped: Highway 20 Self Storage has one real row here, and turning
 /// its prose into the new structured fields needs a human, not a
 /// migration. Still returned so that history isn't simply hidden.
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct TaxesRow {
     pub sales_tax_applies_raw: Option<String>,
     pub sales_tax_rate_raw: Option<String>,
@@ -30,7 +32,8 @@ pub struct TaxesRow {
 /// below. Highway 20 Self Storage has 9 real rows here (one of which
 /// names two separate fees in the same free-text value) -- kept
 /// visible as history, not migrated automatically.
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct DelinquencyStepRow {
     pub step_order: i32,
     pub step_type: String,
@@ -42,8 +45,10 @@ pub struct DelinquencyStepRow {
 /// `clients_elavon`/`clients_detail`'s own `ownership_percent::float8`
 /// already uses) -- avoids adding sqlx's `bigdecimal`/`rust_decimal`
 /// feature just for two fields.
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct TaxEntryRow {
+    #[ts(type = "number")]
     pub id: i64,
     pub tax_type: String,
     pub tax_name: String,
@@ -54,8 +59,10 @@ pub struct TaxEntryRow {
     pub sort_order: i32,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct DelinquencyEntryRow {
+    #[ts(type = "number")]
     pub id: i64,
     pub category: String,
     pub name: String,
@@ -66,21 +73,24 @@ pub struct DelinquencyEntryRow {
     pub sort_order: i32,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct CoverageTierRow {
     pub tier_number: i32,
     pub total_coverage_amount_raw: Option<String>,
     pub cost_to_tenant_raw: Option<String>,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct CommissionRow {
     pub commission_type_raw: Option<String>,
     pub dollar_amount_raw: Option<String>,
     pub percent_amount_raw: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct FacilityPoliciesResponse {
     pub fees: Vec<FeeRow>,
     /// Legacy free-text -- see `TaxesRow`'s own doc comment.

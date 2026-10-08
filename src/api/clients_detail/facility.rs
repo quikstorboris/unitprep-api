@@ -10,7 +10,8 @@ use chrono::NaiveDate;
 use serde::Serialize;
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct FacilityDetailResponse {
     pub id: Uuid,
     pub company_id: Uuid,

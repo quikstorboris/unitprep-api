@@ -6,6 +6,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.113] - 2026-10-08
+
+Efficiency refactor chunk F7d (api side): the facility and policy response types are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.
+
+### Added
+- `ts_rs::TS` + `#[ts(export)]` on `FacilityDetailResponse` and on the policy types `FeeRow`, `TaxesRow`, `DelinquencyStepRow`, `TaxEntryRow`, `DelinquencyEntryRow`, `CoverageTierRow`, `CommissionRow`, `FacilityPoliciesResponse` (`api/clients_detail`) and the two inputs the UI re-uses as types, `TaxEntryInput` and `DelinquencyEntryInput` (`api/clients_facility_policies_edit`). `scripts/check_ts_bindings.sh` now covers 53 files. The `i64` row ids carry `#[ts(type = "number")]` (ts-rs would otherwise type them `bigint`; they are small JSON numbers).
+- The workspace `ts-rs` dependency enables the `uuid-impl` and `chrono-impl` features, so `Uuid` and chrono dates export as `string` (their JSON form) without a per-field override -- needed by every remaining domain (company, directory, search, import, settings). No new crates; `Cargo.lock` gains two dependency edges.
+
 ## [1.9.112] - 2026-10-08
 
 Refactor chunk G1b (operational logging and audit gaps). No migration; no change to any JSON.

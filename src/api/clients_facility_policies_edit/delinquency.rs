@@ -19,7 +19,8 @@ const STEP_TYPES: &[&str] = &[
 ];
 const TRIGGER_TYPES: &[&str] = &["paid_through_date", "step_category"];
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DelinquencyEntryInput {
     pub category: String,
     pub name: String,
