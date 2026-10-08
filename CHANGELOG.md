@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.108] - 2026-10-08
+
+Dev tooling only: the `api-dev` watcher no longer writes TypeScript bindings into the bind-mounted checkout. No change to the service.
+
+### Fixed
+- `docker-compose.yml`: `api-dev` sets `TS_RS_EXPORT_DIR=/tmp/ts-bindings`. The container runs its test watcher as root, and ts-rs writes `export_bindings_*` output as a side effect of those tests; at the default (`./bindings` per crate) that created root-owned files and directories in the host's checkout, after which any host-side `cargo test` or `scripts/preflight.sh` failed every `export_bindings_*` test with `PermissionDenied`. Host runs are unaffected, and `npm run generate-types` / `scripts/check_ts_bindings.sh` keep passing their own `TS_RS_EXPORT_DIR`, so nothing about how bindings reach `unitprep-ui` changes. Takes effect when the container is recreated (`docker compose --profile dev up -d api-dev`).
+
 ## [1.9.107] - 2026-10-08
 
 Efficiency refactor chunk F7a (api side): the dedup report views are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.

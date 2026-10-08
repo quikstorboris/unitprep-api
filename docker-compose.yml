@@ -107,6 +107,18 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       PORT: "8080"
+      # ts-rs writes TypeScript bindings as a side effect of the
+      # `export_bindings_*` tests this container's watch loop runs on every
+      # save. Left at its default (`./bindings` inside each crate), that
+      # output lands in the BIND-MOUNTED checkout owned by root (this
+      # container runs as root), and the next host-side `cargo test` /
+      # `scripts/preflight.sh` then fails every `export_bindings_*` test
+      # with `PermissionDenied` -- which looks like a code bug and is not.
+      # Pointing it at container-local /tmp keeps the watcher's output off
+      # the host entirely. Host runs are unaffected, and the explicit
+      # overrides in `npm run generate-types` / `scripts/check_ts_bindings.sh`
+      # (their own env) are the only way bindings reach unitprep-ui.
+      TS_RS_EXPORT_DIR: "/tmp/ts-bindings"
       # Defaults to just http://localhost:3000/:5173 (see
       # allowed_origins() in src/api/router/mod.rs) -- unitprep-ui's own
       # dev container runs on host port 3001, not 3000, because this
