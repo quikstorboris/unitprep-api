@@ -2,7 +2,8 @@
 
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ElavonPartyInfo {
     pub party_role: String,
     pub display_name: Option<String>,
@@ -31,7 +32,8 @@ pub struct ElavonPartyInfo {
 /// before this field existed) or its decryption fails -- degrades this
 /// one section rather than the whole tab, same pattern `ElavonPartyInfo`
 /// already uses for a party's PII.
-#[derive(Debug, Serialize, Default)]
+#[derive(Debug, Serialize, Default, ts_rs::TS)]
+#[ts(export)]
 pub struct ElavonFinancials {
     pub ein: Option<String>,
     pub bank_routing_number_masked: Option<String>,
@@ -47,7 +49,8 @@ pub struct ElavonFinancials {
     pub maximum_electronic_check_amount_raw: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ElavonCandidate {
     pub merchant_account_run_id: String,
     pub run_name: String,
@@ -68,7 +71,8 @@ pub(super) const QMS_WEB_USER_ID: &str = "QSSWEB";
 /// `user_id` is `QMS_WEB_USER_ID` above). `pin_password` is the real
 /// decrypted value -- same "revealable on demand" convention
 /// `ElavonPartyInfo.ssn` already uses, masking is a frontend concern.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ElavonQmsCredentials {
     pub account_id: Option<String>,
     pub user_id: &'static str,
@@ -89,7 +93,8 @@ impl ElavonQmsCredentials {
 /// actually got a pin pad (per the same PS ticket's own "If customer got
 /// a Pin Pad" conditional); `None`/`None` throughout otherwise, same as
 /// every other not-answered field in this tab.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ElavonPinpadCredentials {
     pub pinpad_user_id: Option<String>,
     pub qss_api_pin: Option<String>,
@@ -104,8 +109,9 @@ impl ElavonPinpadCredentials {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
 #[serde(tag = "status", rename_all = "snake_case")]
+#[ts(export)]
 pub enum ElavonStatusResponse {
     Linked {
         rate_provided: Option<String>,

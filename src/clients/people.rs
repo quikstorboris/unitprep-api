@@ -69,7 +69,8 @@ pub struct ParsedPerson {
 /// table's own `full_name`/`email`/`phone`/`role` columns match this
 /// struct's fields by name) -- the `sqlx::FromRow` derive is for that
 /// query, not for anything Intake-mapping related.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct PersonAssignment {
     pub full_name: String,
     pub email: Option<String>,

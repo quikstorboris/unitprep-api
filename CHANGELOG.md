@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.114] - 2026-10-08
+
+Efficiency refactor chunk F7e (api side): the company-detail, facility-people and Elavon response types are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.
+
+### Added
+- `ts_rs::TS` + `#[ts(export)]` on `CompanyDetailResponse`, `FacilitySummary`, `OwnerInfo`, `ClickUpParentChange` (`api/clients_detail/company/dto.rs`); `FacilityPeopleResponse`, `FacilityPerson`, `LegalOwnerSource`, `MissingLegalOwner` (`api/clients_facility_people/dto.rs`) and `PersonAssignment` (`clients/people.rs`); and `ElavonStatusResponse` (the `status`-tagged enum), `ElavonPartyInfo`, `ElavonFinancials`, `ElavonCandidate`, `ElavonQmsCredentials`, `ElavonPinpadCredentials` (`api/clients_elavon/dto.rs`). `scripts/check_ts_bindings.sh` now covers 68 files. The generated shapes matched the hand-written UI types exactly.
+
 ## [1.9.113] - 2026-10-08
 
 Efficiency refactor chunk F7d (api side): the facility and policy response types are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.

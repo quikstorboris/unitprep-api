@@ -4,7 +4,8 @@ use crate::clients::people::PersonAssignment;
 use serde::Serialize;
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct FacilityPerson {
     pub person_id: Uuid,
     pub full_name: String,
@@ -22,7 +23,8 @@ pub struct FacilityPerson {
     pub legal_owner: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct FacilityPeopleResponse {
     pub roster: Vec<FacilityPerson>,
     pub candidates: Vec<PersonAssignment>,
@@ -41,7 +43,8 @@ pub struct FacilityPeopleResponse {
 
 /// The sister facility whose Merchant Account form supplied the owners
 /// when this facility has none of its own.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct LegalOwnerSource {
     pub facility_id: Uuid,
     pub facility_name: String,
@@ -51,7 +54,8 @@ pub struct LegalOwnerSource {
 /// `role` is deliberately absent (unlike `PersonAssignment`): a
 /// Merchant Account owner has no QMS access level of their own, so the
 /// frontend defaults one (`"owner"`) only when actually adding them.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct MissingLegalOwner {
     pub full_name: String,
     pub email: Option<String>,

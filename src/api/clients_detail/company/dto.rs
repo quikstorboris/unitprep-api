@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct FacilitySummary {
     pub id: Uuid,
     pub name: String,
@@ -26,7 +27,8 @@ pub struct FacilitySummary {
 /// One designation of the company's ClickUp parent facility, newest
 /// last. Names are snapshots taken at the time, so the history still
 /// reads correctly after a facility is renamed or deleted.
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct ClickUpParentChange {
     pub from_facility_id: Option<Uuid>,
     pub from_facility_name: Option<String>,
@@ -36,7 +38,8 @@ pub struct ClickUpParentChange {
     pub changed_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct OwnerInfo {
     pub facility_id: Uuid,
     pub facility_name: String,
@@ -57,7 +60,8 @@ pub struct OwnerInfo {
     pub home_postal_code: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct CompanyDetailResponse {
     pub id: Uuid,
     pub legal_name: String,
