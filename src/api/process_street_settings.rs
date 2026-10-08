@@ -34,6 +34,7 @@
 //! Process Street access is actually running on. See that module's own
 //! doc comment for the fuller reasoning; not repeated here.
 
+use axum::extract::ConnectInfo;
 use axum::{
     extract::{Json, State},
     http::HeaderMap,
@@ -41,10 +42,11 @@ use axum::{
 };
 use chrono::{DateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::api::rls::{begin_for, try_response};
-use crate::api::{bad_request, internal_error, user_agent_from, AppState};
+use crate::api::{bad_request, internal_error, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::integrations::config_source::ConfigSource;
 use crate::integrations::secrets;
@@ -206,10 +208,11 @@ pub struct UpdateProcessStreetSettingsRequest {
 pub async fn update_settings(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(request): Json<UpdateProcessStreetSettingsRequest>,
 ) -> Response {
-    let user_agent = user_agent_from(&headers);
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     try_response!(
         user.require_permission(
@@ -217,7 +220,7 @@ pub async fn update_settings(
             PERMISSION,
             "update_process_street_settings",
             user_agent,
-            None,
+            ip_address,
         )
         .await
     );
@@ -344,6 +347,23 @@ pub async fn update_settings(
         return internal_error("Could not update Process Street settings");
     }
 
+    // After the commit, and never carrying the key: only THAT it was replaced.
+    crate::api::integration_settings_audit::record_settings_updated(
+        &state.db,
+        user.user_id,
+        user_agent,
+        ip_address,
+        "process_street",
+        serde_json::json!({
+            "api_key_replaced": true,
+            "schedule_mode": schedule_mode,
+            "sync_interval_hours": request.sync_interval_hours,
+            "sync_time": sync_time.map(|time| time.format("%H:%M:%S").to_string()),
+            "sync_timezone": sync_timezone,
+        }),
+    )
+    .await;
+
     tracing::info!(
         user_id = %user.user_id,
         sync_interval_hours = request.sync_interval_hours,
@@ -390,6 +410,7 @@ mod tests {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             test_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Json(valid_request()),
         )
@@ -429,6 +450,7 @@ mod tests {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             admin_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Json(request),
         )
@@ -445,6 +467,7 @@ mod tests {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             admin_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Json(request),
         )
@@ -461,6 +484,7 @@ mod tests {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             admin_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Json(request),
         )
@@ -477,6 +501,7 @@ mod tests {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             admin_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Json(request),
         )
@@ -493,6 +518,7 @@ mod tests {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             admin_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Json(request),
         )
@@ -509,6 +535,7 @@ mod tests {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             admin_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Json(request),
         )
@@ -527,6 +554,7 @@ mod tests {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             admin_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Json(valid_daily_time_request()),
         )
@@ -543,6 +571,7 @@ mod tests {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             admin_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Json(request),
         )

@@ -827,6 +827,7 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
             Box::pin(process_street_settings::update_settings(
                 axum::extract::State(empty_state()),
                 test_user(),
+                local_addr(),
                 HeaderMap::new(),
                 Json(
                     process_street_settings::UpdateProcessStreetSettingsRequest {
@@ -856,6 +857,7 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                 Box::pin(process_street_task_roles::update_task_role(
                     axum::extract::State(empty_state()),
                     test_user(),
+                    local_addr(),
                     HeaderMap::new(),
                     axum::extract::Path("qms_credentials".to_string()),
                     Json(process_street_task_roles::UpdateTaskRoleRequest {
@@ -874,6 +876,7 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
             Box::pin(dropbox_settings::update_settings(
                 axum::extract::State(empty_state()),
                 test_user(),
+                local_addr(),
                 HeaderMap::new(),
                 Json(dropbox_settings::UpdateDropboxSettingsRequest {
                     app_key: "key".to_string(),

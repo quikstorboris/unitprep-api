@@ -5,11 +5,12 @@
 //! them. The mapping is a shared singleton, so each test restores the
 //! seeded names before it finishes.
 
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use serde_json::Value;
 use sqlx::PgPool;
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 use super::clickup_db_tests::{body_json, caller, create_user, superuser_pool};
@@ -31,6 +32,7 @@ async fn put(state: &AppState, admin: Uuid, names: &[&str], role: &str) -> (Stat
     let response = process_street_task_roles::update_task_role(
         State(state.clone()),
         caller(admin, &["admin"], &["integrations.manage"]),
+        ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
         HeaderMap::new(),
         Path(role.to_string()),
         Json(UpdateTaskRoleRequest {
@@ -165,6 +167,7 @@ async fn task_roles_db_only_an_admin_can_write_the_mapping() {
     let response = process_street_task_roles::update_task_role(
         State(state),
         caller(manager, &["onboarding_manager"], &["integrations.manage"]),
+        ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
         HeaderMap::new(),
         Path(ROLE.to_string()),
         Json(UpdateTaskRoleRequest {

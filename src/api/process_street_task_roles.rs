@@ -10,15 +10,17 @@
 //! idempotent). Both are admin-only (`integrations.manage`), like the
 //! rest of the Process Street settings.
 
+use axum::extract::ConnectInfo;
 use axum::{
     extract::{Json, Path, State},
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 
 use crate::api::rls::{begin_for, try_response};
-use crate::api::{bad_request, internal_error, not_found, user_agent_from, AppState};
+use crate::api::{bad_request, internal_error, not_found, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::clients::ps_task_roles::{self, KNOWN_ROLES};
 
@@ -145,11 +147,12 @@ fn normalize_names(raw: &[String]) -> Vec<String> {
 pub async fn update_task_role(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Path(role): Path<String>,
     Json(request): Json<UpdateTaskRoleRequest>,
 ) -> Response {
-    let user_agent = user_agent_from(&headers);
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     try_response!(
         user.require_permission(
@@ -157,7 +160,7 @@ pub async fn update_task_role(
             PERMISSION,
             "update_process_street_task_role",
             user_agent,
-            None,
+            ip_address,
         )
         .await
     );
@@ -249,6 +252,16 @@ pub async fn update_task_role(
         return internal_error("Could not update the Process Street task mapping");
     }
 
+    crate::api::integration_settings_audit::record_settings_updated(
+        &state.db,
+        user.user_id,
+        user_agent,
+        ip_address,
+        "process_street_task_roles",
+        serde_json::json!({ "role": known.key, "task_names": names }),
+    )
+    .await;
+
     tracing::info!(user_id = %user.user_id, role = known.key, names = ?names, "Process Street task role updated");
     Json(response).into_response()
 }
@@ -285,6 +298,7 @@ mod tests {
         let response = update_task_role(
             State(empty_state()),
             test_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Path("qms_credentials".to_string()),
             Json(UpdateTaskRoleRequest {

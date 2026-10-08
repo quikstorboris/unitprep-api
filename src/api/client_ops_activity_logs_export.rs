@@ -357,6 +357,30 @@ pub async fn export_activity_logs(
 
     let response_headers = attachment_headers("application/pdf", &filename);
 
+    // Reading the trail out in bulk is itself on the record (the same
+    // reasoning as the security log's own export). Filters and counts
+    // only -- never the exported rows.
+    crate::client_ops::audit_log::record(
+        &state.db,
+        crate::client_ops::audit_log::event::ACTIVITY_LOG_EXPORTED,
+        user.user_id,
+        "activity_log",
+        None,
+        crate::client_ops::audit_log::Change::none(),
+        user_agent,
+        ip_address,
+        serde_json::json!({
+            "date_from": request.date_from,
+            "date_to": request.date_to,
+            "event_types": request.event_types,
+            "entity_types": request.entity_types,
+            "actor_user_ids": request.actor_user_ids,
+            "row_count": row_count,
+            "truncated": truncated,
+        }),
+    )
+    .await;
+
     tracing::info!(
         user_id = %user.user_id,
         row_count,

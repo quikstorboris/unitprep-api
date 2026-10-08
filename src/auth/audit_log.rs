@@ -227,6 +227,17 @@ pub mod event {
     /// integration.
     pub const INTEGRATION_DISCONNECTED: &str = "integration_disconnected";
 
+    /// An administrator changed an org-wide integration setting
+    /// (`api::dropbox_settings`, `api::process_street_settings`,
+    /// `api::process_street_task_roles`) -- the shared Dropbox
+    /// credentials, the Process Street API key and sync schedule, or a
+    /// Process Street task-role mapping. Distinct from
+    /// `INTEGRATION_CONNECTED`, which is one user's own personal
+    /// credential. `metadata.integration` names which one and
+    /// `metadata.details` what was set; it NEVER carries a secret value
+    /// (only that a secret was replaced).
+    pub const INTEGRATION_SETTINGS_UPDATED: &str = "integration_settings_updated";
+
     /// Every event type that exists, for the admin audit-log viewer's
     /// "which events" filter -- served over `GET /auth/audit-logs/event-types`
     /// rather than hand-duplicated into the frontend, so the two cannot
@@ -265,6 +276,7 @@ pub mod event {
         PERMISSION_REVOKED,
         INTEGRATION_CONNECTED,
         INTEGRATION_DISCONNECTED,
+        INTEGRATION_SETTINGS_UPDATED,
     ];
 
     #[cfg(test)]

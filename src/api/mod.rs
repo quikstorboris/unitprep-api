@@ -62,6 +62,7 @@ mod export;
 mod group_file_confirm;
 mod group_file_upload;
 mod health;
+mod integration_settings_audit;
 mod manual_file_upload;
 mod paging;
 mod process_street_settings;
@@ -327,6 +328,9 @@ mod auth_register_db_tests;
 #[path = "clients_implementation_status_db_tests.rs"]
 mod clients_implementation_status_db_tests;
 
+#[cfg(test)]
+#[path = "integration_settings_audit_db_tests.rs"]
+mod integration_settings_audit_db_tests;
 #[cfg(test)]
 #[path = "process_street_task_roles_db_tests.rs"]
 mod process_street_task_roles_db_tests;

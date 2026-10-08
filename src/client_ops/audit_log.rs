@@ -168,6 +168,13 @@ pub mod event {
     /// Create screen's checkbox).
     pub const CLIENT_CLICKUP_WAIVER_CHANGED: &str = "client_clickup_waiver_changed";
 
+    /// Someone exported the activity log as a PDF
+    /// (`api::client_ops_activity_logs_export::export_activity_logs`) --
+    /// the counterpart of `auth::audit_log::event::AUDIT_LOG_EXPORTED`, so
+    /// reading this trail out in bulk is itself on the record. `metadata`
+    /// carries the filters used and the row count returned.
+    pub const ACTIVITY_LOG_EXPORTED: &str = "activity_log_exported";
+
     /// Every event type this module writes, for the Activity Logs admin
     /// filter dropdown -- mirrors `auth::audit_log::event::ALL`'s own
     /// reasoning: straight from this list, so the frontend can never
@@ -207,6 +214,7 @@ pub mod event {
         FACILITY_INTAKE_RELINKED,
         CLIENT_CLICKUP_PARENT_CHANGED,
         CLIENT_CLICKUP_WAIVER_CHANGED,
+        ACTIVITY_LOG_EXPORTED,
     ];
 }
 

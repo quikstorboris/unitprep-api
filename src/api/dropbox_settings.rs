@@ -22,6 +22,7 @@
 //! from_db`/`from_env` would resolve to at startup -- so the page always
 //! reflects what Dropbox access is actually running on. `source` tells
 //! the frontend which of the two it's looking at.
+use axum::extract::ConnectInfo;
 use axum::{
     extract::{Json, State},
     http::HeaderMap,
@@ -29,10 +30,11 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use uuid::Uuid;
 
 use crate::api::rls::{begin_for, try_response};
-use crate::api::{bad_request, internal_error, user_agent_from, AppState};
+use crate::api::{bad_request, internal_error, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::integrations::config_source::ConfigSource;
 use crate::integrations::secrets;
@@ -194,10 +196,11 @@ pub struct UpdateDropboxSettingsRequest {
 pub async fn update_settings(
     State(state): State<AppState>,
     user: AuthenticatedUser,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(request): Json<UpdateDropboxSettingsRequest>,
 ) -> Response {
-    let user_agent = user_agent_from(&headers);
+    let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     try_response!(
         user.require_permission(
@@ -205,7 +208,7 @@ pub async fn update_settings(
             PERMISSION,
             "update_dropbox_settings",
             user_agent,
-            None,
+            ip_address,
         )
         .await
     );
@@ -272,6 +275,23 @@ pub async fn update_settings(
         return internal_error("Could not update Dropbox settings");
     }
 
+    // After the commit, and never carrying a secret: only THAT the app
+    // secret and refresh token were replaced.
+    crate::api::integration_settings_audit::record_settings_updated(
+        &state.db,
+        user.user_id,
+        user_agent,
+        ip_address,
+        "dropbox",
+        serde_json::json!({
+            "app_secret_replaced": true,
+            "refresh_token_replaced": true,
+            "root_namespace_id": request.root_namespace_id,
+            "root_path": request.root_path,
+        }),
+    )
+    .await;
+
     tracing::info!(user_id = %user.user_id, "Dropbox integration settings updated");
 
     match resolve(row, state.env_source.as_ref()) {
@@ -305,6 +325,7 @@ mod tests {
         let response = update_settings(
             State(crate::api::test_support::empty_state()),
             test_user(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))),
             HeaderMap::new(),
             Json(valid_request()),
         )

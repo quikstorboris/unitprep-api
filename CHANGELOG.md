@@ -6,6 +6,19 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.111] - 2026-10-08
+
+Refactor chunk G1a (audit-log gaps): admin edits of integration settings and exports of the activity log are now on the record. One new event in each trail; no migration, no change to any existing JSON.
+
+### Added
+- **`integration_settings_updated`** (security trail, `auth.auth_audit_logs`): written after the commit when an admin saves the Dropbox settings, the Process Street settings, or a Process Street task-role mapping. `metadata.integration` is `dropbox` / `process_street` / `process_street_task_roles`; `metadata.details` records what was set (the Dropbox root path and namespace, the Process Street schedule, the role and its task names) and ONLY that a secret was replaced (`app_secret_replaced`, `refresh_token_replaced`, `api_key_replaced`) -- never the value. The caller's IP is recorded. A refused or rejected request writes nothing. Previously none of these three admin credential/config changes left any audit row.
+- **`activity_log_exported`** (client-ops trail, `client_ops.audit_log`): written when someone exports the activity log as a PDF, with the filters used and the row count -- the counterpart of the security trail's existing `audit_log_exported`. Both new events are in their trail's `ALL` list, so the admin filter dropdowns offer them with no frontend change beyond the Security Logs category preset.
+- `api/integration_settings_audit.rs`, the one place the settings row shape is defined.
+- Six real-DB tests (`integration_settings_audit_db_tests.rs`): each handler writes its row with the right actor / integration / IP; the Dropbox and Process Street rows are checked not to contain the secret that was just saved; a rejected task-role or schedule edit writes no row; the activity-log export writes its row. Mutation-checked: breaking the event name fails the three positive settings tests.
+
+### Changed
+- `dropbox_settings::update_settings`, `process_street_settings::update_settings` and `process_street_task_roles::update_task_role` take a `ConnectInfo<SocketAddr>` (as the other audited handlers do) so the row carries the client IP, and pass it to the permission check as well; their tests and the route-manifest gate test were updated for the extra argument.
+
 ## [1.9.110] - 2026-10-08
 
 Efficiency refactor chunk F7c (api side): the dedup file-classification types are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.
