@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.106] - 2026-10-08
+
+Efficiency refactor chunk D5a: the `Database`/`Environment` marker both integration settings pages report is one type. No behaviour change.
+
+### Changed
+- `ConfigSource` was declared identically in `api/dropbox_settings.rs` and `api/process_street_settings.rs`; it now lives in `integrations/config_source.rs` and both import it (same JSON: `"database"` / `"environment"`). Deliberately not unified further: the two settings handlers differ in what they store (Dropbox: five fields, Process Street: a schedule plus an API key) and ClickUp credentials are per-user with a per-user AAD, so a generic settings skeleton would force three shapes into one for little gain.
+
 ## [1.9.105] - 2026-10-08
 
 Efficiency refactor chunk D5b: known-answer tests for the three encryption formats. Tests only, plus one test-lock rename.

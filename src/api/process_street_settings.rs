@@ -46,6 +46,7 @@ use uuid::Uuid;
 use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, user_agent_from, AppState};
 use crate::auth::AuthenticatedUser;
+use crate::integrations::config_source::ConfigSource;
 use crate::integrations::secrets;
 
 /// The closed set of timezones the "run at a specific time" schedule
@@ -83,13 +84,6 @@ const AAD: &[u8] = b"process_street_settings:1";
 /// constraint-violation error.
 const MIN_INTERVAL_HOURS: i16 = 1;
 const MAX_INTERVAL_HOURS: i16 = 168;
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfigSource {
-    Database,
-    Environment,
-}
 
 #[derive(Debug, Serialize)]
 pub struct ProcessStreetSettingsResponse {

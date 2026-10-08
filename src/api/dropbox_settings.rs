@@ -34,6 +34,7 @@ use uuid::Uuid;
 use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, user_agent_from, AppState};
 use crate::auth::AuthenticatedUser;
+use crate::integrations::config_source::ConfigSource;
 use crate::integrations::secrets;
 
 const PERMISSION: &str = "integrations.manage";
@@ -43,13 +44,6 @@ const PERMISSION: &str = "integrations.manage";
 /// this one beside the settings handlers (used on save); both name the
 /// same row.
 const AAD: &[u8] = b"dropbox_configuration:1";
-
-#[derive(Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ConfigSource {
-    Database,
-    Environment,
-}
 
 #[derive(Debug, Serialize)]
 pub struct DropboxSettingsResponse {
