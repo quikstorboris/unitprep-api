@@ -33,8 +33,8 @@ async fn set_completed(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             if completed {
@@ -46,9 +46,7 @@ async fn set_completed(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx = try_response!(begin_for(&state, &user, "Could not update this client").await);
 

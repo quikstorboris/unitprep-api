@@ -145,12 +145,10 @@ pub async fn list_activity_logs(
     // Redundant with the RLS policy by design -- same reasoning as every
     // other permission-gated read in this app (see auth_invites.rs's
     // module doc).
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "list_activity_logs", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "list_activity_logs", None, None)
+            .await
+    );
 
     let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
 
@@ -263,8 +261,8 @@ pub struct ActivityEventTypesResponse {
 /// from `audit_log::event::ALL`, same reasoning as
 /// `auth_audit_logs::list_event_types`.
 pub async fn list_event_types(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "list_activity_log_event_types",
@@ -272,9 +270,7 @@ pub async fn list_event_types(State(state): State<AppState>, user: Authenticated
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     Json(ActivityEventTypesResponse {
         event_types: audit_log::event::ALL

@@ -267,8 +267,8 @@ pub async fn export_activity_logs(
 ) -> Response {
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "export_activity_logs",
@@ -276,9 +276,7 @@ pub async fn export_activity_logs(
             ip_address,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     if let Err(response) = validate_filters(&request) {
         return *response;
@@ -396,8 +394,8 @@ pub async fn preview_activity_logs(
 ) -> Response {
     let ip_address = Some(IpNetwork::from(addr.ip()));
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "preview_activity_logs",
@@ -405,9 +403,7 @@ pub async fn preview_activity_logs(
             ip_address,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     if let Err(response) = validate_filters(&request) {
         return *response;

@@ -69,18 +69,17 @@ pub async fn grant_role(
 ) -> Response {
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "users.manage_roles",
-            "grant_role",
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "users.manage_roles",
+                "grant_role",
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     // Redundant with the RLS INSERT policy on auth.user_roles by design --
     // same reasoning as every other admin-on-self refusal in this
@@ -205,18 +204,17 @@ pub async fn revoke_role(
 ) -> Response {
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "users.manage_roles",
-            "revoke_role",
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "users.manage_roles",
+                "revoke_role",
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     if target_user_id == admin.user_id {
         return bad_request(

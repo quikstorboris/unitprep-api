@@ -106,12 +106,10 @@ pub async fn manual_link(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "manual_link", user_agent, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "manual_link", user_agent, None)
+            .await
+    );
 
     let run_id = request.run_id.trim().to_string();
     if run_id.is_empty() {

@@ -95,8 +95,8 @@ pub async fn save_clickup_links(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "save_clickup_links",
@@ -104,9 +104,7 @@ pub async fn save_clickup_links(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     if request.links.is_empty() || request.links.len() > MAX_LINKS {
         return bad_request(
@@ -348,12 +346,10 @@ async fn unlink(
     } else {
         "unlink_company_clickup"
     };
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, action, user_agent, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, action, user_agent, None)
+            .await
+    );
 
     let mut tx = try_response!(begin_for(&state, &user, "Could not remove the ClickUp link").await);
 

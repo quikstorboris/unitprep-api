@@ -46,8 +46,8 @@ pub async fn resync_elavon_data(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "resync_elavon_data",
@@ -55,9 +55,7 @@ pub async fn resync_elavon_data(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let Some(client) = state.process_street.clone() else {
         return process_street_not_configured();

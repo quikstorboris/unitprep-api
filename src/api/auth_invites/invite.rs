@@ -1,5 +1,6 @@
 //! Creating (and re-issuing) an invite for a user: request shapes, the endpoint, and the transaction that issues it.
 
+use crate::api::rls::try_response;
 use crate::api::{bad_request, conflict, internal_error, AppState};
 use crate::auth::{
     audit_log, begin_rls_transaction, generate_token, resolve_role_id, AuthenticatedUser,
@@ -59,18 +60,17 @@ pub async fn create_invite(
 
     // Redundant with the RLS policy by design, not by accident -- see the
     // module docs.
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "users.manage",
-            "create_invite",
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "users.manage",
+                "create_invite",
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     // Every other path that sets a user's role (grant_role/revoke_role in
     // auth_user_role.rs) requires users.manage_roles -- this one assigns
@@ -79,18 +79,17 @@ pub async fn create_invite(
     // users.manage_roles (a "can invite people" role, deliberately not
     // "can grant admin") could still invite someone straight in as
     // admin, fully bypassing the reason that second permission exists.
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "users.manage_roles",
-            "create_invite",
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "users.manage_roles",
+                "create_invite",
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     let email = request.email.trim().to_ascii_lowercase();
     let first_name = request.first_name.trim();

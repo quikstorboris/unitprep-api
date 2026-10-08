@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::api::clickup_connection::{clickup_client, load_user_token};
 use crate::api::clickup_lookup::onboarding_space_name;
+use crate::api::rls::try_response;
 use crate::api::tool_runs::facility_belongs_to_company;
 use crate::api::{internal_error, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
@@ -32,8 +33,8 @@ pub async fn prefetch_hierarchy(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "prefetch_clickup_hierarchy",
@@ -41,9 +42,7 @@ pub async fn prefetch_hierarchy(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let (token, space_name) = match tokio::try_join!(
         load_user_token(&state, &user),
@@ -72,12 +71,10 @@ pub async fn prefetch_facility_tasks(
     user: AuthenticatedUser,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "prefetch_clickup_tasks", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "prefetch_clickup_tasks", None, None)
+            .await
+    );
 
     let list_id = match linked_list_id(&state, &user, company_id, facility_id).await {
         Ok(Some(list_id)) => list_id,

@@ -95,12 +95,10 @@ pub async fn rematch_tool_run(
         .get(axum::http::header::USER_AGENT)
         .and_then(|v| v.to_str().ok());
 
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "rematch_tool_run", user_agent, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "rematch_tool_run", user_agent, None)
+            .await
+    );
 
     let mut tx = try_response!(begin_for(&state, &user, "Could not re-check this run").await);
 

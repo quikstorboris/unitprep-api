@@ -47,8 +47,8 @@ pub async fn set_clickup_parent(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "set_clickup_parent",
@@ -56,9 +56,7 @@ pub async fn set_clickup_parent(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx = try_response!(begin_for(&state, &user, "Could not set the parent facility").await);
 
@@ -205,8 +203,8 @@ async fn set_waiver(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             if waived {
@@ -218,9 +216,7 @@ async fn set_waiver(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx = try_response!(begin_for(&state, &user, "Could not update this client").await);
 

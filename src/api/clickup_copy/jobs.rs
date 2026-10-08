@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use super::exec::ItemResult;
 use super::lists::PERMISSION;
+use crate::api::rls::try_response;
 use crate::api::{internal_error, not_found, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 
@@ -156,12 +157,10 @@ pub async fn list_copy_jobs(
     user: AuthenticatedUser,
     Path(company_id): Path<Uuid>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "clickup_copy_jobs", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "clickup_copy_jobs", None, None)
+            .await
+    );
 
     let rows: Result<Vec<JobView>, sqlx::Error> = async {
         let mut tx = begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await?;
@@ -190,12 +189,10 @@ pub async fn get_copy_job(
     user: AuthenticatedUser,
     Path((company_id, job_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "clickup_copy_jobs", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "clickup_copy_jobs", None, None)
+            .await
+    );
 
     let row: Result<Option<JobView>, sqlx::Error> = async {
         let mut tx = begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await?;

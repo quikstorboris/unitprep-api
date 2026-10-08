@@ -117,12 +117,11 @@ pub async fn list_users(State(state): State<AppState>, admin: AuthenticatedUser)
     // auth.list_users_for_admin itself, by the same design as
     // auth_invites.rs's own handlers: this produces a clean 403, and the
     // function's own check is what holds if this one is ever forgotten.
-    if let Err(response) = admin
-        .require_permission(&state.db, "users.view", "list_users", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(&state.db, "users.view", "list_users", None, None)
+            .await
+    );
 
     let mut tx = try_response!(begin_for(&state, &admin, "Could not list users").await);
 
@@ -200,12 +199,11 @@ fn user_csv_record(user: &UserSummary) -> Vec<String> {
 /// this is a view of existing state, not a change to it. A refused export
 /// (wrong role) is audited, matching every other admin-gated read here.
 pub async fn export_users(State(state): State<AppState>, admin: AuthenticatedUser) -> Response {
-    if let Err(response) = admin
-        .require_permission(&state.db, "users.manage", "export_users", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(&state.db, "users.manage", "export_users", None, None)
+            .await
+    );
 
     let mut tx = try_response!(begin_for(&state, &admin, "Could not export users").await);
 

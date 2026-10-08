@@ -5,6 +5,7 @@ use super::compare::{
     classify_company_diff, classify_facility_diff, load_comparisons, PreviewResyncResponse,
 };
 use super::PERMISSION;
+use crate::api::rls::try_response;
 use crate::api::{internal_error, not_found, process_street_not_configured, AppState};
 use crate::auth::AuthenticatedUser;
 use axum::extract::{Json, Path, State};
@@ -20,12 +21,10 @@ pub async fn preview_resync(
     user: AuthenticatedUser,
     Path(company_id): Path<Uuid>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "preview_resync", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "preview_resync", None, None)
+            .await
+    );
 
     let Some(client) = state.process_street.clone() else {
         return process_street_not_configured();

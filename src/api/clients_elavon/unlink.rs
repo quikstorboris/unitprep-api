@@ -33,8 +33,8 @@ pub async fn unlink_facility_elavon(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "unlink_facility_merchant_account",
@@ -42,9 +42,7 @@ pub async fn unlink_facility_elavon(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx = try_response!(
         begin_for(

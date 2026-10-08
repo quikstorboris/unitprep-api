@@ -35,6 +35,7 @@ use super::lists::{
 };
 use super::pairs::{target_choice, task_info, TargetChoice, TaskInfo};
 use crate::api::clickup_connection::{clickup_client, load_user_token};
+use crate::api::rls::try_response;
 use crate::api::{bad_request, conflict, internal_error, not_found, user_agent_from, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clickup::comments::latest;
@@ -181,12 +182,10 @@ pub async fn bulk_tasks(
     Path(company_id): Path<Uuid>,
     Query(query): Query<BulkTasksQuery>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "clickup_bulk_tasks", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "clickup_bulk_tasks", None, None)
+            .await
+    );
     let scope = match parse_scope(query.scope.as_deref()) {
         Ok(scope) => scope,
         Err(response) => return response,
@@ -274,12 +273,10 @@ pub async fn bulk_pairs(
     Path(company_id): Path<Uuid>,
     Query(query): Query<BulkPairsQuery>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "clickup_bulk_pairs", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "clickup_bulk_pairs", None, None)
+            .await
+    );
     let source_task_id = query.source_task_id.trim().to_string();
     if !valid_task_id(&source_task_id) {
         return bad_request("invalid_clickup_task", "Choose a ClickUp task.".to_string());
@@ -379,12 +376,10 @@ pub async fn bulk_comment(
     Path(company_id): Path<Uuid>,
     Query(query): Query<BulkCommentQuery>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "clickup_bulk_comment", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "clickup_bulk_comment", None, None)
+            .await
+    );
     let source_task_id = query.source_task_id.trim().to_string();
     if !valid_task_id(&source_task_id) {
         return bad_request("invalid_clickup_task", "Choose a ClickUp task.".to_string());
@@ -589,12 +584,10 @@ pub async fn bulk_copy(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "clickup_bulk_copy", user_agent, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "clickup_bulk_copy", user_agent, None)
+            .await
+    );
 
     let comment = request.comment.trim().to_string();
     let mut seen = HashSet::new();

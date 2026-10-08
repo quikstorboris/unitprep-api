@@ -17,6 +17,7 @@ use uuid::Uuid;
 use super::exec::{copy_one, ItemResult, SourceLink};
 use super::lists::{load_tasks, prepare, valid_task_id, MAX_COMMENT_CHARS, PERMISSION};
 use crate::api::clickup_connection::{clickup_client, load_user_token};
+use crate::api::rls::try_response;
 use crate::api::{bad_request, user_agent_from, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::clickup::rate_limit;
@@ -69,8 +70,8 @@ pub async fn copy_comments_to_tasks(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "clickup_copy_comments",
@@ -78,9 +79,7 @@ pub async fn copy_comments_to_tasks(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     if request.items.is_empty() || request.items.len() > MAX_ITEMS {
         return bad_request(

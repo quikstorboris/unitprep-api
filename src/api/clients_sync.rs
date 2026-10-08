@@ -14,6 +14,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::api::rls::try_response;
 use crate::api::{conflict, process_street_not_configured, user_agent_from, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::clients::sync::{run_all_workflows_with_progress, try_claim_running, SyncState};
@@ -59,8 +60,8 @@ pub async fn start_sync(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "start_process_street_sync",
@@ -68,9 +69,7 @@ pub async fn start_sync(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let Some(client) = state.process_street.clone() else {
         return process_street_not_configured();

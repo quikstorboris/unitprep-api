@@ -167,12 +167,11 @@ pub async fn list_audit_logs(
 ) -> Response {
     // Redundant with the RLS policy by design -- see auth_invites.rs's
     // module doc for why both layers exist.
-    if let Err(response) = admin
-        .require_permission(&state.db, "audit_logs.read", "list_audit_logs", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(&state.db, "audit_logs.read", "list_audit_logs", None, None)
+            .await
+    );
 
     let limit = clamp_limit(query.limit, DEFAULT_LIMIT, MAX_LIMIT);
 
@@ -286,12 +285,11 @@ pub struct EventTypesResponse {
 /// Admin-gated for consistency with every other audit-log-adjacent
 /// endpoint, even though the list itself carries nothing sensitive.
 pub async fn list_event_types(State(state): State<AppState>, admin: AuthenticatedUser) -> Response {
-    if let Err(response) = admin
-        .require_permission(&state.db, "audit_logs.read", "list_event_types", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(&state.db, "audit_logs.read", "list_event_types", None, None)
+            .await
+    );
 
     Json(EventTypesResponse {
         event_types: audit_log::event::ALL

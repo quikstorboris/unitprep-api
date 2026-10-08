@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::lists::{load_tasks, prepare, valid_task_id, PERMISSION};
 use crate::api::clickup_connection::{clickup_client, load_user_token};
+use crate::api::rls::try_response;
 use crate::api::{bad_request, internal_error, not_found, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::clickup::comments::latest;
@@ -58,12 +59,10 @@ pub async fn copy_comments(
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Query(query): Query<CommentsQuery>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "clickup_copy_comments", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "clickup_copy_comments", None, None)
+            .await
+    );
     let (source_task, target_task) = (query.source_task_id.trim(), query.target_task_id.trim());
     if !valid_task_id(source_task) || !valid_task_id(target_task) {
         return bad_request("invalid_clickup_task", "Choose a ClickUp task.".to_string());

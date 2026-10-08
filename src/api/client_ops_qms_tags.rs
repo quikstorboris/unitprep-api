@@ -94,12 +94,10 @@ pub async fn create_qms_tag(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "create_qms_tag", user_agent, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "create_qms_tag", user_agent, None)
+            .await
+    );
 
     let tag_key = request.tag_key.trim().to_string();
     let label = request.label.trim().to_string();
@@ -211,12 +209,10 @@ pub async fn update_qms_tag(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "update_qms_tag", user_agent, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "update_qms_tag", user_agent, None)
+            .await
+    );
 
     let label = request.label.trim().to_string();
     let category = request.category.trim().to_string();
@@ -318,12 +314,10 @@ async fn set_active(
         "deactivate_qms_tag"
     };
 
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, action, user_agent, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, action, user_agent, None)
+            .await
+    );
 
     let mut tx = try_response!(begin_for(state, user, "Could not update this tag").await);
 

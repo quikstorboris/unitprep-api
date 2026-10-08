@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use super::lists::{load_tasks, parse_scope, prepare, scope_name, FacilityList, PERMISSION};
 use crate::api::clickup_connection::load_user_token;
+use crate::api::rls::try_response;
 use crate::api::AppState;
 use crate::auth::AuthenticatedUser;
 use crate::clickup::copy_pairing;
@@ -104,12 +105,10 @@ pub async fn copy_pairs(
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Query(query): Query<PairsQuery>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "clickup_copy_pairs", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "clickup_copy_pairs", None, None)
+            .await
+    );
     let scope = match parse_scope(query.scope.as_deref()) {
         Ok(scope) => scope,
         Err(response) => return response,

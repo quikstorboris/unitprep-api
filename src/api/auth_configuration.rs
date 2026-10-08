@@ -51,18 +51,17 @@ pub async fn get_configuration(
     State(state): State<AppState>,
     admin: AuthenticatedUser,
 ) -> Response {
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "security_policies.manage",
-            "get_configuration",
-            None,
-            None,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "security_policies.manage",
+                "get_configuration",
+                None,
+                None,
+            )
+            .await
+    );
 
     let mut tx = try_response!(begin_for(&state, &admin, "Could not load security policies").await);
 
@@ -108,18 +107,17 @@ pub async fn update_configuration(
 ) -> Response {
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "security_policies.manage",
-            "update_configuration",
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "security_policies.manage",
+                "update_configuration",
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     if let Some(unknown) = request
         .step_up_actions

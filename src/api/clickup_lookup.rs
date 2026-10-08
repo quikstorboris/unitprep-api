@@ -144,12 +144,10 @@ pub async fn list_clickup_lists(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "list_clickup_lists", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "list_clickup_lists", None, None)
+            .await
+    );
 
     let (_, hierarchy) = match token_and_hierarchy(&state, &user).await {
         Ok(pair) => pair,
@@ -200,12 +198,10 @@ pub async fn clickup_suggestions(
     user: AuthenticatedUser,
     Path(company_id): Path<Uuid>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "clickup_suggestions", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "clickup_suggestions", None, None)
+            .await
+    );
 
     let mut tx =
         try_response!(begin_for(&state, &user, "Could not load ClickUp suggestions").await);
@@ -363,12 +359,10 @@ pub async fn resolve_clickup_url(
     user: AuthenticatedUser,
     Json(request): Json<ResolveUrlRequest>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "resolve_clickup_url", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "resolve_clickup_url", None, None)
+            .await
+    );
 
     let reference = match parse_list_reference(&request.url) {
         Ok(reference) => reference,

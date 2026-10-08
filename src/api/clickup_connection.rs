@@ -236,12 +236,10 @@ pub(crate) async fn clickup_failure_response(
 }
 
 pub async fn get_connection(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "get_clickup_connection", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "get_clickup_connection", None, None)
+            .await
+    );
 
     let mut tx =
         try_response!(begin_for(&state, &user, "Could not load your ClickUp connection").await);
@@ -287,8 +285,8 @@ pub async fn save_token(
 ) -> Response {
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "save_clickup_token",
@@ -296,9 +294,7 @@ pub async fn save_token(
             ip_address,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let token = request.token.trim();
 
@@ -398,8 +394,8 @@ pub async fn test_connection(
 ) -> Response {
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "test_clickup_connection",
@@ -407,9 +403,7 @@ pub async fn test_connection(
             ip_address,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx =
         try_response!(begin_for(&state, &user, "Could not test your ClickUp connection").await);
@@ -526,8 +520,8 @@ pub async fn remove_token(
 ) -> Response {
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "remove_clickup_token",
@@ -535,9 +529,7 @@ pub async fn remove_token(
             ip_address,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx =
         try_response!(begin_for(&state, &user, "Could not remove your ClickUp token").await);

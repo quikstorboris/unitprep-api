@@ -144,8 +144,8 @@ fn resolve(
 }
 
 pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "get_process_street_settings",
@@ -153,9 +153,7 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx =
         try_response!(begin_for(&state, &user, "Could not load Process Street settings").await);
@@ -219,8 +217,8 @@ pub async fn update_settings(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "update_process_street_settings",
@@ -228,9 +226,7 @@ pub async fn update_settings(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let schedule_mode = request.schedule_mode.trim();
     if !matches!(schedule_mode, "interval" | "daily_time") {

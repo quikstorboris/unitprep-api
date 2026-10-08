@@ -60,18 +60,17 @@ pub async fn deactivate_user(
     // Redundant with the RLS policy / set_user_status's own SECURITY
     // DEFINER check by design -- see auth_invites.rs's module doc for why
     // both layers exist.
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "users.manage",
-            "deactivate_user",
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "users.manage",
+                "deactivate_user",
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     if target_user_id == admin.user_id {
         return bad_request(
@@ -215,18 +214,17 @@ pub async fn reactivate_user(
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     // Same two-layer reasoning as deactivate_user above.
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "users.manage",
-            "reactivate_user",
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "users.manage",
+                "reactivate_user",
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     let (raw_token, token_hash) = generate_token();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(invite_hours());

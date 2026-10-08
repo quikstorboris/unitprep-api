@@ -348,8 +348,8 @@ async fn set_archived(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             if archive {
@@ -361,9 +361,7 @@ async fn set_archived(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx = try_response!(begin_for(&state, &user, "Could not update this client").await);
 
@@ -469,12 +467,10 @@ pub async fn delete_company(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "delete_company", user_agent, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "delete_company", user_agent, None)
+            .await
+    );
 
     let mut tx = try_response!(begin_for(&state, &user, "Could not delete this client").await);
 

@@ -83,8 +83,8 @@ pub async fn create_client(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "create_client_from_process_street",
@@ -92,9 +92,7 @@ pub async fn create_client(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let company_intake_run_id = request.company_intake_run_id.trim();
     if company_intake_run_id.is_empty() {

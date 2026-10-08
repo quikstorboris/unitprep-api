@@ -314,18 +314,17 @@ pub async fn export_audit_logs(
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     // Redundant with the RLS policy by design -- see list_audit_logs above.
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "audit_logs.read",
-            "export_audit_logs",
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "audit_logs.read",
+                "export_audit_logs",
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     let ip_filter = match validate_filters(&request) {
         Ok(ip) => ip,
@@ -483,18 +482,17 @@ pub async fn preview_audit_logs(
 ) -> Response {
     let ip_address = Some(IpNetwork::from(addr.ip()));
 
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "audit_logs.read",
-            "preview_audit_logs",
-            None,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "audit_logs.read",
+                "preview_audit_logs",
+                None,
+                ip_address,
+            )
+            .await
+    );
 
     let ip_filter = match validate_filters(&request) {
         Ok(ip) => ip,

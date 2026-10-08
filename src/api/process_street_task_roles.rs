@@ -91,8 +91,8 @@ async fn load_role(
 }
 
 pub async fn get_task_roles(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "get_process_street_task_roles",
@@ -100,9 +100,7 @@ pub async fn get_task_roles(State(state): State<AppState>, user: AuthenticatedUs
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx = try_response!(
         begin_for(
@@ -153,8 +151,8 @@ pub async fn update_task_role(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "update_process_street_task_role",
@@ -162,9 +160,7 @@ pub async fn update_task_role(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let Some(known) = KNOWN_ROLES.iter().find(|known| known.key == role) else {
         return not_found(

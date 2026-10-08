@@ -1,6 +1,7 @@
 //! Admin account recovery: revokes and reissues every credential on the target account.
 
 use super::invite::CreateInviteResponse;
+use crate::api::rls::try_response;
 use crate::api::{bad_request, conflict, internal_error, not_found, AppState};
 use crate::auth::{audit_log, begin_rls_transaction, generate_token, AuthenticatedUser};
 use crate::bootstrap::invite_hours;
@@ -45,18 +46,17 @@ pub async fn recover_account(
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
     // Redundant with the RLS policy by design -- see create_invite above.
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            "users.manage",
-            "recover_account",
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                "users.manage",
+                "recover_account",
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     let email = request.email.trim().to_ascii_lowercase();
 

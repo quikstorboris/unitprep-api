@@ -27,6 +27,7 @@ use uuid::Uuid;
 use crate::api::clickup_connection::{
     clickup_client, clickup_failure_response, load_user_credentials, load_user_token,
 };
+use crate::api::rls::try_response;
 use crate::api::tool_runs::facility_belongs_to_company;
 use crate::api::{bad_request, conflict, internal_error, not_found, user_agent_from, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
@@ -327,8 +328,8 @@ pub async fn duplicate_check_tasks(
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
     Query(query): Query<CandidatesQuery>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "clickup_duplicate_check_tasks",
@@ -336,9 +337,7 @@ pub async fn duplicate_check_tasks(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     // The database lookups and the token read are independent: one wait.
     let (prepared, token) = match tokio::try_join!(
@@ -435,8 +434,8 @@ pub async fn post_duplicate_check_results(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "post_clickup_duplicate_check_results",
@@ -444,9 +443,7 @@ pub async fn post_duplicate_check_results(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let task_id = request.task_id.trim();
     if task_id.is_empty()

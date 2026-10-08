@@ -6,6 +6,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.104] - 2026-10-08
+
+Efficiency refactor chunk D2d (reduced form): the per-handler permission check is one line. No behaviour change.
+
+### Changed
+- 69 handlers in 38 files spelled the permission gate as `if let Err(response) = user.require_permission(..).await { return response; }`; each is now `try_response!(user.require_permission(..).await);`. The check, its audit row and its 403 are untouched; only the early-return plumbing is shared. About 110 lines removed.
+- NOT done: a manifest-driven permission layer that would replace these calls. See the refactor note: the route manifest and the permission-gate tests already prove, for every gated route, that the handler refuses an unprivileged caller with the declared action; a layer would swap that proven enforcement for a new one, move where a refusal is audited, and require rewriting those tests to go through the router, for no reduction in what the database still enforces underneath.
+
 ## [1.9.103] - 2026-10-08
 
 Efficiency refactor chunks D2b and D2c: one place builds error responses, one place clamps list limits. No behaviour change.

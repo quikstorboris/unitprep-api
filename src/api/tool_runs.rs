@@ -258,8 +258,8 @@ pub async fn download_tool_run_output(
     // the source file, so downloads are consistently limited to the roles
     // that run the tools.
     let user_agent = user_agent_from(&headers);
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "download_tool_run_output",
@@ -267,9 +267,7 @@ pub async fn download_tool_run_output(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx =
         try_response!(begin_for(&state, &user, "Could not download this run's output").await);
@@ -337,8 +335,8 @@ pub async fn download_tool_run_source(
     // tokens, gate codes and SSNs, so unlike the report it is limited to
     // the client-ops roles (onboarding manager, department manager).
     let user_agent = user_agent_from(&headers);
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "download_tool_run_source",
@@ -346,9 +344,7 @@ pub async fn download_tool_run_source(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     let mut tx =
         try_response!(begin_for(&state, &user, "Could not download this run's source file").await);
@@ -424,12 +420,10 @@ pub async fn delete_tool_run(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "delete_tool_run", user_agent, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "delete_tool_run", user_agent, None)
+            .await
+    );
 
     let mut tx = try_response!(begin_for(&state, &user, "Could not delete this run").await);
 

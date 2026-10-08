@@ -69,12 +69,10 @@ pub async fn apply_resync(
     Path(company_id): Path<Uuid>,
     Json(request): Json<ApplyResyncRequest>,
 ) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "apply_resync", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "apply_resync", None, None)
+            .await
+    );
 
     let Some(client) = state.process_street.clone() else {
         return process_street_not_configured();

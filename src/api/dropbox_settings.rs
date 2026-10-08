@@ -147,12 +147,10 @@ fn resolve(
 }
 
 pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
-    if let Err(response) = user
-        .require_permission(&state.db, PERMISSION, "get_dropbox_settings", None, None)
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        user.require_permission(&state.db, PERMISSION, "get_dropbox_settings", None, None)
+            .await
+    );
 
     let mut tx = try_response!(begin_for(&state, &user, "Could not load Dropbox settings").await);
 
@@ -207,8 +205,8 @@ pub async fn update_settings(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    if let Err(response) = user
-        .require_permission(
+    try_response!(
+        user.require_permission(
             &state.db,
             PERMISSION,
             "update_dropbox_settings",
@@ -216,9 +214,7 @@ pub async fn update_settings(
             None,
         )
         .await
-    {
-        return response;
-    }
+    );
 
     if request.app_key.trim().is_empty()
         || request.app_secret.is_empty()

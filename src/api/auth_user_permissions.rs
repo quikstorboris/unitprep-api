@@ -111,18 +111,17 @@ pub async fn list_user_permissions(
 ) -> Response {
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            PERMISSION,
-            "list_user_permissions",
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                PERMISSION,
+                "list_user_permissions",
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     let mut tx =
         try_response!(begin_for(&state, &admin, "Could not load this user's permissions").await);
@@ -225,18 +224,17 @@ async fn change_permission(
 ) -> Response {
     let (user_agent, ip_address) = crate::api::request_context(&headers, addr);
 
-    if let Err(response) = admin
-        .require_permission(
-            &state.db,
-            PERMISSION,
-            change.action(),
-            user_agent,
-            ip_address,
-        )
-        .await
-    {
-        return response;
-    }
+    try_response!(
+        admin
+            .require_permission(
+                &state.db,
+                PERMISSION,
+                change.action(),
+                user_agent,
+                ip_address,
+            )
+            .await
+    );
 
     // Redundant with the RLS policies on auth.user_permissions by
     // design -- same reasoning as auth_user_role: a clean 400 here, the
