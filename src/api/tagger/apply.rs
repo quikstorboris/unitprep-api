@@ -14,7 +14,8 @@ use std::time::Instant;
 use unitprep_core::session_store::SessionStoreExt;
 use unitprep_tagger_pipeline::{to_edit, AppliedEdit, SubstitutionStyle};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ConfirmedSubstitution {
     /// Index into the session's own candidate list, as returned by
     /// `/tagger/check` or `/tagger/report`.

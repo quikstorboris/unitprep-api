@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.109] - 2026-10-08
+
+Efficiency refactor chunk F7b (api side): the Template Tagger check/apply types are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.
+
+### Added
+- `ts_rs::TS` + `#[ts(export)]` on `TaggerCheckResponse`, `CandidateView`, `RegionView`, `TierView` (`api/tagger/views.rs`) and `ConfirmedSubstitution` (`api/tagger/apply.rs`, a request-only type). `scripts/check_ts_bindings.sh` now covers 33 files. The generated shapes matched the hand-written UI ones exactly. `TaggerRunSummary` stays hand-mirrored: `check_summary` builds it as a `serde_json::Value`, so there is no struct to derive from (making it one is a separate change).
+
 ## [1.9.108] - 2026-10-08
 
 Dev tooling only: the `api-dev` watcher no longer writes TypeScript bindings into the bind-mounted checkout. No change to the service.

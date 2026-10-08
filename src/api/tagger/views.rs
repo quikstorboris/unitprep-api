@@ -18,8 +18,9 @@ pub(super) const SNIPPET_CONTEXT_CHARS: usize = 30;
 /// session would become its own resource concern.
 pub(super) const MAX_CANDIDATES: usize = 2000;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum RegionView {
     Body,
     TableCell { index: usize },
@@ -34,8 +35,9 @@ impl From<RegionRef> for RegionView {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum TierView {
     Auto,
     NeedsReview,
@@ -54,7 +56,8 @@ impl From<ConfidenceTier> for TierView {
 /// position in the session's own candidate list -- `/tagger/apply`
 /// references a candidate by this same index, not by re-sending its
 /// coordinates.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct CandidateView {
     pub index: usize,
     pub region: RegionView,
@@ -119,7 +122,8 @@ pub(super) fn build_snippet(text: &str, start: usize, end: usize) -> String {
     snippet
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct TaggerCheckResponse {
     pub session_id: String,
     pub candidates: Vec<CandidateView>,
