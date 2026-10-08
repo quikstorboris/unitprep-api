@@ -22,10 +22,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, conflict, internal_error, not_found, AppState};
 use crate::auth::{
-    audit_log, begin_rls_transaction, remaining_active_admins_excluding, resolve_role_id,
-    role_keys_for_user, AuthenticatedUser,
+    audit_log, remaining_active_admins_excluding, resolve_role_id, role_keys_for_user,
+    AuthenticatedUser,
 };
 
 #[derive(Debug, Deserialize)]
@@ -94,13 +95,7 @@ pub async fn grant_role(
 
     let role_key = request.role.trim().to_ascii_lowercase();
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for role grant");
-            return internal_error("Could not grant this role");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &admin, "Could not grant this role").await);
 
     match target_exists(&mut tx, target_user_id).await {
         Ok(true) => {}
@@ -232,13 +227,7 @@ pub async fn revoke_role(
 
     let role_key = role_key.trim().to_ascii_lowercase();
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for role revoke");
-            return internal_error("Could not revoke this role");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &admin, "Could not revoke this role").await);
 
     match target_exists(&mut tx, target_user_id).await {
         Ok(true) => {}

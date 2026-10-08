@@ -28,6 +28,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, conflict, internal_error, ApiErrorBody, AppState};
 use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser};
 use crate::clickup::{ClickUpClient, ClickUpError, ClickUpIdentity};
@@ -245,13 +246,8 @@ pub async fn get_connection(State(state): State<AppState>, user: AuthenticatedUs
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for ClickUp connection read");
-            return internal_error("Could not load your ClickUp connection");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not load your ClickUp connection").await);
 
     let row: Result<Option<StatusRow>, sqlx::Error> = sqlx::query_as(&format!(
         "SELECT {STATUS_COLUMNS} FROM integrations.user_clickup_credentials WHERE user_id = $1"
@@ -338,13 +334,7 @@ pub async fn save_token(
         }
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for ClickUp token save");
-            return internal_error("Could not save your ClickUp token");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not save your ClickUp token").await);
 
     let row: Result<StatusRow, sqlx::Error> = sqlx::query_as(&format!(
         "INSERT INTO integrations.user_clickup_credentials
@@ -424,13 +414,8 @@ pub async fn test_connection(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for ClickUp connection test");
-            return internal_error("Could not test your ClickUp connection");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not test your ClickUp connection").await);
 
     let stored: Result<Option<Vec<u8>>, sqlx::Error> = sqlx::query_scalar(
         "SELECT token_ciphertext FROM integrations.user_clickup_credentials WHERE user_id = $1",
@@ -482,13 +467,8 @@ pub async fn test_connection(
         }
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction to record a ClickUp test result");
-            return internal_error("Could not test your ClickUp connection");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not test your ClickUp connection").await);
 
     // A rejected token keeps the identity ClickUp last reported for it
     // (so the page can still say whose token went bad); only the status
@@ -562,13 +542,8 @@ pub async fn remove_token(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for ClickUp token removal");
-            return internal_error("Could not remove your ClickUp token");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not remove your ClickUp token").await);
 
     let deleted =
         sqlx::query("DELETE FROM integrations.user_clickup_credentials WHERE user_id = $1")

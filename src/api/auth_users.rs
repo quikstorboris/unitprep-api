@@ -8,6 +8,7 @@
 //! -- see the `AUTHORIZATION_FAILURE` arm below -- since that is an
 //! action someone took, not a view of existing state.
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::session_io::attachment_headers;
 use axum::{
     extract::{Json, State},
@@ -18,7 +19,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::api::{internal_error, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::infrastructure::csv_export::write_csv;
 use crate::infrastructure::csv_safety::sanitize_cell;
 
@@ -123,13 +124,7 @@ pub async fn list_users(State(state): State<AppState>, admin: AuthenticatedUser)
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for user listing");
-            return internal_error("Could not list users");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &admin, "Could not list users").await);
 
     let users = match fetch_users_for_admin(&mut tx).await {
         Ok(users) => users,
@@ -212,13 +207,7 @@ pub async fn export_users(State(state): State<AppState>, admin: AuthenticatedUse
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for user export");
-            return internal_error("Could not export users");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &admin, "Could not export users").await);
 
     let users = match fetch_users_for_admin(&mut tx).await {
         Ok(users) => users,

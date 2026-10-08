@@ -35,10 +35,10 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::api::auth_invites::CreateInviteResponse;
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, conflict, internal_error, not_found, AppState};
 use crate::auth::{
-    audit_log, begin_rls_transaction, generate_token, remaining_active_admins_excluding,
-    AuthenticatedUser,
+    audit_log, generate_token, remaining_active_admins_excluding, AuthenticatedUser,
 };
 use crate::bootstrap::invite_hours;
 
@@ -80,13 +80,7 @@ pub async fn deactivate_user(
         );
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for user deactivation");
-            return internal_error("Could not deactivate this user");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &admin, "Could not deactivate this user").await);
 
     let existing: Result<Option<(String, bool)>, sqlx::Error> = sqlx::query_as(
         "SELECT u.status::text,
@@ -237,13 +231,7 @@ pub async fn reactivate_user(
     let (raw_token, token_hash) = generate_token();
     let expires_at = chrono::Utc::now() + chrono::Duration::hours(invite_hours());
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for user reactivation");
-            return internal_error("Could not reactivate this user");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &admin, "Could not reactivate this user").await);
 
     let existing: Result<Option<String>, sqlx::Error> = sqlx::query_scalar(
         "SELECT status::text FROM auth.users WHERE id = $1 AND deleted_at IS NULL",

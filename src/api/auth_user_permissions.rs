@@ -25,6 +25,7 @@ use axum::{
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, not_found, AppState};
 use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser};
 
@@ -123,13 +124,8 @@ pub async fn list_user_permissions(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for permission listing");
-            return internal_error("Could not load this user's permissions");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &admin, "Could not load this user's permissions").await);
 
     match target_exists(&mut tx, target_user_id).await {
         Ok(true) => {}

@@ -24,8 +24,9 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, not_found, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 
 const PERMISSION: &str = "client_ops.perform";
@@ -59,13 +60,7 @@ pub async fn set_clickup_parent(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction to set the ClickUp parent");
-            return internal_error("Could not set the parent facility");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not set the parent facility").await);
 
     let current: Result<Option<(Option<Uuid>,)>, sqlx::Error> = sqlx::query_as(
         "SELECT clickup_parent_facility_id FROM clients.companies WHERE id = $1 FOR UPDATE",
@@ -227,13 +222,7 @@ async fn set_waiver(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for the ClickUp waiver");
-            return internal_error("Could not update this client");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not update this client").await);
 
     // Idempotent both ways: waiving keeps the original who/when.
     let updated: Result<Option<String>, sqlx::Error> = if waived {

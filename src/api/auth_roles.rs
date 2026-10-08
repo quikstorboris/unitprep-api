@@ -12,8 +12,9 @@ use axum::{
 };
 use serde::Serialize;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 
 #[derive(Debug, Serialize)]
 pub struct RoleInfo {
@@ -30,13 +31,7 @@ pub struct ListRolesResponse {
 }
 
 pub async fn list_roles(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for role listing");
-            return internal_error("Could not list roles");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not list roles").await);
 
     #[allow(clippy::type_complexity)]
     let rows: Result<Vec<(String, String, Option<String>, bool, Vec<String>)>, sqlx::Error> =

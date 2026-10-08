@@ -5,6 +5,7 @@
 //! rather than duplicating them, since both modules run variations of the
 //! same underlying filtered query against `auth.auth_audit_logs`.
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::session_io::attachment_headers;
 use std::net::SocketAddr;
 
@@ -24,7 +25,7 @@ use uuid::Uuid;
 use crate::api::auth_audit_logs::{push_event_type_filter, push_user_id_filter};
 use crate::api::bad_request;
 use crate::api::{internal_error, AppState};
-use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser};
+use crate::auth::{audit_log, AuthenticatedUser};
 use crate::infrastructure::audit_log_pdf::{
     render_audit_log_pdf, AuditLogPdfReport, AuditLogPdfRow,
 };
@@ -331,13 +332,7 @@ pub async fn export_audit_logs(
         Err(response) => return *response,
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for audit log export");
-            return internal_error("Could not export the audit log");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &admin, "Could not export the audit log").await);
 
     let admin_identity: Result<Option<(String, String, String)>, sqlx::Error> =
         sqlx::query_as("SELECT first_name, last_name, email::text FROM auth.users WHERE id = $1")
@@ -506,13 +501,7 @@ pub async fn preview_audit_logs(
         Err(response) => return *response,
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for audit log preview");
-            return internal_error("Could not preview the audit log");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &admin, "Could not preview the audit log").await);
 
     let (rows, truncated) = match fetch_filtered_audit_logs(
         &mut tx,

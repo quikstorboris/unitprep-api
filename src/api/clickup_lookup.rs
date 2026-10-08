@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::clickup_connection::{clickup_client, clickup_failure_response, load_user_token};
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, not_found, ApiErrorBody, AppState};
 use crate::auth::{begin_rls_transaction, AuthenticatedUser};
 use crate::clickup::assignment::assign_unique;
@@ -207,13 +208,8 @@ pub async fn clickup_suggestions(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for ClickUp suggestions");
-            return internal_error("Could not load ClickUp suggestions");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not load ClickUp suggestions").await);
 
     let company: Option<(String, Option<String>)> = match sqlx::query_as(
         "SELECT legal_name, dba_name FROM clients.companies WHERE id = $1",

@@ -29,9 +29,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::session_io::attachment_response;
 use crate::api::{internal_error, not_found, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 
 const DEFAULT_LIMIT: i64 = 20;
@@ -171,13 +172,14 @@ pub async fn list_facility_tool_runs(
 ) -> Response {
     let limit = query.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for tool run listing");
-            return internal_error("Could not load this facility's Onboarding Work tab");
-        }
-    };
+    let mut tx = try_response!(
+        begin_for(
+            &state,
+            &user,
+            "Could not load this facility's Onboarding Work tab"
+        )
+        .await
+    );
 
     match facility_belongs_to_company(&mut tx, facility_id, company_id).await {
         Ok(true) => {}
@@ -268,13 +270,8 @@ pub async fn download_tool_run_output(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for tool run output download");
-            return internal_error("Could not download this run's output");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not download this run's output").await);
 
     match facility_belongs_to_company(&mut tx, facility_id, company_id).await {
         Ok(true) => {}
@@ -352,13 +349,8 @@ pub async fn download_tool_run_source(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for tool run source download");
-            return internal_error("Could not download this run's source file");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not download this run's source file").await);
 
     match facility_belongs_to_company(&mut tx, facility_id, company_id).await {
         Ok(true) => {}
@@ -438,13 +430,7 @@ pub async fn delete_tool_run(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for tool run delete");
-            return internal_error("Could not delete this run");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not delete this run").await);
 
     match facility_belongs_to_company(&mut tx, facility_id, company_id).await {
         Ok(true) => {}

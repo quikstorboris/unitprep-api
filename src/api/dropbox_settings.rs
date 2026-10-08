@@ -31,8 +31,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::integrations::secrets;
 
 const PERMISSION: &str = "integrations.manage";
@@ -153,13 +154,7 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for Dropbox settings read");
-            return internal_error("Could not load Dropbox settings");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not load Dropbox settings").await);
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
         "SELECT app_key, app_secret_ciphertext, refresh_token_ciphertext, root_namespace_id, root_path, updated_at, updated_by
@@ -253,13 +248,7 @@ pub async fn update_settings(
         }
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for Dropbox settings update");
-            return internal_error("Could not update Dropbox settings");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not update Dropbox settings").await);
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
         "UPDATE integrations.dropbox_configuration

@@ -1,7 +1,8 @@
 //! `DELETE .../people/{id}` -- unlinks a person from a facility.
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, not_found, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use crate::clients::repository::unlink_person_from_facility;
 use axum::extract::{Path, State};
@@ -31,13 +32,7 @@ pub async fn unlink_facility_person(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for unlink facility person");
-            return internal_error("Could not remove this person");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not remove this person").await);
 
     let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
         "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",

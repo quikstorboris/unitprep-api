@@ -4,8 +4,9 @@ use super::dto::{FacilityPeopleResponse, FacilityPerson, MissingLegalOwner};
 use super::owners::{
     has_a_named_owner, merchant_account_owners, sister_facility_owners, FacilityIdentity,
 };
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, not_found, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::clients::legal_owner::{legal_owner_flags, unmatched_owners, RosterIdentity};
 use crate::clients::people::PersonAssignment;
 use crate::clients::repository::heal_person_in_place;
@@ -21,13 +22,8 @@ pub async fn get_facility_people(
     user: AuthenticatedUser,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for facility people");
-            return internal_error("Could not load this facility's Users tab");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not load this facility's Users tab").await);
 
     let facility: Option<FacilityIdentity> = match sqlx::query_as(
         "SELECT ps_intake_run_id FROM clients.facilities WHERE id = $1 AND company_id = $2",

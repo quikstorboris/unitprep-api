@@ -1,7 +1,8 @@
 //! `PUT .../people/{id}` -- edits a facility person.
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, not_found, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use crate::clients::repository::edit_person_and_facility_link;
 use axum::extract::{Json, Path, State};
@@ -45,13 +46,7 @@ pub async fn edit_facility_person(
         );
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for edit facility person");
-            return internal_error("Could not save this person");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not save this person").await);
 
     let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
         "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",

@@ -22,8 +22,9 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, not_found, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 
 #[derive(Debug, Deserialize)]
@@ -44,13 +45,14 @@ pub async fn update_facility_dropbox_folder(
 ) -> Response {
     let user_agent = user_agent_from(&headers);
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for update dropbox folder");
-            return internal_error("Could not update this facility's Dropbox folder");
-        }
-    };
+    let mut tx = try_response!(
+        begin_for(
+            &state,
+            &user,
+            "Could not update this facility's Dropbox folder"
+        )
+        .await
+    );
 
     let existing: Option<(Option<String>,)> = match sqlx::query_as(
         "SELECT dropbox_folder_url FROM clients.facilities WHERE id = $1 AND company_id = $2",

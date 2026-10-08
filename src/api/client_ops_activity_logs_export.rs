@@ -6,6 +6,7 @@
 //! `report_title` field) -- both PDF exports are the same fixed-column
 //! table with a different title and a different underlying query.
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::session_io::attachment_headers;
 use std::net::SocketAddr;
 
@@ -25,7 +26,7 @@ use uuid::Uuid;
 use crate::api::bad_request;
 use crate::api::client_ops_activity_logs::{push_actor_filter, push_in_filter};
 use crate::api::{internal_error, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::infrastructure::audit_log_pdf::{
     render_audit_log_pdf, AuditLogPdfReport, AuditLogPdfRow,
 };
@@ -283,13 +284,7 @@ pub async fn export_activity_logs(
         return *response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for activity log export");
-            return internal_error("Could not export the activity log");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not export the activity log").await);
 
     let exporter_identity: Result<Option<(String, String, String)>, sqlx::Error> =
         sqlx::query_as("SELECT first_name, last_name, email::text FROM auth.users WHERE id = $1")
@@ -418,13 +413,8 @@ pub async fn preview_activity_logs(
         return *response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for activity log preview");
-            return internal_error("Could not preview the activity log");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not preview the activity log").await);
 
     let (rows, truncated) = match fetch_filtered_activity_logs(&mut tx, &request, PREVIEW_ROW_CAP)
         .await

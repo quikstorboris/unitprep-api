@@ -21,8 +21,9 @@ use sqlx::{Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::api::client_ops_activity_logs::push_actor_filter;
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, user_agent_from, ApiErrorBody, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 
 const PERMISSION: &str = "client_ops.perform";
@@ -286,13 +287,7 @@ pub async fn list_companies(
         .map(str::trim)
         .filter(|value| !value.is_empty());
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for company list");
-            return internal_error("Could not load clients");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not load clients").await);
 
     let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
         "SELECT c.id, c.legal_name, c.created_at, c.archived_at, c.implementation_completed_at, \
@@ -370,13 +365,7 @@ async fn set_archived(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for company archive toggle");
-            return internal_error("Could not update this client");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not update this client").await);
 
     let query = if archive {
         "UPDATE clients.companies SET archived_at = now() WHERE id = $1 AND archived_at IS NULL RETURNING id, legal_name"
@@ -491,13 +480,7 @@ pub async fn delete_company(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for company delete");
-            return internal_error("Could not delete this client");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not delete this client").await);
 
     let deleted: Result<Option<(Uuid, String)>, sqlx::Error> =
         sqlx::query_as("DELETE FROM clients.companies WHERE id = $1 RETURNING id, legal_name")

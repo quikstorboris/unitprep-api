@@ -54,8 +54,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, process_street_not_configured, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::clients::company_naming::resolve_company_name;
 use crate::clients::intake_mapping::{map_intake_fields, MappedCompany, MappedFacility};
 use crate::clients::merchant_account_correlation::{
@@ -197,13 +198,14 @@ pub async fn preview_clients(
     // real per-run fetches below start. Closed before those, same
     // discipline `clients_search` already follows: never hold a DB
     // transaction open across network I/O.
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for client preview");
-            return internal_error("Could not load these runs from Process Street");
-        }
-    };
+    let mut tx = try_response!(
+        begin_for(
+            &state,
+            &user,
+            "Could not load these runs from Process Street"
+        )
+        .await
+    );
 
     let merchant_account_titles = match merchant_account_run_titles(&mut tx).await {
         Ok(titles) => titles,

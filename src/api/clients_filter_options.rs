@@ -24,8 +24,9 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::api::clients_companies::StaffRef;
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::clients::us_states;
 
 /// One state option for the filter checkbox list -- `name` is what's
@@ -55,13 +56,8 @@ pub async fn get_filter_options(
     State(state): State<AppState>,
     user: AuthenticatedUser,
 ) -> Response {
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for clients filter options");
-            return internal_error("Could not load client filter options");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not load client filter options").await);
 
     let raw_states: Result<Vec<(String,)>, sqlx::Error> = sqlx::query_as(
         "SELECT DISTINCT state FROM clients.facilities WHERE state IS NOT NULL AND state <> ''",

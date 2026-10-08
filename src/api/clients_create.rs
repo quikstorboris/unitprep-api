@@ -19,10 +19,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{
     internal_error, process_street_not_configured, user_agent_from, ApiErrorBody, AppState,
 };
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use crate::clients::create::{
     check_not_already_imported, fetch_create_data, write_create_data, CreateError,
@@ -137,15 +138,8 @@ pub async fn create_client(
     // --- Phase 1: fail fast on an already-imported run before ever
     // talking to Process Street, in its own short transaction. ---
     {
-        let mut precheck_tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys)
-            .await
-        {
-            Ok(tx) => tx,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for client creation pre-check");
-                return internal_error("Could not create this client");
-            }
-        };
+        let mut precheck_tx =
+            try_response!(begin_for(&state, &user, "Could not create this client").await);
         match check_not_already_imported(&mut precheck_tx, &all_run_ids).await {
             Ok(()) => {
                 if let Err(err) = precheck_tx.commit().await {
@@ -195,13 +189,7 @@ pub async fn create_client(
     // check only protects against wasting a Process Street round trip
     // on an already-rejected request, not against a second request
     // racing in between. ---
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for client creation write");
-            return internal_error("Could not create this client");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not create this client").await);
 
     let result = write_create_data(
         &mut tx,

@@ -1,8 +1,9 @@
 //! `POST .../people` -- links a person to a facility.
 
 use super::SOURCES;
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, not_found, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use crate::clients::people::PersonAssignment;
 use crate::clients::repository::upsert_person_and_link_to_facility;
@@ -63,13 +64,7 @@ pub async fn add_facility_person(
         role: request.role,
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for add facility person");
-            return internal_error("Could not add this person");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not add this person").await);
 
     let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
         "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",

@@ -28,8 +28,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::QueryBuilder;
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, AppState};
-use crate::auth::begin_rls_transaction;
 use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 
@@ -164,13 +164,7 @@ pub async fn list_activity_logs(
         None => Vec::new(),
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for activity log listing");
-            return internal_error("Could not list activity logs");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not list activity logs").await);
 
     let mut builder: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "SELECT id, event_type, actor_user_id, entity_type, entity_id, metadata, before_state, \

@@ -57,8 +57,9 @@ use axum::{
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct FacilityOnboardingSummary {
@@ -105,13 +106,14 @@ pub async fn get_onboarding_summary(
     user: AuthenticatedUser,
     Path(company_id): Path<Uuid>,
 ) -> Response {
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for onboarding summary");
-            return internal_error("Could not load this company's Onboarding Summary");
-        }
-    };
+    let mut tx = try_response!(
+        begin_for(
+            &state,
+            &user,
+            "Could not load this company's Onboarding Summary"
+        )
+        .await
+    );
 
     let rows: Result<Vec<FacilityOnboardingSummary>, sqlx::Error> = sqlx::query_as(
         "SELECT f.id AS facility_id, f.name AS facility_name,

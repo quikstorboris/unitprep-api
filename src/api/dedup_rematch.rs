@@ -24,6 +24,7 @@ use crate::api::blocking::run_blocking;
 use crate::api::dedup::ExportFormat;
 use crate::api::dedup_blocking;
 use crate::api::dedup_view::{build_report_view, DedupReportView};
+use crate::api::rls::{begin_for, try_response};
 use crate::api::tool_runs::facility_belongs_to_company;
 use crate::api::{internal_error, not_found, session_not_found, AppState};
 use crate::application::dedup_session_service::DedupSessionService;
@@ -101,13 +102,7 @@ pub async fn rematch_tool_run(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for tool run rematch");
-            return internal_error("Could not re-check this run");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not re-check this run").await);
 
     match facility_belongs_to_company(&mut tx, facility_id, company_id).await {
         Ok(true) => {}

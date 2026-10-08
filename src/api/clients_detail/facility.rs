@@ -1,7 +1,8 @@
 //! `GET /clients/{id}/facilities/{id}` -- one facility's own fields.
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, not_found, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -43,13 +44,7 @@ pub async fn get_facility_detail(
     user: AuthenticatedUser,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for facility detail");
-            return internal_error("Could not load this facility");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not load this facility").await);
 
     let facility: Option<FacilityDetailResponse> = match sqlx::query_as(
         "SELECT id, company_id, name, street_address, city, state, zip, phone, email, \

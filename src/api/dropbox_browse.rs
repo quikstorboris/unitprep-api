@@ -27,8 +27,9 @@ use uuid::Uuid;
 
 use unitprep_core::uploaded_file::UploadedFile;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, not_found, ApiErrorBody, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 
 /// The directory portion of a Dropbox path -- `None` for a bare
 /// root-level name with no `/` at all (never actually seen in practice:
@@ -288,13 +289,14 @@ pub async fn facility_dropbox_folder(
     Path(company_id): Path<Uuid>,
     Query(query): Query<FacilityDropboxFolderQuery>,
 ) -> Response {
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for facility dropbox folder lookup");
-            return internal_error("Could not look up this facility's Dropbox folder");
-        }
-    };
+    let mut tx = try_response!(
+        begin_for(
+            &state,
+            &user,
+            "Could not look up this facility's Dropbox folder"
+        )
+        .await
+    );
 
     let facility: Option<(Option<String>,)> = match sqlx::query_as(
         "SELECT dropbox_folder_url FROM clients.facilities WHERE company_id = $1 AND name = $2",

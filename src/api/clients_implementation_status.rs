@@ -17,8 +17,9 @@ use axum::{
 };
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, not_found, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 
 const PERMISSION: &str = "client_ops.perform";
@@ -49,13 +50,7 @@ async fn set_completed(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for the implementation-completed toggle");
-            return internal_error("Could not update this client");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not update this client").await);
 
     let query = if completed {
         "UPDATE clients.companies \

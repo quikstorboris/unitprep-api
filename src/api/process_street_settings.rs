@@ -43,8 +43,9 @@ use chrono::{DateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::integrations::secrets;
 
 /// The closed set of timezones the "run at a specific time" schedule
@@ -156,13 +157,8 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for Process Street settings read");
-            return internal_error("Could not load Process Street settings");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not load Process Street settings").await);
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
         "SELECT schedule_mode, sync_interval_hours, sync_time, sync_timezone,
@@ -322,13 +318,8 @@ pub async fn update_settings(
         }
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for Process Street settings update");
-            return internal_error("Could not update Process Street settings");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not update Process Street settings").await);
 
     let row: Result<SettingsRow, sqlx::Error> = sqlx::query_as(
         "UPDATE integrations.process_street_settings

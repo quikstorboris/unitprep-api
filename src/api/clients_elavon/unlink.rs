@@ -1,8 +1,9 @@
 //! `DELETE .../elavon` -- removes a facility's Merchant Account link and stored data.
 
 use super::PERMISSION;
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, not_found, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use axum::{
     extract::{Path, State},
@@ -45,13 +46,14 @@ pub async fn unlink_facility_elavon(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for elavon unlink");
-            return internal_error("Could not unlink this facility's Merchant Account run");
-        }
-    };
+    let mut tx = try_response!(
+        begin_for(
+            &state,
+            &user,
+            "Could not unlink this facility's Merchant Account run"
+        )
+        .await
+    );
 
     let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
         "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",

@@ -1,11 +1,12 @@
 //! `POST .../elavon/resync` -- re-pulls the linked run from Process Street.
 
 use super::{not_linked, PERMISSION};
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{
     encryption_not_configured, internal_error, not_found, process_street_not_configured,
     user_agent_from, AppState,
 };
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use crate::clients::merchant_account_mapping::{
     credentials_added_to_qms_from_tasks, map_merchant_account_fields,
@@ -67,13 +68,14 @@ pub async fn resync_elavon_data(
     // for the same reason (never hold a transaction across a PS round
     // trip). ---
     let ma_run_id = {
-        let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-            Ok(tx) => tx,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for elavon data resync");
-                return internal_error("Could not resync this facility's Elavon data");
-            }
-        };
+        let mut tx = try_response!(
+            begin_for(
+                &state,
+                &user,
+                "Could not resync this facility's Elavon data"
+            )
+            .await
+        );
 
         let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
             "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",
@@ -161,13 +163,14 @@ pub async fn resync_elavon_data(
 
     // --- Phase 3: the write, in a fresh transaction opened only now
     // that nothing left to do is network-bound. ---
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for elavon data resync write");
-            return internal_error("Could not resync this facility's Elavon data");
-        }
-    };
+    let mut tx = try_response!(
+        begin_for(
+            &state,
+            &user,
+            "Could not resync this facility's Elavon data"
+        )
+        .await
+    );
 
     if let Err(err) = resync_merchant_account_run(
         &mut tx,

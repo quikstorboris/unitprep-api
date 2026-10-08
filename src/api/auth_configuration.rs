@@ -25,8 +25,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, AppState};
-use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser, ADD_PASSKEY};
+use crate::auth::{audit_log, AuthenticatedUser, ADD_PASSKEY};
 
 #[derive(Debug, Serialize)]
 pub struct AuthConfigurationResponse {
@@ -63,13 +64,7 @@ pub async fn get_configuration(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for configuration read");
-            return internal_error("Could not load security policies");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &admin, "Could not load security policies").await);
 
     #[allow(clippy::type_complexity)]
     let row: Result<
@@ -137,13 +132,8 @@ pub async fn update_configuration(
         );
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for configuration update");
-            return internal_error("Could not update security policies");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &admin, "Could not update security policies").await);
 
     let prior: Result<sqlx::types::Json<Vec<String>>, sqlx::Error> =
         sqlx::query_scalar("SELECT step_up_actions FROM auth.auth_configuration WHERE id = 1")

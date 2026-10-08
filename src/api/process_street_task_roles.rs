@@ -17,8 +17,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, not_found, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::clients::ps_task_roles::{self, KNOWN_ROLES};
 
 const PERMISSION: &str = "integrations.manage";
@@ -103,13 +104,14 @@ pub async fn get_task_roles(State(state): State<AppState>, user: AuthenticatedUs
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for task roles read");
-            return internal_error("Could not load the Process Street task mapping");
-        }
-    };
+    let mut tx = try_response!(
+        begin_for(
+            &state,
+            &user,
+            "Could not load the Process Street task mapping"
+        )
+        .await
+    );
 
     let mut roles = Vec::with_capacity(KNOWN_ROLES.len());
     for known in KNOWN_ROLES {
@@ -193,13 +195,14 @@ pub async fn update_task_role(
         );
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for task role update");
-            return internal_error("Could not update the Process Street task mapping");
-        }
-    };
+    let mut tx = try_response!(
+        begin_for(
+            &state,
+            &user,
+            "Could not update the Process Street task mapping"
+        )
+        .await
+    );
 
     let result: Result<(), sqlx::Error> = async {
         // Keep rows for names that stay (original ids/ordering), remove

@@ -6,9 +6,10 @@ use super::views::{
     build_candidate_views, CandidateView, TaggerCheckResponse, TierView, MAX_CANDIDATES,
 };
 use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root, parent_folder};
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, ApiErrorBody, AppState};
 use crate::application::tagger_session_service::TaggerSessionService;
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::tool_runs;
 use axum::extract::{Json, Multipart, Query, State};
 use axum::http::StatusCode;
@@ -136,13 +137,7 @@ pub(super) async fn recognize_and_create_session(
         }
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for tag_pattern lookup");
-            return internal_error("Could not load the pattern library");
-        }
-    };
+    let mut tx = try_response!(begin_for(state, user, "Could not load the pattern library").await);
 
     let patterns = match load_label_proximity_patterns(&mut tx).await {
         Ok(patterns) => patterns,

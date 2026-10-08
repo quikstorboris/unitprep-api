@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.102] - 2026-10-08
+
+Efficiency refactor chunk D2a: opening the caller's RLS transaction is one line. No behaviour change.
+
+### Changed
+- New `api/rls.rs`: `begin_for(&state, &user, "Could not load X")` opens the caller's row-level-security transaction (`begin_rls_transaction` with their id and roles) and, on failure, logs the cause with the caller's id and answers the same 500; `try_response!` unwraps its `Result<_, Response>` into the handler's early return.
+- 73 handlers in 45 files had the identical seven-line `match begin_rls_transaction(...) { Ok(tx) => tx, Err(err) => { tracing::error!(...); return internal_error("..."); } }`; each is now `let mut tx = try_response!(begin_for(&state, &user, "...").await);`. About 300 lines removed. The failure log line is now `failed to open the request's RLS transaction` with the caller-facing message as its `context` field (it used to be a per-endpoint sentence); the response is unchanged.
+- Not changed: the other 59 `begin_rls_transaction` calls, which sit in helpers that return `Result`, return a cookie-jar tuple, or take a different identity (pre-authentication flows) -- they do not have the handler's early-return shape.
+
 ## [1.9.101] - 2026-10-07
 
 Efficiency refactor chunk D4h (long functions, first batch): four of the longest non-route functions broken into named steps. No behaviour change.

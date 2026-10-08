@@ -6,8 +6,9 @@ use super::build::{
     FacilityIdentity, PartyRow,
 };
 use super::dto::{ElavonCandidate, ElavonStatusResponse};
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, not_found, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::clients::merchant_account_correlation::{
     all_intake_run_titles, correlate_by_title, merchant_account_run_titles, Correlation,
     IntakeRunTitle, MerchantAccountRunInfo,
@@ -28,13 +29,14 @@ pub async fn get_facility_elavon(
     user: AuthenticatedUser,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
 ) -> Response {
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for facility elavon");
-            return internal_error("Could not load this facility's Elavon status");
-        }
-    };
+    let mut tx = try_response!(
+        begin_for(
+            &state,
+            &user,
+            "Could not load this facility's Elavon status"
+        )
+        .await
+    );
 
     let facility: Option<FacilityIdentity> = match sqlx::query_as(
         "SELECT ps_intake_run_id FROM clients.facilities WHERE id = $1 AND company_id = $2",

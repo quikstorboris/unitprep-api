@@ -25,8 +25,9 @@ use serde::{Deserialize, Serialize};
 use sqlx::QueryBuilder;
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, AppState};
-use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser};
+use crate::auth::{audit_log, AuthenticatedUser};
 
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
@@ -188,13 +189,7 @@ pub async fn list_audit_logs(
         None => Vec::new(),
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, admin.user_id, &admin.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, admin_user_id = %admin.user_id, "failed to open transaction for audit log listing");
-            return internal_error("Could not list audit logs");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &admin, "Could not list audit logs").await);
 
     let mut builder: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
         "SELECT id, event_type, actor_user_id, target_user_id, metadata, before_state, \

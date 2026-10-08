@@ -28,8 +28,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::clickup_lookup::{token_and_hierarchy, verify_list, ListOption};
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, internal_error, not_found, user_agent_from, ApiErrorBody, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 
 const PERMISSION: &str = "integrations.clickup";
@@ -175,13 +176,7 @@ pub async fn save_clickup_links(
         }
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction to save ClickUp links");
-            return internal_error("Could not save the ClickUp links");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not save the ClickUp links").await);
 
     let batch_facility_ids: Vec<Uuid> = request.links.iter().map(|l| l.facility_id).collect();
     let mut changes: Vec<(Uuid, Option<String>, ListOption)> = Vec::new();
@@ -361,13 +356,7 @@ async fn unlink(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction to unlink ClickUp");
-            return internal_error("Could not remove the ClickUp link");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not remove the ClickUp link").await);
 
     // What is linked right now (also the audit "before").
     let linked: Result<Vec<(Uuid, String, String)>, sqlx::Error> = sqlx::query_as(

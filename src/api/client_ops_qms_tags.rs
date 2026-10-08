@@ -21,8 +21,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, conflict, internal_error, not_found, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log::{self, Change};
 
 const PERMISSION: &str = "client_ops.manage_tags";
@@ -59,13 +60,7 @@ pub struct UpdateQmsTagRequest {
 /// not, so a future editor UI can show and reactivate a deactivated tag
 /// rather than needing a second endpoint just to find it again.
 pub async fn list_qms_tags(State(state): State<AppState>, user: AuthenticatedUser) -> Response {
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for qms tag listing");
-            return internal_error("Could not list QMS tags");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not list QMS tags").await);
 
     let rows: Result<Vec<QmsTag>, sqlx::Error> = sqlx::query_as(
         "SELECT tag_key, label, category, is_active
@@ -121,13 +116,7 @@ pub async fn create_qms_tag(
         );
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for qms tag creation");
-            return internal_error("Could not create this tag");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not create this tag").await);
 
     let insert_result = sqlx::query(
         "INSERT INTO client_ops.qms_tag (tag_key, label, category) VALUES ($1, $2, $3)",
@@ -244,13 +233,7 @@ pub async fn update_qms_tag(
         );
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for qms tag update");
-            return internal_error("Could not update this tag");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not update this tag").await);
 
     let before = match fetch_current(&mut tx, &tag_key).await {
         Ok(Some(row)) => row,
@@ -342,13 +325,7 @@ async fn set_active(
         return response;
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for qms tag activation change");
-            return internal_error("Could not update this tag");
-        }
-    };
+    let mut tx = try_response!(begin_for(state, user, "Could not update this tag").await);
 
     let before = match fetch_current(&mut tx, tag_key).await {
         Ok(Some(row)) => row,

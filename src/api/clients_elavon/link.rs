@@ -1,11 +1,12 @@
 //! `POST .../link` -- the manual confirm that ties a Merchant Account run to a facility.
 
 use super::{already_linked, PERMISSION};
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{
     encryption_not_configured, internal_error, not_found, process_street_not_configured,
     user_agent_from, ApiErrorBody, AppState,
 };
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use crate::clients::merchant_account_mapping::{
     credentials_added_to_qms_from_tasks, map_merchant_account_fields,
@@ -74,13 +75,9 @@ pub async fn link_facility_elavon(
     // --- Phase 1: quick DB-only checks, in their own short transaction
     // that closes before anything talks to the network. ---
     {
-        let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-            Ok(tx) => tx,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for elavon link");
-                return internal_error("Could not link this Merchant Account run");
-            }
-        };
+        let mut tx = try_response!(
+            begin_for(&state, &user, "Could not link this Merchant Account run").await
+        );
 
         let facility_exists: Option<(Uuid,)> = match sqlx::query_as(
             "SELECT id FROM clients.facilities WHERE id = $1 AND company_id = $2",
@@ -186,13 +183,8 @@ pub async fn link_facility_elavon(
     // self-corrects: `facility_merchant_accounts.facility_id` is a
     // primary key, so the loser gets a clean database error here rather
     // than corrupting anything. ---
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for elavon link write");
-            return internal_error("Could not link this Merchant Account run");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not link this Merchant Account run").await);
 
     if let Err(err) = ingest_merchant_account_run(
         &mut tx,

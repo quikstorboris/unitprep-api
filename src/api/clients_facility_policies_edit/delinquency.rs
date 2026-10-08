@@ -6,8 +6,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, user_agent_from, AppState};
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use crate::clients::policy_exemption::{mark_exempt_if_qsx_and_was_empty, PolicyCategory};
 
@@ -104,13 +105,8 @@ pub async fn update_delinquency(
         }
     }
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for update_delinquency");
-            return internal_error("Could not save delinquency entries");
-        }
-    };
+    let mut tx =
+        try_response!(begin_for(&state, &user, "Could not save delinquency entries").await);
 
     match ensure_facility_and_policies_row(&mut tx, company_id, facility_id).await {
         Ok(true) => {}

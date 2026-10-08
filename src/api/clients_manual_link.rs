@@ -43,11 +43,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{
     bad_request, encryption_not_configured, internal_error, not_found,
     process_street_not_configured, user_agent_from, AppState,
 };
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use crate::clients::intake_mapping::{map_intake_fields, MappedFacility};
 use crate::clients::merchant_account_mapping::{
@@ -129,13 +130,7 @@ pub async fn manual_link(
     // `link_facility_elavon` uses and for the same reason (never hold a
     // database connection open across a live PS round trip).
     {
-        let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-            Ok(tx) => tx,
-            Err(err) => {
-                tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for manual link precheck");
-                return internal_error("Could not link this run");
-            }
-        };
+        let mut tx = try_response!(begin_for(&state, &user, "Could not link this run").await);
 
         match facility_belongs_to_company(&mut tx, request.facility_id, company_id).await {
             Ok(true) => {}
@@ -229,13 +224,7 @@ async fn manual_link_merchant_account(
     let credentials_added_to_qms =
         credentials_added_to_qms_from_tasks(&tasks, &qms_credential_task_names);
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for manual link write");
-            return internal_error("Could not link this run");
-        }
-    };
+    let mut tx = try_response!(begin_for(state, user, "Could not link this run").await);
 
     // Whatever's already linked gets cleared first -- same three deletes
     // `unlink_facility_elavon` uses -- so this always succeeds as a
@@ -355,13 +344,7 @@ async fn manual_link_intake(
     let snapshot: Value = serde_json::to_value(&fields).unwrap_or(Value::Null);
     let refreshed = apply_facility_refresh(&MappedFacility::default(), &mapped.facility, &[]);
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for manual link write");
-            return internal_error("Could not link this run");
-        }
-    };
+    let mut tx = try_response!(begin_for(state, user, "Could not link this run").await);
 
     let previous_run_id: Option<(Option<String>,)> = match sqlx::query_as(
         "SELECT ps_intake_run_id FROM clients.facilities WHERE id = $1",

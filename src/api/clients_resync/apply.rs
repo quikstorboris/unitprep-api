@@ -3,10 +3,11 @@
 use super::compare::{load_comparisons, usable_cache_entry};
 use super::write::{write_all, ApplyError};
 use super::PERMISSION;
+use crate::api::rls::{begin_for, try_response};
 use crate::api::{
     encryption_not_configured, internal_error, not_found, process_street_not_configured, AppState,
 };
-use crate::auth::{begin_rls_transaction, AuthenticatedUser};
+use crate::auth::AuthenticatedUser;
 use crate::client_ops::audit_log;
 use crate::clients::repository::IngestMerchantAccountError;
 use axum::extract::{Json, Path, State};
@@ -112,13 +113,7 @@ pub async fn apply_resync(
         },
     };
 
-    let mut tx = match begin_rls_transaction(&state.db, user.user_id, &user.role_keys).await {
-        Ok(tx) => tx,
-        Err(err) => {
-            tracing::error!(error = %err, user_id = %user.user_id, "failed to open transaction for resync apply");
-            return internal_error("Could not apply the re-sync");
-        }
-    };
+    let mut tx = try_response!(begin_for(&state, &user, "Could not apply the re-sync").await);
 
     let written = match write_all(
         &mut tx,
