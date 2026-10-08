@@ -3829,6 +3829,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
+ "ts-rs",
  "unitprep-core",
 ]
 

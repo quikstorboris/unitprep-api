@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.107] - 2026-10-08
+
+Efficiency refactor chunk F7a (api side): the dedup report views are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.
+
+### Added
+- `#[derive(ts_rs::TS)]` + `#[ts(export)]` on `DedupCheckResponse`, `DedupReportView` and every view under it (`dedup_view.rs`), and on the enums they reference in `unitprep-dedup` (`FieldCategory`, `FieldName`, `RelatednessSignal`, `UnidentifiedMode`). `unitprep-dedup` gains the `ts-rs` dependency (already a workspace dependency; a data-shape-only derive, like its existing `serde` one). `scripts/check_ts_bindings.sh` (preflight step 9) now covers 28 files instead of 11, so a backend rename of any of these fields fails the gate until `unitprep-ui` is regenerated.
+
+### Notes
+- Regenerating found one real mismatch: the hand-written UI `FieldName` union listed `PhoneNumberPrefix` and `AltContactPhoneNumberPrefix`, which the Rust enum deliberately excludes (see its doc comment) and the backend never sends. The generated type drops them; nothing in the UI referenced them.
+- `duplicate_customer_records` and `unidentified` were optional in the hand-written UI type ("reports cached before this field existed"); the generated type makes them required, because the backend always sends them. UI code that tolerates their absence still compiles and still protects against old stored reports.
+
 ## [1.9.106] - 2026-10-08
 
 Efficiency refactor chunk D5a: the `Database`/`Environment` marker both integration settings pages report is one type. No behaviour change.

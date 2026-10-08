@@ -19,3 +19,8 @@ anyhow = { workspace = true }
 # UnitGroup's own domain::models) — this is a data-shape derive, not an
 # I/O dependency, so it doesn't compromise this crate's no-I/O purity.
 serde = { workspace = true }
+
+# TypeScript bindings for the report-view types the UI renders (same
+# data-shape-only derive as serde above; `unitprep-api`'s `dedup_view`
+# exports the views, these are the enums they reference).
+ts-rs = { workspace = true }

@@ -28,7 +28,8 @@ use unitprep_dedup::{
 
 use crate::infrastructure::dedup_export_plan::{build_export_plan, field_cell_refs, PlannedRow};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct BulletView {
     pub field: FieldName,
     pub label: &'static str,
@@ -40,7 +41,8 @@ pub struct BulletView {
     pub cell_refs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct FlaggedGroupView {
     pub key: String,
     pub display_name: String,
@@ -52,7 +54,8 @@ pub struct FlaggedGroupView {
     pub bullets: Vec<BulletView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DuplicateTenantView {
     pub tenant_id: String,
     pub units: Vec<String>,
@@ -61,7 +64,8 @@ pub struct DuplicateTenantView {
 /// One person recorded under several vendor tenant ids -- see
 /// `unitprep_dedup::duplicate_records`. `differing_categories` is empty
 /// in the common case (the records agree on every contact field).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DuplicateCustomerRecordView {
     pub display_name: String,
     pub tenants: Vec<DuplicateTenantView>,
@@ -69,7 +73,8 @@ pub struct DuplicateCustomerRecordView {
     pub note: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct TypoVariantView {
     pub display_name_a: String,
     pub units_a: Vec<String>,
@@ -85,7 +90,8 @@ pub struct TypoVariantView {
     pub note: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct RelatedTenantMemberView {
     pub display_name: String,
     pub units: Vec<String>,
@@ -97,21 +103,24 @@ pub struct RelatedTenantMemberView {
 /// household (see `unitprep_dedup::RelatedTenantEvidence`'s own doc
 /// comment on why a household's members don't all necessarily share
 /// every piece of its evidence directly).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct RelatedTenantEvidenceView {
     pub signal: RelatednessSignal,
     pub shared_value: String,
     pub members: Vec<RelatedTenantMemberView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct RelatedTenantView {
     pub members: Vec<RelatedTenantMemberView>,
     pub evidence: Vec<RelatedTenantEvidenceView>,
     pub note: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DedupReportView {
     pub total_rows: usize,
     pub unique_tenants: usize,
@@ -125,14 +134,16 @@ pub struct DedupReportView {
     pub unidentified: Option<UnidentifiedView>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct IdentifiedMatchView {
     pub tenant_id: String,
     pub display_name: String,
     pub units: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct UnidentifiedTenantView {
     pub display_name: String,
     pub units: Vec<String>,
@@ -144,7 +155,8 @@ pub struct UnidentifiedTenantView {
 /// only once the user chose to match by name; their cell references are
 /// empty because this section is not placed by the export planner's
 /// per-cluster cell mapping.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct UnidentifiedView {
     pub mode: UnidentifiedMode,
     pub tenants: Vec<UnidentifiedTenantView>,

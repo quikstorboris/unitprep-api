@@ -3,7 +3,8 @@
 use crate::api::dedup_view::DedupReportView;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DedupCheckResponse {
     pub session_id: String,
     pub report: DedupReportView,

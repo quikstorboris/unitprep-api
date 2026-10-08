@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 /// the exact priority order the reference script uses to pick which
 /// note to show when multiple categories differ at once (first match
 /// in this order wins).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub enum FieldCategory {
     Phone,
     Email,
@@ -55,7 +56,8 @@ pub enum FieldKind {
 /// values are populated. `TenantRecord` still stores the raw values
 /// (`phone_number_prefix`/`alt_contact_phone_number_prefix`) for
 /// export passthrough — this enum only governs what's compared.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub enum FieldName {
     PhoneNumber,
     Email,

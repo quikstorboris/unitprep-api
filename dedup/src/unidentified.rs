@@ -19,8 +19,9 @@ use crate::similarity::find_typo_variant_candidates;
 use crate::types::{FlaggedGroup, TenantGroup, TenantRecord, TypoVariantCandidate};
 
 /// What the user chose to do with the tenants that have no customer id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum UnidentifiedMode {
     /// Not decided yet: the tenants are listed and the user is asked.
     #[default]

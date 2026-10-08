@@ -54,7 +54,8 @@ const MAX_CLUSTER_SIZE: usize = 3;
 /// check, not a second normalization pass.
 const MIN_PHONE_DIGITS: usize = 10;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub enum RelatednessSignal {
     SharedPhone,
     SharedEmail,
