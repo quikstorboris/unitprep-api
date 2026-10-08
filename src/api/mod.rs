@@ -71,6 +71,9 @@ mod resolve_unit_format;
 mod rls;
 mod route_access;
 mod router;
+#[cfg(test)]
+#[path = "secret_debug_tests.rs"]
+mod secret_debug_tests;
 mod select_group_file;
 pub(crate) mod select_unit_file;
 pub(crate) mod session_io;

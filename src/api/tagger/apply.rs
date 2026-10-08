@@ -268,6 +268,7 @@ pub(super) async fn build_edited_docx(
         apply_ms = started.elapsed().as_millis(),
         "Tagger apply complete"
     );
+    crate::api::slow_operation::warn_if_slow("tagger_apply", started.elapsed());
 
     Ok((edited_bytes, tagged_file_name(&original_file_name)))
 }

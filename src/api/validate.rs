@@ -176,6 +176,7 @@ pub fn run_validation(
             started.elapsed().as_millis(),
         "Validation complete"
     );
+    crate::api::slow_operation::warn_if_slow("unit_group_validate", started.elapsed());
 
     Ok(ValidateResponse {
         files_checked: validation.files_checked,

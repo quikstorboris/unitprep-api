@@ -283,6 +283,24 @@ pub async fn run(args: BootstrapArgs) -> Result<String, String> {
         .await
         .map_err(|err| format!("could not commit: {err}"))?;
 
+    // The most privileged account action in the system must not be the one
+    // that leaves no record. No actor: the operator running this command has
+    // no application identity, so `target` is the account and `metadata.via`
+    // says it came from the command line, not from an administrator.
+    crate::auth::audit_log::record(
+        &pool,
+        crate::auth::audit_log::event::INVITE_CREATED,
+        crate::auth::audit_log::Subjects {
+            actor: None,
+            target: Some(user_id),
+        },
+        None,
+        None,
+        crate::auth::audit_log::Change::none(),
+        audit_metadata(&args.mode, hours),
+    )
+    .await;
+
     let headline = match args.mode {
         Mode::Create { .. } => "Administrator created.",
         Mode::ReissueInvite => "New setup link issued; any previous one is now void.",
@@ -304,6 +322,20 @@ pub async fn run(args: BootstrapArgs) -> Result<String, String> {
          writing -- until then the account exists but cannot sign in).\n",
         args.email
     ))
+}
+
+/// What the bootstrap's audit row carries: that it came from the command
+/// line, whether it created the administrator or reissued a setup link, and
+/// how long the link lives. Never the token.
+fn audit_metadata(mode: &Mode, invite_hours: i64) -> serde_json::Value {
+    serde_json::json!({
+        "via": "bootstrap_cli",
+        "mode": match mode {
+            Mode::Create { .. } => "create_administrator",
+            Mode::ReissueInvite => "reissue_invite",
+        },
+        "invite_hours": invite_hours,
+    })
 }
 
 /// The owner/direct connection this command needs.
@@ -481,6 +513,28 @@ async fn create_invite(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_audit_metadata_says_where_it_came_from_and_never_carries_a_token() {
+        let create = Mode::Create {
+            first_name: "A".to_string(),
+            last_name: "B".to_string(),
+            company: "quikstor".to_string(),
+            job_title: None,
+        };
+        let created = audit_metadata(&create, 24);
+        assert_eq!(created["via"], "bootstrap_cli");
+        assert_eq!(created["mode"], "create_administrator");
+        assert_eq!(created["invite_hours"], 24);
+
+        let reissued = audit_metadata(&Mode::ReissueInvite, 2);
+        assert_eq!(reissued["mode"], "reissue_invite");
+        assert_eq!(
+            reissued.as_object().unwrap().len(),
+            3,
+            "no token or email in the row"
+        );
+    }
 
     fn argv(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| s.to_string()).collect()

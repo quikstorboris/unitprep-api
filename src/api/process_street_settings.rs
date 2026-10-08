@@ -194,7 +194,7 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
 /// "interval"`, whatever's sent for them is ignored and NULLed out in
 /// the database, matching the CHECK constraint that only enforces their
 /// presence for the other mode.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct UpdateProcessStreetSettingsRequest {
     pub schedule_mode: String,
     pub sync_interval_hours: i16,
@@ -203,6 +203,20 @@ pub struct UpdateProcessStreetSettingsRequest {
     pub sync_time: Option<String>,
     pub sync_timezone: Option<String>,
     pub api_key: String,
+}
+
+/// `Debug` never prints api_key: a stray `{:?}` of this
+/// value in a log line must not leak a credential.
+impl std::fmt::Debug for UpdateProcessStreetSettingsRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpdateProcessStreetSettingsRequest")
+            .field("schedule_mode", &self.schedule_mode)
+            .field("sync_interval_hours", &self.sync_interval_hours)
+            .field("sync_time", &self.sync_time)
+            .field("sync_timezone", &self.sync_timezone)
+            .field("api_key", &"<redacted>")
+            .finish()
+    }
 }
 
 pub async fn update_settings(

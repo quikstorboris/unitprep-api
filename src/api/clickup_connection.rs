@@ -271,9 +271,19 @@ pub async fn get_connection(State(state): State<AppState>, user: AuthenticatedUs
     .into_response()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct SaveTokenRequest {
     pub token: String,
+}
+
+/// `Debug` never prints token: a stray `{:?}` of this
+/// value in a log line must not leak a credential.
+impl std::fmt::Debug for SaveTokenRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SaveTokenRequest")
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 pub async fn save_token(

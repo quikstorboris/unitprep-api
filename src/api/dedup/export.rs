@@ -141,6 +141,7 @@ pub async fn export(
         export_ms = started.elapsed().as_millis(),
         "Dedup export generated"
     );
+    crate::api::slow_operation::warn_if_slow("dedup_export", started.elapsed());
 
     response
 }

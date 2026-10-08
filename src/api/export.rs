@@ -253,6 +253,7 @@ async fn generate_export_zip(
         zip_name = %filename,
         "Export generated successfully"
     );
+    crate::api::slow_operation::warn_if_slow("unit_group_export", started.elapsed());
 
     Ok(GeneratedExport {
         zip_bytes,

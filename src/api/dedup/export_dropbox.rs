@@ -192,6 +192,7 @@ pub async fn export_to_dropbox(
         export_ms = started.elapsed().as_millis(),
         "Dedup export saved to Dropbox"
     );
+    crate::api::slow_operation::warn_if_slow("dedup_export_dropbox", started.elapsed());
 
     Json(DedupExportToDropboxResponse { path: dropbox_path }).into_response()
 }

@@ -140,11 +140,26 @@ where
         match build().send().await {
             Ok(response) => {
                 if is_last || !is_retryable_status(response.status()) {
+                    if is_last && attempt > 1 && is_retryable_status(response.status()) {
+                        tracing::warn!(
+                            status = response.status().as_u16(),
+                            attempts = attempt,
+                            "upstream still failing after retries, giving up"
+                        );
+                    }
                     return Ok(response);
                 }
 
                 let wait = match retry_after(&response) {
-                    Some(requested) if requested > MAX_RETRY_AFTER => return Ok(response),
+                    Some(requested) if requested > MAX_RETRY_AFTER => {
+                        tracing::warn!(
+                            status = response.status().as_u16(),
+                            retry_after_secs = requested.as_secs(),
+                            attempt,
+                            "upstream asked for a longer wait than is allowed, giving up"
+                        );
+                        return Ok(response);
+                    }
                     Some(requested) => requested,
                     None => backoff(&policy, attempt - 1),
                 };
@@ -159,6 +174,13 @@ where
             }
             Err(err) => {
                 if is_last || !is_retryable_error(&err) {
+                    if is_last && attempt > 1 && is_retryable_error(&err) {
+                        tracing::warn!(
+                            timeout = err.is_timeout(),
+                            attempts = attempt,
+                            "upstream still unreachable after retries, giving up"
+                        );
+                    }
                     return Err(err);
                 }
 

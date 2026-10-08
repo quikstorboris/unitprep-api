@@ -163,12 +163,25 @@ pub fn decrypt_facility_secrets(
 /// `bank_routing_number`, `bank_account_number` (`DecryptedFacilitySecrets`'s
 /// own job) and `quikstor_password`/`mid` (no display path anywhere) --
 /// same unknown-JSON-keys-silently-dropped trick.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct DecryptedElavonCredentials {
     pub account_id: Option<String>,
     pub qss_web_pin: Option<String>,
     pub pinpad_user_id: Option<String>,
     pub qss_api_pin: Option<String>,
+}
+
+/// `Debug` never prints qss_web_pin, qss_api_pin: a stray `{:?}` of this
+/// value in a log line must not leak a credential.
+impl std::fmt::Debug for DecryptedElavonCredentials {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecryptedElavonCredentials")
+            .field("account_id", &self.account_id)
+            .field("qss_web_pin", &"<redacted>")
+            .field("pinpad_user_id", &self.pinpad_user_id)
+            .field("qss_api_pin", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Decrypts a facility's `encrypted_secrets` blob into just the 4

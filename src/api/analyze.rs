@@ -98,6 +98,7 @@ pub async fn analyze(
         analysis_ms = started.elapsed().as_millis(),
         "Analysis complete"
     );
+    crate::api::slow_operation::warn_if_slow("unit_group_analyze", started.elapsed());
 
     let response = AnalyzeResponse {
         facilities: results.batch_run.facilities.len(),

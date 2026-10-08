@@ -6,6 +6,19 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.112] - 2026-10-08
+
+Refactor chunk G1b (operational logging and audit gaps). No migration; no change to any JSON.
+
+### Added
+- **Bootstrap is on the record.** `bootstrap-admin` (create the first administrator, or `--reissue-invite`) now writes an `invite_created` security-trail row: no actor (the operator has no application identity), the account as target, `metadata` = `{via: "bootstrap_cli", mode: "create_administrator" | "reissue_invite", invite_hours}`, never the token. Smoke-tested end to end against a scratch copy of the test database with the real binary: both modes write their row, and no token-like value appears in any row.
+- **Pool exhaustion is its own log line.** When a handler cannot get a connection before the acquire timeout, `begin_for` now logs `database connection pool exhausted` with `pool_size` and `pool_idle` (it used to be a generic "failed to open the request's RLS transaction" with the sqlx error text).
+- **Retry give-ups are logged.** `integrations::http::send_with_retry` logs one `warn` when it gives up after retrying (still failing / still unreachable / upstream asked for a longer `Retry-After` than allowed) -- previously only the individual retries were logged and the end result showed up only as a handler error.
+- **More slow-operation warnings.** `warn_if_slow` (2 s) now also covers dedup export (download and Dropbox), Template Tagger check and apply, and Unit Groups validate, analyze and export, next to the three dedup handlers that already had it.
+
+### Changed
+- `Debug` for `UpdateDropboxSettingsRequest`, `UpdateProcessStreetSettingsRequest`, `SaveTokenRequest` and `DecryptedElavonCredentials` is hand-written and prints `<redacted>` for the secrets (app secret, refresh token, API key, ClickUp token, QSS PINs), so a future `tracing::..!(request = ?request)` cannot leak them. An audit of every `tracing` call found no current log of a request body, headers or credential value (upstream response bodies are truncated since A2); this closes the one way that could regress. Tests print each type and assert the secret is absent and the non-secret fields are present.
+
 ## [1.9.111] - 2026-10-08
 
 Refactor chunk G1a (audit-log gaps): admin edits of integration settings and exports of the activity log are now on the record. One new event in each trail; no migration, no change to any existing JSON.

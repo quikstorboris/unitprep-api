@@ -190,6 +190,7 @@ pub(super) async fn recognize_and_create_session(
         check_ms = started.elapsed().as_millis(),
         "Tagger check complete"
     );
+    crate::api::slow_operation::warn_if_slow("tagger_check", started.elapsed());
 
     Json(TaggerCheckResponse {
         session_id,

@@ -317,3 +317,18 @@ fn decrypts_elavon_credentials_to_the_4_qms_pinpad_fields_only() {
     );
     clear_test_key();
 }
+
+/// G1: a stray `{:?}` of the decrypted credentials must not leak the PINs.
+#[test]
+fn decrypted_elavon_credentials_redact_the_pins_but_not_the_ids() {
+    const SECRET: &str = "TOPSECRET-do-not-log";
+    let credentials = DecryptedElavonCredentials {
+        account_id: Some("acct-9".to_string()),
+        qss_web_pin: Some(SECRET.to_string()),
+        pinpad_user_id: Some("pinpad-user".to_string()),
+        qss_api_pin: Some(SECRET.to_string()),
+    };
+    let printed = format!("{credentials:?}");
+    assert!(!printed.contains(SECRET), "{printed}");
+    assert!(printed.contains("acct-9") && printed.contains("pinpad-user"));
+}

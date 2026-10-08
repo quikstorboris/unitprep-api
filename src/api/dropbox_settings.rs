@@ -184,13 +184,27 @@ pub async fn get_settings(State(state): State<AppState>, user: AuthenticatedUser
 /// doc comment on why the form is always pre-filled with the effective
 /// value, never blank), so saving just re-encrypts and stores exactly
 /// what came in.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct UpdateDropboxSettingsRequest {
     pub app_key: String,
     pub app_secret: String,
     pub refresh_token: String,
     pub root_namespace_id: String,
     pub root_path: String,
+}
+
+/// `Debug` never prints app_secret, refresh_token: a stray `{:?}` of this
+/// value in a log line must not leak a credential.
+impl std::fmt::Debug for UpdateDropboxSettingsRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UpdateDropboxSettingsRequest")
+            .field("app_key", &self.app_key)
+            .field("app_secret", &"<redacted>")
+            .field("refresh_token", &"<redacted>")
+            .field("root_namespace_id", &self.root_namespace_id)
+            .field("root_path", &self.root_path)
+            .finish()
+    }
 }
 
 pub async fn update_settings(
