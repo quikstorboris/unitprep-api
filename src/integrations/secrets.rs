@@ -175,4 +175,103 @@ mod tests {
         assert!(decrypt(b"dropbox_configuration:1", &blob).is_err());
         clear_test_key();
     }
+
+    // ---- known-answer and negative tests (efficiency refactor D5b) ------
+    //
+    // Key 00 01 02 .. 1f; AAD `dropbox_configuration:1`; plaintext
+    // `s3cret-t0ken`. See `auth::totp`'s matching block for why.
+    const GOLDEN_KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    const GOLDEN_BLOB_HEX: &str =
+        "01eb174c21cef6bbc0c5eb658e246f9fc081758851cdb7a5622f59d553d3c67dc5d96035db2ce582c4";
+
+    #[test]
+    #[serial(integration_secrets_encryption_key_env)]
+    fn a_stored_blob_from_the_shipped_format_still_decrypts() {
+        std::env::set_var(KEY_ENV, GOLDEN_KEY);
+        let blob = hex::decode(GOLDEN_BLOB_HEX).unwrap();
+
+        let recovered = decrypt(b"dropbox_configuration:1", &blob);
+
+        clear_test_key();
+        assert_eq!(recovered.as_deref(), Ok("s3cret-t0ken"));
+    }
+
+    #[test]
+    #[serial(integration_secrets_encryption_key_env)]
+    fn the_golden_blob_does_not_open_under_another_key() {
+        std::env::set_var(
+            KEY_ENV,
+            "ff02030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+        );
+        let blob = hex::decode(GOLDEN_BLOB_HEX).unwrap();
+
+        let result = decrypt(b"dropbox_configuration:1", &blob);
+
+        clear_test_key();
+        assert_eq!(
+            result,
+            Err("failed to decrypt stored integration secret".to_string())
+        );
+    }
+
+    #[test]
+    #[serial(integration_secrets_encryption_key_env)]
+    fn a_key_of_the_wrong_length_is_refused_with_its_length() {
+        std::env::set_var(KEY_ENV, "0011223344556677");
+
+        let result = encrypt(b"dropbox_configuration:1", "value");
+
+        clear_test_key();
+        assert!(
+            matches!(&result, Err(message) if message.contains("32 bytes, got 8")),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    #[serial(integration_secrets_encryption_key_env)]
+    fn a_key_that_is_not_hex_is_refused() {
+        std::env::set_var(
+            KEY_ENV,
+            "not-hex-not-hex-not-hex-not-hex-not-hex-not-hex-not-hex-not-h",
+        );
+
+        let result = encrypt(b"dropbox_configuration:1", "value");
+
+        clear_test_key();
+        assert!(
+            matches!(&result, Err(message) if message.contains("hex-encoded")),
+            "got {result:?}"
+        );
+    }
+
+    #[test]
+    #[serial(integration_secrets_encryption_key_env)]
+    fn an_unknown_format_version_is_refused_before_the_key_is_even_read() {
+        // No key set at all: the version check comes first, so the answer
+        // is the version message, not "key is not set".
+        clear_test_key();
+        let mut blob = hex::decode(GOLDEN_BLOB_HEX).unwrap();
+        blob[0] = 2;
+
+        let result = decrypt(b"dropbox_configuration:1", &blob);
+
+        assert_eq!(
+            result,
+            Err("stored integration secret has an unrecognized format version".to_string())
+        );
+    }
+
+    #[test]
+    #[serial(integration_secrets_encryption_key_env)]
+    fn a_blob_too_short_to_hold_a_tag_is_refused_before_the_key_is_read() {
+        clear_test_key();
+
+        let result = decrypt(b"dropbox_configuration:1", &[1u8; 20]);
+
+        assert_eq!(
+            result,
+            Err("stored integration secret is corrupt (too short)".to_string())
+        );
+    }
 }

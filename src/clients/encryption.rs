@@ -252,4 +252,43 @@ mod tests {
         ));
         clear_test_key();
     }
+
+    // ---- known-answer tests (efficiency refactor D5b) -------------------
+    //
+    // See `auth::totp`'s matching block for why. Key 00 01 02 .. 1f; AAD
+    // `11111111-2222-3333-4444-555555555555`; plaintext `123-45-6789`.
+    const GOLDEN_KEY: &str = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+    const GOLDEN_AAD: &[u8] = b"11111111-2222-3333-4444-555555555555";
+    const GOLDEN_BLOB_HEX: &str =
+        "01f4539b79afd28ca5d47ed25cec9069669afc05c0b5da92d2b68f29c20ca5c3806453926d670b54";
+
+    #[test]
+    #[serial(client_pii_encryption_key_env)]
+    fn a_stored_blob_from_the_shipped_format_still_decrypts() {
+        std::env::set_var(KEY_ENV, GOLDEN_KEY);
+        let blob = hex::decode(GOLDEN_BLOB_HEX).unwrap();
+
+        let recovered = decrypt(GOLDEN_AAD, &blob).expect("the golden blob must decrypt");
+
+        clear_test_key();
+        assert_eq!(recovered, b"123-45-6789");
+    }
+
+    #[test]
+    #[serial(client_pii_encryption_key_env)]
+    fn the_golden_blob_does_not_open_under_another_aad_or_key() {
+        std::env::set_var(KEY_ENV, GOLDEN_KEY);
+        let blob = hex::decode(GOLDEN_BLOB_HEX).unwrap();
+        let wrong_aad = decrypt(b"11111111-2222-3333-4444-555555555556", &blob);
+
+        std::env::set_var(
+            KEY_ENV,
+            "ff02030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+        );
+        let wrong_key = decrypt(GOLDEN_AAD, &blob);
+
+        clear_test_key();
+        assert!(wrong_aad.is_err());
+        assert!(wrong_key.is_err());
+    }
 }

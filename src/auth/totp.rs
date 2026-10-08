@@ -557,4 +557,56 @@ mod tests {
             "sanity: the base32 secret is uppercase in the URI"
         );
     }
+
+    // ---- known-answer tests (efficiency refactor D5b) -------------------
+    //
+    // Round-trip tests pass even if a refactor silently changes the AAD or
+    // the byte layout, because both directions change together. This blob
+    // was produced ONCE by the shipped code (key 00 01 02 .. 1f, AAD = the
+    // user's 16 UUID bytes) and is hard-coded here, so any change to the
+    // wire format or to what is bound as AAD fails these tests instead of
+    // quietly making every stored secret undecryptable.
+    const GOLDEN_USER: [u8; 16] = [
+        0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18, 0x29, 0x3a, 0x4b, 0x5c, 0x6d, 0x7e, 0x8f,
+        0x90,
+    ];
+    const GOLDEN_BLOB_HEX: &str =
+        "01fd9c53c7851026a597f06a2d88fd9f71f21b3db2cc75f37ef24c88b6f60ecce0ce015bdb5cc3aac824806971eb7745b3";
+
+    #[test]
+    #[serial(totp_env)]
+    fn a_stored_blob_from_the_shipped_format_still_decrypts() {
+        with_key();
+        let blob = hex::decode(GOLDEN_BLOB_HEX).unwrap();
+
+        let recovered = decrypt_secret(Uuid::from_bytes(GOLDEN_USER), &blob)
+            .expect("the golden blob must decrypt under the golden key and AAD");
+
+        assert_eq!(recovered, b"0123456789abcdefghij".to_vec());
+    }
+
+    #[test]
+    #[serial(totp_env)]
+    fn the_golden_blob_does_not_open_for_another_user() {
+        with_key();
+        let blob = hex::decode(GOLDEN_BLOB_HEX).unwrap();
+
+        assert!(decrypt_secret(Uuid::from_bytes([7; 16]), &blob).is_err());
+    }
+
+    #[test]
+    #[serial(totp_env)]
+    fn the_golden_blob_does_not_open_under_a_different_key() {
+        with_key();
+        let blob = hex::decode(GOLDEN_BLOB_HEX).unwrap();
+        std::env::set_var(
+            KEY_ENV,
+            "ff02030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+        );
+
+        let result = decrypt_secret(Uuid::from_bytes(GOLDEN_USER), &blob);
+
+        with_key();
+        assert!(result.is_err(), "a blob must not open under another key");
+    }
 }

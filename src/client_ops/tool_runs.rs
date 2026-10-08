@@ -588,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    #[serial_test::serial(client_pii_env)]
+    #[serial_test::serial(client_pii_encryption_key_env)]
     fn a_sealed_source_is_not_the_plaintext_and_opens_back_to_it() {
         std::env::set_var(
             "CLIENT_PII_ENCRYPTION_KEY",
@@ -619,7 +619,7 @@ abc,1
     }
 
     #[test]
-    #[serial_test::serial(client_pii_env)]
+    #[serial_test::serial(client_pii_encryption_key_env)]
     fn without_a_key_no_plaintext_is_stored() {
         std::env::remove_var("CLIENT_PII_ENCRYPTION_KEY");
         let sealed = seal_source("run-1", b"secret", "text/csv");

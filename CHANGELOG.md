@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.105] - 2026-10-08
+
+Efficiency refactor chunk D5b: known-answer tests for the three encryption formats. Tests only, plus one test-lock rename.
+
+### Added
+- Known-answer ("golden") tests for the TOTP secret, client PII and integration-secret blobs: a blob produced once by the shipped code (fixed key, fixed AAD, fixed plaintext) is hard-coded and must still decrypt, must not open under another AAD (or user), and must not open under another key. Round-trip tests alone pass even if a change alters the AAD or byte layout on both sides at once, which would make every stored secret unreadable; these do not.
+- `integrations::secrets` had no negative tests for its key handling: wrong-length key (message names the length), non-hex key, unknown format version and too-short blob (both refused BEFORE the key is read, as documented).
+
+### Fixed
+- Two `tool_runs` tests that set `CLIENT_PII_ENCRYPTION_KEY` used the serial lock `client_pii_env` while every other test touching that variable used `client_pii_encryption_key_env`; different locks meant they could run in parallel and race. Unified.
+
 ## [1.9.104] - 2026-10-08
 
 Efficiency refactor chunk D2d (reduced form): the per-handler permission check is one line. No behaviour change.
