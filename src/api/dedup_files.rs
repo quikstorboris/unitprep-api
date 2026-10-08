@@ -62,7 +62,8 @@ pub struct ClassifyFilesRequest {
     pub files: Vec<ClassifyFileInput>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ClassifyFileInput {
     pub file_name: String,
     /// `None` when the browser couldn't read the header row (a legacy
@@ -75,7 +76,8 @@ pub struct ClassifyDropboxFolderRequest {
     pub path: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ClassifiedFileView {
     pub file_name: String,
     pub path: Option<String>,
@@ -93,15 +95,18 @@ pub struct ClassifiedFileView {
     pub missing_headers: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SuggestionView {
     pub pms: Option<String>,
     pub selected: Vec<String>,
     /// file name -> the preferred file it loses to.
+    #[ts(type = "Record<string, string>")]
     pub alternatives: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ClassifyResponse {
     pub files: Vec<ClassifiedFileView>,
     pub suggested: SuggestionView,
@@ -280,7 +285,8 @@ pub async fn classify_dropbox_folder(
     Json(classify_to_response(&state, &files)).into_response()
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct RequirementFormat {
     pub name: String,
     pub report_name: String,
@@ -289,13 +295,15 @@ pub struct RequirementFormat {
     pub guidance: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct RequirementVendor {
     pub pms: String,
     pub formats: Vec<RequirementFormat>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct FileRequirementsResponse {
     pub vendors: Vec<RequirementVendor>,
 }

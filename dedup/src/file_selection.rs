@@ -17,8 +17,9 @@ use serde::{Deserialize, Serialize};
 use unitprep_core::csv_document::CsvDocument;
 use unitprep_core::vendor_format::{detect_vendor, VendorFormat};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum FileRole {
     /// A self-contained tenant file: one of these is enough to run a check.
     Primary,
@@ -89,8 +90,9 @@ pub struct FileHeaders {
     pub headers: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ts_rs::TS)]
 #[serde(rename_all = "lowercase")]
+#[ts(export)]
 pub enum FileStatus {
     Recognized,
     Unrecognized,

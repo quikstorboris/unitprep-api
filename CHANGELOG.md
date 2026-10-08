@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.110] - 2026-10-08
+
+Efficiency refactor chunk F7c (api side): the dedup file-classification types are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.
+
+### Added
+- `ts_rs::TS` + `#[ts(export)]` on `ClassifiedFileView`, `SuggestionView`, `ClassifyResponse`, `ClassifyFileInput`, `RequirementFormat`, `RequirementVendor` and `FileRequirementsResponse` (`api/dedup_files.rs`) and on `FileRole` / `FileStatus` (`unitprep-dedup`'s `file_selection.rs`). `SuggestionView.alternatives` (a `BTreeMap`) carries `#[ts(type = "Record<string, string>")]`: ts-rs would otherwise type its values as possibly-absent. `scripts/check_ts_bindings.sh` now covers 42 files.
+
 ## [1.9.109] - 2026-10-08
 
 Efficiency refactor chunk F7b (api side): the Template Tagger check/apply types are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.
