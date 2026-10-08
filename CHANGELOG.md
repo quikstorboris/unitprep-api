@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.101] - 2026-10-07
+
+Efficiency refactor chunk D4h (long functions, first batch): four of the longest non-route functions broken into named steps. No behaviour change.
+
+### Changed
+- `api::analyze::analyze` (303 lines) is now `read_inputs` (stage and group-file checks under the read lock), `compute` (the batch build and analysis on the blocking pool), `record_on_session` (the generation-guarded write-back) and `record_tool_run`, with `analyze` itself the ~60-line sequence. The stale-write-back race tests pass unchanged.
+- `api::upload::upload` (194): the multipart reading loop is `read_upload`.
+- `api::resolve_unit_format::resolve_unit_format` (213): the session mutation is `apply_resolution` and the error-to-response table is `not_ready_response`.
+- `bootstrap::run` (191): `connect`, `create_administrator`, `retire_old_invites` (the `--reissue-invite` path) and `create_invite`; the command was driven end to end against the test database (reissue retires old invites and leaves one live; create refuses a non-empty database; an unknown account is refused).
+- The remaining long functions are mostly handlers whose length is the RLS-transaction / permission-gate / error-response boilerplate that D2 removes; they are re-measured after D2 rather than split by hand now.
+
 ## [1.9.100] - 2026-10-07
 
 Efficiency refactor chunk D4c (shared session IO): the file-download response and the save-location answer, copied across the three tools and four exports, are now one module. No behaviour change.

@@ -245,22 +245,7 @@ pub fn invite_hours() -> i64 {
 /// Runs the bootstrap. Returns a message to print on success, or an error
 /// message to print to stderr before exiting non-zero.
 pub async fn run(args: BootstrapArgs) -> Result<String, String> {
-    let database_url = std::env::var("BOOTSTRAP_DATABASE_URL").map_err(|_| {
-        "BOOTSTRAP_DATABASE_URL is not set. It must be the OWNER/direct connection \
-         string (the one used for migrations), not the application's DATABASE_URL -- \
-         creating a user requires bypassing row-level security, which the \
-         application role deliberately cannot do."
-            .to_string()
-    })?;
-
-    // Eager connect, not lazy: for a one-shot command a bad URL should fail
-    // immediately with a connection error, rather than surfacing later as a
-    // confusing failure partway through.
-    let pool = PgPoolOptions::new()
-        .max_connections(1)
-        .connect(&database_url)
-        .await
-        .map_err(|err| format!("could not connect using BOOTSTRAP_DATABASE_URL: {err}"))?;
+    let pool = connect().await?;
 
     // Everything below runs in one transaction: a partial bootstrap -- a
     // user with no invite -- would leave an account nobody can enrol into
@@ -278,136 +263,21 @@ pub async fn run(args: BootstrapArgs) -> Result<String, String> {
             company,
             job_title,
         } => {
-            let existing: i64 = sqlx::query_scalar("SELECT count(*) FROM auth.users")
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(|err| format!("could not count existing users: {err}"))?;
-
-            if existing > 0 {
-                return Err(format!(
-                    "refusing to run: {existing} user(s) already exist. This is a one-time \
-                     setup step for an empty database. If the administrator exists but never \
-                     enrolled and the setup link is gone, use --reissue-invite. To add a \
-                     further user, have an existing administrator issue an invite."
-                ));
-            }
-
-            let new_user_id: Uuid = sqlx::query_scalar(
-                "INSERT INTO auth.users
-                     (email, first_name, last_name, job_title, company, status)
-                 VALUES ($1::citext, $2, $3, $4, $5::auth.user_company,
-                         'invited'::auth.user_status)
-                 RETURNING id",
+            create_administrator(
+                &mut tx,
+                &args.email,
+                first_name,
+                last_name,
+                company,
+                job_title.as_deref(),
             )
-            .bind(&args.email)
-            .bind(first_name)
-            .bind(last_name)
-            .bind(job_title.as_deref())
-            .bind(company)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|err| format!("could not create the administrator: {err}"))?;
-
-            // granted_by is left NULL -- there is no administrator yet for
-            // this grant to be attributed to, the same reason
-            // user_invites.created_by is nullable for this exact case.
-            sqlx::query(
-                "INSERT INTO auth.user_roles (user_id, role_id)
-                 SELECT $1, id FROM auth.roles WHERE key = 'admin'",
-            )
-            .bind(new_user_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|err| format!("could not grant the administrator role: {err}"))?;
-
-            new_user_id
+            .await?
         }
-
-        Mode::ReissueInvite => {
-            // Narrow on purpose. This is a recovery path, so it must not
-            // become a general "mint a link for anyone" tool: it requires
-            // the named account to still be un-enrolled, which is the only
-            // situation where no other route in exists.
-            let found: Option<(Uuid, String, i64)> = sqlx::query_as(
-                "SELECT u.id,
-                        u.status::text,
-                        (SELECT count(*) FROM auth.webauthn_credentials c
-                          WHERE c.user_id = u.id)
-                 FROM auth.users u
-                 WHERE u.email = $1::citext AND u.deleted_at IS NULL",
-            )
-            .bind(&args.email)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|err| format!("could not look up that account: {err}"))?;
-
-            let Some((id, status, credential_count)) = found else {
-                return Err(format!(
-                    "no active account with email {}. Nothing to reissue an invite for.",
-                    args.email
-                ));
-            };
-
-            if credential_count > 0 {
-                return Err(format!(
-                    "refusing to reissue: {} already has {credential_count} passkey(s) \
-                     enrolled and can sign in normally. A setup link is only for an \
-                     account that has never enrolled.",
-                    args.email
-                ));
-            }
-
-            if status != "invited" {
-                return Err(format!(
-                    "refusing to reissue: {} has status {status:?}, not \"invited\". \
-                     Reissuing is only for an account still awaiting its first enrolment.",
-                    args.email
-                ));
-            }
-
-            // Any outstanding invite is retired first, so exactly one live
-            // link exists per account. Leaving the old one usable would mean
-            // a lost token stayed valid until natural expiry -- the opposite
-            // of what someone reaching for this command wants.
-            let retired = sqlx::query(
-                "UPDATE auth.user_invites SET used_at = now()
-                  WHERE user_id = $1 AND used_at IS NULL",
-            )
-            .bind(id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|err| format!("could not retire the previous invite: {err}"))?
-            .rows_affected();
-
-            if retired > 0 {
-                eprintln!("note: retired {retired} outstanding invite(s) for this account");
-            }
-
-            id
-        }
+        Mode::ReissueInvite => retire_old_invites(&mut tx, &args.email).await?,
     };
 
-    // Same generation and hashing as a session token -- imported rather
-    // than reimplemented, so there is exactly one definition of how a
-    // bearer secret is produced and stored in this codebase.
-    let (raw_token, token_hash) = generate_token();
-
     let hours = invite_hours();
-    let expires_at = chrono::Utc::now() + chrono::Duration::hours(hours);
-
-    // created_by is left to its column default, which resolves to NULL with
-    // no identity context set -- the case the schema made that column
-    // nullable for.
-    sqlx::query(
-        "INSERT INTO auth.user_invites (user_id, token_hash, expires_at)
-         VALUES ($1, $2, $3)",
-    )
-    .bind(user_id)
-    .bind(&token_hash)
-    .bind(expires_at)
-    .execute(&mut *tx)
-    .await
-    .map_err(|err| format!("could not create the setup invite: {err}"))?;
+    let raw_token = create_invite(&mut tx, user_id, hours).await?;
 
     tx.commit()
         .await
@@ -434,6 +304,178 @@ pub async fn run(args: BootstrapArgs) -> Result<String, String> {
          writing -- until then the account exists but cannot sign in).\n",
         args.email
     ))
+}
+
+/// The owner/direct connection this command needs.
+async fn connect() -> Result<sqlx::PgPool, String> {
+    let database_url = std::env::var("BOOTSTRAP_DATABASE_URL").map_err(|_| {
+        "BOOTSTRAP_DATABASE_URL is not set. It must be the OWNER/direct connection \
+         string (the one used for migrations), not the application's DATABASE_URL -- \
+         creating a user requires bypassing row-level security, which the \
+         application role deliberately cannot do."
+            .to_string()
+    })?;
+
+    // Eager connect, not lazy: for a one-shot command a bad URL should fail
+    // immediately with a connection error, rather than surfacing later as a
+    // confusing failure partway through.
+    PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .map_err(|err| format!("could not connect using BOOTSTRAP_DATABASE_URL: {err}"))
+}
+
+/// Creates the first administrator (status `invited`, role `admin`).
+/// Refuses unless the database has no users at all.
+async fn create_administrator(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    email: &str,
+    first_name: &str,
+    last_name: &str,
+    company: &str,
+    job_title: Option<&str>,
+) -> Result<Uuid, String> {
+    let existing: i64 = sqlx::query_scalar("SELECT count(*) FROM auth.users")
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|err| format!("could not count existing users: {err}"))?;
+
+    if existing > 0 {
+        return Err(format!(
+            "refusing to run: {existing} user(s) already exist. This is a one-time \
+             setup step for an empty database. If the administrator exists but never \
+             enrolled and the setup link is gone, use --reissue-invite. To add a \
+             further user, have an existing administrator issue an invite."
+        ));
+    }
+
+    let new_user_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO auth.users
+             (email, first_name, last_name, job_title, company, status)
+         VALUES ($1::citext, $2, $3, $4, $5::auth.user_company,
+                 'invited'::auth.user_status)
+         RETURNING id",
+    )
+    .bind(email)
+    .bind(first_name)
+    .bind(last_name)
+    .bind(job_title)
+    .bind(company)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(|err| format!("could not create the administrator: {err}"))?;
+
+    // granted_by is left NULL -- there is no administrator yet for
+    // this grant to be attributed to, the same reason
+    // user_invites.created_by is nullable for this exact case.
+    sqlx::query(
+        "INSERT INTO auth.user_roles (user_id, role_id)
+         SELECT $1, id FROM auth.roles WHERE key = 'admin'",
+    )
+    .bind(new_user_id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|err| format!("could not grant the administrator role: {err}"))?;
+
+    Ok(new_user_id)
+}
+
+/// The recovery path: finds the named account, requires it to still be
+/// un-enrolled, and retires its outstanding invites so exactly one live
+/// link exists afterwards.
+///
+/// Narrow on purpose. This is a recovery path, so it must not become a
+/// general "mint a link for anyone" tool: it requires the named account to
+/// still be un-enrolled, which is the only situation where no other route
+/// in exists.
+async fn retire_old_invites(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    email: &str,
+) -> Result<Uuid, String> {
+    let found: Option<(Uuid, String, i64)> = sqlx::query_as(
+        "SELECT u.id,
+                u.status::text,
+                (SELECT count(*) FROM auth.webauthn_credentials c
+                  WHERE c.user_id = u.id)
+         FROM auth.users u
+         WHERE u.email = $1::citext AND u.deleted_at IS NULL",
+    )
+    .bind(email)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|err| format!("could not look up that account: {err}"))?;
+
+    let Some((id, status, credential_count)) = found else {
+        return Err(format!(
+            "no active account with email {email}. Nothing to reissue an invite for."
+        ));
+    };
+
+    if credential_count > 0 {
+        return Err(format!(
+            "refusing to reissue: {email} already has {credential_count} passkey(s) \
+             enrolled and can sign in normally. A setup link is only for an \
+             account that has never enrolled."
+        ));
+    }
+
+    if status != "invited" {
+        return Err(format!(
+            "refusing to reissue: {email} has status {status:?}, not \"invited\". \
+             Reissuing is only for an account still awaiting its first enrolment."
+        ));
+    }
+
+    // Any outstanding invite is retired first, so exactly one live
+    // link exists per account. Leaving the old one usable would mean
+    // a lost token stayed valid until natural expiry -- the opposite
+    // of what someone reaching for this command wants.
+    let retired = sqlx::query(
+        "UPDATE auth.user_invites SET used_at = now()
+          WHERE user_id = $1 AND used_at IS NULL",
+    )
+    .bind(id)
+    .execute(&mut **tx)
+    .await
+    .map_err(|err| format!("could not retire the previous invite: {err}"))?
+    .rows_affected();
+
+    if retired > 0 {
+        eprintln!("note: retired {retired} outstanding invite(s) for this account");
+    }
+
+    Ok(id)
+}
+
+/// Stores a fresh setup invite for `user_id` and returns the raw token.
+async fn create_invite(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    hours: i64,
+) -> Result<String, String> {
+    // Same generation and hashing as a session token -- imported rather
+    // than reimplemented, so there is exactly one definition of how a
+    // bearer secret is produced and stored in this codebase.
+    let (raw_token, token_hash) = generate_token();
+
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(hours);
+
+    // created_by is left to its column default, which resolves to NULL with
+    // no identity context set -- the case the schema made that column
+    // nullable for.
+    sqlx::query(
+        "INSERT INTO auth.user_invites (user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(user_id)
+    .bind(&token_hash)
+    .bind(expires_at)
+    .execute(&mut **tx)
+    .await
+    .map_err(|err| format!("could not create the setup invite: {err}"))?;
+
+    Ok(raw_token)
 }
 
 #[cfg(test)]

@@ -33,13 +33,18 @@ pub struct UploadResponse {
     pub multipart_errors: usize,
 }
 
-pub async fn upload(
-    State(state): State<AppState>,
-    user: AuthenticatedUser,
-    mut multipart: Multipart,
-) -> Response {
-    let started = Instant::now();
+/// What was read off the multipart stream: the files, and how the read went.
+struct ReadUpload {
+    files: Vec<UploadedFile>,
+    field_count: usize,
+    files_failed: usize,
+    multipart_errors: usize,
+}
 
+/// Reads every part of an upload: file parts become `UploadedFile`s, the
+/// `file_modified_times` sidecar is applied onto them once the whole stream
+/// has been read, and a part that cannot be read is counted, not fatal.
+async fn read_upload(mut multipart: Multipart) -> ReadUpload {
     let mut uploaded_files: Vec<UploadedFile> = Vec::new();
 
     // Populated from the `file_modified_times` sidecar field (see
@@ -173,6 +178,28 @@ pub async fn upload(
             uploaded.modified_at = Some(ms);
         }
     }
+
+    ReadUpload {
+        files: uploaded_files,
+        field_count,
+        files_failed,
+        multipart_errors,
+    }
+}
+
+pub async fn upload(
+    State(state): State<AppState>,
+    user: AuthenticatedUser,
+    multipart: Multipart,
+) -> Response {
+    let started = Instant::now();
+
+    let ReadUpload {
+        files: uploaded_files,
+        field_count,
+        files_failed,
+        multipart_errors,
+    } = read_upload(multipart).await;
 
     let files_uploaded = uploaded_files.len();
 

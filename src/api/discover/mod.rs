@@ -16,6 +16,7 @@ mod format_resolution;
 mod selection;
 
 pub use dto::DiscoverRequest;
+pub(crate) use dto::DiscoverResponse;
 
 pub(crate) use compute::compute_discovery;
 pub(crate) use format_helpers::{
