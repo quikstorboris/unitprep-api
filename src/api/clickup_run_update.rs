@@ -1,15 +1,22 @@
-//! Posting a finished duplicate check to the facility's ClickUp task:
-//! once the check's summary file is saved to the facility's Dropbox
-//! folder, Orchestrator looks in the facility's linked ClickUp list for
-//! the task that stands for this check (the 1st or the 2nd), lets the
-//! person confirm which one, then comments "Duplicate check results are
-//! here" (with *here* linking the saved file), adds the person as an
-//! assignee and sets the task to its list's complete status.
+//! Posting a finished tool run to the facility's ClickUp task: once the
+//! run's results file is saved to the facility's Dropbox folder,
+//! Orchestrator looks in the facility's linked ClickUp list for the task
+//! that stands for this run, lets the person confirm which one, then
+//! comments (the wording's last words, *here*, link the saved file), adds
+//! the person as an assignee and sets the task to its list's complete
+//! status.
+//!
+//! Which task a run stands for, and what the comment says, are rows of
+//! `integrations.clickup_task_steps` (matched by the run's tool and its
+//! position among the facility's runs of that tool: a duplicate check has
+//! a 1st and a 2nd step, Unit Groups and the Template Tagger one each),
+//! never Rust constants -- so a renamed task or new wording is a data
+//! edit, and a new tool is a row plus the tool in `tool_runs`.
 //!
 //! Everything about the run is read from the database, never taken from
-//! the browser: which check this is (the run's position among the
-//! facility's dedup runs), where its file was saved, and which list the
-//! facility is linked to. The one thing the browser names is the task,
+//! the browser: which step this is (the run's position among the
+//! facility's runs of its tool), where its file was saved, and which list
+//! the facility is linked to. The one thing the browser names is the task,
 //! and that is re-read from ClickUp and refused unless it really lives
 //! in the facility's linked list.
 //!
@@ -39,23 +46,6 @@ use crate::client_ops::{audit_log, tool_runs as run_store};
 
 const PERMISSION: &str = "integrations.clickup";
 
-/// The comment's wording. The word "here" is the link.
-const COMMENT_LEAD: &str = "Duplicate check results are ";
-const COMMENT_LINK_TEXT: &str = "here";
-
-/// Comment used when there is no Dropbox file to link (the results were
-/// only downloaded, or nothing was saved yet). The person adds the file
-/// to the task by hand.
-const COMMENT_WITHOUT_LINK: &str = "Duplicate check complete.";
-
-/// The first check's step, and the step standing for every later one.
-const FIRST_STEP: &str = "dedup_first";
-const LATER_STEP: &str = "dedup_second";
-
-/// Checks after the second only add a comment to the 2nd check's task:
-/// that task is already assigned and complete.
-const COMMENT_ONLY_FROM_SEQUENCE: i64 = 3;
-
 /// Everything the two endpoints need, read from the database.
 struct Prepared {
     list_id: String,
@@ -69,11 +59,27 @@ struct Prepared {
     /// The share link captured when the file was saved, if it was ready.
     output_link: Option<String>,
     step: StepDefinition,
+    /// The step's comment wording: the lead-in, the linked word, and the
+    /// whole comment used when there is no file to link (the results were
+    /// only downloaded, or nothing was saved yet -- the person adds the
+    /// file to the task by hand).
+    comment: CommentWording,
+    /// The run position from which an update only adds a comment: the
+    /// task is already assigned and complete.
+    comment_only_from_sequence: i64,
+    /// The run's tool (`dedup`, `unit_group`, `tagger`).
+    tool: String,
+}
+
+struct CommentWording {
+    lead: String,
+    link_text: String,
+    without_link: String,
 }
 
 impl Prepared {
     fn comment_only(&self) -> bool {
-        self.sequence_number >= COMMENT_ONLY_FROM_SEQUENCE
+        self.sequence_number >= self.comment_only_from_sequence
     }
 }
 
@@ -98,7 +104,7 @@ pub struct TaskCandidate {
 
 #[derive(Debug, Serialize)]
 pub struct CandidatesResponse {
-    /// "1st Duplicate Check", "2nd Duplicate Check", ...
+    /// "1st Duplicate Check", "2nd Duplicate Check", "Unit Groups", ...
     pub step_label: String,
     pub sequence_number: i64,
     pub list_name: String,
@@ -107,7 +113,7 @@ pub struct CandidatesResponse {
     /// link it. When false the comment has no link and the person adds
     /// the file by hand.
     pub file_link_available: bool,
-    /// Third and later checks only add a comment (no assignee, no status).
+    /// Later runs only add a comment (no assignee, no status).
     pub comment_only: bool,
     pub candidates: Vec<TaskCandidate>,
 }
@@ -151,7 +157,7 @@ pub struct PostResultsResponse {
     /// file; the person adds it by hand).
     pub link_kind: &'static str,
     pub comment: StepOutcome,
-    /// `None` when not part of this update (third and later checks).
+    /// `None` when not part of this update (later runs).
     pub assignee: Option<StepOutcome>,
     pub status: Option<StepOutcome>,
 }
@@ -164,14 +170,14 @@ async fn timed<T>(step: &'static str, work: impl std::future::Future<Output = T>
     tracing::info!(
         step,
         elapsed_ms = started.elapsed().as_millis() as u64,
-        "ClickUp duplicate-check step"
+        "ClickUp run-update step"
     );
     result
 }
 
 fn server_error(context: &'static str, err: &sqlx::Error, user: &AuthenticatedUser) -> Response {
     tracing::error!(error = %err, user_id = %user.user_id, "{context}");
-    internal_error("Could not look up this duplicate check for ClickUp")
+    internal_error("Could not look up this run for ClickUp")
 }
 
 /// Reads the facility's linked list, the run and the step definition, or
@@ -183,7 +189,7 @@ async fn prepare(
     facility_id: Uuid,
     session_id: &str,
 ) -> Result<Prepared, Response> {
-    let fail = |err: sqlx::Error| server_error("ClickUp duplicate-check lookup failed", &err, user);
+    let fail = |err: sqlx::Error| server_error("ClickUp run lookup failed", &err, user);
 
     let mut tx = begin_rls_transaction(&state.db, user.user_id, &user.role_keys)
         .await
@@ -209,12 +215,12 @@ async fn prepare(
     // `session_id` may be the run's own session id (right after a check) or
     // the run's row id (what the Onboarding Work tab lists), so a check can
     // be posted later from either place.
-    let run: Option<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT sequence_number, session_id, output_dropbox_path, output_dropbox_link FROM (
-             SELECT id, session_id, output_dropbox_path, output_dropbox_link,
+    let run: Option<RunRow> = sqlx::query_as(
+        "SELECT tool, sequence_number, session_id, output_dropbox_path, output_dropbox_link FROM (
+             SELECT id, tool, session_id, output_dropbox_path, output_dropbox_link,
                     ROW_NUMBER() OVER (PARTITION BY facility_id, tool ORDER BY created_at ASC) AS sequence_number
                FROM client_ops.tool_runs
-              WHERE facility_id = $1 AND tool = 'dedup'
+              WHERE facility_id = $1
          ) runs WHERE session_id = $2 OR id::text = $2",
     )
     .bind(facility_id)
@@ -223,18 +229,23 @@ async fn prepare(
     .await
     .map_err(fail)?;
 
-    let step_key = match &run {
-        Some((1, _, _, _)) => FIRST_STEP,
-        _ => LATER_STEP,
+    // The run's step is the tool's step with the highest ordinal not above
+    // the run's position (a 3rd duplicate check uses the 2nd check's step).
+    let step: Option<StepRow> = match &run {
+        Some((tool, sequence_number, ..)) => sqlx::query_as(
+            "SELECT step_key, label, ordinal, phrases, comment_lead, comment_link_text,
+                    comment_without_link, comment_only_from_sequence
+               FROM integrations.clickup_task_steps
+              WHERE tool = $1 AND ordinal <= $2
+              ORDER BY ordinal DESC LIMIT 1",
+        )
+        .bind(tool)
+        .bind(*sequence_number as i32)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(fail)?,
+        None => None,
     };
-    let step: Option<(String, String, i32, Vec<String>)> = sqlx::query_as(
-        "SELECT step_key, label, ordinal, phrases
-           FROM integrations.clickup_task_steps WHERE step_key = $1",
-    )
-    .bind(step_key)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(fail)?;
 
     tx.commit().await.map_err(fail)?;
 
@@ -246,16 +257,29 @@ async fn prepare(
         ));
     };
 
-    let Some((sequence_number, session_id, output_path, output_link)) = run else {
+    let Some((tool, sequence_number, session_id, output_path, output_link)) = run else {
         return Err(not_found(
             "not_found",
-            "No duplicate check with that session was recorded for this facility.".to_string(),
+            "No run with that session was recorded for this facility.".to_string(),
         ));
     };
 
-    let Some((step_key, label, ordinal, phrases)) = step else {
-        tracing::error!(step_key, "ClickUp task step missing from the database");
-        return Err(internal_error("The ClickUp task step is not configured"));
+    let Some((
+        step_key,
+        label,
+        ordinal,
+        phrases,
+        comment_lead,
+        comment_link_text,
+        comment_without_link,
+        comment_only_from_sequence,
+    )) = step
+    else {
+        tracing::warn!(tool, "no ClickUp task step is configured for this tool");
+        return Err(conflict(
+            "clickup_step_not_configured",
+            "No ClickUp task is configured for this kind of run yet.".to_string(),
+        ));
     };
 
     Ok(Prepared {
@@ -272,8 +296,33 @@ async fn prepare(
             ordinal,
             phrases,
         },
+        comment: CommentWording {
+            lead: comment_lead,
+            link_text: comment_link_text,
+            without_link: comment_without_link,
+        },
+        comment_only_from_sequence: i64::from(comment_only_from_sequence),
+        tool,
     })
 }
+
+/// One `integrations.clickup_task_steps` row: key, label, ordinal, task-name
+/// phrases, comment lead-in, linked word, no-link comment, and the run
+/// position from which only a comment is added.
+/// One tool run: tool, position among the facility's runs of it, session id,
+/// saved Dropbox path and its captured share link.
+type RunRow = (String, i64, String, Option<String>, Option<String>);
+
+type StepRow = (
+    String,
+    String,
+    i32,
+    Vec<String>,
+    String,
+    String,
+    String,
+    i32,
+);
 
 /// Percent-encodes everything but unreserved characters (RFC 3986), for
 /// a Dropbox web path.
@@ -319,10 +368,10 @@ async fn results_link(state: &AppState, path: &str) -> (String, &'static str) {
     }
 }
 
-/// The tasks in the facility's linked list that could be this check's,
+/// The tasks in the facility's linked list that could be this run's,
 /// best match first. Always a list, even with one entry: the person
 /// confirms the task before anything is written.
-pub async fn duplicate_check_tasks(
+pub async fn run_update_tasks(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     Path((company_id, facility_id)): Path<(Uuid, Uuid)>,
@@ -332,7 +381,7 @@ pub async fn duplicate_check_tasks(
         user.require_permission(
             &state.db,
             PERMISSION,
-            "clickup_duplicate_check_tasks",
+            "clickup_run_update_tasks",
             None,
             None,
         )
@@ -421,11 +470,11 @@ fn failure_message(err: &ClickUpError) -> String {
     }
 }
 
-/// Posts the check's results to the confirmed task: comment, assignee,
+/// Posts the run's results to the confirmed task: comment, assignee,
 /// complete. The three writes are separate ClickUp calls and cannot be
 /// made atomic, so each one's outcome is reported on its own and a
 /// failure of one does not stop the others.
-pub async fn post_duplicate_check_results(
+pub async fn post_run_update(
     State(state): State<AppState>,
     user: AuthenticatedUser,
     headers: HeaderMap,
@@ -438,7 +487,7 @@ pub async fn post_duplicate_check_results(
         user.require_permission(
             &state.db,
             PERMISSION,
-            "post_clickup_duplicate_check_results",
+            "post_clickup_run_update",
             user_agent,
             None,
         )
@@ -475,7 +524,7 @@ pub async fn post_duplicate_check_results(
     };
     let client = clickup_client(&state);
 
-    // Third and later checks only comment; the others also need the
+    // Later runs only comment; the others also need the
     // list's complete status. Everything read here is independent (the
     // task, the list's statuses, the Dropbox link), so it is read at once.
     let comment_only = prepared.comment_only();
@@ -569,10 +618,10 @@ pub async fn post_duplicate_check_results(
     let link_kind = link.as_ref().map_or("none", |(_, kind)| kind);
     let parts: Vec<(&str, Option<&str>)> = match &link {
         Some((url, _)) => vec![
-            (COMMENT_LEAD, None),
-            (COMMENT_LINK_TEXT, Some(url.as_str())),
+            (prepared.comment.lead.as_str(), None),
+            (prepared.comment.link_text.as_str(), Some(url.as_str())),
         ],
-        None => vec![(COMMENT_WITHOUT_LINK, None)],
+        None => vec![(prepared.comment.without_link.as_str(), None)],
     };
 
     // The three writes touch different things on the task, so they are
@@ -615,9 +664,16 @@ pub async fn post_duplicate_check_results(
     let assignee = assignee.map(outcome);
     let status = status.map(outcome);
 
+    // Duplicate checks keep their original event type so older log rows and
+    // new ones read as one history.
+    let event = if prepared.tool == "dedup" {
+        audit_log::event::FACILITY_CLICKUP_DUPLICATE_CHECK_POSTED
+    } else {
+        audit_log::event::FACILITY_CLICKUP_RUN_POSTED
+    };
     audit_log::record(
         &state.db,
-        audit_log::event::FACILITY_CLICKUP_DUPLICATE_CHECK_POSTED,
+        event,
         user.user_id,
         "facility",
         Some(&facility_id.to_string()),
@@ -627,6 +683,7 @@ pub async fn post_duplicate_check_results(
         serde_json::json!({
             "company_id": company_id,
             "session_id": request.session_id,
+            "tool": prepared.tool,
             "step": prepared.step.step_key,
             "clickup_task_id": task.id,
             "clickup_task_name": task.name,

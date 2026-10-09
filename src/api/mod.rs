@@ -18,9 +18,9 @@ pub(crate) mod blocking;
 mod cancel_session;
 mod clickup_connection;
 mod clickup_copy;
-mod clickup_duplicate_check;
 mod clickup_lookup;
 mod clickup_prefetch;
+mod clickup_run_update;
 mod client_ops_activity_logs;
 mod client_ops_activity_logs_export;
 mod client_ops_qms_tags;
@@ -309,8 +309,8 @@ mod concurrent_load_tests;
 mod clickup_links_db_tests;
 
 #[cfg(test)]
-#[path = "clickup_duplicate_check_db_tests.rs"]
-mod clickup_duplicate_check_db_tests;
+#[path = "clickup_run_update_db_tests.rs"]
+mod clickup_run_update_db_tests;
 
 #[cfg(test)]
 #[path = "clients_facility_people_db_tests.rs"]

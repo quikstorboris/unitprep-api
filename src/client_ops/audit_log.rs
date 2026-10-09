@@ -90,11 +90,16 @@ pub mod event {
     /// facility of a company via "Unlink All Facilities").
     pub const FACILITY_CLICKUP_UNLINKED: &str = "facility_clickup_unlinked";
     /// A duplicate check's results were posted to the facility's ClickUp
-    /// task (`api::clickup_duplicate_check`): a comment linking the saved
+    /// task (`api::clickup_run_update`): a comment linking the saved
     /// file, the actor added as assignee, the task completed. `metadata`
     /// records the task id and how each of the three writes went.
     pub const FACILITY_CLICKUP_DUPLICATE_CHECK_POSTED: &str =
         "facility_clickup_duplicate_check_posted";
+    /// Any other tool run's results (Unit Groups, the Template Tagger) were
+    /// posted to the facility's ClickUp task (`api::clickup_run_update`),
+    /// the same three writes as a duplicate check. `metadata.tool` names
+    /// the tool and `metadata.step` the `clickup_task_steps` row.
+    pub const FACILITY_CLICKUP_RUN_POSTED: &str = "facility_clickup_run_posted";
     /// Comments were copied from another facility's ClickUp list onto this
     /// facility's tasks (`api::clickup_copy`). `metadata` records the
     /// source facility and how many rows copied, failed and got the
@@ -196,6 +201,7 @@ pub mod event {
         FACILITY_CLICKUP_LINKED,
         FACILITY_CLICKUP_UNLINKED,
         FACILITY_CLICKUP_DUPLICATE_CHECK_POSTED,
+        FACILITY_CLICKUP_RUN_POSTED,
         FACILITY_CLICKUP_COMMENTS_COPIED,
         FACILITY_PERSON_ADDED,
         FACILITY_PERSON_UPDATED,

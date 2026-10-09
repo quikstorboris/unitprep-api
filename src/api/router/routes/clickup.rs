@@ -7,7 +7,7 @@ use axum::{
 
 use crate::api::route_access::{GatedRouter, RouteAccess};
 use crate::api::{
-    clickup_connection, clickup_copy, clickup_duplicate_check, clickup_lookup, clickup_prefetch,
+    clickup_connection, clickup_copy, clickup_lookup, clickup_prefetch, clickup_run_update,
     clients_clickup_links, AppState,
 };
 
@@ -152,26 +152,27 @@ pub(super) fn clickup_routes() -> GatedRouter<AppState> {
                 },
             )],
         )
-        // Posting a finished duplicate check to the facility's ClickUp task.
+        // Posting a finished tool run (duplicate check, Unit Groups, Template
+        // Tagger) to the facility's ClickUp task.
         .gated_route(
-            "/clients/{company_id}/facilities/{facility_id}/clickup/duplicate-check-tasks",
-            get(clickup_duplicate_check::duplicate_check_tasks),
+            "/clients/{company_id}/facilities/{facility_id}/clickup/run-tasks",
+            get(clickup_run_update::run_update_tasks),
             [(
                 Method::GET,
                 RouteAccess::Permission {
                     keys: &["integrations.clickup"],
-                    action: "clickup_duplicate_check_tasks",
+                    action: "clickup_run_update_tasks",
                 },
             )],
         )
         .gated_route(
-            "/clients/{company_id}/facilities/{facility_id}/clickup/duplicate-check-results",
-            post(clickup_duplicate_check::post_duplicate_check_results),
+            "/clients/{company_id}/facilities/{facility_id}/clickup/run-results",
+            post(clickup_run_update::post_run_update),
             [(
                 Method::POST,
                 RouteAccess::Permission {
                     keys: &["integrations.clickup"],
-                    action: "post_clickup_duplicate_check_results",
+                    action: "post_clickup_run_update",
                 },
             )],
         )

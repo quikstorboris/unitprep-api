@@ -24,11 +24,11 @@ use crate::api::test_support::{empty_state, test_user};
 use crate::api::{
     auth_audit_logs, auth_audit_logs_export, auth_configuration, auth_invites,
     auth_user_permissions, auth_user_role, auth_user_status, auth_users, clickup_connection,
-    clickup_copy, clickup_duplicate_check, clickup_lookup, clickup_prefetch,
-    client_ops_activity_logs, client_ops_activity_logs_export, client_ops_qms_tags,
-    clients_clickup_links, clients_clickup_parent, clients_create, clients_elavon,
-    clients_implementation_status, clients_manual_link, clients_resync, clients_sync,
-    dedup_rematch, dropbox_settings, process_street_settings, process_street_task_roles, tool_runs,
+    clickup_copy, clickup_lookup, clickup_prefetch, clickup_run_update, client_ops_activity_logs,
+    client_ops_activity_logs_export, client_ops_qms_tags, clients_clickup_links,
+    clients_clickup_parent, clients_create, clients_elavon, clients_implementation_status,
+    clients_manual_link, clients_resync, clients_sync, dedup_rematch, dropbox_settings,
+    process_street_settings, process_street_task_roles, tool_runs,
 };
 
 use super::routes::build;
@@ -294,29 +294,29 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
             }) as fn() -> BoxFuture,
         ),
         (
-            "/clients/{company_id}/facilities/{facility_id}/clickup/duplicate-check-tasks",
+            "/clients/{company_id}/facilities/{facility_id}/clickup/run-tasks",
             Method::GET,
             (|| {
-                Box::pin(clickup_duplicate_check::duplicate_check_tasks(
+                Box::pin(clickup_run_update::run_update_tasks(
                     axum::extract::State(empty_state()),
                     test_user(),
                     Path((Uuid::new_v4(), Uuid::new_v4())),
-                    axum::extract::Query(clickup_duplicate_check::CandidatesQuery {
+                    axum::extract::Query(clickup_run_update::CandidatesQuery {
                         session_id: "s".to_string(),
                     }),
                 ))
             }) as fn() -> BoxFuture,
         ),
         (
-            "/clients/{company_id}/facilities/{facility_id}/clickup/duplicate-check-results",
+            "/clients/{company_id}/facilities/{facility_id}/clickup/run-results",
             Method::POST,
             (|| {
-                Box::pin(clickup_duplicate_check::post_duplicate_check_results(
+                Box::pin(clickup_run_update::post_run_update(
                     axum::extract::State(empty_state()),
                     test_user(),
                     HeaderMap::new(),
                     Path((Uuid::new_v4(), Uuid::new_v4())),
-                    Json(clickup_duplicate_check::PostResultsRequest {
+                    Json(clickup_run_update::PostResultsRequest {
                         session_id: "s".to_string(),
                         task_id: "t".to_string(),
                     }),

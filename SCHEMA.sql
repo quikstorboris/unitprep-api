@@ -3,7 +3,7 @@
 -- local test-db, via
 --   pg_dump --schema-only --no-owner --no-privileges
 -- Read-only reference, not applied by sqlx and not part of the migrations/
--- directory -- the 110 incremental migrations under migrations/
+-- directory -- the 111 incremental migrations under migrations/
 -- remain the actual source of truth and the real "how did we get here"
 -- history. This file exists so a newcomer (human or AI) can see current
 -- table/column/RLS/index shape in one place without reading them all in
@@ -14,7 +14,7 @@
 -- psql's per-dump \restrict/\unrestrict guard lines (a random token that
 -- changes on every dump) are stripped so a regeneration only shows real
 -- schema changes in the diff.
--- Generated 2026-10-07.
+-- Generated 2026-10-09.
 
 --
 -- PostgreSQL database dump
@@ -1709,9 +1709,17 @@ CREATE TABLE integrations.clickup_task_steps (
     phrases text[] NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_by uuid,
+    tool text DEFAULT 'dedup'::text NOT NULL,
+    comment_lead text NOT NULL,
+    comment_link_text text NOT NULL,
+    comment_without_link text NOT NULL,
+    comment_only_from_sequence integer DEFAULT 2 NOT NULL,
+    CONSTRAINT clickup_task_steps_comment_only_from_sequence_check CHECK ((comment_only_from_sequence >= 1)),
+    CONSTRAINT clickup_task_steps_comment_text_not_blank CHECK (((btrim(comment_lead) <> ''::text) AND (btrim(comment_link_text) <> ''::text) AND (btrim(comment_without_link) <> ''::text))),
     CONSTRAINT clickup_task_steps_label_check CHECK ((btrim(label) <> ''::text)),
     CONSTRAINT clickup_task_steps_ordinal_check CHECK ((ordinal >= 1)),
-    CONSTRAINT clickup_task_steps_phrases_check CHECK ((cardinality(phrases) > 0))
+    CONSTRAINT clickup_task_steps_phrases_check CHECK ((cardinality(phrases) > 0)),
+    CONSTRAINT clickup_task_steps_tool_check CHECK ((tool = ANY (ARRAY['dedup'::text, 'unit_group'::text, 'tagger'::text])))
 );
 
 
@@ -2305,6 +2313,14 @@ ALTER TABLE ONLY integrations.clickup_settings
 
 ALTER TABLE ONLY integrations.clickup_task_steps
     ADD CONSTRAINT clickup_task_steps_pkey PRIMARY KEY (step_key);
+
+
+--
+-- Name: clickup_task_steps clickup_task_steps_tool_ordinal_unique; Type: CONSTRAINT; Schema: integrations; Owner: -
+--
+
+ALTER TABLE ONLY integrations.clickup_task_steps
+    ADD CONSTRAINT clickup_task_steps_tool_ordinal_unique UNIQUE (tool, ordinal);
 
 
 --

@@ -1,5 +1,7 @@
-//! Real-database tests for posting a duplicate check to its ClickUp task
-//! (`clickup_duplicate_check`): task candidates for the 1st vs 2nd check,
+//! Real-database tests for posting a tool run (duplicate check, Unit
+//! Groups, Template Tagger) to its ClickUp task (`clickup_run_update`):
+//! task candidates for the 1st vs 2nd check, the Unit Groups and Template
+//! Tagger steps and their data-driven comment wording,
 //! the refusals (facility not linked, file not saved, task in another
 //! list, list without a complete status) and the three ClickUp writes,
 //! against a mock ClickUp and the local `test-db` (as `app_service`, so
@@ -24,7 +26,7 @@ use uuid::Uuid;
 
 use super::clickup_db_tests::{body_json, caller, create_user, superuser_pool};
 use crate::api::test_support::{empty_state, FakeEnvSource};
-use crate::api::{clickup_connection, clickup_duplicate_check, clickup_prefetch, AppState};
+use crate::api::{clickup_connection, clickup_prefetch, clickup_run_update, AppState};
 use crate::auth::AuthenticatedUser;
 
 const ENCRYPTION_KEY: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -76,6 +78,9 @@ async fn spawn_clickup(mock: Mock) -> String {
                         task("c1", "COMPLETE Duplicate Tenant Corrections", Some("p1"), &list),
                         task("p2", "7. Second Pass", None, &list),
                         task("c2", "PERFORM 2nd Duplicate Check", Some("p2"), &list),
+                        task("p3", "9. Unit Setup", None, &list),
+                        task("u1", "CONFIGURE Unit Setup", Some("p3"), &list),
+                        task("t1", "APPLY TAGS to Lease", Some("p3"), &list),
                         task("x1", "ADD Recurring Fees", None, &list)
                     ] }))
                 }
@@ -223,12 +228,17 @@ impl Fixture {
     /// Records a dedup run `minutes_ago` minutes in the past; returns its
     /// session id.
     async fn run(&self, saved_to_dropbox: bool, minutes_ago: i32) -> String {
+        self.run_of("dedup", saved_to_dropbox, minutes_ago).await
+    }
+
+    /// Like `run`, for any tool (`dedup`, `unit_group`, `tagger`).
+    async fn run_of(&self, tool: &str, saved_to_dropbox: bool, minutes_ago: i32) -> String {
         let session_id = Uuid::new_v4().to_string();
         sqlx::query(
             "INSERT INTO client_ops.tool_runs
                  (tool, facility_id, session_id, actor_user_id, source_file_name, report_summary,
                   output_dropbox_path, created_at)
-             VALUES ('dedup', $1, $2, $3, 'Tenants.csv', '{}'::jsonb, $4,
+             VALUES ($6, $1, $2, $3, 'Tenants.csv', '{}'::jsonb, $4,
                      now() - make_interval(mins => $5))",
         )
         .bind(self.facility_id)
@@ -238,6 +248,7 @@ impl Fixture {
             "/QMS Onboarding/Affordable Storage/Synott/Duplicate Check/SYN_v1_pull_check_10-05-2026.xlsx",
         ))
         .bind(minutes_ago)
+        .bind(tool)
         .execute(&self.superuser)
         .await
         .unwrap();
@@ -245,11 +256,11 @@ impl Fixture {
     }
 
     async fn candidates(&self, session_id: &str) -> axum::response::Response {
-        clickup_duplicate_check::duplicate_check_tasks(
+        clickup_run_update::run_update_tasks(
             State(self.state.clone()),
             self.user(),
             Path((self.company_id, self.facility_id)),
-            Query(clickup_duplicate_check::CandidatesQuery {
+            Query(clickup_run_update::CandidatesQuery {
                 session_id: session_id.to_string(),
             }),
         )
@@ -257,12 +268,12 @@ impl Fixture {
     }
 
     async fn post(&self, session_id: &str, task_id: &str) -> axum::response::Response {
-        clickup_duplicate_check::post_duplicate_check_results(
+        clickup_run_update::post_run_update(
             State(self.state.clone()),
             self.user(),
             HeaderMap::new(),
             Path((self.company_id, self.facility_id)),
-            Json(clickup_duplicate_check::PostResultsRequest {
+            Json(clickup_run_update::PostResultsRequest {
                 session_id: session_id.to_string(),
                 task_id: task_id.to_string(),
             }),
@@ -581,6 +592,125 @@ async fn clickup_dupcheck_db_a_share_link_captured_at_save_time_is_the_one_comme
         writes[0].1["comment"][1]["attributes"]["link"],
         "https://www.dropbox.com/scl/fi/abc/file.xlsx?rlkey=k&dl=0"
     );
+
+    std::env::remove_var("INTEGRATION_SECRETS_ENCRYPTION_KEY");
+}
+
+/// Unit Groups and the Template Tagger have their own steps: the task
+/// phrases come from `clickup_task_steps`, never from code.
+#[tokio::test]
+#[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
+async fn clickup_run_update_db_unit_groups_and_tagger_runs_are_offered_their_own_tasks() {
+    let _ = dotenvy::from_filename(".env.local");
+    let fx = Fixture::new().await;
+    fx.link_facility().await;
+    let unit_group = fx.run_of("unit_group", true, 10).await;
+    let tagger = fx.run_of("tagger", true, 5).await;
+
+    let body = body_json(fx.candidates(&unit_group).await).await;
+    assert_eq!(body["step_label"], "Unit Groups");
+    assert_eq!(body["candidates"][0]["task_id"], "u1");
+    assert!(body["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|c| c["task_id"] != "t1" && c["task_id"] != "c1"));
+
+    let body = body_json(fx.candidates(&tagger).await).await;
+    assert_eq!(body["step_label"], "Template Tagger");
+    assert_eq!(body["candidates"][0]["task_id"], "t1");
+
+    std::env::remove_var("INTEGRATION_SECRETS_ENCRYPTION_KEY");
+}
+
+/// A first Unit Groups run comments, assigns and completes; the comment
+/// and the audit event name the tool; a second run only comments.
+#[tokio::test]
+#[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
+async fn clickup_run_update_db_a_unit_group_run_posts_with_its_own_wording_and_event() {
+    let _ = dotenvy::from_filename(".env.local");
+    let fx = Fixture::new().await;
+    fx.link_facility().await;
+    let first = fx.run_of("unit_group", true, 10).await;
+    let second = fx.run_of("unit_group", true, 5).await;
+
+    let response = fx.post(&first, "u1").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_json(response).await;
+    assert_eq!(body["comment"]["ok"], true);
+    assert_eq!(body["assignee"]["ok"], true);
+    assert_eq!(body["status"]["ok"], true);
+
+    let writes = fx.writes();
+    assert_eq!(writes.len(), 3);
+    let blocks = writes[0].1["comment"].as_array().unwrap();
+    assert_eq!(blocks[0]["text"], "Unit group results are ");
+    assert_eq!(blocks[1]["text"], "here");
+
+    let audited: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM client_ops.audit_log
+          WHERE event_type = 'facility_clickup_run_posted' AND entity_id = $1
+            AND metadata->>'tool' = 'unit_group'",
+    )
+    .bind(fx.facility_id.to_string())
+    .fetch_one(&fx.superuser)
+    .await
+    .unwrap();
+    assert_eq!(audited, 1);
+
+    // The second run of a one-step tool only adds a comment.
+    let body = body_json(fx.candidates(&second).await).await;
+    assert_eq!(body["comment_only"], true);
+    let response = fx.post(&second, "u1").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(body_json(response).await["assignee"].is_null());
+    assert_eq!(fx.writes().len(), 4);
+
+    std::env::remove_var("INTEGRATION_SECRETS_ENCRYPTION_KEY");
+}
+
+/// Editing the step's row changes what gets matched and what is said,
+/// with no code change.
+#[tokio::test]
+#[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
+async fn clickup_run_update_db_the_step_row_drives_the_task_phrase_and_the_wording() {
+    let _ = dotenvy::from_filename(".env.local");
+    let fx = Fixture::new().await;
+    fx.link_facility().await;
+    let tagger = fx.run_of("tagger", true, 1).await;
+
+    sqlx::query(
+        "UPDATE integrations.clickup_task_steps
+            SET phrases = ARRAY['PERFORM 2nd Duplicate Check'],
+                comment_lead = 'Tags were applied, see ', comment_link_text = 'this file'
+          WHERE step_key = 'template_tagger'",
+    )
+    .execute(&fx.superuser)
+    .await
+    .unwrap();
+
+    let body = body_json(fx.candidates(&tagger).await).await;
+    assert_eq!(body["candidates"][0]["task_id"], "c2");
+
+    let response = fx.post(&tagger, "c2").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let blocks = fx.writes()[0].1["comment"].as_array().unwrap().clone();
+    assert_eq!(blocks[0]["text"], "Tags were applied, see ");
+    assert_eq!(blocks[1]["text"], "this file");
+
+    // Put the seeded row back for the next test.
+    sqlx::query(
+        "UPDATE integrations.clickup_task_steps
+            SET phrases = ARRAY['APPLY TAGS to Lease'],
+                comment_lead = 'Template tagger results are ', comment_link_text = 'here'
+          WHERE step_key = 'template_tagger'",
+    )
+    .execute(&fx.superuser)
+    .await
+    .unwrap();
 
     std::env::remove_var("INTEGRATION_SECRETS_ENCRYPTION_KEY");
 }
