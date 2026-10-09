@@ -63,21 +63,24 @@ use crate::clients::sync::apply_facility_refresh;
 
 const PERMISSION: &str = "client_ops.perform";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum ManualLinkWorkflow {
     Intake,
     MerchantAccount,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ManualLinkRequest {
     pub facility_id: Uuid,
     pub workflow: ManualLinkWorkflow,
     pub run_id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ManualLinkResponse {
     pub workflow: &'static str,
 }

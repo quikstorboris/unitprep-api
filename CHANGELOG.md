@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.116] - 2026-10-08
+
+Efficiency refactor chunk F7f (api side): the company-list, resync, manual-link, directory filter, client-import preview/create, search, onboarding-summary and a few auth/settings types are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.
+
+### Added
+- `ts_rs::TS` + `#[ts(export)]` on `CompanySummary` / `StaffRef` (`clients_companies.rs`); `ResyncConflict`, `PreviewResyncResponse`, `ConflictResolution`, `ApplyResyncResponse` (`clients_resync/`); `ManualLinkRequest` / `ManualLinkResponse` / `ManualLinkWorkflow`; `FilterOptionsResponse` / `StateOption`; `MappedCompany`, `MappedFacility` (`clients/intake_mapping.rs`), `PreviewedRun`, `PreviewClientsResponse`, `CreateClientRequest`, `CreateFacilitySelection`, `CreateClientResponse`, `EditableFacilityFields`; the search DTOs (`DuplicateCandidate`, `FacilityMatch`, `PersonMatch`, `MerchantAccountMatch`, `SearchClientsResponse`, `MatchedVia`); `FacilityOnboardingSummary` / `OnboardingSummaryResponse`; `RoleInfo`, `GrantablePermission`, `UserPermissionsResponse`, `CreateInviteResponse`; and `ConfigSource`. `scripts/check_ts_bindings.sh` now covers 100 files.
+- Two field overrides so the generated type is as precise as the hand-written one it replaces: `PersonMatch.workflow` is typed as the `"intake" | "merchant_account" | "contract_order"` union, and the `i64` `FacilityOnboardingSummary.duplicate_checks_completed` as `number` (ts-rs defaults to `bigint`).
+
+### Notes
+- Deliberately NOT generated: `UserSummary` and `CreateInviteRequest` (the UI narrows `role` / `company` to unions the Rust `String` fields cannot express), `SyncStatus` (`state` is a bare `&'static str` in Rust; the UI's union is tighter), and the tool-run summary union (its Rust side builds the report summary as an untyped JSON value).
+
 ## [1.9.115] - 2026-10-08
 
 Efficiency refactor chunk A6b: the Template Tagger's CPU-bound steps run on the blocking pool. No behaviour change.

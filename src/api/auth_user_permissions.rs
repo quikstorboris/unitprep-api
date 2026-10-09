@@ -31,7 +31,8 @@ use crate::auth::{audit_log, begin_rls_transaction, AuthenticatedUser};
 
 const PERMISSION: &str = "user_permissions.manage";
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct GrantablePermission {
     pub key: String,
     pub label: String,
@@ -42,7 +43,8 @@ pub struct GrantablePermission {
     pub granted: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct UserPermissionsResponse {
     pub user_id: Uuid,
     pub permissions: Vec<GrantablePermission>,

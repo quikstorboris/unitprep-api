@@ -15,7 +15,8 @@ use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ConflictResolution {
     pub entity_type: String,
     pub entity_id: Uuid,
@@ -33,7 +34,8 @@ pub struct ApplyResyncRequest {
     pub resolutions: Vec<ConflictResolution>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ApplyResyncResponse {
     pub updated_count: usize,
     pub merchant_accounts_refreshed: usize,

@@ -79,7 +79,8 @@ use crate::process_street::{FormField, ProcessStreetClient, ProcessStreetError, 
 /// ClickUp is the real future editable field, not this one). Excluding
 /// it here, rather than just not rendering an input for it, makes
 /// clobbering it structurally impossible, not just a UI convention.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct EditableFacilityFields {
     pub name: Option<String>,
     pub street_address: Option<String>,

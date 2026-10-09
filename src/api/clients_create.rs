@@ -40,7 +40,8 @@ fn already_imported(run_ids: Vec<String>) -> Response {
     )
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct CreateFacilitySelection {
     pub run_id: String,
     pub fields: EditableFacilityFields,
@@ -52,7 +53,8 @@ pub struct CreateFacilitySelection {
     pub merchant_account_run_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct CreateClientRequest {
     pub company_intake_run_id: String,
     pub company: MappedCompany,
@@ -65,7 +67,8 @@ pub struct CreateClientRequest {
     pub clickup_waived: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct CreateClientResponse {
     pub company_id: Uuid,
     pub facility_ids: Vec<Uuid>,

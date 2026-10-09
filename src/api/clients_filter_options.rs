@@ -35,13 +35,15 @@ use crate::clients::us_states;
 /// state), `abbreviation` is included only so the frontend's dropdown
 /// can also match a typed postal code (e.g. "CA") against a "California"
 /// option it wouldn't otherwise find by label text alone.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct StateOption {
     pub name: String,
     pub abbreviation: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct FilterOptionsResponse {
     pub states: Vec<StateOption>,
     pub previous_pms: Vec<String>,

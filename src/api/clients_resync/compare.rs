@@ -22,7 +22,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use uuid::Uuid;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ResyncConflict {
     /// "company" | "facility".
     pub entity_type: &'static str,
@@ -35,7 +36,8 @@ pub struct ResyncConflict {
     pub fresh_value: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct PreviewResyncResponse {
     /// How many fields would update automatically -- not manually
     /// edited, so no choice is needed.

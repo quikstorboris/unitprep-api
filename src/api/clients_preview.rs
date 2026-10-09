@@ -89,7 +89,8 @@ pub struct PreviewClientsRequest {
     pub runs: Vec<PreviewRunRequest>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct PreviewedRun {
     pub run_id: String,
     /// PS's own `Is_this_their_first_time_filling_out_this_form?` for
@@ -133,7 +134,8 @@ pub struct PreviewedRun {
     pub merchant_account_run_id: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct PreviewClientsResponse {
     pub runs: Vec<PreviewedRun>,
 }

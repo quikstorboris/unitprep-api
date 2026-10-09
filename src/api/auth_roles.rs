@@ -16,7 +16,8 @@ use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, AppState};
 use crate::auth::AuthenticatedUser;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct RoleInfo {
     pub key: String,
     pub label: String,

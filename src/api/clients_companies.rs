@@ -70,7 +70,8 @@ pub struct ListCompaniesQuery {
 /// label a filter chip or a grid's group heading, never the rest of
 /// `auth.users` (see `auth.staff_directory()`'s own doc comment for why
 /// that's a deliberate, narrow exposure).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct StaffRef {
     pub id: Uuid,
     pub name: String,
@@ -91,7 +92,8 @@ fn staff_ref(
     })
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct CompanySummary {
     pub id: Uuid,
     pub legal_name: String,

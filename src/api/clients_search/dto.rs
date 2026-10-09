@@ -12,8 +12,9 @@ pub struct SearchClientsQuery {
 /// carries a real `status`; a run pulled in only because a person on it
 /// matched the query has no status available without an extra live PS
 /// call per candidate, so it's `None` rather than guessed at.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
 pub enum MatchedVia {
     Name,
     Person { full_name: String, role: String },
@@ -26,7 +27,8 @@ pub enum MatchedVia {
 /// facility), each identified by which Merchant Account run it came
 /// from. The frontend brackets rows sharing a `run_id` and shows this
 /// as "Potential Duplicates" rather than silently picking one.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct DuplicateCandidate {
     pub merchant_account_run_id: String,
     /// PS's own `audit.updatedDate` for *this* Merchant Account run --
@@ -55,7 +57,8 @@ pub struct DuplicateCandidate {
     pub addresses_agree: Option<bool>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct FacilityMatch {
     pub run_id: String,
     pub run_name: String,
@@ -79,9 +82,11 @@ pub struct FacilityMatch {
     pub duplicate: Option<DuplicateCandidate>,
 }
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct PersonMatch {
     /// `intake` | `merchant_account` | `contract_order`.
+    #[ts(type = "\"intake\" | \"merchant_account\" | \"contract_order\"")]
     pub workflow: String,
     pub ps_run_id: String,
     pub run_name: String,
@@ -94,7 +99,8 @@ pub struct PersonMatch {
 /// One New Merchant Account run whose own title matched the query --
 /// see this module's own doc comment for why this exists as its own
 /// list rather than being folded into `facility_matches`.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct MerchantAccountMatch {
     pub run_id: String,
     pub run_name: String,
@@ -124,7 +130,8 @@ pub struct MerchantAccountMatch {
     pub similar_facility_names: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct SearchClientsResponse {
     pub facility_matches: Vec<FacilityMatch>,
     pub merchant_account_matches: Vec<MerchantAccountMatch>,

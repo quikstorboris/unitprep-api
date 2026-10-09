@@ -32,7 +32,8 @@ pub struct CreateInviteRequest {
     pub role: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct CreateInviteResponse {
     pub user_id: Uuid,
 

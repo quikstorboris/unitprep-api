@@ -7,8 +7,9 @@ use serde::Serialize;
 /// the process is still running on `.env.local` / process env values. The
 /// settings pages report it so an admin can tell a saved value from a
 /// fallback that a restart or a missing row would change.
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Serialize, PartialEq, Eq, ts_rs::TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum ConfigSource {
     Database,
     Environment,

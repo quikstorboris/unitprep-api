@@ -61,7 +61,8 @@ use crate::api::rls::{begin_for, try_response};
 use crate::api::{internal_error, AppState};
 use crate::auth::AuthenticatedUser;
 
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
+#[ts(export)]
 pub struct FacilityOnboardingSummary {
     pub facility_id: Uuid,
     pub facility_name: String,
@@ -93,10 +94,12 @@ pub struct FacilityOnboardingSummary {
     /// -- a row only exists once a check has actually succeeded, so this
     /// is already a completed-check count, not something that needs
     /// filtering further.
+    #[ts(type = "number")]
     pub duplicate_checks_completed: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct OnboardingSummaryResponse {
     pub facilities: Vec<FacilityOnboardingSummary>,
 }

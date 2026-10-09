@@ -49,7 +49,8 @@ fn parse_is_first_time(fields: &[FormField]) -> Option<bool> {
 /// Also the wire shape for the confirmation-screen preview/create round
 /// trip (`api::clients_preview`/`api::clients_create`) -- every field
 /// here is editable on that screen, so no separate DTO is worth having.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct MappedCompany {
     pub legal_name: Option<String>,
     pub corporate_email: Option<String>,
@@ -95,7 +96,8 @@ pub struct MappedCompany {
 /// request carries a narrower `api::clients_create::EditableFacilityFields`
 /// instead of this whole struct -- making it structurally impossible to
 /// submit an edited go_live_date, not just a convention to follow.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct MappedFacility {
     pub name: Option<String>,
     pub street_address: Option<String>,
