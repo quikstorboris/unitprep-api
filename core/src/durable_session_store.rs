@@ -5,17 +5,51 @@ use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use sqlx::PgPool;
+use tokio::time::Instant;
 
 use crate::in_memory_session_store::InMemorySessionStore;
 use crate::session::{HasSessionMetadata, SessionMetadata};
 use crate::session_store::{SessionMetrics, SessionStore};
+use crate::sweep_schedule::SweepSchedule;
 
-/// How often the Postgres-row expiry sweep runs -- independent of, and
-/// deliberately the same cadence as, `InMemorySessionStore`'s own
-/// `start_cleanup_task` interval. See that sweep's own doc comment on
-/// `DurableSessionStore::start_cleanup_task` for why a *separate* sweep
-/// is needed at all, rather than piggybacking on the in-memory one.
-const DB_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
+/// How long after a row's expiry its sweep is allowed to run. Rows that
+/// expire within this window of each other are removed by one sweep, so a
+/// busy day costs a handful of database wake-ups rather than one per row.
+/// An expired row is never served either way (rehydration checks
+/// staleness), so this only bounds how long its bytes linger.
+const DEFAULT_SWEEP_GRACE: Duration = Duration::from_secs(5 * 60);
+
+/// After a (re)start, the first sweep runs this long in: it clears rows
+/// left over from before the restart, which the schedule cannot know about.
+/// The database is awake at startup anyway.
+const DEFAULT_STARTUP_SWEEP_DELAY: Duration = Duration::from_secs(30);
+
+/// A sweep is never scheduled sooner than this after the previous one was
+/// planned, so a table full of nearly-expired rows cannot turn into a busy
+/// loop.
+const MIN_SWEEP_SPACING: Duration = Duration::from_secs(30);
+
+/// How long to wait before trying again after a sweep fails (database down).
+const SWEEP_RETRY_DELAY: Duration = Duration::from_secs(60);
+
+/// Tunable timing for the Postgres expiry sweep. The defaults are what the
+/// application uses; tests shorten them.
+#[derive(Debug, Clone, Copy)]
+pub struct SweepTiming {
+    /// See `DEFAULT_SWEEP_GRACE`.
+    pub grace: Duration,
+    /// See `DEFAULT_STARTUP_SWEEP_DELAY`.
+    pub startup_delay: Duration,
+}
+
+impl Default for SweepTiming {
+    fn default() -> Self {
+        Self {
+            grace: DEFAULT_SWEEP_GRACE,
+            startup_delay: DEFAULT_STARTUP_SWEEP_DELAY,
+        }
+    }
+}
 
 /// A write-through wrapper around `InMemorySessionStore<S>` that survives
 /// a process restart by also persisting a serialized snapshot of every
@@ -90,6 +124,10 @@ pub struct DurableSessionStore<S> {
     kind: String,
 
     timeout: Duration,
+
+    /// When the next Postgres expiry sweep is due; see `sweep_schedule`.
+    sweep: Arc<SweepSchedule>,
+    sweep_timing: SweepTiming,
 }
 
 // Written by hand instead of `#[derive(Clone)]` for the same reason as
@@ -104,6 +142,8 @@ impl<S> Clone for DurableSessionStore<S> {
             db: self.db.clone(),
             kind: self.kind.clone(),
             timeout: self.timeout,
+            sweep: self.sweep.clone(),
+            sweep_timing: self.sweep_timing,
         }
     }
 }
@@ -123,14 +163,31 @@ where
             db,
             kind: kind.into(),
             timeout,
+            sweep: Arc::new(SweepSchedule::new()),
+            sweep_timing: SweepTiming::default(),
         }
+    }
+
+    /// Overrides the sweep timing (tests use short values). Call before
+    /// `start_cleanup_task`.
+    pub fn with_sweep_timing(mut self, timing: SweepTiming) -> Self {
+        self.sweep_timing = timing;
+        self
+    }
+
+    /// True when no Postgres sweep is scheduled -- the store is not going to
+    /// touch the database on its own. Exposed so tests (and diagnostics) can
+    /// assert the idle state.
+    pub fn sweep_is_idle(&self) -> bool {
+        self.sweep.due().is_none()
     }
 
     /// Starts BOTH cleanup mechanisms this store needs:
     ///
     /// 1. The inner `InMemorySessionStore`'s own hot-path sweep, entirely
     ///    unchanged -- it still expires sessions out of the in-process
-    ///    map on the same schedule it always has.
+    ///    map on the same schedule it always has (an in-process timer;
+    ///    it never touches the database).
     /// 2. A second, independent sweep that deletes this store's own
     ///    `kind`'s stale rows from `auth.durable_sessions`.
     ///
@@ -145,35 +202,43 @@ where
     /// opposed to an explicit `delete()`, e.g. `/session/cancel`) would
     /// leave its row behind forever, and the table would grow
     /// unbounded -- exactly the failure this second sweep exists to
-    /// prevent. Running it as its own periodic query (deleting by
-    /// `kind` + `last_accessed` directly, no deserialization needed) is
-    /// simpler than threading a callback through `InMemorySessionStore`
-    /// and keeps that type's own contract (used as-is by the three tool
-    /// sessions and every existing test) completely unchanged.
+    /// prevent. Running it as its own query (deleting by `kind` +
+    /// `last_accessed` directly, no deserialization needed) is simpler
+    /// than threading a callback through `InMemorySessionStore` and keeps
+    /// that type's own contract (used as-is by the three tool sessions and
+    /// every existing test) completely unchanged.
+    ///
+    /// **Pass 2 is scheduled, not periodic.** It used to be a fixed
+    /// 60-second timer per store, which queried Postgres about five times
+    /// a minute forever and so kept a scale-to-zero database (Neon)
+    /// awake around the clock. Now it runs only when a row can have
+    /// expired: see `sweep_schedule` for the rules. In short, the first
+    /// write after a quiet spell schedules a sweep for just after that
+    /// row's expiry, each sweep re-arms itself from the oldest remaining
+    /// row, and with no rows left nothing runs. One sweep also runs
+    /// shortly after startup to clear rows left by the previous process.
     pub fn start_cleanup_task(&self) {
         self.inner.start_cleanup_task();
 
         let db = self.db.clone();
         let kind = self.kind.clone();
         let timeout = self.timeout;
+        let timing = self.sweep_timing;
+        let schedule = self.sweep.clone();
+
+        schedule.lower_to(Instant::now() + timing.startup_delay);
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(DB_SWEEP_INTERVAL);
-
             loop {
-                interval.tick().await;
-
-                match delete_expired_rows(&db, &kind, timeout).await {
-                    Ok(deleted) if deleted > 0 => {
-                        tracing::info!(kind = %kind, deleted, "durable session Postgres sweep removed expired rows");
-                    }
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!(
-                            error = %err,
-                            kind = %kind,
-                            "durable session Postgres sweep failed; will retry on the next tick",
-                        );
+                match schedule.due() {
+                    None => schedule.changed().await,
+                    Some(at) => {
+                        if tokio::time::timeout_at(at, schedule.changed())
+                            .await
+                            .is_err()
+                        {
+                            sweep_once(&db, &kind, timeout, timing, &schedule).await;
+                        }
                     }
                 }
             }
@@ -218,6 +283,12 @@ where
         let metadata = session.metadata().clone();
         let db = self.db.clone();
         let kind = self.kind.clone();
+
+        // This row cannot expire before `timeout` from now: make sure a
+        // sweep is scheduled for just after that (and none runs sooner).
+        let now = Instant::now();
+        self.sweep
+            .note_write(now, now + self.timeout + self.sweep_timing.grace);
 
         tokio::spawn(async move {
             if let Err(err) = upsert_row(&db, &kind, &metadata, payload).await {
@@ -460,6 +531,66 @@ async fn delete_row(db: &PgPool, kind: &str, id: &str) -> Result<(), sqlx::Error
     Ok(())
 }
 
+/// One scheduled sweep: delete this kind's expired rows, then schedule the
+/// next sweep from the oldest row that is left (nothing left, nothing
+/// scheduled). On failure it retries after `SWEEP_RETRY_DELAY`.
+async fn sweep_once(
+    db: &PgPool,
+    kind: &str,
+    timeout: Duration,
+    timing: SweepTiming,
+    schedule: &SweepSchedule,
+) {
+    let write_in_gap = schedule.begin_sweep();
+
+    let outcome = async {
+        let deleted = delete_expired_rows(db, kind, timeout).await?;
+        let oldest = oldest_row_epoch(db, kind).await?;
+        Ok::<_, sqlx::Error>((deleted, oldest))
+    }
+    .await;
+
+    match outcome {
+        Ok((deleted, oldest)) => {
+            if deleted > 0 {
+                tracing::info!(kind = %kind, deleted, "durable session Postgres sweep removed expired rows");
+            }
+            if let Some(oldest) = oldest {
+                let due_epoch = oldest + timeout.as_secs_f64() + timing.grace.as_secs_f64();
+                let wait = Duration::from_secs_f64(
+                    (due_epoch - epoch_seconds(SystemTime::now()))
+                        .max(MIN_SWEEP_SPACING.as_secs_f64()),
+                );
+                schedule.lower_to(Instant::now() + wait);
+            }
+            if write_in_gap {
+                // A write landed between this sweep falling due and starting;
+                // its row may have been inserted after the look above.
+                schedule.lower_to(Instant::now() + timeout + timing.grace);
+            }
+        }
+        Err(err) => {
+            tracing::error!(
+                error = %err,
+                kind = %kind,
+                "durable session Postgres sweep failed; will retry shortly",
+            );
+            schedule.lower_to(Instant::now() + SWEEP_RETRY_DELAY);
+        }
+    }
+}
+
+/// `last_accessed` of the oldest row of this kind, as epoch seconds.
+async fn oldest_row_epoch(db: &PgPool, kind: &str) -> Result<Option<f64>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXTRACT(EPOCH FROM min(last_accessed))::float8
+         FROM auth.durable_sessions WHERE kind = $1",
+    )
+    .bind(kind)
+    .fetch_one(db)
+    .await
+}
+
 async fn delete_expired_rows(
     db: &PgPool,
     kind: &str,
@@ -482,3 +613,7 @@ async fn delete_expired_rows(
 #[cfg(test)]
 #[path = "durable_session_store_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "durable_session_store_db_tests.rs"]
+mod db_tests;

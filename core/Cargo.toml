@@ -28,7 +28,7 @@ encoding_rs = "0.8"
 # that fn only exists when built with "rt-multi-thread", hence that
 # feature being listed explicitly here rather than relying on it being
 # unified in transitively from the binary crate's own "full" feature set.
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time"] }
 
 # Session locking — panicking while a lock is held releases it instead of
 # poisoning it, so a bug in one request can never permanently wedge session
