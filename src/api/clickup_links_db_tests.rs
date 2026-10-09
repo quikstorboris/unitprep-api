@@ -698,6 +698,7 @@ async fn clickup_links_db_unlinking_works_even_when_the_users_token_has_gone_bad
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn clickup_links_db_a_user_who_never_connected_clickup_is_told_to_connect_it() {
     let _ = dotenvy::from_filename(".env.local");

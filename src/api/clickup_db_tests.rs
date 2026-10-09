@@ -101,6 +101,7 @@ pub(super) async fn body_json(response: Response) -> Value {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see module doc"]
 async fn clickup_db_a_direct_grant_is_unioned_into_the_resolved_session() {
     let _ = dotenvy::from_filename(".env.local");
@@ -147,6 +148,7 @@ async fn clickup_db_a_direct_grant_is_unioned_into_the_resolved_session() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see module doc"]
 async fn clickup_db_a_permission_that_is_not_directly_grantable_is_refused_by_the_database() {
     let superuser = superuser_pool();
@@ -168,6 +170,7 @@ async fn clickup_db_a_permission_that_is_not_directly_grantable_is_refused_by_th
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see module doc"]
 async fn clickup_db_rls_lets_only_granter_roles_write_grants_and_never_on_oneself() {
     let _ = dotenvy::from_filename(".env.local");
@@ -223,6 +226,7 @@ async fn clickup_db_rls_lets_only_granter_roles_write_grants_and_never_on_onesel
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see module doc"]
 async fn clickup_db_credentials_rls_isolates_each_users_row_even_from_admins() {
     let _ = dotenvy::from_filename(".env.local");
@@ -443,6 +447,7 @@ async fn clickup_db_connection_lifecycle_save_test_invalidate_recover_remove() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see module doc"]
 async fn clickup_db_grant_endpoints_round_trip_and_are_idempotent() {
     let _ = dotenvy::from_filename(".env.local");
@@ -537,6 +542,7 @@ async fn clickup_db_grant_endpoints_round_trip_and_are_idempotent() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see module doc"]
 async fn clickup_db_a_department_manager_can_list_users_and_grant_but_not_manage_them() {
     let _ = dotenvy::from_filename(".env.local");

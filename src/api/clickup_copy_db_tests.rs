@@ -407,6 +407,7 @@ impl Fixture {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_pairs_tasks_in_every_phase_in_the_templates_order() {
     let f = Fixture::new().await;
@@ -469,6 +470,7 @@ async fn copy_db_pairs_tasks_in_every_phase_in_the_templates_order() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_the_scope_filter_narrows_the_rows() {
     let f = Fixture::new().await;
@@ -489,6 +491,7 @@ async fn copy_db_the_scope_filter_narrows_the_rows() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_refuses_without_a_source_or_when_the_source_is_the_target_or_unlinked() {
     let f = Fixture::new().await;
@@ -531,6 +534,7 @@ async fn copy_db_refuses_without_a_source_or_when_the_source_is_the_target_or_un
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_a_row_is_prefilled_with_the_sources_latest_comment() {
     let f = Fixture::new().await;
@@ -545,6 +549,7 @@ async fn copy_db_a_row_is_prefilled_with_the_sources_latest_comment() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_flags_a_target_that_already_has_the_comment_or_the_pointer() {
     let f = Fixture::new().await;
@@ -565,6 +570,7 @@ async fn copy_db_flags_a_target_that_already_has_the_comment_or_the_pointer() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_posts_the_comment_and_one_pointer_per_task() {
     let f = Fixture::new().await;
@@ -590,6 +596,7 @@ async fn copy_db_posts_the_comment_and_one_pointer_per_task() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_the_parents_own_tasks_get_no_pointer() {
     let f = Fixture::new().await;
@@ -622,6 +629,7 @@ async fn copy_db_the_parents_own_tasks_get_no_pointer() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_without_a_parent_no_pointer_is_posted() {
     let f = Fixture::new().await;
@@ -651,6 +659,7 @@ async fn copy_db_without_a_parent_no_pointer_is_posted() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_one_denied_row_does_not_stop_the_others() {
     let f = Fixture::new().await;
@@ -674,6 +683,7 @@ async fn copy_db_one_denied_row_does_not_stop_the_others() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_refuses_bad_requests_without_writing() {
     let f = Fixture::new().await;
@@ -800,6 +810,7 @@ impl Fixture {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_lists_the_source_tasks_and_the_possible_destinations() {
     let f = Fixture::new().await;
@@ -845,6 +856,7 @@ async fn bulk_db_lists_the_source_tasks_and_the_possible_destinations() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_pairs_the_chosen_task_in_every_destination() {
     let f = Fixture::new().await;
@@ -875,6 +887,7 @@ async fn bulk_db_pairs_the_chosen_task_in_every_destination() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_prefills_with_the_source_tasks_latest_comment() {
     let f = Fixture::new().await;
@@ -889,6 +902,7 @@ async fn bulk_db_prefills_with_the_source_tasks_latest_comment() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_a_small_copy_runs_inside_the_request() {
     let f = Fixture::new().await;
@@ -922,6 +936,7 @@ async fn bulk_db_a_small_copy_runs_inside_the_request() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_refuses_bad_requests_without_writing() {
     let f = Fixture::new().await;
@@ -947,6 +962,7 @@ async fn bulk_db_refuses_bad_requests_without_writing() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_a_denied_destination_does_not_stop_the_others() {
     let f = Fixture::new().await;
@@ -969,6 +985,7 @@ async fn bulk_db_a_denied_destination_does_not_stop_the_others() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_a_big_copy_runs_as_a_background_job_only_its_owner_can_see() {
     let f = Fixture::new().await;
@@ -1057,6 +1074,7 @@ async fn bulk_db_a_big_copy_runs_as_a_background_job_only_its_owner_can_see() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_a_job_that_has_gone_quiet_is_reported_as_interrupted() {
     let f = Fixture::new().await;
@@ -1087,6 +1105,7 @@ async fn bulk_db_a_job_that_has_gone_quiet_is_reported_as_interrupted() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_a_dialog_copy_ends_with_a_link_to_the_source_task() {
     let f = Fixture::new().await;
@@ -1122,6 +1141,7 @@ async fn copy_db_a_dialog_copy_ends_with_a_link_to_the_source_task() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_every_copied_comment_ends_with_a_link_to_the_source_task() {
     let f = Fixture::new().await;
@@ -1143,6 +1163,7 @@ async fn bulk_db_every_copied_comment_ends_with_a_link_to_the_source_task() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_a_source_task_outside_the_source_list_is_refused_and_nothing_is_posted() {
     let f = Fixture::new().await;
@@ -1172,6 +1193,7 @@ fn status_writes(f: &Fixture) -> Vec<(String, Value)> {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_only_comments_unless_completing_is_asked_for() {
     let f = Fixture::new().await;
@@ -1185,6 +1207,7 @@ async fn bulk_db_only_comments_unless_completing_is_asked_for() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_completes_each_destination_task_when_asked() {
     let f = Fixture::new().await;
@@ -1204,6 +1227,7 @@ async fn bulk_db_completes_each_destination_task_when_asked() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_a_list_with_no_complete_status_still_gets_the_comment() {
     let f = Fixture::new().await;
@@ -1227,6 +1251,7 @@ async fn bulk_db_a_list_with_no_complete_status_still_gets_the_comment() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn bulk_db_a_task_that_cannot_be_commented_on_is_not_completed() {
     let f = Fixture::new().await;
@@ -1243,6 +1268,7 @@ async fn bulk_db_a_task_that_cannot_be_commented_on_is_not_completed() {
 }
 
 #[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
 async fn copy_db_the_dialog_completes_the_target_task_only_when_asked() {
     let f = Fixture::new().await;
