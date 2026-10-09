@@ -55,6 +55,10 @@ pub struct TaskDropdown {
     pub field_name: String,
     pub option_id: String,
     pub option_name: String,
+    /// The option's position in the field's own option list. For
+    /// Onboarding Phase this is the template's phase order, which is the
+    /// order people expect to see the groups in.
+    pub option_order: Option<i64>,
 }
 
 impl ClickUpTask {
@@ -165,6 +169,10 @@ impl CustomFieldBody {
             field_name: self.name,
             option_id: chosen.id,
             option_name: chosen.name,
+            option_order: chosen
+                .orderindex
+                .as_ref()
+                .and_then(serde_json::Number::as_i64),
         })
     }
 }
@@ -423,6 +431,7 @@ mod tests {
         let phase = task.dropdown("Onboarding Phase").unwrap();
         assert_eq!(phase.option_id, "o-mig");
         assert_eq!(phase.option_name, "Migration");
+        assert_eq!(phase.option_order, Some(1));
         assert_eq!(phase.field_id, "f-phase");
     }
 

@@ -56,7 +56,9 @@ fn task(id: &str, name: &str, parent: Option<&str>, list: &str, phase: i64, scop
               "type_config": { "options": [
                   { "id": "o-setup", "name": "Set Up", "orderindex": 0 },
                   { "id": "o-mig", "name": "Migration", "orderindex": 1 },
-                  { "id": "o-train", "name": "Training", "orderindex": 2 }
+                  { "id": "o-train", "name": "Training", "orderindex": 2 },
+                  { "id": "o-sched", "name": "Scheduling", "orderindex": 3 },
+                  { "id": "o-stop", "name": "Show Stoppers", "orderindex": 4 }
               ] }, "value": phase },
             { "id": "f-scope", "name": "Corp/Fac", "type": "drop_down",
               "type_config": { "options": [
@@ -67,18 +69,25 @@ fn task(id: &str, name: &str, parent: Option<&str>, list: &str, phase: i64, scop
     })
 }
 
-/// The same template in both lists: two Set Up tasks, one Migration task
-/// and one Training task (never copied). Task ids carry a prefix (`S` in
-/// the source list, `T` in the target list) because ClickUp's ids are
-/// unique per task, and so the mock's comment store keeps each list's
-/// tasks apart.
+/// The same template in both lists: two Set Up tasks, one each in
+/// Migration, Training, Scheduling and Show Stoppers, and one task with no
+/// phase at all (never offered). Task ids carry a prefix (`S` in the
+/// source list, `T` in the target list) because ClickUp's ids are unique
+/// per task, and so the mock's comment store keeps each list's tasks
+/// apart.
 fn list_tasks(list: &str, prefix: &str) -> Value {
     let id = |name: &str| format!("{prefix}{name}");
+    let mut loose = task(&id("loose"), "Loose Task", None, list, 0, 1);
+    loose["custom_fields"][0]["value"] = Value::Null;
+
     json!({ "last_page": true, "tasks": [
         task(&id("fees"), "CONFIGURE Fees", None, list, 0, 0),
         task(&id("delinq"), "CONFIGURE Delinquency", None, list, 0, 0),
         task(&id("import"), "IMPORT Tenants", None, list, 1, 1),
-        task(&id("train"), "Train Staff", None, list, 2, 1)
+        task(&id("train"), "Train Staff", None, list, 2, 1),
+        task(&id("sched"), "BOOK Go-Live Call", None, list, 3, 1),
+        task(&id("stop"), "RESOLVE Open Blockers", None, list, 4, 0),
+        loose
     ] })
 }
 
@@ -399,7 +408,7 @@ impl Fixture {
 
 #[tokio::test]
 #[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
-async fn copy_db_pairs_set_up_and_migration_tasks_and_skips_other_phases() {
+async fn copy_db_pairs_tasks_in_every_phase_in_the_templates_order() {
     let f = Fixture::new().await;
 
     let response = f.pairs(None, None).await;
@@ -416,8 +425,30 @@ async fn copy_db_pairs_set_up_and_migration_tasks_and_skips_other_phases() {
         .iter()
         .map(|row| row["source"]["task_id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids.len(), 3, "Training must not be offered: {ids:?}");
-    assert!(!ids.contains(&"Strain"));
+    // Every phase is offered; a task with no phase is not.
+    assert_eq!(ids.len(), 6, "{ids:?}");
+    assert!(ids.contains(&"Sstop") && ids.contains(&"Ssched") && ids.contains(&"Strain"));
+    assert!(!ids.contains(&"Sloose"));
+
+    // Each row carries its phase and the phase's place in the template's
+    // own order, which the page sorts the groups by.
+    let order_of = |id: &str| {
+        rows.iter()
+            .find(|row| row["source"]["task_id"] == id)
+            .unwrap()["phase_order"]
+            .as_i64()
+            .unwrap()
+    };
+    assert_eq!(
+        ["Sfees", "Simport", "Strain", "Ssched", "Sstop"].map(order_of),
+        [0, 1, 2, 3, 4]
+    );
+    let stop = rows
+        .iter()
+        .find(|row| row["source"]["task_id"] == "Sstop")
+        .unwrap();
+    assert_eq!(stop["phase"], "Show Stoppers");
+    assert_eq!(stop["target"]["task_id"], "Tstop");
 
     let fees = rows
         .iter()
@@ -434,7 +465,7 @@ async fn copy_db_pairs_set_up_and_migration_tasks_and_skips_other_phases() {
     assert_eq!(import["phase"], "Migration");
     assert_eq!(import["target"]["task_id"], "Timport");
 
-    assert_eq!(body["target_tasks"].as_array().unwrap().len(), 3);
+    assert_eq!(body["target_tasks"].as_array().unwrap().len(), 6);
 }
 
 #[tokio::test]
@@ -443,10 +474,13 @@ async fn copy_db_the_scope_filter_narrows_the_rows() {
     let f = Fixture::new().await;
 
     let corporate = body_json(f.pairs(None, Some("corporate")).await).await;
-    assert_eq!(corporate["rows"].as_array().unwrap().len(), 2);
+    // Corporate: fees, delinquency, open blockers.
+    assert_eq!(corporate["rows"].as_array().unwrap().len(), 3);
 
     let facility = body_json(f.pairs(None, Some("facility")).await).await;
-    assert_eq!(facility["rows"].as_array().unwrap().len(), 1);
+    // Facility: import, training, go-live call (the phase-less task is
+    // never offered, whatever its scope).
+    assert_eq!(facility["rows"].as_array().unwrap().len(), 3);
 
     assert_eq!(
         f.pairs(None, Some("nonsense")).await.status(),
@@ -777,11 +811,18 @@ async fn bulk_db_lists_the_source_tasks_and_the_possible_destinations() {
     assert_eq!(body["source"]["facility_name"], "Main St");
     assert_eq!(body["parent"]["facility_name"], "Main St");
     let tasks = body["tasks"].as_array().unwrap();
-    assert_eq!(tasks.len(), 3, "Training is not offered");
+    assert_eq!(
+        tasks.len(),
+        6,
+        "every phase is offered, a phase-less task is not"
+    );
     assert_eq!(
         tasks.iter().find(|t| t["task_id"] == "Simport").unwrap()["phase"],
         "Migration"
     );
+    let stop = tasks.iter().find(|t| t["task_id"] == "Sstop").unwrap();
+    assert_eq!(stop["phase"], "Show Stoppers");
+    assert_eq!(stop["phase_order"], 4);
 
     let destinations: Vec<&str> = body["destinations"]
         .as_array()
@@ -800,7 +841,7 @@ async fn bulk_db_lists_the_source_tasks_and_the_possible_destinations() {
     assert_eq!(body["unlinked"][0]["facility_id"], unlinked.to_string());
 
     let corporate = body_json(f.bulk_tasks(Some("corporate")).await).await;
-    assert_eq!(corporate["tasks"].as_array().unwrap().len(), 2);
+    assert_eq!(corporate["tasks"].as_array().unwrap().len(), 3);
 }
 
 #[tokio::test]
@@ -818,7 +859,7 @@ async fn bulk_db_pairs_the_chosen_task_in_every_destination() {
         .find(|d| d["facility_name"] == "Second St")
         .unwrap();
     assert_eq!(second["target"]["task_id"], "Tfees");
-    assert_eq!(second["tasks"].as_array().unwrap().len(), 3);
+    assert_eq!(second["tasks"].as_array().unwrap().len(), 6);
     let third = destinations
         .iter()
         .find(|d| d["facility_name"] == "Third St")

@@ -2,8 +2,8 @@
 //! facility's list to the counterpart task in several other facilities'
 //! lists at once.
 //!
-//! - `bulk-tasks`: the source list's Set Up/Migration tasks, and which
-//!   other facilities could be destinations;
+//! - `bulk-tasks`: the source list's tasks in every Onboarding Phase, and
+//!   which other facilities could be destinations;
 //! - `bulk-pairs`: for the chosen source task, each destination's
 //!   suggested counterpart (and its tasks, to choose another by hand);
 //! - `bulk-comment`: the source task's latest comment, to prefill;
@@ -159,6 +159,8 @@ pub struct FacilityRef {
 #[derive(Debug, Serialize)]
 pub struct BulkTask {
     pub phase: String,
+    /// The phase's position in the template's own order.
+    pub phase_order: i64,
     #[serde(flatten)]
     pub task: TaskInfo,
 }
@@ -211,6 +213,7 @@ pub async fn bulk_tasks(
             phase: copy_pairing::copy_phase(task)
                 .unwrap_or_default()
                 .to_string(),
+            phase_order: copy_pairing::phase_order(task),
             task: task_info(task, &parents),
         })
         .collect();

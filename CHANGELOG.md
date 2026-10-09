@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.117] - 2026-10-09
+
+ClickUp Copy offers every Onboarding Phase, not only Set Up and Migration. No migration.
+
+### Changed
+- **ClickUp Copy now includes every phase the list has** -- Scheduling, Show Stoppers, Training and the rest -- instead of the two hard-coded ones (`COPY_PHASES` is gone). Any task with an Onboarding Phase is offered and paired within its own phase; a task with no phase is still not offered. The phases are whatever options the list's field defines, so a new phase in the template needs no code change.
+- `copy-pairs` rows and `bulk-tasks` tasks carry `phase_order` (the phase's position in the field's own option list), so the pages show the groups in the ClickUp list's order. Tasks now remember their dropdown option's `orderindex` (`TaskDropdown.option_order`).
+- Tests: the mock ClickUp gains Scheduling and Show Stoppers tasks and a phase-less one; 3 new pairing unit tests (every phase offered, a phase-less task not offered, phase order).
+
 ## [1.9.116] - 2026-10-08
 
 Efficiency refactor chunk F7f (api side): the company-list, resync, manual-link, directory filter, client-import preview/create, search, onboarding-summary and a few auth/settings types are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.

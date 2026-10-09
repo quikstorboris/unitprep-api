@@ -1,6 +1,6 @@
-//! `GET .../clickup/copy-pairs`: the source and target lists' tasks in the
-//! Set Up and Migration phases, paired by name/phase/parent. Suggestions
-//! only -- the dialog lets the person override every row.
+//! `GET .../clickup/copy-pairs`: the source and target lists' tasks in
+//! every Onboarding Phase, paired by name/phase/parent. Suggestions only
+//! -- the dialog lets the person override every row.
 
 use std::collections::HashMap;
 
@@ -50,8 +50,10 @@ pub struct TargetChoice {
 
 #[derive(Debug, Serialize)]
 pub struct PairRow {
-    /// The phase ("Set Up", "Migration") the dialog groups rows under.
+    /// The phase ("Set Up", "Show Stoppers", ...) the dialog groups rows
+    /// under, and its position in the template's own phase order.
     pub phase: String,
+    pub phase_order: i64,
     pub source: TaskInfo,
     /// The suggested counterpart; `None` is "no match".
     pub target: Option<TargetChoice>,
@@ -145,6 +147,7 @@ pub async fn copy_pairs(
             phase: copy_pairing::copy_phase(pairing.source)
                 .unwrap_or_default()
                 .to_string(),
+            phase_order: copy_pairing::phase_order(pairing.source),
             source: task_info(pairing.source, &source_parents),
             target: pairing
                 .target

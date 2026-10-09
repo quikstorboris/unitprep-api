@@ -5,8 +5,9 @@
 //! page the person is on), with the **source** facility chosen per request
 //! and defaulting to the company's designated parent:
 //!
-//! - `pairs`: the source and target lists' tasks in the Set Up and
-//!   Migration phases, paired by name/phase/parent (suggestions only);
+//! - `pairs`: the source and target lists' tasks in every Onboarding Phase
+//!   (Set Up, Migration, Scheduling, Show Stoppers, ...), paired by
+//!   name/phase/parent (suggestions only);
 //! - `comments`: one row's source comment (the prefill) and whether the
 //!   target looks as if it already has it -- fetched per row so the
 //!   dialog does not read every task's comments up front;

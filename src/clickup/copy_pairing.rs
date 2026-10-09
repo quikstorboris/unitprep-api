@@ -10,8 +10,11 @@
 //! name, and is only ever a *suggestion*: the person confirms or
 //! overrides every row, like the duplicate-check task lookup.
 //!
-//! Only tasks in the phases ClickUp Copy handles ([`COPY_PHASES`]) take
-//! part. Name normalization is shared with `task_matching`.
+//! Every task that has an Onboarding Phase takes part -- Set Up,
+//! Migration, Scheduling, Show Stoppers and whatever else the template
+//! defines -- and is paired only within its own phase. A task with no
+//! phase is not offered. Name normalization is shared with
+//! `task_matching`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,17 +22,18 @@ use super::task_matching::{dice, tokens};
 use super::tasks::{compact_label, ClickUpTask};
 
 /// The custom field that groups a template's tasks ("Set Up",
-/// "Migration", ...).
+/// "Migration", "Scheduling", "Show Stoppers", ...).
 ///
-/// The field and phase names below are the template's, found in the
-/// vault's ClickUp design log; they are compared by [`compact_label`]
-/// (case, spacing, emoji ignored). They are constants for now -- if the
-/// template wording changes, or more phases need copying, they should
-/// become data like `integrations.clickup_task_steps`.
+/// The field name is the template's, found in the vault's ClickUp design
+/// log; it is compared by [`compact_label`] (case, spacing, emoji
+/// ignored). It is a constant for now -- if the template wording changes
+/// it should become data like `integrations.clickup_task_steps`. The
+/// *phases* are not listed anywhere: whatever options the list's field
+/// defines are the groups.
 pub const PHASE_FIELD: &str = "Onboarding Phase";
 
-/// The phases whose comments ClickUp Copy handles.
-pub const COPY_PHASES: &[&str] = &["Set Up", "Migration"];
+/// Where a phase with no recorded position sorts: after every real one.
+pub const UNORDERED_PHASE: i64 = 1_000_000;
 
 /// The Corporate / Facility custom field: whether a task is done once
 /// per client or once per facility. Used as a filter.
@@ -65,19 +69,23 @@ pub fn scope(task: &ClickUpTask) -> Option<Scope> {
     }
 }
 
-/// The task's phase, as the template spells it ("Set Up"), when it is
-/// one of [`COPY_PHASES`].
+/// The task's phase, as the template spells it ("Set Up", "Show
+/// Stoppers"), or `None` for a task with no phase.
 pub fn copy_phase(task: &ClickUpTask) -> Option<&str> {
-    let phase = task.dropdown(PHASE_FIELD)?;
-    let label = compact_label(&phase.option_name);
-    COPY_PHASES
-        .iter()
-        .any(|wanted| compact_label(wanted) == label)
-        .then_some(phase.option_name.as_str())
+    task.dropdown(PHASE_FIELD)
+        .map(|phase| phase.option_name.as_str())
 }
 
-/// The tasks ClickUp Copy handles: those in [`COPY_PHASES`], optionally
-/// narrowed to one [`Scope`].
+/// The phase's position in the template's own order (Set Up first, ...),
+/// so groups show in the order people know from the ClickUp list.
+pub fn phase_order(task: &ClickUpTask) -> i64 {
+    task.dropdown(PHASE_FIELD)
+        .and_then(|phase| phase.option_order)
+        .unwrap_or(UNORDERED_PHASE)
+}
+
+/// The tasks ClickUp Copy handles: those with an Onboarding Phase,
+/// optionally narrowed to one [`Scope`].
 pub fn eligible(tasks: &[ClickUpTask], only: Option<Scope>) -> Vec<&ClickUpTask> {
     tasks
         .iter()
@@ -229,6 +237,7 @@ mod tests {
             field_name: field.to_string(),
             option_id: option_id.to_string(),
             option_name: option_name.to_string(),
+            option_order: None,
         }
     }
 
@@ -366,11 +375,62 @@ mod tests {
     }
 
     #[test]
-    fn tasks_outside_the_copy_phases_are_ignored() {
-        let source = [task("s1", "Train Staff", None, "Training", "Facility")];
-        let target = [task("t1", "Train Staff", None, "Training", "Facility")];
+    fn every_phase_is_offered_not_only_set_up_and_migration() {
+        let phases = [
+            "Set Up",
+            "Migration",
+            "Scheduling",
+            "Show Stoppers",
+            "Training",
+        ];
+        let source: Vec<ClickUpTask> = phases
+            .iter()
+            .enumerate()
+            .map(|(n, phase)| task(&format!("s{n}"), "Review Items", None, phase, "Facility"))
+            .collect();
+        let target: Vec<ClickUpTask> = phases
+            .iter()
+            .enumerate()
+            .map(|(n, phase)| task(&format!("t{n}"), "Review Items", None, phase, "Facility"))
+            .collect();
 
-        assert!(pair(&source, &target, None).is_empty());
+        let pairings = pair(&source, &target, None);
+
+        // Same name in every phase, yet each pairs with its own phase's task.
+        assert_eq!(pairings.len(), 5);
+        for n in 0..5 {
+            assert_eq!(
+                target_id(&pairings, &format!("s{n}")),
+                Some(format!("t{n}").as_str())
+            );
+        }
+        assert_eq!(eligible(&source, None).len(), 5);
+        assert_eq!(copy_phase(&source[3]), Some("Show Stoppers"));
+    }
+
+    #[test]
+    fn a_task_with_no_phase_is_not_offered() {
+        let mut unphased = setup("s1", "Loose Task", None);
+        unphased.dropdowns.retain(|d| d.field_name != PHASE_FIELD);
+        let target = [setup("t1", "Loose Task", None)];
+
+        assert!(copy_phase(&unphased).is_none());
+        assert!(eligible(std::slice::from_ref(&unphased), None).is_empty());
+        assert!(pair(&[unphased], &target, None).is_empty());
+    }
+
+    #[test]
+    fn phases_follow_the_templates_own_order_and_unordered_ones_sort_last() {
+        let mut scheduling = setup("a", "x", None);
+        scheduling.dropdowns[0].option_order = Some(2);
+        let mut set_up = setup("b", "x", None);
+        set_up.dropdowns[0].option_order = Some(0);
+        let unordered = setup("c", "x", None);
+
+        assert_eq!(phase_order(&set_up), 0);
+        assert_eq!(phase_order(&scheduling), 2);
+        assert_eq!(phase_order(&unordered), UNORDERED_PHASE);
+        assert!(phase_order(&scheduling) < phase_order(&unordered));
     }
 
     #[test]
