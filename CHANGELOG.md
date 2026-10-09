@@ -6,6 +6,10 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.119] - 2026-10-09
+
+The server stops querying Postgres on a timer, so a scale-to-zero database (Neon) can suspend when idle. No migration.
+
 ### Changed
 - **The server no longer queries Postgres on a timer, so a scale-to-zero database (Neon) can suspend when nobody is using the app.** Each of the five durable session stores ran its own `DELETE` sweep every 60 seconds, about five queries a minute around the clock, which kept the compute awake permanently. The sweep is now scheduled instead of periodic (`core/src/sweep_schedule.rs`): the first write after a quiet spell schedules one sweep for just after that row's expiry (session timeout plus a 5-minute grace, so rows expiring close together share one wake-up); each sweep then looks up the oldest row still stored and schedules the next one from that; with no rows left nothing is scheduled and nothing runs. One sweep still runs 30 seconds after startup to clear rows left by the previous process. Expired rows were never served either way (rehydration checks staleness), so this only changes how soon their bytes are deleted: within about the grace period, as before for an active server, and no longer on a clock while idle. Not changed: the two 4-hour vendor-format refreshes and the Process Street sync interval, which wake the database a few times a day.
 - Added `DurableSessionStore::with_sweep_timing` and `sweep_is_idle` (tests and diagnostics).
