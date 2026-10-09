@@ -1,6 +1,7 @@
 //! `POST /tagger/apply` -- writes the confirmed substitutions into a copy of the template.
 
 use super::dropbox::tagged_file_name;
+use crate::api::blocking::run_blocking;
 use crate::api::session_io::attachment_response;
 use crate::api::{bad_request, internal_error, session_not_found, AppState};
 use crate::auth::AuthenticatedUser;
@@ -170,12 +171,16 @@ pub(super) async fn build_edited_docx(
     // read_docx already validated these exact bytes at /check time, so
     // a failure here can only mean something is very wrong with the
     // stored session bytes, not with the file itself.
-    let doc = match read_docx(&original_bytes) {
-        Ok(doc) => doc,
-        Err(err) => {
+    // Re-parsing the document is CPU-bound: off the async workers.
+    let bytes_to_read = original_bytes.clone();
+    let doc = match run_blocking("tagger_apply_read_docx", move || read_docx(&bytes_to_read)).await
+    {
+        Ok(Ok(doc)) => doc,
+        Ok(Err(err)) => {
             tracing::error!(session_id = %request.session_id, error = ?err, "Tagger apply failed to re-read the stored document");
             return Err(internal_error("Could not rebuild this session's document"));
         }
+        Err(response) => return Err(response),
     };
 
     let style = if request.preserve_blanks {
@@ -250,9 +255,15 @@ pub(super) async fn build_edited_docx(
             .into_response());
     }
 
-    let edited_bytes = match edit_docx_all(&original_bytes, &edits, &underline_edits) {
-        Ok(bytes) => bytes,
-        Err(err) => {
+    // Rewriting the .docx is the heaviest step: off the async workers.
+    let edited = run_blocking("tagger_edit_docx", move || {
+        edit_docx_all(&original_bytes, &edits, &underline_edits)
+    })
+    .await;
+    let edited_bytes = match edited {
+        Ok(Ok(bytes)) => bytes,
+        Err(response) => return Err(response),
+        Ok(Err(err)) => {
             tracing::warn!(session_id = %request.session_id, error = ?err, "Tagger apply failed");
             return Err(bad_request(
                 "apply_failed",

@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.115] - 2026-10-08
+
+Efficiency refactor chunk A6b: the Template Tagger's CPU-bound steps run on the blocking pool. No behaviour change.
+
+### Changed
+- `/tagger/check` (and the Dropbox import that shares it), `/tagger/report` and `/tagger/apply` parsed the .docx, matched patterns, built candidate views, created the session and rewrote the .docx directly on async worker threads. Each of those steps now goes through `run_blocking` with a closure that owns its data (`tagger_read_docx`, `tagger_find_candidates`, `tagger_create_session`, `tagger_report`, `tagger_apply_read_docx`, `tagger_edit_docx`), the same pattern as the dedup and Unit Groups handlers (A4-A6). Control flow, error responses and logging are unchanged, including the `too_many_candidates` rejection; the 23 existing Tagger tests pass untouched. Templates are small, so this is hygiene rather than a measured win.
+
 ## [1.9.114] - 2026-10-08
 
 Efficiency refactor chunk F7e (api side): the company-detail, facility-people and Elavon response types are exported to TypeScript by ts-rs. No behaviour change; no change to any JSON.

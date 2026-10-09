@@ -5,6 +5,7 @@ use super::patterns::load_label_proximity_patterns;
 use super::views::{
     build_candidate_views, CandidateView, TaggerCheckResponse, TierView, MAX_CANDIDATES,
 };
+use crate::api::blocking::run_blocking;
 use crate::api::dropbox_browse::{download_as_uploaded_file, ensure_path_in_root, parent_folder};
 use crate::api::rls::{begin_for, try_response};
 use crate::api::{bad_request, error_response, internal_error, AppState};
@@ -108,15 +109,18 @@ pub(super) async fn recognize_and_create_session(
 ) -> Response {
     let started = Instant::now();
 
-    let doc = match read_docx(&file.bytes) {
-        Ok(doc) => doc,
-        Err(err) => {
+    // Parsing the .docx is CPU-bound: off the async workers.
+    let bytes_to_read = file.bytes.clone();
+    let doc = match run_blocking("tagger_read_docx", move || read_docx(&bytes_to_read)).await {
+        Ok(Ok(doc)) => doc,
+        Ok(Err(err)) => {
             tracing::warn!(file = %file.file_name, error = ?err, "Tagger check failed to read .docx");
             return bad_request(
                 "invalid_docx",
                 "Could not read this file as a .docx".to_string(),
             );
         }
+        Err(response) => return response,
     };
 
     let mut tx = try_response!(begin_for(state, user, "Could not load the pattern library").await);
@@ -134,36 +138,59 @@ pub(super) async fn recognize_and_create_session(
         return internal_error("Could not load the pattern library");
     }
 
-    let candidates = find_candidates(&doc, &[], &patterns);
+    // Pattern matching over the whole document and building the views are
+    // CPU-bound too; `patterns` is only counted afterwards, so it moves in.
+    let pattern_count = patterns.len();
+    let found = run_blocking("tagger_find_candidates", move || {
+        let candidates = find_candidates(&doc, &[], &patterns);
+        if candidates.len() > MAX_CANDIDATES {
+            return Err(candidates.len());
+        }
+        let views = build_candidate_views(&doc, &candidates);
+        Ok((candidates, views))
+    })
+    .await;
+    let (candidates, candidate_views) = match found {
+        Ok(Ok(found)) => found,
+        Ok(Err(candidate_count)) => {
+            tracing::warn!(
+                file = %file.file_name,
+                candidate_count,
+                "Tagger check rejected -- candidate count exceeds MAX_CANDIDATES"
+            );
+            return error_response(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "too_many_candidates",
+                format!(
+                    "This document has too many potential matches to review ({candidate_count} found, {MAX_CANDIDATES} max). \
+                     It may not be a template intended for tagging."
+                ),
+            );
+        }
+        Err(response) => return response,
+    };
 
-    if candidates.len() > MAX_CANDIDATES {
-        tracing::warn!(
-            file = %file.file_name,
-            candidate_count = candidates.len(),
-            "Tagger check rejected -- candidate count exceeds MAX_CANDIDATES"
-        );
-        return error_response(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "too_many_candidates",
-            format!(
-                "This document has too many potential matches to review ({} found, {} max). \
-                     It may not be a template intended for tagging.",
-                candidates.len(),
-                MAX_CANDIDATES
-            ),
-        );
-    }
-
-    let candidate_views = build_candidate_views(&doc, &candidates);
     let summary = check_summary(&file.file_name, &candidate_views);
 
-    let session_id = TaggerSessionService::new(Arc::clone(&state.tagger_sessions)).create_session(
-        file.bytes,
-        file.file_name.clone(),
-        candidates,
-        Some(user.user_id),
-        source_dropbox_folder_path,
-    );
+    // Creating the session persists the file, so it runs off the workers as well.
+    let sessions = Arc::clone(&state.tagger_sessions);
+    let session_bytes = file.bytes;
+    let session_file_name = file.file_name.clone();
+    let owner_id = user.user_id;
+    let session_id = match run_blocking("tagger_create_session", move || {
+        TaggerSessionService::new(sessions).create_session(
+            session_bytes,
+            session_file_name,
+            candidates,
+            Some(owner_id),
+            source_dropbox_folder_path,
+        )
+    })
+    .await
+    {
+        Ok(session_id) => session_id,
+        Err(response) => return response,
+    };
 
     if let Some(facility_id) = facility_id {
         tool_runs::record_run(
@@ -185,7 +212,7 @@ pub(super) async fn recognize_and_create_session(
         session_id = %session_id,
         owner_id = %user.user_id,
         file = %file.file_name,
-        pattern_count = patterns.len(),
+        pattern_count,
         candidate_count = candidate_views.len(),
         check_ms = started.elapsed().as_millis(),
         "Tagger check complete"
