@@ -299,6 +299,11 @@ pub(crate) mod test_support;
 #[path = "clickup_db_tests.rs"]
 mod clickup_db_tests;
 
+/// Concurrent-operator load measurement (efficiency refactor follow-up):
+/// real router + real test-db, report only. Ignored; see its module doc.
+#[cfg(test)]
+mod concurrent_load_tests;
+
 #[cfg(test)]
 #[path = "clickup_links_db_tests.rs"]
 mod clickup_links_db_tests;

@@ -6,6 +6,9 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- Test only: `concurrent_load_report` (`src/api/concurrent_load_tests.rs`, ignored), a report-only benchmark that drives the real router with concurrent dedup operators and prints latency percentiles, throughput and peak pool use. See its module doc for the command and knobs. No production code changed.
+
 ## [1.9.117] - 2026-10-09
 
 ClickUp Copy offers every Onboarding Phase, not only Set Up and Migration. No migration.
