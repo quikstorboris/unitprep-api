@@ -22,6 +22,9 @@
 //! that user's rate limiter (`exec`).
 
 //!
+//! `sync_log` lists the copies made onto a facility (the "Last Synced
+//! Project" log) from the Activity Logs trail.
+//!
 //! The client's bulk copy (`bulk`) copies one comment to many facilities,
 //! and runs as a background job (`jobs`) when it is too big to finish
 //! inside the request.
@@ -33,12 +36,14 @@ mod exec;
 mod jobs;
 mod lists;
 mod pairs;
+mod sync_log;
 
 pub use bulk::{bulk_comment, bulk_copy, bulk_pairs, bulk_tasks};
 pub use comments::copy_comments;
 pub use copy::copy_comments_to_tasks;
 pub use jobs::{get_copy_job, list_copy_jobs};
 pub use pairs::copy_pairs;
+pub use sync_log::facility_sync_log;
 
 // The request types are built only by the endpoint tests (axum builds them
 // from the HTTP request in the real server).
@@ -52,3 +57,5 @@ pub use comments::CommentsQuery;
 pub use copy::{CopyItem, CopyRequest};
 #[cfg(test)]
 pub use pairs::PairsQuery;
+#[cfg(test)]
+pub use sync_log::SyncLogQuery;

@@ -191,6 +191,17 @@ pub(super) fn clickup_routes() -> GatedRouter<AppState> {
             )],
         )
         .gated_route(
+            "/clients/{company_id}/facilities/{facility_id}/clickup/sync-log",
+            get(clickup_copy::facility_sync_log),
+            [(
+                Method::GET,
+                RouteAccess::Permission {
+                    keys: &["integrations.clickup"],
+                    action: "clickup_sync_log",
+                },
+            )],
+        )
+        .gated_route(
             "/clients/{company_id}/facilities/{facility_id}/clickup/copy-comments",
             get(clickup_copy::copy_comments),
             [(

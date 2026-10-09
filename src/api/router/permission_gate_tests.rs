@@ -339,6 +339,21 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
             }) as fn() -> BoxFuture,
         ),
         (
+            "/clients/{company_id}/facilities/{facility_id}/clickup/sync-log",
+            Method::GET,
+            (|| {
+                Box::pin(clickup_copy::facility_sync_log(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    Path((Uuid::new_v4(), Uuid::new_v4())),
+                    axum::extract::Query(clickup_copy::SyncLogQuery {
+                        limit: None,
+                        before_id: None,
+                    }),
+                ))
+            }) as fn() -> BoxFuture,
+        ),
+        (
             "/clients/{company_id}/facilities/{facility_id}/clickup/copy-comments",
             Method::GET,
             (|| {
