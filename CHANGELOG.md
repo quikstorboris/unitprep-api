@@ -6,6 +6,12 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Test only: a race that made the ClickUp real-DB tests fail about one run in six when all `_db_` tests ran together. Every test that depends on `INTEGRATION_SECRETS_ENCRYPTION_KEY` is now in the existing serial group, so one test removing the key can no longer land between another test setting it and decrypting its token. No production code changed.
+
+### Changed
+- `scripts/run_ci_db_tests.sh` now also runs every ignored test whose name contains `_db_` (103 tests, about 8 s) on top of its 18-name allowlist, so the refactor safety nets (sessions, resync/sync, registration, audit rows, ClickUp) run in CI. See the script header for the convention and the trade-off.
+
 ### Added
 - Test only: `concurrent_load_report` (`src/api/concurrent_load_tests.rs`, ignored), a report-only benchmark that drives the real router with concurrent dedup operators and prints latency percentiles, throughput and peak pool use. See its module doc for the command and knobs. No production code changed.
 

@@ -19,6 +19,18 @@
 # it to CI is a deliberate, visible, one-line addition to this file,
 # not something that happens by omission.
 #
+# Since 2026-10-09 there is ALSO a convention-based step at the end: every
+# ignored test whose name contains `_db_` runs. By convention a `_db_` test
+# needs only TEST_DATABASE_URL (the ephemeral Postgres) plus loopback mock
+# servers -- never a real Process Street/Dropbox/ClickUp account. That
+# trades the "a new test joins CI only by a deliberate one-line addition"
+# rule for "a new `_db_` test joins automatically", on purpose: the ~100
+# `_db_` tests are the only automated check on sessions, RLS, registration,
+# audit rows and the ClickUp permission paths, and a hand-kept list of them
+# would rot. A test that needs a real external account must NOT have `_db_`
+# in its name (the live ones are named after what they hit, e.g.
+# `resolves_..._real_shared_link`).
+#
 # Requires TEST_DATABASE_URL already set and pointing at a real,
 # throwaway Postgres (see db::connect_test() -- this script doesn't
 # set it, just runs tests that read it).
@@ -59,6 +71,12 @@ for name in "${DB_ONLY_IGNORED_TESTS[@]}"; do
         fail=1
     fi
 done
+
+echo
+echo "==> Running every ignored test named *_db_* (convention: local test-db only)"
+if ! cargo test --workspace -- --ignored _db_; then
+    fail=1
+fi
 
 echo
 if [ "$fail" -ne 0 ]; then
