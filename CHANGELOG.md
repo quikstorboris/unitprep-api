@@ -6,13 +6,23 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
-- Test only: a race that made the ClickUp real-DB tests fail about one run in six when all `_db_` tests ran together. Every test that depends on `INTEGRATION_SECRETS_ENCRYPTION_KEY` is now in the existing serial group, so one test removing the key can no longer land between another test setting it and decrypting its token. No production code changed.
+## [1.9.118] - 2026-10-09
 
-### Changed
-- `scripts/run_ci_db_tests.sh` now also runs every ignored test whose name contains `_db_` (103 tests, about 8 s) on top of its 18-name allowlist, so the refactor safety nets (sessions, resync/sync, registration, audit rows, ClickUp) run in CI. See the script header for the convention and the trade-off.
+ClickUp run updates for Unit Groups and the Template Tagger (task phrases and comment wording are data), and a facility "Last Synced Project" log. **Migration `20261009120000`** (prod: `scripts/prod_db_status.sh`, then `prod_db_sync.sh`, before this release goes live).
 
 ### Added
+- **Unit Groups and Template Tagger runs can update their ClickUp task** the way a duplicate check does: find the task in the facility's linked list (the person confirms it), comment with a link to the saved results file, add the person as assignee, set the task complete. The tasks are "CONFIGURE Unit Setup" (Unit Groups) and "APPLY TAGS to Lease" (Template Tagger). A later run of either only adds a comment.
+- `GET /clients/{id}/facilities/{id}/clickup/sync-log` (`clickup_copy::sync_log`): the "Last Synced Project" log -- every comment copy made onto the facility (source facility, who, when, copied/failed/completed counts, dialog or bulk), newest first, keyset-paged with `before_id`/`limit`. It reads the existing `facility_clickup_comments_copied` rows in the Activity Logs trail instead of keeping a second table that could disagree with it. Needs `integrations.clickup` (and, through RLS, a client-ops role to see rows).
+- Audit event `facility_clickup_run_posted` for non-dedup runs posted to ClickUp (`metadata.tool`, `metadata.step`); duplicate checks keep `facility_clickup_duplicate_check_posted`.
+
+### Changed
+- **Task phrases and comment wording are data, not constants.** `integrations.clickup_task_steps` gains `tool`, `comment_lead`, `comment_link_text`, `comment_without_link` and `comment_only_from_sequence` (and `UNIQUE (tool, ordinal)`); the duplicate-check wording that was in Rust constants is now in its two rows, and the two new steps are seeded. A run is matched to the step with the highest `ordinal` not above its position among the facility's runs of that tool. Editing a row changes what is matched and said with no deploy; a settings screen for it is not built yet.
+- `clickup_duplicate_check` is now `clickup_run_update`, and its routes `clickup/duplicate-check-tasks` / `duplicate-check-results` are `clickup/run-tasks` / `run-results` (the UI moves with them). A run with no step row answers 409 `clickup_step_not_configured`.
+- `SCHEMA.sql` regenerated (111 migrations).
+
+### Tests and CI
+- Test only: a race that made the ClickUp real-DB tests fail about one run in six when all `_db_` tests ran together. Every test that depends on `INTEGRATION_SECRETS_ENCRYPTION_KEY` is now in the existing serial group, so one test removing the key can no longer land between another test setting it and decrypting its token. No production code changed.
+- `scripts/run_ci_db_tests.sh` now also runs every ignored test whose name contains `_db_` (103 tests, about 8 s) on top of its 18-name allowlist, so the refactor safety nets (sessions, resync/sync, registration, audit rows, ClickUp) run in CI. See the script header for the convention and the trade-off.
 - Test only: `concurrent_load_report` (`src/api/concurrent_load_tests.rs`, ignored), a report-only benchmark that drives the real router with concurrent dedup operators and prints latency percentiles, throughput and peak pool use. See its module doc for the command and knobs. No production code changed.
 
 ## [1.9.117] - 2026-10-09
