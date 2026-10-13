@@ -6,6 +6,16 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.120] - 2026-10-13
+
+ClickUp Copy: several source tasks can be copied together. No migration.
+
+### Added
+-  accepts  (default false) to run as a background job even when small. The page sets it when it copies several tasks together (one request per task, each with its own comment and source link) whose total is more than the 50 ClickUp calls a single request may spend. Test: a small copy sent to the background answers 202 .
+
+### Security
+-  0.11.17 -> 0.11.19 (lockfile only) for RUSTSEC-2026-0338, -0340 and -0343 (remote-peer panics), which the cargo-audit preflight step reported.
+
 ## [1.9.119] - 2026-10-09
 
 The server stops querying Postgres on a timer, so a scale-to-zero database (Neon) can suspend when idle. No migration.
