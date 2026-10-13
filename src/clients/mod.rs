@@ -27,5 +27,6 @@ pub mod policy_exemption;
 pub mod ps_task_roles;
 pub mod repository;
 pub mod search;
+pub mod staff_resolution;
 pub mod sync;
 pub mod us_states;

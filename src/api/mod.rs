@@ -313,6 +313,10 @@ mod clickup_links_db_tests;
 mod clickup_run_update_db_tests;
 
 #[cfg(test)]
+#[path = "staff_resolution_db_tests.rs"]
+mod staff_resolution_db_tests;
+
+#[cfg(test)]
 #[path = "clients_facility_people_db_tests.rs"]
 mod clients_facility_people_db_tests;
 

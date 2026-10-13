@@ -490,6 +490,10 @@ pub async fn write_create_data(
         &company_manually_edited_fields,
     )
     .await?;
+    // The Intake conductor's email, matched to an OO user, is the
+    // company's Implementation Manager.
+    crate::clients::staff_resolution::assign_implementation_manager(tx, company_id, company_fields)
+        .await?;
 
     let qms_credential_task_names =
         ps_task_roles::load_task_names(tx, ps_task_roles::QMS_CREDENTIALS_ROLE).await?;

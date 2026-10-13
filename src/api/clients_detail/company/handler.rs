@@ -5,6 +5,7 @@ use super::queries::{
     fetch_clickup_parent_history, fetch_company_facilities, fetch_company_row, fetch_elavon_active,
     fetch_owner_parties,
 };
+use crate::api::clients_companies::StaffRef;
 use crate::api::{internal_error, not_found, AppState};
 use crate::auth::AuthenticatedUser;
 use crate::clients::merchant_account_mapping::decrypt_party_pii;
@@ -144,6 +145,10 @@ pub async fn get_company_detail(
         archived_at: company.archived_at,
         implementation_completed_at: company.implementation_completed_at,
         clickup_parent_facility_id: company.clickup_parent_facility_id,
+        implementation_manager: company
+            .implementation_manager_user_id
+            .zip(company.implementation_manager_name)
+            .map(|(id, name)| StaffRef { id, name }),
         clickup_waived_at: company.clickup_waived_at,
         clickup_parent_history,
         elavon_active,

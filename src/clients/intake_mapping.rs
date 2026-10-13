@@ -442,6 +442,31 @@ fn map_commission(fields: &[FormField]) -> Option<MappedCommission> {
     (!commission.is_empty()).then_some(commission)
 }
 
+/// The software the facility is leaving. PS asks "What Property Management
+/// Software is this facility currently using?" and, only when the answer
+/// is "3rd Party PMS", follows up with "Which 3rd Party Software are they
+/// using?" (a pick list, whose "Other" opens a free-text name). The
+/// specific product is what matters -- "3rd Party PMS" alone tells the
+/// Clients filter nothing -- so a follow-up answer replaces the umbrella
+/// one. Whatever PS spells it as is kept (the filter list is built from
+/// the values in use, so a new product appears the first time a client
+/// uses it).
+fn previous_pms(fields: &[FormField]) -> Option<String> {
+    let general = value_for(
+        fields,
+        "What_Property_Management_Software_is_this_facility_currently_using?",
+    )?;
+    let specific = value_for(fields, "Which_3rd_Party_Software_are_they_using?")
+        .filter(|value| !value.eq_ignore_ascii_case("other"))
+        .or_else(|| {
+            value_for(
+                fields,
+                "What_is_the_name_of_the_3rd_Party_Software_they_are_using?",
+            )
+        });
+    Some(specific.unwrap_or(general))
+}
+
 pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
     let company = MappedCompany {
         legal_name: value_for(
@@ -482,10 +507,7 @@ pub fn map_intake_fields(fields: &[FormField]) -> MappedIntakeRun {
             fields,
             "What_is_the_PRIMARY_storage_offering_at_this_facility?",
         ),
-        previous_pms: value_for(
-            fields,
-            "What_Property_Management_Software_is_this_facility_currently_using?",
-        ),
+        previous_pms: previous_pms(fields),
         access_control_system: value_for(fields, "What_Access_Control_system_are_they_using?"),
         go_live_date: parse_ps_date(fields, "What_is_the_Go_Live_Date_on_the_contract?"),
         dropbox_folder_url: value_for(fields, "Facility_Onboarding_folder_URL:"),
@@ -715,5 +737,73 @@ mod tests {
         assert!(mapped.fees.is_empty());
         assert!(mapped.delinquency_steps.is_empty());
         assert!(mapped.coverage_tiers.is_empty());
+    }
+
+    fn select_field(key: &str, value: Option<&str>) -> FormField {
+        serde_json::from_value(serde_json::json!({
+            "id": key, "taskId": "t", "key": key, "label": key, "fieldType": "Select",
+            "data": { "value": value, "hasDefaultValue": false }
+        }))
+        .expect("a form field")
+    }
+
+    const PMS: &str = "What_Property_Management_Software_is_this_facility_currently_using?";
+    const WHICH: &str = "Which_3rd_Party_Software_are_they_using?";
+    const NAMED: &str = "What_is_the_name_of_the_3rd_Party_Software_they_are_using?";
+
+    #[test]
+    fn a_third_party_pms_is_the_specific_product_picked_in_the_follow_up() {
+        let fields = vec![
+            select_field(PMS, Some("3rd Party PMS")),
+            select_field(WHICH, Some("Sitelink Web Edition")),
+        ];
+
+        assert_eq!(
+            map_intake_fields(&fields).facility.previous_pms.as_deref(),
+            Some("Sitelink Web Edition")
+        );
+    }
+
+    #[test]
+    fn a_third_party_pms_picked_as_other_is_the_name_typed_in() {
+        let fields = vec![
+            select_field(PMS, Some("3rd Party PMS")),
+            select_field(WHICH, Some("Other")),
+            select_field(NAMED, Some("Winsen Sentinel ")),
+        ];
+
+        assert_eq!(
+            map_intake_fields(&fields).facility.previous_pms.as_deref(),
+            Some("Winsen Sentinel")
+        );
+    }
+
+    #[test]
+    fn without_a_follow_up_answer_the_general_one_stands() {
+        let none = vec![select_field(PMS, Some("3rd Party PMS"))];
+        assert_eq!(
+            map_intake_fields(&none).facility.previous_pms.as_deref(),
+            Some("3rd Party PMS")
+        );
+
+        // "Other" with no name typed is not a product name.
+        let other_blank = vec![
+            select_field(PMS, Some("3rd Party PMS")),
+            select_field(WHICH, Some("Other")),
+        ];
+        assert_eq!(
+            map_intake_fields(&other_blank)
+                .facility
+                .previous_pms
+                .as_deref(),
+            Some("3rd Party PMS")
+        );
+
+        let express = vec![select_field(PMS, Some("QuikStor Express"))];
+        assert_eq!(
+            map_intake_fields(&express).facility.previous_pms.as_deref(),
+            Some("QuikStor Express")
+        );
+        assert_eq!(map_intake_fields(&[]).facility.previous_pms, None);
     }
 }

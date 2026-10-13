@@ -26,6 +26,8 @@ pub(super) struct CompanyDetailRow {
     pub(super) implementation_completed_at: Option<DateTime<Utc>>,
     pub(super) clickup_parent_facility_id: Option<Uuid>,
     pub(super) clickup_waived_at: Option<DateTime<Utc>>,
+    pub(super) implementation_manager_user_id: Option<Uuid>,
+    pub(super) implementation_manager_name: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -54,7 +56,11 @@ pub(super) async fn fetch_company_row(
          corporate_address_city, corporate_address_state, corporate_address_zip, subdomain, \
          accepted_payment_methods, accounting_basis, payment_scheme, offers_tenant_insurance_raw, \
          insurance_provider, website_url, archived_at, implementation_completed_at, \
-         clickup_parent_facility_id, clickup_waived_at \
+         clickup_parent_facility_id, clickup_waived_at, implementation_manager_user_id, \
+         (SELECT NULLIF(btrim(sd.first_name || ' ' || sd.last_name), '') \
+            FROM auth.staff_directory() sd \
+           WHERE sd.id = clients.companies.implementation_manager_user_id) \
+           AS implementation_manager_name \
          FROM clients.companies WHERE id = $1",
     )
     .bind(company_id)

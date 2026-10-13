@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::api::clients_companies::StaffRef;
+
 #[derive(Debug, Serialize, sqlx::FromRow, ts_rs::TS)]
 #[ts(export)]
 pub struct FacilitySummary {
@@ -85,6 +87,9 @@ pub struct CompanyDetailResponse {
     /// The facility whose ClickUp list is the source for ClickUp Copy
     /// (see `clients_clickup_parent`); `None` until one is designated.
     pub clickup_parent_facility_id: Option<Uuid>,
+    /// The company's Implementation Manager (PS Intake conductor), when
+    /// one is assigned.
+    pub implementation_manager: Option<StaffRef>,
     /// Set when the company was deliberately created without a ClickUp
     /// project, which silences the "no ClickUp link" warning.
     pub clickup_waived_at: Option<DateTime<Utc>>,
