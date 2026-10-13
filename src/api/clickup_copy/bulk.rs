@@ -450,6 +450,11 @@ pub struct BulkCopyRequest {
     /// comment is posted. Off unless asked for.
     #[serde(default)]
     pub complete_tasks: bool,
+    /// Run as a background job even when small. The page sets it when it
+    /// copies several tasks together whose total is too much for one
+    /// rate-limit window (each task is its own request).
+    #[serde(default)]
+    pub background: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -696,7 +701,9 @@ pub async fn bulk_copy(
 
     let complete = request.complete_tasks;
 
-    if estimated_calls(total, ctx.parent.is_some(), complete) <= INLINE_CALL_BUDGET {
+    if !request.background
+        && estimated_calls(total, ctx.parent.is_some(), complete) <= INLINE_CALL_BUDGET
+    {
         let client = clickup_client(&state);
         let limiter = rate_limit::for_user(user.user_id);
         let mut results = Vec::with_capacity(total);

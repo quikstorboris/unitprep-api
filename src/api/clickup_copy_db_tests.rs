@@ -795,6 +795,7 @@ impl Fixture {
                 source_task_name: "CONFIGURE Fees".to_string(),
                 source_task_id: source_task_id.map(str::to_string),
                 complete_tasks,
+                background: false,
                 comment: comment.to_string(),
                 destinations: destinations
                     .iter()
@@ -1362,4 +1363,38 @@ async fn copy_db_the_sync_log_lists_the_copies_made_onto_a_facility() {
     )
     .await;
     assert!(body["entries"].as_array().unwrap().is_empty());
+}
+
+/// A small copy normally runs inside the request; the page asks for the
+/// background when several tasks copied together add up to too much.
+#[tokio::test]
+#[serial_test::serial(integration_secrets_encryption_key_env)]
+#[ignore = "needs the local test-db -- see clickup_db_tests' module doc"]
+async fn bulk_db_a_small_copy_can_be_sent_to_the_background() {
+    let f = Fixture::new().await;
+
+    let response = clickup_copy::bulk_copy(
+        State(f.state.clone()),
+        Fixture::user_for(f.user_id),
+        HeaderMap::new(),
+        Path(f.company_id),
+        Json(clickup_copy::BulkCopyRequest {
+            source_facility_id: None,
+            source_task_name: "CONFIGURE Fees".to_string(),
+            source_task_id: None,
+            complete_tasks: false,
+            background: true,
+            comment: "Fees are configured.".to_string(),
+            destinations: vec![clickup_copy::BulkDestination {
+                facility_id: f.target,
+                target_task_id: "Tfees".to_string(),
+            }],
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let body = body_json(response).await;
+    assert_eq!(body["mode"], "job");
+    assert_eq!(body["total"], 1);
 }

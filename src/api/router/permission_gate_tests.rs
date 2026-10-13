@@ -448,6 +448,7 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                         comment: "c".to_string(),
                         destinations: vec![],
                         complete_tasks: false,
+                        background: false,
                     }),
                 ))
             }) as fn() -> BoxFuture,
