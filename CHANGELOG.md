@@ -6,6 +6,19 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.121] - 2026-10-13
+
+Implementation Manager from the Intake conductor, and the specific previous PMS. **Migration `20261013120000`** (a data backfill; prod: `scripts/prod_db_status.sh`, then `prod_db_sync.sh`).
+
+### Added
+- **Implementation Manager is now set.** The Process Street Intake step "Who is the Conductor" answers with `Conductor_Email_Address:`; `clients::staff_resolution` matches it to the OO user with that email (case-insensitive) when a client is created, looking in `clients.staff_identity_alias` first (the redirect for a former employee) and never overwriting a manager already set. No match leaves it unassigned. This was never finished before (the planned `staff_resolution` module was removed unbuilt), which is why the Clients page's Implementation Manager filter had no options.
+- `GET /clients/{id}` returns `implementation_manager` (`{id, name}` or null); the company page shows it under the title row.
+- Migration `20261013120000` backfills existing clients from the Intake answers already stored in each row's `raw_ps_snapshot` (on Neon dev: 16 of 20 companies assigned; the other four name conductors with no OO account).
+
+### Changed
+- **Previous PMS is the specific product.** When the answer is "3rd Party PMS", the facility now takes PS's follow-up: "Which 3rd Party Software are they using?" (e.g. "Sitelink Web Edition"), or for "Other" the name typed in "What is the name of the 3rd Party Software they are using?". Before, every such facility read "3rd Party PMS", so the Clients page's Previous PMS filter had almost nothing to offer. The filter list is built from the values in use, so a new product appears the first time a client uses it. The same migration backfills existing facilities (a value edited by hand is left alone); the nightly sync keeps them current.
+- `CompanyDetailResponse` gains `implementation_manager` (bindings regenerated).
+
 ## [1.9.120] - 2026-10-13
 
 ClickUp Copy: several source tasks can be copied together. No migration.
