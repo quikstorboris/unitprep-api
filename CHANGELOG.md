@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.122] - 2026-10-14
+
+Dedup reads Syrasoft's Tenant List. **Migration `20261014120000`** (one registry row; prod: `scripts/prod_db_status.sh`, then `prod_db_sync.sh`).
+
+### Added
+- **Syrasoft (A2Z, Longview, TC's).** The "Tenant List - All Tenants" report is the one Syrasoft file dedup needs. It is a printed layout, so `parsing::syrasoft_report` flattens it to one row per tenant record and unit, reading every sheet (Longview's runs onto a second) and leaving out former tenants. Syrasoft has no tenant ids, so a record is identified as `R-` plus its first unit, and one person entered as two records is reported as a duplicate customer record. The transform `derive_syrasoft_tenant_fields` builds the name key ("Last, First" to "First Last"), the phone (home, then cell, then business, staff notes cut off) and the split address, and blanks staff notes in the email slot.
+- Real pulls: A2Z 197 tenant records (1 duplicate), Longview 530 (13), TC's 268 (12); all but one at each of Longview and TC's are exact same-name records, the other a name variant.
+- Not covered yet: alternate contacts (not in this pull; need a separate Syrasoft export).
+
 ## [1.9.121] - 2026-10-13
 
 Implementation Manager from the Intake conductor, and the specific previous PMS. **Migration `20261013120000`** (a data backfill; prod: `scripts/prod_db_status.sh`, then `prod_db_sync.sh`).

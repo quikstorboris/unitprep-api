@@ -3,7 +3,7 @@ use std::io::Cursor;
 use calamine::{open_workbook_auto_from_rs, Data, Reader};
 use chrono::NaiveTime;
 
-use super::printed_report;
+use super::{printed_report, syrasoft_report};
 use crate::csv_document::CsvDocument;
 use crate::uploaded_file::UploadedFile;
 
@@ -30,13 +30,34 @@ pub fn parse_excel_document(file: &UploadedFile) -> anyhow::Result<CsvDocument> 
 
     let range = workbook.worksheet_range(&first_sheet)?;
 
-    let all_rows: Vec<Vec<String>> = range
+    let mut all_rows: Vec<Vec<String>> = range
         .rows()
         .map(|row| row.iter().map(cell_to_string).collect())
         .collect();
 
     if all_rows.is_empty() {
         anyhow::bail!("Workbook '{}' contains no rows", file.file_name);
+    }
+
+    // Syrasoft's Tenant List is a printed layout that runs onto further
+    // sheets when the facility is large, so it is the one report read
+    // across every sheet (see the LIMITATION above for everything else).
+    if syrasoft_report::is_tenant_list(&all_rows) {
+        for name in workbook.sheet_names().into_iter().skip(1) {
+            let more = workbook.worksheet_range(&name)?;
+            all_rows.extend(
+                more.rows()
+                    .map(|row| row.iter().map(cell_to_string).collect::<Vec<String>>()),
+            );
+        }
+        if let Some(report) = syrasoft_report::flatten_tenant_list(&all_rows) {
+            return Ok(CsvDocument {
+                file_name: file.file_name.clone(),
+                headers: report.headers,
+                rows: report.rows,
+                modified_at: file.modified_at,
+            });
+        }
     }
 
     // A printed-report layout (title rows, "Page N", repeated headers) is

@@ -906,3 +906,174 @@ fn quikstor_cloud_street_rows_with_two_tenant_ids_become_a_duplicate_customer_re
     );
     assert_eq!(report.duplicate_customer_records[0].tenants.len(), 2);
 }
+
+/// Syrasoft's real signature/mapping, mirroring the
+/// `client_ops.vendor_format` registry migration's seed row exactly
+/// (`20261014120000_seed_syrasoft_tenant_list_vendor_format`) -- onboarded
+/// from the A2Z / Longview / TC's Tenant List pulls.
+fn syrasoft_vendor() -> VendorFormat {
+    let mapping = [
+        ("CustNumb", "Unit #"),
+        ("UnitNumber", "Unit #"),
+        ("TenantId", "Tenant Record ID"),
+        ("FirtLast", "FirtLast"),
+        ("PhoneNumber", "PhoneNumber"),
+        ("Email", "Email"),
+        ("AddressStreet1", "AddressStreet1"),
+        ("AddressStreet2", "AddressStreet2"),
+        ("AddressCity", "AddressCity"),
+        ("AddressState", "AddressState"),
+        ("AddressPostalCode", "AddressPostalCode"),
+    ];
+
+    VendorFormat {
+        name: "Syrasoft Tenant List".to_string(),
+        content_type: ContentType::Tenants,
+        signature_headers: [
+            "Tenant",
+            "Tenant Record ID",
+            "Unit #",
+            "Unit Type",
+            "Phone 1",
+            "Address Line 1",
+        ]
+        .iter()
+        .map(|h| h.to_string())
+        .collect(),
+        field_mapping: mapping
+            .iter()
+            .map(|(t, s)| (t.to_string(), s.to_string()))
+            .collect(),
+        transform_key: Some("derive_syrasoft_tenant_fields".to_string()),
+    }
+}
+
+/// The flattened Tenant List's headers (see `parsing::syrasoft_report`),
+/// trimmed to the ones the mapping reads plus the signature.
+fn syrasoft_document(rows: Vec<Vec<&str>>) -> CsvDocument {
+    document(
+        vec![
+            "Tenant",
+            "Tenant Record ID",
+            "Phone Type 1",
+            "Phone 1",
+            "Phone Type 2",
+            "Phone 2",
+            "Address Line 1",
+            "Address Line 2",
+            "Email",
+            "Unit #",
+            "Unit Type",
+        ],
+        rows,
+    )
+}
+
+#[test]
+fn detects_and_normalizes_a_syrasoft_row() {
+    let doc = syrasoft_document(vec![vec![
+        "Kreger, Betty Jo",
+        "R-0043",
+        "[B]",
+        "305-111-1111",
+        "[H]",
+        "305-304-8615 sisters",
+        "274 16th ST APT 7",
+        "REEDSPORT, OR 97467",
+        "no listed alternate",
+        "0017",
+        "10 x 20",
+    ]]);
+
+    let records = records_from_csv_document(&doc, &[syrasoft_vendor()])
+        .expect("known-good Syrasoft document");
+
+    assert_eq!(records.len(), 1);
+    let r = &records[0];
+    assert_eq!(r.first_last, "Betty Kreger");
+    assert_eq!(r.unit_number, "0017");
+    assert_eq!(r.cust_numb, "0017");
+    assert_eq!(r.tenant_id, "R-0043");
+    assert_eq!(r.phone_number, "305-304-8615");
+    assert_eq!(
+        r.email, "",
+        "a staff note in the email slot is not an email"
+    );
+    assert_eq!(r.address_street1, "274 16th ST APT 7");
+    assert_eq!(r.address_city, "REEDSPORT");
+    assert_eq!(r.address_state, "OR");
+    assert_eq!(r.address_postal_code, "97467");
+}
+
+/// The case Syrasoft pulls actually have: Betty Kreger is two tenant
+/// records (first units 0043 and 0146) with identical contact. Each
+/// record's own units stay together under it; the two records are one
+/// person entered twice.
+#[test]
+fn syrasoft_two_records_under_one_name_become_a_duplicate_customer_record() {
+    let row = |record: &'static str, unit: &'static str| {
+        vec![
+            "Kreger, Betty",
+            record,
+            "[H]",
+            "305-304-8615",
+            "",
+            "",
+            "274 16th ST APT 7",
+            "REEDSPORT, OR 97467",
+            "",
+            unit,
+            "10 x 15",
+        ]
+    };
+    let doc = syrasoft_document(vec![
+        row("R-0043", "0043"),
+        row("R-0043", "0017"),
+        row("R-0146", "0146"),
+        row("R-0146", "0192"),
+    ]);
+
+    let records = records_from_csv_document(&doc, &[syrasoft_vendor()])
+        .expect("known-good Syrasoft document");
+    let report = crate::report::run(records);
+
+    assert!(report.flagged_groups.is_empty());
+    assert_eq!(report.duplicate_customer_records.len(), 1);
+    let entry = &report.duplicate_customer_records[0];
+    assert_eq!(entry.display_name, "Betty Kreger");
+    assert_eq!(entry.tenants.len(), 2);
+    assert!(
+        entry.note.contains("ID R-0043 (units 0017 and 0043)"),
+        "{}",
+        entry.note
+    );
+}
+
+/// One record renting several units, with the same contact on every row,
+/// is one customer: nothing to report.
+#[test]
+fn syrasoft_one_record_with_several_units_is_not_flagged() {
+    let row = |unit: &'static str| {
+        vec![
+            "Marks, Bill And Maureen",
+            "R-0007",
+            "[H]",
+            "541-271-2492",
+            "",
+            "",
+            "3100 LONGWOOD",
+            "REEDSPORT, OR 97467",
+            "",
+            unit,
+            "10 x 20",
+        ]
+    };
+    let doc = syrasoft_document(vec![row("0007"), row("0008"), row("0024")]);
+
+    let records = records_from_csv_document(&doc, &[syrasoft_vendor()])
+        .expect("known-good Syrasoft document");
+    let report = crate::report::run(records);
+
+    assert!(report.flagged_groups.is_empty());
+    assert!(report.duplicate_customer_records.is_empty());
+}

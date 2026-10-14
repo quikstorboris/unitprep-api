@@ -22,6 +22,34 @@ fn file(name: &str, headers: &[&str]) -> FileHeaders {
     }
 }
 
+/// The headers `parsing::syrasoft_report` gives a Syrasoft Tenant List.
+const SYRASOFT_TENANT_LIST: [&str; 24] = [
+    "Tenant",
+    "Tenant Record ID",
+    "Phone Type 1",
+    "Phone 1",
+    "Phone Type 2",
+    "Phone 2",
+    "Phone Type 3",
+    "Phone 3",
+    "Phone Type 4",
+    "Phone 4",
+    "Address Line 1",
+    "Address Line 2",
+    "Address Line 3",
+    "Email",
+    "Access #",
+    "Balance",
+    "Deposit",
+    "Comments",
+    "Unit #",
+    "Unit Type",
+    "Rate",
+    "Move In",
+    "Next Billing",
+    "Overlock",
+];
+
 /// Davidson Road's QuikStor Cloud pull (2026-10-07): same files, but the
 /// address columns are AddressStreet1 ... AddressPostalCode and there is a
 /// Gender column.
@@ -196,6 +224,10 @@ async fn the_seeded_registry_classifies_real_export_headers() {
             .collect::<Vec<_>>(),
         ),
         file("Davidson Leases.csv", &QC_LEASES),
+        // Syrasoft's Tenant List as `parsing::syrasoft_report` flattens it.
+        file("Tenant List - All Tenants.xls", &SYRASOFT_TENANT_LIST),
+        // Another Syrasoft report: row 0 of its sheet is just a title.
+        file("rentRoll.xls", &["Rent Roll"]),
     ];
 
     let (classified, _) = classify(&files, &vendors, &metas);
@@ -273,6 +305,12 @@ async fn the_seeded_registry_classifies_real_export_headers() {
         vec![("Rent Roll.xlsx".to_string(), "Directory.xlsx".to_string())]
     );
 
+    assert_eq!(
+        format_of("Tenant List - All Tenants.xls"),
+        Some(("Syrasoft Tenant List".to_string(), FileRole::Primary))
+    );
+    assert_eq!(format_of("rentRoll.xls"), None);
+
     // Formats whose export has a real tenant id map it into dedup's
     // canonical TenantId; formats that only have a per-unit customer
     // number (QSX, Easy Storage Solutions) must not.
@@ -302,6 +340,11 @@ async fn the_seeded_registry_classifies_real_export_headers() {
     assert_eq!(
         source_of_tenant_id("QuikStor Cloud (street address headers)"),
         Some("LegacyTenantId".to_string())
+    );
+    // Syrasoft has no tenant id; the flattener supplies a record id.
+    assert_eq!(
+        source_of_tenant_id("Syrasoft Tenant List"),
+        Some("Tenant Record ID".to_string())
     );
     assert_eq!(source_of_tenant_id("QSX"), None);
     assert_eq!(source_of_tenant_id("Easy Storage Solutions"), None);

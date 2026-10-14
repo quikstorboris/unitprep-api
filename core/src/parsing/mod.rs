@@ -12,6 +12,7 @@ mod csv;
 mod excel;
 mod printed_report;
 mod spreadsheetml;
+mod syrasoft_report;
 
 pub use csv::parse_csv_document;
 pub use excel::parse_excel_document;
