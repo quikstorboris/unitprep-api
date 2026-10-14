@@ -274,6 +274,32 @@ async fn apply_returns_400_for_an_out_of_range_candidate_index() {
 }
 
 #[tokio::test]
+async fn apply_with_nothing_confirmed_returns_the_document_unchanged() {
+    let original_bytes = std::fs::read(FIXTURE).unwrap();
+    let state = tagger_state_with_session("s1", original_bytes.clone(), "atherton.docx", vec![]);
+
+    let response = apply(
+        State(state),
+        crate::api::test_support::test_user(),
+        Json(TaggerApplyRequest {
+            session_id: "s1".to_string(),
+            preserve_blanks: false,
+            confirmed: vec![],
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(
+        read_docx(&body).unwrap().body.text,
+        read_docx(&original_bytes).unwrap().body.text
+    );
+}
+
+#[tokio::test]
 async fn apply_succeeds_for_a_candidate_spanning_multiple_runs() {
     let original_bytes = std::fs::read(FIXTURE).unwrap();
     let doc = read_docx(&original_bytes).unwrap();
@@ -597,4 +623,71 @@ fn the_check_summary_counts_candidates_tags_and_reviews() {
     assert_eq!(summary["tags"]["tenant_name"], 2);
     assert_eq!(summary["tags"]["unit_number"], 1);
     assert!(summary["applied_count"].is_null());
+}
+
+#[test]
+fn a_tab_blank_candidate_shows_only_its_own_tab_as_a_marker() {
+    let xml = r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>LVSS </w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>SIZE: </w:t></w:r><w:r><w:rPr><w:u w:val="single"/></w:rPr><w:tab/></w:r></w:p></w:body></w:document>"#;
+    let doc = docx_surgeon::extract_flat_text(xml);
+    let tab = doc.body.text.rfind('\t').unwrap();
+    let candidate = RegionCandidate {
+        region: RegionRef::Body,
+        candidate: Candidate {
+            tag_key: "u.dim".to_string(),
+            matched_text: "\t".to_string(),
+            start: tab,
+            end: tab + 1,
+        },
+        tier: ConfidenceTier::Auto,
+    };
+
+    let views = build_candidate_views(&doc, &[candidate]);
+
+    assert_eq!(views[0].matched_text, "\u{21e5}");
+    assert_eq!(views[0].snippet.matches('\u{21e5}').count(), 1);
+    assert!(!views[0].snippet.contains('\t'));
+}
+
+#[test]
+fn an_empty_cell_candidate_shows_the_label_cell_and_an_empty_cell_marker() {
+    let xml = r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>By placing his/her initials here,</w:t></w:r></w:p></w:tc><w:tc><w:p></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    let doc = docx_surgeon::extract_flat_text(xml);
+    let candidate = RegionCandidate {
+        region: RegionRef::TableCell(1),
+        candidate: Candidate {
+            tag_key: "e.init".to_string(),
+            matched_text: String::new(),
+            start: 0,
+            end: 0,
+        },
+        tier: ConfidenceTier::Auto,
+    };
+
+    let views = build_candidate_views(&doc, &[candidate]);
+
+    assert_eq!(
+        views[0].snippet,
+        "By placing his/her initials here, [empty cell]"
+    );
+}
+
+#[test]
+fn a_text_box_candidate_shows_its_label_context_and_where_the_value_goes() {
+    let xml = r#"<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Zip:</w:t></w:r></w:p><w:p><w:r><w:t>State:</w:t></w:r></w:p></w:body></w:document>"#;
+    let doc = docx_surgeon::extract_flat_text(xml);
+    let end = doc.body.text.len();
+    let candidate = RegionCandidate {
+        region: RegionRef::Body,
+        candidate: Candidate {
+            tag_key: "e.state".to_string(),
+            matched_text: String::new(),
+            start: end,
+            end,
+        },
+        tier: ConfidenceTier::Auto,
+    };
+
+    let views = build_candidate_views(&doc, &[candidate]);
+
+    assert_eq!(views[0].snippet, "Zip: / State: [value goes here]");
 }

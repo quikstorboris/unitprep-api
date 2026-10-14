@@ -8,6 +8,9 @@
 //!   proximity library, finds blank underscore runs near a recognized
 //!   label -- no known value required, for template documents that
 //!   haven't been filled in at all.
+//! - [`recognize_tab_blanks`]: the same library again, for a blank drawn
+//!   as an *underlined tab* rather than underscores -- no literal `_` in
+//!   the document at all.
 //! - [`recognize_filled_values`]: the same label-proximity library, but
 //!   for a label's value when it's already filled in with real content
 //!   rather than left blank (a system-generated notice, a completed
@@ -42,6 +45,7 @@ pub mod recognize;
 
 pub use detect::{detect_candidates, Candidate, TagValue};
 pub use recognize::{
-    recognize_blanks, recognize_filled_values, LabelPosition, LabelProximityPattern,
-    PrecedingAnchor,
+    find_label_ends, is_container_tail_punctuation, recognize_blanks, recognize_filled_values,
+    recognize_tab_blanks, recognize_textbox_blanks, LabelPosition, LabelProximityPattern,
+    PrecedingAnchor, TAB_BLANK_TEXT,
 };

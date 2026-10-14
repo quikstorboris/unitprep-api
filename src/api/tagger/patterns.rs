@@ -10,6 +10,9 @@ pub(super) struct LabelProximityPatternJson {
     pub(super) max_gap_chars: usize,
     #[serde(default)]
     pub(super) requires_preceding_anchor: Option<PrecedingAnchorJson>,
+    /// See `LabelProximityPattern::repeats`.
+    #[serde(default)]
+    pub(super) repeats: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,6 +73,7 @@ pub(super) async fn load_label_proximity_patterns(
                         within_chars: a.within_chars,
                     }
                 }),
+                repeats: parsed.repeats,
             })
         })
         .collect())

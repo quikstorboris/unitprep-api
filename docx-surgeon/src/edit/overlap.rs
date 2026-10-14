@@ -62,7 +62,9 @@ pub(super) fn check_no_overlapping_spans(
         same_region.sort_by_key(|(start, _)| *start);
         for pair in same_region.windows(2) {
             let (a, b) = (pair[0], pair[1]);
-            if b.0 < a.1 {
+            // Two zero-width edits at the very same point (an insertion
+            // point both want) conflict just like overlapping spans.
+            if b.0 < a.1 || a == b {
                 return Err(EditError::OverlappingEdits {
                     region,
                     first: a,

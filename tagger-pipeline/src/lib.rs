@@ -21,10 +21,11 @@
 //! `docx_surgeon::apply_all_edits`'s job, called explicitly by the
 //! caller.
 
-use docx_surgeon::{Edit, FlatDocument, RegionRef, UnderlineEdit};
+use docx_surgeon::{Edit, FlatDocument, FlatText, RegionRef, UnderlineEdit};
 use unitprep_template_tagger::{
-    detect_candidates, recognize_blanks, recognize_filled_values, Candidate, LabelProximityPattern,
-    TagValue,
+    detect_candidates, find_label_ends, is_container_tail_punctuation, recognize_blanks,
+    recognize_filled_values, recognize_tab_blanks, recognize_textbox_blanks, Candidate,
+    LabelPosition, LabelProximityPattern, TagValue, TAB_BLANK_TEXT,
 };
 
 /// Which review tier a candidate falls into, per the design's tier-1/
@@ -77,54 +78,180 @@ pub fn find_candidates(
     patterns: &[LabelProximityPattern],
 ) -> Vec<RegionCandidate> {
     let mut raw = Vec::new();
-    collect_region(RegionRef::Body, &doc.body.text, values, patterns, &mut raw);
+    // Only a text box a value can actually go next to is worth proposing:
+    // one that can grow to fit a tag (a tag appended to a box sized to
+    // its label would be clipped), or one whose group shape has a drawn
+    // blank square after it.
+    let writable_boxes: Vec<(usize, usize)> = (0..doc.textboxes.len())
+        .filter(|&i| doc.textbox_can_hold_value(i))
+        .map(|i| (doc.textboxes[i].text_start, doc.textboxes[i].text_end))
+        .collect();
+    collect_region(
+        RegionRef::Body,
+        &doc.body,
+        &writable_boxes,
+        values,
+        patterns,
+        &mut raw,
+    );
     for (i, cell) in doc.table_cells.iter().enumerate() {
         collect_region(
             RegionRef::TableCell(i),
-            &cell.text,
+            cell,
+            &[],
             values,
             patterns,
             &mut raw,
         );
     }
+    collect_empty_cell_blanks(doc, patterns, &mut raw);
     assign_tiers(raw)
 }
 
 fn collect_region(
     region: RegionRef,
-    text: &str,
+    flat: &FlatText,
+    text_boxes: &[(usize, usize)],
     values: &[TagValue],
     patterns: &[LabelProximityPattern],
-    out: &mut Vec<(RegionRef, Candidate, bool)>,
+    out: &mut Vec<RawCandidate>,
 ) {
+    let text = flat.text.as_str();
     for candidate in detect_candidates(text, values) {
-        out.push((region, candidate, false));
+        out.push((region, candidate, Origin::Exact));
     }
     for candidate in recognize_blanks(text, patterns) {
-        out.push((region, candidate, false));
+        out.push((region, candidate, Origin::Exact));
     }
+
+    // A blank drawn as an underlined tab, or the end of a floating text
+    // box holding just a label, is as exact as an underscore run -- the
+    // document itself marks it. But an *unanchored* pattern whose label
+    // shows up at several places ("City:" for the occupant, the
+    // alternate contact and the lienholder) cannot say which one it
+    // means, so what it finds there is only a suggestion.
+    let (anchored_or_unique, ambiguous): (Vec<_>, Vec<_>) =
+        patterns.iter().cloned().partition(|pattern| {
+            pattern.requires_preceding_anchor.is_some()
+                || pattern.repeats
+                || find_label_ends(text, pattern).len() <= 1
+        });
+    for (set, origin) in [
+        (&anchored_or_unique, Origin::Exact),
+        (&ambiguous, Origin::AmbiguousLabel),
+    ] {
+        for candidate in recognize_tab_blanks(text, &flat.underlined_tabs, set) {
+            out.push((region, candidate, origin));
+        }
+        for candidate in recognize_textbox_blanks(text, text_boxes, set) {
+            out.push((region, candidate, origin));
+        }
+    }
+
     // A filled-value guess is a boundary inference, not an exact match
-    // (unlike the two above, both unambiguous by construction) -- see
-    // `recognize_filled_values`'s own doc comment. `force_review: true`
-    // routes it to `ConfidenceTier::NeedsReview` unconditionally in
-    // `assign_tiers` below, regardless of whether anything else
-    // competes for the same span.
+    // -- see `recognize_filled_values`'s own doc comment. It always
+    // needs review, regardless of whether anything else competes for
+    // the same span.
     for candidate in recognize_filled_values(text, patterns) {
-        out.push((region, candidate, true));
+        out.push((region, candidate, Origin::Guess));
     }
+}
+
+/// How sure a matcher was about a candidate's span.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// A blank or known value the document itself pins down.
+    Exact,
+    /// A boundary guess (`recognize_filled_values`).
+    Guess,
+    /// An exact blank, but from an unanchored pattern whose label
+    /// appears at more than one place in the document.
+    AmbiguousLabel,
+}
+
+type RawCandidate = (RegionRef, Candidate, Origin);
+
+/// A table cell holding nothing at all, directly after a cell whose text
+/// *ends with* a pattern's label, is that label's blank -- the shape of
+/// an "initials" box (`label cell | empty cell | rest of the sentence`)
+/// and of any two-column form whose value column is left empty.
+///
+/// The candidate is a zero-width point in the empty cell (`start ==
+/// end == 0`, empty `matched_text`); applying it writes the tag as a new
+/// run into the cell's empty paragraph (see
+/// `docx_surgeon::EmptyParagraph`). Only [`LabelPosition::After`]
+/// patterns apply -- the label comes first.
+fn collect_empty_cell_blanks(
+    doc: &FlatDocument,
+    patterns: &[LabelProximityPattern],
+    out: &mut Vec<RawCandidate>,
+) {
+    for index in 1..doc.table_cells.len() {
+        let cell = &doc.table_cells[index];
+        if !cell.is_empty_paragraph_insertion(0, 0) {
+            continue;
+        }
+        let label_cell = &doc.table_cells[index - 1].text;
+
+        for pattern in patterns {
+            if pattern.position != LabelPosition::After {
+                continue;
+            }
+            let ends_label = unitprep_template_tagger::find_label_ends(label_cell, pattern)
+                .into_iter()
+                .any(|label_end| {
+                    label_cell[label_end..]
+                        .chars()
+                        .all(is_container_tail_punctuation)
+                });
+            if ends_label {
+                out.push((
+                    RegionRef::TableCell(index),
+                    Candidate {
+                        tag_key: pattern.tag_key.clone(),
+                        matched_text: String::new(),
+                        start: 0,
+                        end: 0,
+                    },
+                    Origin::Exact,
+                ));
+            }
+        }
+    }
+}
+
+/// Drops every [`Origin::AmbiguousLabel`] candidate that shares its span
+/// with an exact one -- the anchored pattern knows which section the
+/// blank belongs to; the unanchored pattern only knows the label.
+///
+/// Nothing else is collapsed: two exact candidates for one span (even
+/// with the same tag) are still both reported, so a reviewer sees the
+/// real choice (see [`find_candidates`]).
+fn drop_superseded_ambiguous(raw: Vec<RawCandidate>) -> Vec<RawCandidate> {
+    let exact_spans: std::collections::HashSet<(RegionRef, usize, usize)> = raw
+        .iter()
+        .filter(|(_, _, origin)| *origin == Origin::Exact)
+        .map(|(region, candidate, _)| (*region, candidate.start, candidate.end))
+        .collect();
+
+    raw.into_iter()
+        .filter(|(region, candidate, origin)| {
+            *origin != Origin::AmbiguousLabel
+                || !exact_spans.contains(&(*region, candidate.start, candidate.end))
+        })
+        .collect()
 }
 
 /// A span is unambiguous (tier `Auto`) if exactly one candidate in the
 /// whole batch shares its exact `(region, start, end)` *and* that
-/// candidate isn't itself a lower-confidence boundary guess (see
-/// `force_review` on the raw tuple, set by `collect_region` for
-/// `recognize_filled_values`'s candidates). One pass builds per-span
-/// counts, a second maps `raw` against them -- O(n) rather than the
-/// previous O(n^2) re-scan of the whole batch per candidate, which made
-/// a large or adversarial document's candidate count quadratic in
+/// candidate is an exact match (see [`Origin`]). One pass builds
+/// per-span counts, a second maps `raw` against them -- O(n) rather than
+/// the previous O(n^2) re-scan of the whole batch per candidate, which
+/// made a large or adversarial document's candidate count quadratic in
 /// processing cost (see `MAX_CANDIDATES` at this crate's call site for
 /// the accompanying hard cap).
-fn assign_tiers(raw: Vec<(RegionRef, Candidate, bool)>) -> Vec<RegionCandidate> {
+fn assign_tiers(raw: Vec<RawCandidate>) -> Vec<RegionCandidate> {
+    let raw = drop_superseded_ambiguous(raw);
     let mut counts: std::collections::HashMap<(RegionRef, usize, usize), usize> =
         std::collections::HashMap::new();
     for (region, candidate, _) in &raw {
@@ -134,9 +261,9 @@ fn assign_tiers(raw: Vec<(RegionRef, Candidate, bool)>) -> Vec<RegionCandidate> 
     }
 
     raw.into_iter()
-        .map(|(region, candidate, force_review)| {
+        .map(|(region, candidate, origin)| {
             let competing = counts[&(region, candidate.start, candidate.end)];
-            let tier = if competing <= 1 && !force_review {
+            let tier = if competing <= 1 && origin == Origin::Exact {
                 ConfidenceTier::Auto
             } else {
                 ConfidenceTier::NeedsReview
@@ -224,6 +351,30 @@ pub fn to_edit(
     let blank_end = candidate.candidate.end;
     let matched_len = blank_end - blank_start;
     let is_blank = is_underscore_run(&candidate.candidate.matched_text);
+
+    // A text-box label's value is appended after the label, so it needs
+    // a separating space. (The same zero-width, empty-text shape in a
+    // table cell is the cell's only content, and needs none.)
+    let replacement = if candidate.region == RegionRef::Body
+        && blank_start == blank_end
+        && candidate.candidate.matched_text.is_empty()
+    {
+        format!(" {replacement}")
+    } else {
+        replacement
+    };
+
+    // An underlined-tab blank: the tag goes in just *before* the tab and
+    // the tab (the form's drawn line) stays. The same for every style --
+    // there is no underscore run to preserve or replace.
+    if candidate.candidate.matched_text == TAB_BLANK_TEXT {
+        return AppliedEdit::Plain(Edit {
+            region: candidate.region,
+            flat_start: blank_start,
+            flat_end: blank_start,
+            replacement,
+        });
+    }
 
     match style {
         SubstitutionStyle::Replace if is_blank => AppliedEdit::Underline(UnderlineEdit {
@@ -319,6 +470,7 @@ mod tests {
             position,
             max_gap_chars: 5,
             requires_preceding_anchor: None,
+            repeats: false,
         }
     }
 
@@ -661,5 +813,339 @@ mod tests {
         let reflattened = extract_flat_text(&edited_xml).body;
 
         assert_eq!(reflattened.text, "Last name: {{e.lname}}");
+    }
+
+    fn pattern_after(tag_key: &str, label: &str, max_gap_chars: usize) -> LabelProximityPattern {
+        LabelProximityPattern {
+            tag_key: tag_key.to_string(),
+            label: label.to_string(),
+            position: unitprep_template_tagger::LabelPosition::After,
+            max_gap_chars,
+            requires_preceding_anchor: None,
+            repeats: false,
+        }
+    }
+
+    const UNDERLINED_TAB_FORM: &str = concat!(
+        r#"<w:p><w:r><w:t>DATE OF LEASE: </w:t></w:r>"#,
+        r#"<w:r><w:rPr><w:u w:val="single"/></w:rPr><w:tab/></w:r>"#,
+        r#"<w:r><w:t> Access Code: </w:t></w:r>"#,
+        r#"<w:r><w:rPr><w:u w:val="single"/></w:rPr><w:tab/></w:r></w:p>"#,
+        r#"<w:p><w:r><w:t>Late fee</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>$20</w:t></w:r></w:p>"#,
+    );
+
+    #[test]
+    fn an_underlined_tab_blank_is_found_and_the_tab_survives_the_edit() {
+        let xml = wrap(UNDERLINED_TAB_FORM);
+        let doc = extract_flat_text(&xml);
+        let patterns = [
+            pattern_after("m.indate", "DATE OF LEASE", 5),
+            pattern_after("e.keycodes", "Access Code", 5),
+            pattern_after("x.fee", "Late fee", 5),
+        ];
+
+        let found = find_candidates(&doc, &[], &patterns);
+
+        // The plain tab after "Late fee" is a separator, not a blank --
+        // at most the filled-value guesser (always NeedsReview) sees
+        // "$20" there.
+        let blanks: Vec<&RegionCandidate> = found
+            .iter()
+            .filter(|c| c.tier == ConfidenceTier::Auto)
+            .collect();
+        let keys: Vec<&str> = blanks
+            .iter()
+            .map(|c| c.candidate.tag_key.as_str())
+            .collect();
+        assert_eq!(keys, vec!["m.indate", "e.keycodes"]);
+
+        let edits: Vec<Edit> = blanks
+            .iter()
+            .map(|c| {
+                plain(to_edit(
+                    c,
+                    format!("{{{{{}}}}}", c.candidate.tag_key),
+                    SubstitutionStyle::Replace,
+                ))
+            })
+            .collect();
+        let result = apply_all_edits(&xml, &doc, &edits, &[]).unwrap();
+
+        assert!(result.contains("<w:t>DATE OF LEASE: {{m.indate}}</w:t></w:r><w:r><w:rPr><w:u w:val=\"single\"/></w:rPr><w:tab/></w:r>"));
+        assert!(result.contains("<w:t> Access Code: {{e.keycodes}}</w:t></w:r><w:r><w:rPr><w:u w:val=\"single\"/></w:rPr><w:tab/></w:r>"));
+        assert_eq!(result.matches("<w:tab/>").count(), 3);
+    }
+
+    #[test]
+    fn preserve_blank_style_treats_a_tab_blank_the_same() {
+        let xml = wrap(UNDERLINED_TAB_FORM);
+        let doc = extract_flat_text(&xml);
+        let found = find_candidates(&doc, &[], &[pattern_after("m.indate", "DATE OF LEASE", 5)]);
+
+        let edit = plain(to_edit(
+            &found[0],
+            "{{m.indate}}".to_string(),
+            SubstitutionStyle::PreserveBlank,
+        ));
+
+        assert_eq!(edit.flat_start, edit.flat_end);
+    }
+
+    const INITIALS_ROW: &str = concat!(
+        r#"<w:tbl><w:tr>"#,
+        r#"<w:tc><w:p><w:r><w:t>By placing his/her initials here,</w:t></w:r></w:p></w:tc>"#,
+        r#"<w:tc><w:p></w:p></w:tc>"#,
+        r#"<w:tc><w:p><w:r><w:t>, Occupant acknowledges</w:t></w:r></w:p></w:tc>"#,
+        r#"</w:tr></w:tbl>"#,
+    );
+
+    #[test]
+    fn an_empty_cell_after_a_cell_ending_in_a_label_is_that_labels_blank() {
+        let xml = wrap(INITIALS_ROW);
+        let doc = extract_flat_text(&xml);
+
+        let found = find_candidates(&doc, &[], &[pattern_after("e.init", "initials here", 5)]);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].region, RegionRef::TableCell(1));
+        assert_eq!(found[0].tier, ConfidenceTier::Auto);
+
+        let edit = plain(to_edit(
+            &found[0],
+            "{{e.init}}".to_string(),
+            SubstitutionStyle::Replace,
+        ));
+        let result = apply_all_edits(&xml, &doc, &[edit], &[]).unwrap();
+        assert!(result.contains(
+            r#"<w:tc><w:p><w:r><w:t xml:space="preserve">{{e.init}}</w:t></w:r></w:p></w:tc>"#
+        ));
+    }
+
+    #[test]
+    fn an_empty_cell_after_a_cell_that_merely_mentions_the_label_is_not_a_blank() {
+        let xml = wrap(concat!(
+            r#"<w:tbl><w:tr>"#,
+            r#"<w:tc><w:p><w:r><w:t>Initials here are optional for minors</w:t></w:r></w:p></w:tc>"#,
+            r#"<w:tc><w:p></w:p></w:tc>"#,
+            r#"</w:tr></w:tbl>"#,
+        ));
+        let doc = extract_flat_text(&xml);
+
+        assert!(
+            find_candidates(&doc, &[], &[pattern_after("e.init", "initials here", 5)]).is_empty()
+        );
+    }
+
+    #[test]
+    fn a_non_empty_cell_after_the_label_cell_is_not_an_empty_cell_blank() {
+        let xml = wrap(concat!(
+            r#"<w:tbl><w:tr>"#,
+            r#"<w:tc><w:p><w:r><w:t>Initials here:</w:t></w:r></w:p></w:tc>"#,
+            r#"<w:tc><w:p><w:r><w:t>JS</w:t></w:r></w:p></w:tc>"#,
+            r#"</w:tr></w:tbl>"#,
+        ));
+        let doc = extract_flat_text(&xml);
+
+        assert!(
+            find_candidates(&doc, &[], &[pattern_after("e.init", "initials here", 5)]).is_empty()
+        );
+    }
+
+    fn text_box_xml(h_pt: i64, label: &str) -> String {
+        format!(
+            concat!(
+                r#"<w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor>"#,
+                r#"<wp:positionH relativeFrom="page"><wp:posOffset>{h}</wp:posOffset></wp:positionH>"#,
+                r#"<wp:positionV relativeFrom="paragraph"><wp:posOffset>3810</wp:posOffset></wp:positionV>"#,
+                r#"<wp:extent cx="500000" cy="106680"/><a:graphic><a:graphicData><wps:wsp><wps:spPr>"#,
+                r#"<a:xfrm><a:off x="0" y="0"/><a:ext cx="500000" cy="106680"/></a:xfrm></wps:spPr>"#,
+                r#"<wps:txbx><w:txbxContent><w:p><w:r><w:t>{label}</w:t></w:r></w:p></w:txbxContent></wps:txbx>"#,
+                r#"</wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice>"#,
+                r#"<mc:Fallback><w:pict><w:txbxContent><w:p><w:r><w:t>{label}</w:t></w:r></w:p></w:txbxContent></w:pict></mc:Fallback>"#,
+                r#"</mc:AlternateContent></w:r>"#,
+            ),
+            h = h_pt * 12_700,
+            label = label
+        )
+    }
+
+    fn text_box_form() -> String {
+        wrap(&format!(
+            concat!(
+                "<w:p>{first}{last}</w:p>",
+                r#"<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:right="720"/></w:sectPr>"#,
+            ),
+            first = text_box_xml(47, "First:"),
+            last = text_box_xml(220, "Last:"),
+        ))
+    }
+
+    #[test]
+    fn a_text_box_label_gets_its_tag_and_the_box_grows_to_the_next_box() {
+        let xml = text_box_form();
+        let doc = extract_flat_text(&xml);
+        let patterns = [
+            pattern_after("e.fname", "First:", 5),
+            pattern_after("e.lname", "Last:", 5),
+        ];
+
+        let found = find_candidates(&doc, &[], &patterns);
+
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|c| c.tier == ConfidenceTier::Auto));
+
+        let edits: Vec<Edit> = found
+            .iter()
+            .map(|c| {
+                plain(to_edit(
+                    c,
+                    format!("{{{{{}}}}}", c.candidate.tag_key),
+                    SubstitutionStyle::Replace,
+                ))
+            })
+            .collect();
+        let result = apply_all_edits(&xml, &doc, &edits, &[]).unwrap();
+
+        assert!(result.contains("<w:t>First: {{e.fname}}</w:t>"));
+        assert!(result.contains("<w:t>Last: {{e.lname}}</w:t>"));
+        // "First:" (47pt) grows to 2pt short of "Last:" (220pt); "Last:" to the 576pt margin.
+        assert!(result.contains(r#"<wp:extent cx="2171700" cy="106680"/>"#));
+        assert!(result.contains(r#"<wp:extent cx="4521200" cy="106680"/>"#));
+        // The legacy copies are left exactly as they were.
+        assert!(result.contains("<w:t>First:</w:t>"));
+    }
+
+    #[test]
+    fn a_text_box_with_no_room_to_grow_is_not_proposed() {
+        let xml = wrap(&format!(
+            concat!(
+                "<w:p>{first}{last}</w:p>",
+                r#"<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:right="720"/></w:sectPr>"#,
+            ),
+            first = text_box_xml(47, "First:"),
+            last = text_box_xml(60, "Last:"),
+        ));
+        let doc = extract_flat_text(&xml);
+
+        let found = find_candidates(&doc, &[], &[pattern_after("e.fname", "First:", 5)]);
+
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    fn boxes_form(boxes: &[(i64, &str)]) -> String {
+        let anchored: String = boxes
+            .iter()
+            .map(|(h, label)| text_box_xml(*h, label))
+            .collect();
+        wrap(&format!(
+            concat!(
+                "<w:p>{}</w:p>",
+                r#"<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:right="720"/></w:sectPr>"#,
+            ),
+            anchored
+        ))
+    }
+
+    fn anchored(tag_key: &str, label: &str, anchor: &str) -> LabelProximityPattern {
+        LabelProximityPattern {
+            requires_preceding_anchor: Some(unitprep_template_tagger::PrecedingAnchor {
+                text: anchor.to_string(),
+                within_chars: 20,
+            }),
+            ..pattern_after(tag_key, label, 5)
+        }
+    }
+
+    #[test]
+    fn an_unanchored_label_that_repeats_is_only_a_suggestion() {
+        let xml = boxes_form(&[(47, "City:"), (220, "City:")]);
+        let doc = extract_flat_text(&xml);
+
+        let found = find_candidates(&doc, &[], &[pattern_after("e.city", "City:", 5)]);
+
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|c| c.tier == ConfidenceTier::NeedsReview));
+    }
+
+    #[test]
+    fn an_unanchored_label_that_appears_once_is_still_automatic() {
+        let xml = boxes_form(&[(47, "City:"), (220, "Zip:")]);
+        let doc = extract_flat_text(&xml);
+
+        let found = find_candidates(&doc, &[], &[pattern_after("e.city", "City:", 5)]);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].tier, ConfidenceTier::Auto);
+    }
+
+    #[test]
+    fn an_anchored_pattern_supersedes_the_generic_one_on_the_same_blank() {
+        let xml = boxes_form(&[(47, "City:"), (220, "Alt:"), (400, "City:")]);
+        let doc = extract_flat_text(&xml);
+        let patterns = [
+            pattern_after("e.city", "City:", 5),
+            anchored("e.a.city", "City:", "Alt:"),
+        ];
+
+        let found = find_candidates(&doc, &[], &patterns);
+
+        let mut by_tag: Vec<(&str, ConfidenceTier)> = found
+            .iter()
+            .map(|c| (c.candidate.tag_key.as_str(), c.tier))
+            .collect();
+        by_tag.sort_by_key(|(tag, _)| *tag);
+        // The first "City:" has no anchor, so only the generic guess;
+        // the second is claimed by the anchored pattern alone.
+        assert_eq!(
+            by_tag,
+            vec![
+                ("e.a.city", ConfidenceTier::Auto),
+                ("e.city", ConfidenceTier::NeedsReview)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_blank_split_across_runs_is_replaced_by_one_underlined_tag() {
+        let xml = wrap(concat!(
+            r#"<w:p><w:r><w:t>Date: </w:t></w:r>"#,
+            r#"<w:r><w:rPr><w:b/></w:rPr><w:t>____</w:t></w:r><w:r><w:t>____</w:t></w:r></w:p>"#,
+        ));
+        let doc = extract_flat_text(&xml);
+        let found = find_candidates(&doc, &[], &[pattern_after("d.now", "Date:", 5)]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].candidate.matched_text, "________");
+
+        for style in [SubstitutionStyle::Replace, SubstitutionStyle::PreserveBlank] {
+            let edit = underlined(to_edit(&found[0], "{{d.now}}".to_string(), style));
+            let result = apply_all_edits(&xml, &doc, &[], &[edit]).unwrap();
+
+            assert_eq!(result.matches("{{d.now}}").count(), 1, "{style:?}");
+            // The run that holds the tag is underlined, and keeps the
+            // original run's bold.
+            let tag_run_start = result[..result.find("{{d.now}}").unwrap()]
+                .rfind("<w:r>")
+                .unwrap();
+            let tag_run = &result[tag_run_start..result.find("{{d.now}}").unwrap()];
+            assert!(
+                tag_run.contains(r#"<w:u w:val="single"/>"#),
+                "{style:?}: {tag_run}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_label_declared_repeatable_stays_automatic_when_it_recurs() {
+        let xml = boxes_form(&[(47, "Initials here,"), (220, "Initials here,")]);
+        let doc = extract_flat_text(&xml);
+        let pattern = LabelProximityPattern {
+            repeats: true,
+            ..pattern_after("e.init", "Initials here", 5)
+        };
+
+        let found = find_candidates(&doc, &[], &[pattern]);
+
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|c| c.tier == ConfidenceTier::Auto));
     }
 }

@@ -83,12 +83,85 @@ pub(super) fn build_candidate_views(
                 index,
                 region: rc.region.into(),
                 tag_key: rc.candidate.tag_key.clone(),
-                matched_text: rc.candidate.matched_text.clone(),
+                matched_text: visible_matched_text(&rc.candidate.matched_text),
                 tier: rc.tier.into(),
-                snippet: build_snippet(region_text, rc.candidate.start, rc.candidate.end),
+                snippet: snippet_for(doc, rc, region_text),
             }
         })
         .collect()
+}
+
+const TAB_MARKER: char = '\u{21e5}';
+
+/// A tab is invisible in a review list, so an underlined-tab blank's
+/// `matched_text` is shown as `⇥`.
+fn visible_matched_text(matched_text: &str) -> String {
+    if matched_text == unitprep_template_tagger::TAB_BLANK_TEXT {
+        TAB_MARKER.to_string()
+    } else {
+        matched_text.to_string()
+    }
+}
+
+/// The context excerpt for one candidate.
+///
+/// - An empty table cell has no text of its own to excerpt, so its
+///   snippet is the cell before it (the label) plus a marker for the
+///   empty cell itself.
+/// - An underlined-tab blank marks its own tab with `⇥`; every other tab
+///   in the excerpt becomes a plain space (same byte length, so the
+///   candidate's offsets still line up), keeping the marker unique for
+///   the UI's highlight.
+fn snippet_for(
+    doc: &docx_surgeon::FlatDocument,
+    rc: &RegionCandidate,
+    region_text: &str,
+) -> String {
+    if let RegionRef::TableCell(index) = rc.region {
+        if region_text.is_empty() && index > 0 {
+            let label_cell = &doc.table_cells[index - 1].text;
+            let from = char_boundary_at_or_after(
+                label_cell,
+                label_cell.len().saturating_sub(2 * SNIPPET_CONTEXT_CHARS),
+            );
+            return format!("{} [empty cell]", &label_cell[from..]);
+        }
+    }
+
+    // A text-box label's value is appended at the end of the box: show
+    // the label (and the labels just before it, to say which section)
+    // followed by a marker for where the value goes.
+    if rc.region == RegionRef::Body
+        && rc.candidate.start == rc.candidate.end
+        && rc.candidate.matched_text.is_empty()
+    {
+        let end = rc.candidate.end;
+        let from =
+            char_boundary_at_or_after(region_text, end.saturating_sub(2 * SNIPPET_CONTEXT_CHARS));
+        let lines: Vec<&str> = region_text[from..end]
+            .split('\n')
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        return format!("{} [value goes here]", lines.join(" / "));
+    }
+
+    if rc.candidate.matched_text == unitprep_template_tagger::TAB_BLANK_TEXT {
+        let spaced: String = region_text
+            .char_indices()
+            .map(|(i, c)| {
+                if c == '\t' && i != rc.candidate.start {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .collect();
+        return build_snippet(&spaced, rc.candidate.start, rc.candidate.end)
+            .replace('\t', &TAB_MARKER.to_string());
+    }
+
+    build_snippet(region_text, rc.candidate.start, rc.candidate.end)
 }
 
 pub(super) fn char_boundary_at_or_after(text: &str, mut idx: usize) -> usize {

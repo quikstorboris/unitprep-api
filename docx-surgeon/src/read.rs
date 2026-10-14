@@ -1,6 +1,8 @@
 use quick_xml::events::Event;
 use quick_xml::Reader;
 
+use crate::textbox::{room_to_right, GroupBlank, PageBounds, TextBox, TextBoxTracker};
+
 /// One `<w:t>` element's contribution to the flattened text.
 ///
 /// `xml_content_start`/`xml_content_end` is the byte range in the raw
@@ -52,6 +54,31 @@ pub struct FlatText {
     /// Every `<w:t>` run's contribution, in document order, non-
     /// overlapping and sorted by `flat_start`.
     pub runs: Vec<RunSpan>,
+    /// Flat-text offset of every `\t` that came from a real `<w:tab/>`
+    /// inside an *underlined* run -- how a form draws a fill-in line
+    /// without any literal `_` characters (see
+    /// `unitprep_template_tagger::recognize_tab_blanks`). Sorted.
+    pub underlined_tabs: Vec<usize>,
+    /// Where a tag could be inserted into this region if it is a table
+    /// cell holding no text at all (an empty first paragraph, no runs)
+    /// -- the shape of an "initials" box. `None` otherwise.
+    pub empty_paragraph: Option<EmptyParagraph>,
+}
+
+/// Where, in the raw `document.xml`, a brand-new run can be written
+/// into an otherwise empty table-cell paragraph.
+///
+/// Either the paragraph is `<w:p ...>...</w:p>` with nothing but
+/// (optionally) `<w:pPr>` inside -- `replace_end == insert_at` and the
+/// new `<w:r>` is inserted at `insert_at`, just before `</w:p>` -- or
+/// it is self-closing, `<w:p .../>`, in which case `[insert_at,
+/// replace_end)` is the whole tag and `self_closing_open_tag` holds its
+/// text minus the trailing `/>`, so it can be re-emitted as an open tag.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmptyParagraph {
+    pub insert_at: usize,
+    pub replace_end: usize,
+    pub self_closing_open_tag: Option<String>,
 }
 
 impl FlatText {
@@ -107,6 +134,13 @@ impl FlatText {
     /// `apply_edits` fail the whole batch on the first bad one.
     pub fn is_editable_range(&self, flat_start: usize, flat_end: usize) -> bool {
         !self.runs_touching(flat_start, flat_end).is_empty()
+            || self.is_empty_paragraph_insertion(flat_start, flat_end)
+    }
+
+    /// Whether `[flat_start, flat_end)` is the one insertion point an
+    /// empty table cell offers -- see [`EmptyParagraph`].
+    pub fn is_empty_paragraph_insertion(&self, flat_start: usize, flat_end: usize) -> bool {
+        flat_start == 0 && flat_end == 0 && self.runs.is_empty() && self.empty_paragraph.is_some()
     }
 }
 
@@ -134,9 +168,41 @@ impl FlatText {
 pub struct FlatDocument {
     pub body: FlatText,
     pub table_cells: Vec<FlatText>,
+    /// Every floating text box in the body, in document order (see
+    /// [`crate::textbox`]). The `mc:Fallback` copy of each box is not
+    /// read at all -- it duplicates the `mc:Choice` one.
+    pub textboxes: Vec<TextBox>,
+    pub page: PageBounds,
 }
 
 impl FlatDocument {
+    /// The text box whose (non-empty) text ends exactly at body flat
+    /// offset `flat_end`, if any.
+    pub fn textbox_ending_at(&self, flat_end: usize) -> Option<usize> {
+        self.textboxes
+            .iter()
+            .position(|b| b.text_end == flat_end && b.text_start < b.text_end)
+    }
+
+    /// How wide (EMU) text box `index` can grow -- `None` if it cannot
+    /// be resized or has nothing worth growing into. See
+    /// [`crate::textbox::room_to_right`].
+    pub fn textbox_room_emu(&self, index: usize) -> Option<i64> {
+        room_to_right(&self.textboxes, index, self.page)
+    }
+
+    /// Whether a value can be written next to text box `index`: it has
+    /// room to grow, or its group shape has a blank square after it.
+    pub fn textbox_can_hold_value(&self, index: usize) -> bool {
+        self.textbox_room_emu(index).is_some() || self.textboxes[index].group_blank.is_some()
+    }
+
+    /// The group blank of the text box whose text ends at `flat_end`.
+    pub fn group_blank_ending_at(&self, flat_end: usize) -> Option<&GroupBlank> {
+        let index = self.textbox_ending_at(flat_end)?;
+        self.textboxes[index].group_blank.as_ref()
+    }
+
     /// The region `r` identifies. Panics if `r` is a `TableCell` index
     /// out of range for this document -- same "caller-guaranteed valid"
     /// contract as `Vec`'s own indexing, since a [`RegionRef`] is only
@@ -167,6 +233,11 @@ struct Accumulator {
     text: String,
     runs: Vec<RunSpan>,
     wrote_any_paragraph: bool,
+    underlined_tabs: Vec<usize>,
+    empty_paragraph: Option<EmptyParagraph>,
+    /// Paragraph nesting depth at which this region's first paragraph
+    /// opened, while that paragraph is still open.
+    first_paragraph_depth: Option<usize>,
 }
 
 impl Accumulator {
@@ -175,13 +246,25 @@ impl Accumulator {
             text: String::new(),
             runs: Vec::new(),
             wrote_any_paragraph: false,
+            underlined_tabs: Vec::new(),
+            empty_paragraph: None,
+            first_paragraph_depth: None,
         }
     }
 
     fn finish(self) -> FlatText {
+        // An insertion point is only valid while the region really has
+        // nothing addressable in it.
+        let empty_paragraph = if self.runs.is_empty() {
+            self.empty_paragraph
+        } else {
+            None
+        };
         FlatText {
             text: self.text,
             runs: self.runs,
+            underlined_tabs: self.underlined_tabs,
+            empty_paragraph,
         }
     }
 }
@@ -217,10 +300,52 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
     let mut current_rpr_open_start = 0usize;
     let mut current_rpr_range: Option<(usize, usize)> = None;
     let mut pushed_run_this_element = false;
+    // `<w:tab w:val=".." w:pos=".."/>` inside `<w:tabs>` *defines* a tab
+    // stop; it is not a tab character in the text.
+    let mut in_tab_stops = false;
+    let mut paragraph_depth = 0usize;
+    let mut outer_paragraph_start = 0usize;
+    let mut fallback_depth = 0usize;
+    let mut textboxes = TextBoxTracker::default();
 
     loop {
         let pos_before = reader.buffer_position() as usize;
-        match reader.read_event() {
+        let event = reader.read_event();
+
+        // `mc:AlternateContent` carries every floating shape twice: the
+        // modern `mc:Choice` and a legacy `mc:Fallback` copy. Only the
+        // first is read, so nothing is matched (or edited) twice.
+        match &event {
+            Ok(Event::Start(e)) if e.local_name().as_ref() == b"Fallback" => {
+                fallback_depth += 1;
+                continue;
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == b"Fallback" => {
+                fallback_depth = fallback_depth.saturating_sub(1);
+                continue;
+            }
+            Ok(Event::Eof) | Err(_) => {}
+            _ if fallback_depth > 0 => continue,
+            _ => {}
+        }
+
+        match &event {
+            Ok(Event::Start(e)) => textboxes.on_start(
+                e.local_name().as_ref(),
+                e,
+                pos_before,
+                outer_paragraph_start,
+            ),
+            Ok(Event::Empty(e)) => {
+                let tag = &document_xml[pos_before..reader.buffer_position() as usize];
+                textboxes.on_empty(e.local_name().as_ref(), tag, pos_before);
+            }
+            Ok(Event::End(e)) => textboxes.on_end(e.local_name().as_ref()),
+            Ok(Event::Text(t)) => textboxes.on_text(&t.decode().unwrap_or_default()),
+            _ => {}
+        }
+
+        match event {
             Ok(Event::Eof) => break,
             Err(_) => break,
 
@@ -229,12 +354,21 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
                     cell_stack.push(Accumulator::new());
                 }
                 b"p" => {
+                    paragraph_depth += 1;
+                    if paragraph_depth == 1 {
+                        outer_paragraph_start = pos_before;
+                    }
                     let acc = current_acc(&mut cell_stack, &mut body);
                     if acc.wrote_any_paragraph {
                         acc.text.push('\n');
+                    } else {
+                        acc.first_paragraph_depth = Some(paragraph_depth);
                     }
                     acc.wrote_any_paragraph = true;
+                    let flat_len = acc.text.len();
+                    textboxes.take_pending_text_start(flat_len);
                 }
+                b"tabs" => in_tab_stops = true,
                 b"r" => {
                     current_run_underlined = false;
                     current_run_start = pos_before;
@@ -308,7 +442,31 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
             },
 
             Ok(Event::Empty(e)) => match e.local_name().as_ref() {
-                b"tab" => current_acc(&mut cell_stack, &mut body).text.push('\t'),
+                b"tab" if in_tab_stops => {}
+                b"tab" => {
+                    let acc = current_acc(&mut cell_stack, &mut body);
+                    if current_run_underlined {
+                        acc.underlined_tabs.push(acc.text.len());
+                    }
+                    acc.text.push('\t');
+                }
+                b"p" => {
+                    // A self-closing paragraph: the first (and so far
+                    // only) one in a table cell is an insertion point.
+                    let in_cell = !cell_stack.is_empty();
+                    let acc = current_acc(&mut cell_stack, &mut body);
+                    if in_cell && !acc.wrote_any_paragraph && acc.empty_paragraph.is_none() {
+                        let tag_end = reader.buffer_position() as usize;
+                        let tag = &document_xml[pos_before..tag_end];
+                        if let Some(open) = tag.strip_suffix("/>") {
+                            acc.empty_paragraph = Some(EmptyParagraph {
+                                insert_at: pos_before,
+                                replace_end: tag_end,
+                                self_closing_open_tag: Some(open.trim_end().to_string()),
+                            });
+                        }
+                    }
+                }
                 b"u" if in_run_props => {
                     let explicitly_none = e.attributes().flatten().any(|a| {
                         a.key.local_name().as_ref() == b"val" && a.value.as_ref() == b"none"
@@ -338,6 +496,33 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
             },
 
             Ok(Event::End(e)) => match e.local_name().as_ref() {
+                b"tabs" => in_tab_stops = false,
+                b"txbxContent" => {
+                    textboxes.finish_content(cell_stack.is_empty().then_some(body.text.len()));
+                    // The box's text must not run into whatever the
+                    // anchoring paragraph says next ("ANOTHER PERSON" +
+                    // "IN ADDITION..." must not read as "PERSONIN").
+                    current_acc(&mut cell_stack, &mut body).text.push('\n');
+                }
+                b"p" => {
+                    let in_cell = !cell_stack.is_empty();
+                    let acc = current_acc(&mut cell_stack, &mut body);
+                    if in_cell
+                        && acc.first_paragraph_depth == Some(paragraph_depth)
+                        && acc.runs.is_empty()
+                        && acc.empty_paragraph.is_none()
+                    {
+                        acc.empty_paragraph = Some(EmptyParagraph {
+                            insert_at: pos_before,
+                            replace_end: pos_before,
+                            self_closing_open_tag: None,
+                        });
+                    }
+                    if acc.first_paragraph_depth == Some(paragraph_depth) {
+                        acc.first_paragraph_depth = None;
+                    }
+                    paragraph_depth = paragraph_depth.saturating_sub(1);
+                }
                 b"rPr" => {
                     in_run_props = false;
                     current_rpr_range =
@@ -363,9 +548,28 @@ pub fn extract_flat_text(document_xml: &str) -> FlatDocument {
         }
     }
 
+    let body = body.finish();
+    let mut boxes = textboxes.boxes;
+    for text_box in &mut boxes {
+        // A group blank's tag is written in the label's own font.
+        if let Some(blank) = &mut text_box.group_blank {
+            blank.run_props = body
+                .runs
+                .iter()
+                .find(|run| {
+                    run.flat_start >= text_box.text_start
+                        && run.flat_end <= text_box.text_end
+                        && run.flat_end > run.flat_start
+                })
+                .and_then(|run| run.rpr_range);
+        }
+    }
+
     FlatDocument {
-        body: body.finish(),
+        body,
         table_cells,
+        textboxes: boxes,
+        page: textboxes.page,
     }
 }
 
@@ -658,5 +862,62 @@ mod tests {
         // would be 6 (len("Before")) instead of 0.
         assert_eq!(doc.table_cells[0].runs[0].flat_start, 0);
         assert_eq!(doc.table_cells[0].runs[0].flat_end, 5);
+    }
+
+    #[test]
+    fn an_underlined_tab_is_recorded_but_a_plain_one_is_not() {
+        let xml = wrap(
+            r#"<w:p><w:r><w:t>Date:</w:t></w:r><w:r><w:rPr><w:u w:val="single"/></w:rPr><w:tab/></w:r><w:r><w:t>Of:</w:t></w:r><w:r><w:tab/></w:r></w:p>"#,
+        );
+        let doc = extract_flat_text(&xml);
+
+        assert_eq!(doc.body.text, "Date:\tOf:\t");
+        assert_eq!(doc.body.underlined_tabs, vec![5]);
+    }
+
+    #[test]
+    fn a_tab_stop_definition_is_not_a_tab_character() {
+        let xml = wrap(
+            r#"<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs></w:pPr><w:r><w:t>A</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>B</w:t></w:r></w:p>"#,
+        );
+
+        assert_eq!(extract_flat_text(&xml).body.text, "A\tB");
+    }
+
+    #[test]
+    fn an_empty_cell_paragraph_is_an_insertion_point() {
+        let xml = wrap(r#"<w:tbl><w:tr><w:tc><w:p><w:pPr/></w:p></w:tc></w:tr></w:tbl>"#);
+        let doc = extract_flat_text(&xml);
+
+        let paragraph = doc.table_cells[0].empty_paragraph.as_ref().unwrap();
+        assert_eq!(
+            &xml[paragraph.insert_at..],
+            "</w:p></w:tc></w:tr></w:tbl></w:body></w:document>"
+        );
+        assert_eq!(paragraph.insert_at, paragraph.replace_end);
+        assert!(doc.table_cells[0].is_editable_range(0, 0));
+    }
+
+    #[test]
+    fn a_self_closing_cell_paragraph_is_an_insertion_point() {
+        let xml = wrap(r#"<w:tbl><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl>"#);
+        let doc = extract_flat_text(&xml);
+
+        let paragraph = doc.table_cells[0].empty_paragraph.as_ref().unwrap();
+        assert_eq!(&xml[paragraph.insert_at..paragraph.replace_end], "<w:p/>");
+        assert_eq!(paragraph.self_closing_open_tag.as_deref(), Some("<w:p"));
+    }
+
+    #[test]
+    fn a_cell_with_text_or_body_text_has_no_insertion_point() {
+        let xml = wrap(&format!(
+            r#"<w:p></w:p><w:tbl><w:tr>{}</w:tr></w:tbl>"#,
+            cell("Value")
+        ));
+        let doc = extract_flat_text(&xml);
+
+        assert!(doc.body.empty_paragraph.is_none());
+        assert!(doc.table_cells[0].empty_paragraph.is_none());
+        assert!(!doc.table_cells[0].is_empty_paragraph_insertion(0, 0));
     }
 }

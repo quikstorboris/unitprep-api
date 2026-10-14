@@ -1,14 +1,16 @@
-use crate::read::{FlatDocument, RegionRef};
+use crate::read::{EmptyParagraph, FlatDocument, RegionRef};
 
 mod fragment;
 mod overlap;
 mod run_xml;
+mod textbox_growth;
 
 use fragment::{
     collect_fragments, compute_plain_replacements, compute_underline_replacements,
     finalize_fragment_replacements, splice_replacements, RunStyle, StyledFragment,
 };
 use overlap::{check_no_cross_kind_overlap, check_no_overlapping_spans, check_no_overlaps};
+use textbox_growth::{group_blank_replacement, group_blank_target, textbox_growth_replacements};
 
 /// One text replacement, expressed in flat-text coordinates relative to
 /// `region` (the same coordinate space [`crate::read::extract_flat_text`]
@@ -129,6 +131,19 @@ pub fn apply_all_edits(
     check_no_overlapping_spans(&underline_spans)?;
     check_no_cross_kind_overlap(edits, underline_edits)?;
 
+    // An edit into a table cell that holds no text at all has no run to
+    // splice into: it writes a brand-new run into the cell's empty
+    // paragraph instead (see `crate::read::EmptyParagraph`).
+    let growth = textbox_growth_replacements(doc, edits);
+    // An append at the end of a label box whose group shape has a drawn
+    // blank square writes into that square, not into the label.
+    let (group_edits, edits): (Vec<&Edit>, Vec<&Edit>) =
+        edits.iter().partition(|e| group_blank_target(doc, e));
+    let (insertions, edits): (Vec<&Edit>, Vec<&Edit>) = edits.into_iter().partition(|e| {
+        doc.region(e.region)
+            .is_empty_paragraph_insertion(e.flat_start, e.flat_end)
+    });
+
     let mut by_run: Vec<(RegionRef, usize, Vec<StyledFragment>)> = Vec::new();
     for edit in edits {
         collect_fragments(
@@ -153,10 +168,41 @@ pub fn apply_all_edits(
         )?;
     }
 
-    Ok(splice_replacements(
-        document_xml,
-        finalize_fragment_replacements(document_xml, doc, by_run),
-    ))
+    let mut replacements = finalize_fragment_replacements(document_xml, doc, by_run);
+    replacements.extend(growth);
+    for edit in group_edits {
+        replacements.push(group_blank_replacement(document_xml, doc, edit));
+    }
+    for insertion in insertions {
+        let paragraph = doc
+            .region(insertion.region)
+            .empty_paragraph
+            .as_ref()
+            .expect("partitioned on is_empty_paragraph_insertion");
+        replacements.push(empty_paragraph_replacement(
+            paragraph,
+            &insertion.replacement,
+        ));
+    }
+
+    Ok(splice_replacements(document_xml, replacements))
+}
+
+/// The `[start, end)` byte range and new content that writes
+/// `replacement` as a new run into an empty paragraph.
+fn empty_paragraph_replacement(
+    paragraph: &EmptyParagraph,
+    replacement: &str,
+) -> (usize, usize, String) {
+    let run = format!(
+        r#"<w:r><w:t xml:space="preserve">{}</w:t></w:r>"#,
+        run_xml::xml_escape_text(replacement)
+    );
+    let content = match &paragraph.self_closing_open_tag {
+        Some(open_tag) => format!("{open_tag}>{run}</w:p>"),
+        None => run,
+    };
+    (paragraph.insert_at, paragraph.replace_end, content)
 }
 
 /// One "delete the blank, underline the replacement" edit: every
@@ -691,5 +737,177 @@ mod tests {
         let reflattened = extract_flat_text(&edited).body;
         assert_eq!(reflattened.text, "AAA{{a}}BBB{{b}}CCC");
         assert!(edited.contains(r#"<w:rPr><w:u w:val="single"/></w:rPr><w:t>{{b}}</w:t>"#));
+    }
+
+    #[test]
+    fn an_edit_into_an_empty_cell_writes_a_new_run_there() {
+        let xml = wrap(
+            r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>initials here,</w:t></w:r></w:p></w:tc><w:tc><w:p></w:p></w:tc></w:tr></w:tbl>"#,
+        );
+        let doc = extract_flat_text(&xml);
+        let edit = Edit {
+            region: RegionRef::TableCell(1),
+            flat_start: 0,
+            flat_end: 0,
+            replacement: "{{e.init}}".to_string(),
+        };
+
+        let result = apply_all_edits(&xml, &doc, &[edit], &[]).unwrap();
+
+        assert!(result.contains(
+            r#"<w:tc><w:p><w:r><w:t xml:space="preserve">{{e.init}}</w:t></w:r></w:p></w:tc>"#
+        ));
+        assert!(result.contains("<w:t>initials here,</w:t>"));
+    }
+
+    #[test]
+    fn an_edit_into_a_self_closing_empty_cell_paragraph_keeps_its_attributes() {
+        let xml = wrap(r#"<w:tbl><w:tr><w:tc><w:p w:rsidR="00AB12"/></w:tc></w:tr></w:tbl>"#);
+        let doc = extract_flat_text(&xml);
+        let edit = Edit {
+            region: RegionRef::TableCell(0),
+            flat_start: 0,
+            flat_end: 0,
+            replacement: "{{e.init}}".to_string(),
+        };
+
+        let result = apply_all_edits(&xml, &doc, &[edit], &[]).unwrap();
+
+        assert!(result.contains(
+            r#"<w:p w:rsidR="00AB12"><w:r><w:t xml:space="preserve">{{e.init}}</w:t></w:r></w:p>"#
+        ));
+    }
+
+    #[test]
+    fn two_zero_width_edits_at_the_same_point_conflict() {
+        let xml = wrap(r#"<w:p><w:r><w:t>Date:</w:t></w:r><w:r><w:tab/></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+        let edits = [body_edit(5, 5, "{{a}}"), body_edit(5, 5, "{{b}}")];
+
+        assert!(matches!(
+            apply_all_edits(&xml, &doc, &edits, &[]),
+            Err(EditError::OverlappingEdits { .. })
+        ));
+    }
+
+    #[test]
+    fn a_zero_width_edit_just_before_a_tab_lands_in_the_labels_run() {
+        let xml = wrap(r#"<w:p><w:r><w:t>Date: </w:t></w:r><w:r><w:tab/></w:r></w:p>"#);
+        let doc = extract_flat_text(&xml);
+
+        let result = apply_all_edits(&xml, &doc, &[body_edit(6, 6, "{{m.indate}}")], &[]).unwrap();
+
+        assert!(result.contains("<w:t>Date: {{m.indate}}</w:t></w:r><w:r><w:tab/></w:r>"));
+    }
+
+    const TEXTBOX_FORM: &str = concat!(
+        r#"<w:p><w:r><mc:AlternateContent><mc:Choice Requires="wps"><w:drawing><wp:anchor>"#,
+        r#"<wp:positionH relativeFrom="page"><wp:posOffset>596900</wp:posOffset></wp:positionH>"#,
+        r#"<wp:positionV relativeFrom="paragraph"><wp:posOffset>3810</wp:posOffset></wp:positionV>"#,
+        r#"<wp:extent cx="985520" cy="106680"/><a:graphic><a:graphicData><wps:wsp><wps:spPr>"#,
+        r#"<a:xfrm><a:off x="0" y="0"/><a:ext cx="985520" cy="106680"/></a:xfrm></wps:spPr>"#,
+        r#"<wps:txbx><w:txbxContent><w:p><w:r><w:t>Name:</w:t></w:r></w:p></w:txbxContent></wps:txbx>"#,
+        r#"</wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice>"#,
+        r#"<mc:Fallback><w:pict><w:txbxContent><w:p><w:r><w:t>Name:</w:t></w:r></w:p></w:txbxContent></w:pict></mc:Fallback>"#,
+        r#"</mc:AlternateContent></w:r></w:p>"#,
+        r#"<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:right="720"/></w:sectPr>"#,
+    );
+
+    #[test]
+    fn a_text_box_is_read_once_not_once_per_choice_and_fallback() {
+        let doc = extract_flat_text(&wrap(TEXTBOX_FORM));
+
+        // The anchoring paragraph is empty; the box's own paragraph follows
+        // it, and a line break keeps the box's text from running into
+        // whatever follows.
+        assert_eq!(doc.body.text, "\nName:\n");
+        assert_eq!(doc.textboxes.len(), 1);
+        assert_eq!(doc.textboxes[0].geometry.as_ref().unwrap().cx, 985_520);
+        // 576pt content right edge minus the box's 47pt left edge.
+        assert_eq!(doc.textbox_room_emu(0), Some((576 - 47) * 12_700));
+    }
+
+    #[test]
+    fn appending_to_a_text_box_widens_it_and_leaves_the_fallback_alone() {
+        let xml = wrap(TEXTBOX_FORM);
+        let doc = extract_flat_text(&xml);
+
+        let result = apply_all_edits(&xml, &doc, &[body_edit(6, 6, " {{e.lname}}")], &[]).unwrap();
+
+        assert!(result.contains("<w:t>Name: {{e.lname}}</w:t>"));
+        assert!(result.contains(r#"<wp:extent cx="6718300" cy="106680"/>"#));
+        assert!(result.contains(r#"<a:ext cx="6718300" cy="106680"/>"#));
+        // The legacy copy is untouched.
+        assert_eq!(result.matches("<w:t>Name:</w:t>").count(), 1);
+    }
+
+    #[test]
+    fn an_edit_that_is_not_at_the_end_of_a_text_box_does_not_resize_it() {
+        let xml = wrap(TEXTBOX_FORM);
+        let doc = extract_flat_text(&xml);
+
+        let result = apply_all_edits(&xml, &doc, &[body_edit(2, 4, "XX")], &[]).unwrap();
+
+        assert!(result.contains(r#"<wp:extent cx="985520" cy="106680"/>"#));
+    }
+
+    const GROUP_FORM: &str = concat!(
+        r#"<w:p><w:r><mc:AlternateContent><mc:Choice Requires="wpg"><w:drawing><wp:anchor>"#,
+        r#"<wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH>"#,
+        r#"<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>"#,
+        r#"<wp:extent cx="3352165" cy="224790"/><a:graphic><a:graphicData><wpg:wgp>"#,
+        r#"<wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="3352165" cy="224790"/>"#,
+        r#"<a:chExt cx="3352165" cy="224790"/></a:xfrm></wpg:grpSpPr>"#,
+        // the group's outer border: no text, starts at the left edge
+        r#"<wps:wsp><wps:cNvPr id="1" name="Graphic 85"/><wps:spPr><a:xfrm><a:off x="0" y="0"/>"#,
+        r#"<a:ext cx="3352165" cy="224790"/></a:xfrm></wps:spPr><wps:bodyPr/></wps:wsp>"#,
+        // the initials square, right after the label
+        r#"<wps:wsp><wps:cNvPr id="2" name="Graphic 86"/><wps:spPr><a:xfrm><a:off x="1198880" y="17157"/>"#,
+        r#"<a:ext cx="537210" cy="114300"/></a:xfrm></wps:spPr><wps:bodyPr wrap="square"></wps:bodyPr></wps:wsp>"#,
+        r#"<wps:wsp><wps:cNvPr id="3" name="Textbox 87"/><wps:spPr><a:xfrm><a:off x="75438" y="20561"/>"#,
+        r#"<a:ext cx="1136650" cy="91440"/></a:xfrm></wps:spPr><wps:txbx><w:txbxContent><w:p>"#,
+        r#"<w:r><w:rPr><w:sz w:val="14"/></w:rPr><w:t>By placing his/her initials here,</w:t></w:r></w:p>"#,
+        r#"</w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp>"#,
+        r#"</wpg:wgp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice>"#,
+        r#"<mc:Fallback><w:pict><w:txbxContent><w:p><w:r><w:t>By placing his/her initials here,</w:t></w:r></w:p></w:txbxContent></w:pict></mc:Fallback>"#,
+        r#"</mc:AlternateContent></w:r></w:p>"#,
+    );
+
+    #[test]
+    fn a_group_labels_drawn_square_is_found_and_the_border_is_not() {
+        let doc = extract_flat_text(&wrap(GROUP_FORM));
+
+        assert_eq!(doc.textboxes.len(), 1);
+        let blank = doc.textboxes[0].group_blank.as_ref().unwrap();
+        let xml = wrap(GROUP_FORM);
+        // It points at the square's own bodyPr (the one with wrap="square").
+        assert!(xml[blank.insert_at..].starts_with(r#"<wps:bodyPr wrap="square">"#));
+        assert!(doc.textbox_can_hold_value(0));
+        // A group box has no geometry, so it is never resized.
+        assert_eq!(doc.textbox_room_emu(0), None);
+    }
+
+    #[test]
+    fn a_tag_for_a_group_label_goes_into_the_drawn_square_not_the_label() {
+        let xml = wrap(GROUP_FORM);
+        let doc = extract_flat_text(&xml);
+        let end = doc.textboxes[0].text_end;
+
+        let result =
+            apply_all_edits(&xml, &doc, &[body_edit(end, end, " {{e.init}}")], &[]).unwrap();
+
+        assert!(result.contains(concat!(
+            r#"<wps:txbx><w:txbxContent><w:p><w:pPr><w:jc w:val="center"/></w:pPr>"#,
+            r#"<w:r><w:rPr><w:sz w:val="14"/></w:rPr><w:t xml:space="preserve">{{e.init}}</w:t></w:r>"#,
+            r#"</w:p></w:txbxContent></wps:txbx><wps:bodyPr wrap="square"></wps:bodyPr>"#,
+        )));
+        // The label's own text and the legacy copy are untouched.
+        assert_eq!(
+            result
+                .matches("<w:t>By placing his/her initials here,</w:t>")
+                .count(),
+            2
+        );
+        assert!(!result.contains("initials here, {{e.init}}"));
     }
 }

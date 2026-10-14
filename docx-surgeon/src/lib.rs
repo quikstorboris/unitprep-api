@@ -37,11 +37,13 @@
 
 pub mod edit;
 pub mod read;
+pub mod textbox;
 
 pub use edit::{
     apply_all_edits, apply_edits, apply_underline_edits, Edit, EditError, UnderlineEdit,
 };
-pub use read::{extract_flat_text, FlatDocument, FlatText, RegionRef, RunSpan};
+pub use read::{extract_flat_text, EmptyParagraph, FlatDocument, FlatText, RegionRef, RunSpan};
+pub use textbox::{GroupBlank, PageBounds, TextBox, TextBoxGeometry};
 
 use std::io::{Cursor, Read, Write};
 

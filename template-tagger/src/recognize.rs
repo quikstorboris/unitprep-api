@@ -21,6 +21,11 @@ pub struct LabelProximityPattern {
     /// before each one. `None` for the common case of a label that
     /// only ever appears once.
     pub requires_preceding_anchor: Option<PrecedingAnchor>,
+    /// The label legitimately recurs for the *same* tag -- "initials
+    /// here" under every acknowledged paragraph -- so seeing it several
+    /// times is not the section ambiguity an unanchored `City:` has
+    /// (occupant? alternate contact? lienholder?).
+    pub repeats: bool,
 }
 
 /// See [`LabelProximityPattern::requires_preceding_anchor`].
@@ -116,6 +121,163 @@ pub fn recognize_blanks(document_text: &str, patterns: &[LabelProximityPattern])
     candidates
 }
 
+/// Byte offset of the end of every occurrence of `pattern`'s label in
+/// `text` that satisfies the pattern's own preceding-anchor requirement
+/// -- for a caller that does its own "what follows the label" check
+/// (e.g. "is the label the last thing in this table cell").
+pub fn find_label_ends(text: &str, pattern: &LabelProximityPattern) -> Vec<usize> {
+    find_word_bounded_matches(text, &pattern.label)
+        .into_iter()
+        .filter(
+            |&(label_start, _)| match &pattern.requires_preceding_anchor {
+                Some(anchor) => anchor_precedes(text, label_start, anchor),
+                None => true,
+            },
+        )
+        .map(|(_, label_end)| label_end)
+        .collect()
+}
+
+/// Whether a char may trail a label at the very end of its container (a
+/// table cell, a text box) without being content of its own -- `"By
+/// placing his/her initials here,"` still *ends with* its label.
+pub fn is_container_tail_punctuation(c: char) -> bool {
+    c.is_whitespace() || matches!(c, ':' | ',' | '.' | '#' | '$')
+}
+
+/// Finds fields whose only place to write a value is the *end of their
+/// own label's text box*: a floating box holding just a label
+/// (`"Occupant Name - First:"`), laid over a drawn field bar that has no
+/// text container of its own -- the shape of a form converted from PDF.
+///
+/// `text_boxes` are the `[start, end)` ranges of `document_text` that
+/// are one box's text (the caller passes only boxes it can actually
+/// write into and grow). A label that ends a box -- followed by nothing
+/// but [`is_container_tail_punctuation`] up to the box's end -- yields a
+/// zero-width candidate at that end, where the tag is appended. A label
+/// that merely appears in a longer sentence inside a box does not.
+///
+/// Only [`LabelPosition::After`] patterns apply, and a label's
+/// preceding-anchor requirement is honored as everywhere else.
+pub fn recognize_textbox_blanks(
+    document_text: &str,
+    text_boxes: &[(usize, usize)],
+    patterns: &[LabelProximityPattern],
+) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+
+    for pattern in patterns {
+        if pattern.position != LabelPosition::After {
+            continue;
+        }
+
+        for label_end in find_label_ends(document_text, pattern) {
+            let label_start = label_end - pattern.label.len();
+            let Some(&(_, box_end)) = text_boxes
+                .iter()
+                .find(|&&(start, end)| start <= label_start && label_end <= end)
+            else {
+                continue;
+            };
+
+            if document_text[label_end..box_end]
+                .chars()
+                .all(is_container_tail_punctuation)
+            {
+                candidates.push(Candidate {
+                    tag_key: pattern.tag_key.clone(),
+                    matched_text: String::new(),
+                    start: box_end,
+                    end: box_end,
+                });
+            }
+        }
+    }
+
+    candidates.sort_by_key(|candidate| candidate.start);
+    candidates
+}
+
+/// The text a tab-blank candidate carries as `matched_text`: the tab
+/// character itself. [`recognize_tab_blanks`] proposes a *position*
+/// (the underlined tab), not a span of text to replace.
+pub const TAB_BLANK_TEXT: &str = "\t";
+
+/// Whether a char may sit between a label and its blank without being
+/// "content" -- the label's own colon, spacing, and a currency or number
+/// sign (`"Rental Rate Per Month: $<tab>"`).
+fn is_tab_blank_connector(c: char) -> bool {
+    c == ' ' || c == ':' || c == '$' || c == '#'
+}
+
+/// Same job as [`recognize_blanks`], for a blank drawn as an *underlined
+/// tab* rather than a run of `_` -- a fill-in line with zero literal
+/// underscore characters, the shape of most forms converted from PDF
+/// and of several real templates in the corpus (Northwest Heated Mini
+/// Storage: 192 underlined blanks, no underscores).
+///
+/// `underlined_tabs` is the flat-text offset of every tab character
+/// that sits in an underlined run (`docx_surgeon::FlatText::
+/// underlined_tabs`) -- a plain tab is a column separator, not a blank,
+/// and nothing here can tell the two apart from text alone.
+///
+/// A candidate is the *first* underlined tab after a pattern's label,
+/// reached through nothing but connector punctuation (spaces, `:`, `$`,
+/// `#`) within `max_gap_chars` -- so `"Access Code: <tab><tab>"` yields
+/// one candidate, not two, and a label followed by real words never
+/// reaches a tab at all. Only [`LabelPosition::After`] patterns apply; a
+/// pattern whose blank precedes its label has no tab-blank form.
+///
+/// The candidate spans just the tab (`matched_text` is
+/// [`TAB_BLANK_TEXT`]). Applying it inserts the tag immediately *before*
+/// the tab and leaves the tab itself alone, so the line stays as long
+/// as the form drew it.
+pub fn recognize_tab_blanks(
+    document_text: &str,
+    underlined_tabs: &[usize],
+    patterns: &[LabelProximityPattern],
+) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+
+    for pattern in patterns {
+        if pattern.position != LabelPosition::After {
+            continue;
+        }
+
+        for (label_start, label_end) in find_word_bounded_matches(document_text, &pattern.label) {
+            if let Some(anchor) = &pattern.requires_preceding_anchor {
+                if !anchor_precedes(document_text, label_start, anchor) {
+                    continue;
+                }
+            }
+
+            let mut position = label_end;
+            for c in document_text[label_end..].chars() {
+                if c == '\t' {
+                    if underlined_tabs.binary_search(&position).is_ok()
+                        && position - label_end <= pattern.max_gap_chars
+                    {
+                        candidates.push(Candidate {
+                            tag_key: pattern.tag_key.clone(),
+                            matched_text: TAB_BLANK_TEXT.to_string(),
+                            start: position,
+                            end: position + 1,
+                        });
+                    }
+                    break;
+                }
+                if !is_tab_blank_connector(c) {
+                    break;
+                }
+                position += c.len_utf8();
+            }
+        }
+    }
+
+    candidates.sort_by_key(|candidate| candidate.start);
+    candidates
+}
+
 /// A run shorter than this is not treated as a plausible filled value --
 /// same reasoning as [`MIN_BLANK_LEN`], picked to rule out a label
 /// matching immediately against stray punctuation with nothing real
@@ -182,6 +344,7 @@ pub fn recognize_filled_values(
     patterns: &[LabelProximityPattern],
 ) -> Vec<Candidate> {
     let other_boundaries = all_label_boundaries(document_text, patterns);
+    let label_starts = all_label_starts(document_text, patterns);
     let mut candidates = Vec::new();
 
     for pattern in patterns {
@@ -208,6 +371,14 @@ pub fn recognize_filled_values(
             };
 
             if let Some((start, end)) = span {
+                // Not a value: the "value" is itself another field's
+                // label ("Unit" + " " + "SIZE:" -> "SIZE"), or is only
+                // punctuation (a stray "(" or ")" left between tabs).
+                if label_starts.contains(&start)
+                    || !document_text[start..end].chars().any(char::is_alphanumeric)
+                {
+                    continue;
+                }
                 candidates.push(Candidate {
                     tag_key: pattern.tag_key.clone(),
                     matched_text: document_text[start..end].to_string(),
@@ -236,6 +407,17 @@ fn all_label_boundaries(document_text: &str, patterns: &[LabelProximityPattern])
     }
     boundaries.sort_unstable();
     boundaries
+}
+
+/// Every position where any pattern's label *starts*.
+fn all_label_starts(document_text: &str, patterns: &[LabelProximityPattern]) -> Vec<usize> {
+    let mut starts = Vec::new();
+    for pattern in patterns {
+        for (start, _) in find_word_bounded_matches(document_text, &pattern.label) {
+            starts.push(start);
+        }
+    }
+    starts
 }
 
 /// The value span starting at `from` (a label's end, for
@@ -476,6 +658,7 @@ mod tests {
             position,
             max_gap_chars,
             requires_preceding_anchor: None,
+            repeats: false,
         }
     }
 
@@ -776,6 +959,7 @@ mod tests {
                     text: "ALTERNATE NAME".to_string(),
                     within_chars: 30,
                 }),
+                repeats: false,
             };
 
             let candidates = recognize_filled_values(text, &[anchored]);
@@ -834,5 +1018,208 @@ mod tests {
                 .iter()
                 .any(|c| c.tag_key == "u.num" && c.matched_text == "1000"));
         }
+    }
+
+    fn tab_pattern(tag_key: &str, label: &str, max_gap_chars: usize) -> LabelProximityPattern {
+        LabelProximityPattern {
+            tag_key: tag_key.to_string(),
+            label: label.to_string(),
+            position: LabelPosition::After,
+            max_gap_chars,
+            requires_preceding_anchor: None,
+            repeats: false,
+        }
+    }
+
+    #[test]
+    fn an_underlined_tab_after_a_label_is_a_blank() {
+        let text = "DATE OF LEASE: \tB. SPACE";
+        let tab = text.find('\t').unwrap();
+
+        let found =
+            recognize_tab_blanks(text, &[tab], &[tab_pattern("m.indate", "DATE OF LEASE", 5)]);
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].tag_key, "m.indate");
+        assert_eq!((found[0].start, found[0].end), (tab, tab + 1));
+        assert_eq!(found[0].matched_text, TAB_BLANK_TEXT);
+    }
+
+    #[test]
+    fn a_plain_tab_is_a_separator_not_a_blank() {
+        let text = "Late fee:\t$20.00";
+
+        let found = recognize_tab_blanks(text, &[], &[tab_pattern("x", "Late fee", 5)]);
+
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn only_the_first_tab_of_a_run_of_tabs_is_proposed() {
+        let text = "Access Code: \t\tE. Fee";
+        let first = text.find('\t').unwrap();
+
+        let found = recognize_tab_blanks(
+            text,
+            &[first, first + 1],
+            &[tab_pattern("e.keycodes", "Access Code", 5)],
+        );
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].start, first);
+    }
+
+    #[test]
+    fn a_dollar_sign_between_label_and_tab_is_skipped() {
+        let text = "Rental Rate Per Month: $\t";
+        let tab = text.find('\t').unwrap();
+
+        let found = recognize_tab_blanks(
+            text,
+            &[tab],
+            &[tab_pattern("x", "Rental Rate Per Month", 5)],
+        );
+
+        assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn words_between_a_label_and_a_tab_mean_it_is_not_that_labels_blank() {
+        let text = "Name: Jane Smith\t";
+        let tab = text.find('\t').unwrap();
+
+        let found = recognize_tab_blanks(text, &[tab], &[tab_pattern("x", "Name", 20)]);
+
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn a_tab_beyond_max_gap_chars_is_not_matched() {
+        let text = "SIZE:          \t";
+        let tab = text.find('\t').unwrap();
+
+        assert!(recognize_tab_blanks(text, &[tab], &[tab_pattern("x", "SIZE", 3)]).is_empty());
+        assert_eq!(
+            recognize_tab_blanks(text, &[tab], &[tab_pattern("x", "SIZE", 20)]).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_before_pattern_has_no_tab_blank_form() {
+        let text = "\tSignature";
+        let pattern = LabelProximityPattern {
+            position: LabelPosition::Before,
+            ..tab_pattern("x", "Signature", 5)
+        };
+
+        assert!(recognize_tab_blanks(text, &[0], &[pattern]).is_empty());
+    }
+
+    #[test]
+    fn a_preceding_anchor_is_honored_for_tab_blanks() {
+        let text = "ANOTHER PERSON\nName: \t";
+        let tab = text.find('\t').unwrap();
+        let mut pattern = tab_pattern("e.a.name", "Name:", 5);
+        pattern.requires_preceding_anchor = Some(PrecedingAnchor {
+            text: "ANOTHER PERSON".to_string(),
+            within_chars: 40,
+        });
+
+        assert_eq!(
+            recognize_tab_blanks(text, &[tab], &[pattern.clone()]).len(),
+            1
+        );
+
+        pattern.requires_preceding_anchor = Some(PrecedingAnchor {
+            text: "LIENHOLDER".to_string(),
+            within_chars: 40,
+        });
+        assert!(recognize_tab_blanks(text, &[tab], &[pattern]).is_empty());
+    }
+
+    #[test]
+    fn a_filled_value_that_is_just_another_label_is_not_proposed() {
+        let patterns = [
+            tab_pattern("u.num", "Unit", 10),
+            tab_pattern("u.dim", "SIZE", 5),
+        ];
+
+        let found = recognize_filled_values("APPROX. UNIT SIZE: \n", &patterns);
+
+        assert!(found.iter().all(|c| c.tag_key != "u.num"), "{found:?}");
+    }
+
+    #[test]
+    fn a_filled_value_with_no_letters_or_digits_is_not_proposed() {
+        let found =
+            recognize_filled_values("Name: \t\t(\t) \t", &[tab_pattern("e.a.name", "Name:", 10)]);
+
+        assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn a_label_that_ends_a_text_box_is_a_blank_at_the_boxs_end() {
+        let text = "intro\nOccupant Name - First:\nLast:\n";
+        let first = (6, 28);
+        let last = (29, 34);
+
+        let found = recognize_textbox_blanks(
+            text,
+            &[first, last],
+            &[
+                tab_pattern("e.fname", "Occupant Name - First:", 5),
+                tab_pattern("e.lname", "Last:", 5),
+            ],
+        );
+
+        let at: Vec<(&str, usize)> = found
+            .iter()
+            .map(|c| (c.tag_key.as_str(), c.start))
+            .collect();
+        assert_eq!(at, vec![("e.fname", 28), ("e.lname", 34)]);
+        assert!(found
+            .iter()
+            .all(|c| c.start == c.end && c.matched_text.is_empty()));
+    }
+
+    #[test]
+    fn a_label_inside_a_longer_text_box_sentence_is_not_a_blank() {
+        let text = "Name: is required for every occupant";
+
+        let found =
+            recognize_textbox_blanks(text, &[(0, text.len())], &[tab_pattern("x", "Name:", 5)]);
+
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn a_label_outside_every_text_box_is_not_a_text_box_blank() {
+        let text = "Name:\nLast:";
+
+        let found = recognize_textbox_blanks(text, &[(6, 11)], &[tab_pattern("x", "Name:", 5)]);
+
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn a_text_box_blank_honors_the_preceding_anchor() {
+        let text = "ANOTHER PERSON\nCity:";
+        let mut pattern = tab_pattern("e.a.city", "City:", 5);
+        pattern.requires_preceding_anchor = Some(PrecedingAnchor {
+            text: "ANOTHER PERSON".to_string(),
+            within_chars: 30,
+        });
+
+        assert_eq!(
+            recognize_textbox_blanks(text, &[(15, 20)], &[pattern.clone()]).len(),
+            1
+        );
+
+        pattern.requires_preceding_anchor = Some(PrecedingAnchor {
+            text: "OCCUPANT".to_string(),
+            within_chars: 30,
+        });
+        assert!(recognize_textbox_blanks(text, &[(15, 20)], &[pattern]).is_empty());
     }
 }
