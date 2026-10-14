@@ -38,7 +38,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# One cargo-test-filter substring per line -- each verified unique
+# One test-name filter substring per line -- each verified unique
 # enough within this workspace that a plain substring match (no
 # --exact needed) can't accidentally pull in an unrelated test.
 DB_ONLY_IGNORED_TESTS=(
@@ -62,19 +62,13 @@ DB_ONLY_IGNORED_TESTS=(
     the_seeded_registry_classifies_real_export_headers
 )
 
-echo "==> Running ${#DB_ONLY_IGNORED_TESTS[@]} DB-only #[ignore]'d tests"
+# libtest accepts several filters after `--` and runs a test matching ANY
+# of them, so the allowlist and the `_db_` convention share ONE cargo
+# invocation (one build/link pass and one harness start per test binary)
+# instead of eighteen-plus separate ones.
+echo "==> Running ${#DB_ONLY_IGNORED_TESTS[@]} allowlisted DB-only #[ignore]'d tests plus every ignored test named *_db_ (convention: local test-db only)"
 fail=0
-for name in "${DB_ONLY_IGNORED_TESTS[@]}"; do
-    echo
-    echo "--> $name"
-    if ! cargo test --workspace "$name" -- --ignored; then
-        fail=1
-    fi
-done
-
-echo
-echo "==> Running every ignored test named *_db_* (convention: local test-db only)"
-if ! cargo test --workspace -- --ignored _db_; then
+if ! cargo test --workspace -- --ignored _db_ "${DB_ONLY_IGNORED_TESTS[@]}"; then
     fail=1
 fi
 

@@ -6,6 +6,19 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.123] - 2026-10-14
+
+Second-pass hygiene after the efficiency refactor. No behavior change; no migration.
+
+### Changed
+- **XLSX export builds its cluster formats once.** `dedup_xlsx_export` created a new `Format` for every data row; it now builds the four cluster-color formats up front and reuses them. Output is identical.
+- **CI DB tests run in one `cargo test` pass.** `scripts/run_ci_db_tests.sh` passed the 18 allowlisted names and the `_db_` filter as separate invocations; libtest accepts several filters, so they are now a single run (one harness start per test binary instead of 19).
+
+### Tests and CI
+- New `scripts/check_schema_sql_fresh.sh`: fails when `SCHEMA.sql`'s recorded migration count differs from `migrations/` (preflight step 10 and the fast CI job). It needs no Docker. It caught that `SCHEMA.sql` was already two migrations behind (both data-only, so the schema content is unchanged; header count and date refreshed).
+- The rule "no database transaction is open across a ClickUp call" is now written in the `clickup_copy` module docs. An audit of `bulk`, `jobs`, `clickup_connection` and `clickup_run_update` found no violation.
+- RUNBOOK: the single-instance note now says session state is durable in Postgres and only the cache is per-process.
+
 ## [1.9.122] - 2026-10-14
 
 Dedup reads Syrasoft's Tenant List. **Migration `20261014120000`** (one registry row; prod: `scripts/prod_db_status.sh`, then `prod_db_sync.sh`).

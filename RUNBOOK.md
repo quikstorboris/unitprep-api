@@ -77,7 +77,9 @@ clear message, not silent data loss.
 scaling today — `DurableSessionStore`'s in-memory layer is
 per-process, so two instances behind a load balancer without sticky
 sessions would each keep their own cache and could observe a session
-inconsistently between them. This is a deliberate, current limitation,
+inconsistently between them (the session itself is durable in Postgres,
+which stays the source of truth; only the cache is per-process). This is a
+deliberate, current limitation,
 not an oversight — see `brain/Gotchas.md` / `brain/Patterns.md` in the
 vault for the fuller reasoning if this ever needs to change.
 

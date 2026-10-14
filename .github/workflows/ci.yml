@@ -32,6 +32,9 @@ jobs:
       - name: Workflow secret/permissions guard
         run: ./scripts/check_workflow_secrets.sh
 
+      - name: SCHEMA.sql matches the migration count
+        run: ./scripts/check_schema_sql_fresh.sh
+
       - name: Install pinned Rust toolchain
         # rust-toolchain.toml pins the exact version; rustup (already
         # on GitHub's runners) auto-installs it the first time any

@@ -84,6 +84,14 @@ pub fn generate_xlsx(report: &DedupReport, all_records: &[TenantRecord]) -> Resu
         .set_bold()
         .set_background_color(Color::RGB(BANNER_FILL));
 
+    // One per cluster color, built once: a data row only picks one by
+    // its cluster index, so a large report no longer allocates a fresh
+    // `Format` per row.
+    let cluster_formats: Vec<Format> = CLUSTER_COLORS
+        .iter()
+        .map(|&rgb| Format::new().set_background_color(Color::RGB(rgb)))
+        .collect();
+
     let mut last_row = 0u32;
 
     for (excel_row, planned_row) in (1u32..).zip(plan.iter()) {
@@ -111,9 +119,7 @@ pub fn generate_xlsx(report: &DedupReport, all_records: &[TenantRecord]) -> Resu
                 cluster,
                 hyperlink_target,
             } => {
-                let format = Format::new().set_background_color(Color::RGB(
-                    CLUSTER_COLORS[cluster % CLUSTER_COLORS.len()],
-                ));
+                let format = &cluster_formats[cluster % cluster_formats.len()];
 
                 for (col, value) in record_values(record).into_iter().enumerate() {
                     if col as u16 != NOTE_COLUMN {
@@ -121,7 +127,7 @@ pub fn generate_xlsx(report: &DedupReport, all_records: &[TenantRecord]) -> Resu
                             excel_row,
                             col as u16,
                             value.as_str(),
-                            &format,
+                            format,
                         )?;
                     }
                 }
@@ -131,7 +137,7 @@ pub fn generate_xlsx(report: &DedupReport, all_records: &[TenantRecord]) -> Resu
                     excel_row,
                     note,
                     hyperlink_target.as_deref(),
-                    &format,
+                    format,
                 )?;
             }
         }

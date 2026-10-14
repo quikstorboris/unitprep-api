@@ -20,6 +20,12 @@
 //! with the caller's own ClickUp token, so ClickUp attributes the
 //! comments to the person who clicked, and every ClickUp call goes through
 //! that user's rate limiter (`exec`).
+//!
+//! **No database transaction is open across a ClickUp call.** Every
+//! handler here reads what it needs in one short RLS transaction,
+//! commits, and only then talks to ClickUp (the same rule the Process
+//! Street and Dropbox paths follow): a slow or retried ClickUp request
+//! must never pin a pooled connection. Keep it that way when adding code.
 
 //!
 //! `sync_log` lists the copies made onto a facility (the "Last Synced
