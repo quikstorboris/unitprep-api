@@ -6,6 +6,31 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.124] - 2026-10-14
+
+The Template Tagger now tags PDF-converted forms. Longview Self Storage's rental agreement went from 2 hits (both wrong) to 27 correct tags. **Migrations `20261014160000`, `20261014180000`, `20261014200000`, `20261014220000`** are label-pattern data only (nothing in the code requires them), plus the Syrasoft migration `20261014120000` from 1.9.122 if prod has not applied it; prod: `scripts/prod_db_status.sh`, then `prod_db_sync.sh`.
+
+### Added
+- **Blanks drawn as underlined tabs.** A label followed by an underlined tab (no `_` anywhere in the document) is a blank. The tag is inserted before the tab and the tab, the form's drawn line, stays. A plain tab is a column separator, never a blank.
+- **Empty table cells.** A cell with nothing in it, right after a cell that ends with a pattern's label (`By placing his/her initials here,`), is that label's blank; the tag is written as a new run into the cell's empty paragraph.
+- **Floating text-box labels.** A label that is the whole text of a floating text box (one per field label on a converted form) gets its tag at the end of that box, and the box grows to the free room on its row (up to the next box, else the page's right margin) so the value is not clipped. Both stored widths (`wp:extent` and the shape's `a:ext`) change together.
+- **Initials inside group shapes.** When a group shape has a drawn blank square right after a label box, the tag is written into that square (it becomes a text shape), in the label's own font, centered.
+- `repeats` on a label pattern: the label legitimately recurs for the same tag (`initials here` under every paragraph), so a repeat is not ambiguity.
+- Label patterns for the Longview / T.C.'s RV agreement (occupant, alternate contact, DOB, driver's license, access code, move-in date, rate, unit number, initials).
+
+### Changed
+- **`mc:Fallback` copies are no longer read.** Each floating shape is stored twice; every text-box label was being found, and would have been edited, twice. The legacy copy is left byte-for-byte untouched.
+- A text box's text now ends with a line break, so it cannot run into the next body text (`ANOTHER PERSON` + `IN ADDITION` read as `PERSONIN` and broke every anchor).
+- An unanchored pattern whose label repeats in the document (`City:` for the occupant, the alternate contact and the lienholder) is only a suggestion (Needs Review), and yields to an anchored exact candidate on the same blank.
+- Filled-value guesses no longer propose another field's label (`Unit` + `SIZE`) or text with no letters or digits (a stray `(`) as a value.
+
+### Fixed
+- `<w:tabs>` tab-stop definitions were being read as real tab characters in the flat text.
+- Two zero-width edits at the same point now conflict instead of both inserting.
+
+### Tests and CI
+- Tests for each recognizer and edit above, and for blanks split across runs (the tag appears once, underlined, in the original run's formatting). Real-file check: the Longview agreement through the dev database's 42 patterns gives 27 Auto tags and 1 Needs Review; output is well-formed and every other zip part is byte-identical.
+
 ## [1.9.123] - 2026-10-14
 
 Second-pass hygiene after the efficiency refactor. No behavior change; no migration.
