@@ -21,13 +21,16 @@ const MAX_ATTEMPTS: u32 = 4;
 /// through; a reset further out (the hourly cap) fails the call instead.
 const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(90);
 
-/// PS rate-limits in short windows as well as hourly: a sync that fetched
-/// every run as fast as the network allowed hit 429s within half a minute
-/// (2026-10-15). 40 calls per 10 s is well under that and still fast
-/// enough -- a 700-run sync takes about three minutes.
+/// PS allows ~2,500 requests an hour (0.7/s), enforced as a refilling
+/// bucket: a burst goes through until the bucket is empty (~50 s at full
+/// speed), then every call is limited to the refill rate. v1.9.126's
+/// 4 calls/s drained it and then 429'd on every retry, each reset only a
+/// second or two away (2026-10-15). 6 calls per 10 s (0.6/s) stays under
+/// the refill rate, leaving a little for searches and previews. A full
+/// resync of N runs therefore takes about N / 0.6 seconds.
 fn request_pacer() -> &'static RateLimiter {
     static PACER: OnceLock<RateLimiter> = OnceLock::new();
-    PACER.get_or_init(|| RateLimiter::new(40, Duration::from_secs(10)))
+    PACER.get_or_init(|| RateLimiter::new(6, Duration::from_secs(10)))
 }
 
 /// How long to wait after a 429, read from PS's body ("Please try again

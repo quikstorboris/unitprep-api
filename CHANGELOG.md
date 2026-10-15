@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.127] - 2026-10-15
+
+Process Street pacing corrected. No migration.
+
+### Fixed
+- 1.9.126 paced PS calls at 4/s, but PS's real limit is a refilling bucket of ~2,500/hour (0.7/s): the burst drained it in ~50 s and every retry then 429'd again. The pacer is now 6 calls per 10 s (0.6/s). A first sync with a large backlog is slow by design (about N / 0.6 seconds for N runs) but completes.
+
 ## [1.9.126] - 2026-10-15
 
 Fixes Process Street 429s during "Sync Now". No migration.
