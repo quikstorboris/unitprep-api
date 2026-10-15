@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -31,6 +32,32 @@ const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(90);
 fn request_pacer() -> &'static RateLimiter {
     static PACER: OnceLock<RateLimiter> = OnceLock::new();
     PACER.get_or_init(|| RateLimiter::new(6, Duration::from_secs(10)))
+}
+
+/// One line per request to PS, so what spends the rate budget can be read
+/// from the log: the endpoint (query string dropped -- it only carries a
+/// pagination cursor), the status, how many calls this process has made
+/// since it started, and any rate-limit headers PS sends (`x-ratelimit-*`,
+/// `retry-after`; none have been confirmed yet).
+fn log_call(url: &str, status: u16, headers: &reqwest::header::HeaderMap) {
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+    let call_number = CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    let rate_headers = headers
+        .iter()
+        .filter(|(name, _)| {
+            let name = name.as_str();
+            name.contains("ratelimit") || name.contains("rate-limit") || name == "retry-after"
+        })
+        .map(|(name, value)| format!("{name}={}", value.to_str().unwrap_or("?")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    tracing::info!(
+        endpoint = %url.split('?').next().unwrap_or(url).trim_start_matches(BASE_URL),
+        status,
+        call_number,
+        rate_headers = %rate_headers,
+        "Process Street call"
+    );
 }
 
 /// How long to wait after a 429, read from PS's body ("Please try again
@@ -194,6 +221,7 @@ impl ProcessStreetClient {
             })
             .await?;
             let status = response.status();
+            log_call(url, status.as_u16(), response.headers());
             let body = response.text().await?;
 
             if attempt < MAX_ATTEMPTS {

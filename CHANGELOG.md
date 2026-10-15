@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.128] - 2026-10-15
+
+Logging only; no behavior change, no migration.
+
+### Added
+- Every Process Street request now logs one `Process Street call` line: endpoint, status, a running call count for the process, and any rate-limit headers PS sends. Reading these shows what spends the rate budget.
+
 ## [1.9.127] - 2026-10-15
 
 Process Street pacing corrected. No migration.
