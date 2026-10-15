@@ -25,6 +25,7 @@ pub struct LabelProximityPattern {
     /// here" under every acknowledged paragraph -- so seeing it several
     /// times is not the section ambiguity an unanchored `City:` has
     /// (occupant? alternate contact? lienholder?).
+    #[serde(default)]
     pub repeats: bool,
 }
 

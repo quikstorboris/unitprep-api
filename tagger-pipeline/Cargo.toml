@@ -11,3 +11,11 @@ unitprep-template-tagger = { path = "../template-tagger" }
 # TaggerSession (src/application/tagger_session_service.rs) can round-trip
 # through unitprep_core::durable_session_store::DurableSessionStore.
 serde = { workspace = true }
+
+[dev-dependencies]
+# The real-document corpus test (tests/corpus.rs): reads patterns.json /
+# expected.json, and checks the edited .docx is well-formed and that every
+# part other than document.xml is byte-identical.
+serde_json = "1"
+zip = { workspace = true }
+quick-xml = { workspace = true }

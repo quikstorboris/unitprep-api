@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.125] - 2026-10-14
+
+Tests and tooling only; no behavior change, no migration.
+
+### Tests and CI
+- **Real-document corpus for the Template Tagger** (`tagger-pipeline/tests/corpus/`). Every folder is one real document: `input.docx`, the `patterns.json` in force when it was blessed (so no database is needed), `expected.json` (every candidate's tag, tier, region and context, and the tags that must appear in the applied output) and a `README.md`. `tests/corpus.rs` runs every case and also enforces what must hold for any document: the edited `document.xml` is well-formed, every other part of the .docx and every `mc:Fallback` copy is byte-for-byte unchanged, and each Auto candidate is applied exactly once. Adding a case is adding a folder. Re-bless after an intended change with `UPDATE_CORPUS=1 cargo test -p unitprep-tagger-pipeline --test corpus`. Case 1 is the Longview Self Storage / T.C.'s RV rental agreement (27 Auto tags, 1 Needs Review). Verified to fail when a pattern is removed.
+- **`scripts/coverage.sh` and `scripts/coverage_by_area.py`**: line coverage of the whole workspace, default tests plus the DB-backed ignored tests against a fresh throwaway database (never Neon), printed per area. Baseline 2026-10-14: 76.3% (logic crates 94-98%, HTTP handlers 64%). A map of thin spots, not a target.
+- `LabelProximityPattern.repeats` now has `#[serde(default)]`, so a `patterns.json` without it still loads.
+
 ## [1.9.124] - 2026-10-14
 
 The Template Tagger now tags PDF-converted forms. Longview Self Storage's rental agreement went from 2 hits (both wrong) to 27 correct tags. **Migrations `20261014160000`, `20261014180000`, `20261014200000`, `20261014220000`** are label-pattern data only (nothing in the code requires them), plus the Syrasoft migration `20261014120000` from 1.9.122 if prod has not applied it; prod: `scripts/prod_db_status.sh`, then `prod_db_sync.sh`.

@@ -1,0 +1,201 @@
+{
+  "candidates": [
+    {
+      "tier": "Auto",
+      "tag_key": "m.indate",
+      "region": "body",
+      "context": ". 7/10/26\n\nDATE OF LEASE: "
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "u.num",
+      "region": "body",
+      "context": " \t B. STORAGE SPACE  LVSS "
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "u.dim",
+      "region": "body",
+      "context": "S \t C. APPROX. UNIT SIZE: "
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.keycodes",
+      "region": "body",
+      "context": " SIZE: \t\n\nD. Access Code: "
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "m.effrate",
+      "region": "body",
+      "context": ". Rental Rate Per Month: $"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.fname",
+      "region": "body",
+      "context": "\t\n\n\nOccupant Name - First:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.lname",
+      "region": "body",
+      "context": "upant Name - First:\n\nLast:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.phone",
+      "region": "body",
+      "context": "e - First:\n\nLast:\n\n_Phone:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.post",
+      "region": "body",
+      "context": "rst:\n\nLast:\n\n_Phone:\n\nZip:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.state",
+      "region": "body",
+      "context": "st:\n\n_Phone:\n\nZip:\n\nState:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.city",
+      "region": "body",
+      "context": "hone:\n\nZip:\n\nState:\n\nCity:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.address",
+      "region": "body",
+      "context": ":\n\nState:\n\nCity:\n\nAddress:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.email",
+      "region": "body",
+      "context": ":\n\nCity:\n\nAddress:\n\nEmail:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.phone",
+      "region": "body",
+      "context": "by electronic mail.\n\nCell:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.a.phone",
+      "region": "body",
+      "context": "IONS MAY BE SENT.\n\n\nPhone:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.a.name",
+      "region": "body",
+      "context": "Y BE SENT.\n\n\nPhone:\nName: "
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.a.city",
+      "region": "body",
+      "context": "hone:\nName: \t\t(\t) \t\n\nCity:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.a.address",
+      "region": "body",
+      "context": ": \t\t(\t) \t\n\nCity:\n\nAddress:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.a.state",
+      "region": "body",
+      "context": "\t\n\nCity:\n\nAddress:\n\nState:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.a.post",
+      "region": "body",
+      "context": "y:\n\nAddress:\n\nState:\n\nZip:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.a.email",
+      "region": "body",
+      "context": "ess:\n\nState:\n\nZip:\nEmail: "
+    },
+    {
+      "tier": "NeedsReview",
+      "tag_key": "e.city",
+      "region": "body",
+      "context": "E NONE AND INITIAL.\n\nCity:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.dob",
+      "region": "body",
+      "context": "ACILITY.\n(\t) \t\n\n\n\n\n\nD.O.B."
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.dlnum",
+      "region": "body",
+      "context": "\nD.O.B.\n\nDriver’s License:"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.init",
+      "region": "body",
+      "context": "ing his/her initials here,"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.init",
+      "region": "body",
+      "context": "ing his/her initials here,"
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.init",
+      "region": "cell:1",
+      "context": ""
+    },
+    {
+      "tier": "Auto",
+      "tag_key": "e.init",
+      "region": "cell:5",
+      "context": ""
+    }
+  ],
+  "applied_tags": [
+    "{{m.indate}}",
+    "{{u.num}}",
+    "{{u.dim}}",
+    "{{e.keycodes}}",
+    "{{m.effrate}}",
+    "{{e.fname}}",
+    "{{e.lname}}",
+    "{{e.phone}}",
+    "{{e.post}}",
+    "{{e.state}}",
+    "{{e.city}}",
+    "{{e.address}}",
+    "{{e.email}}",
+    "{{e.phone}}",
+    "{{e.a.phone}}",
+    "{{e.a.name}}",
+    "{{e.a.city}}",
+    "{{e.a.address}}",
+    "{{e.a.state}}",
+    "{{e.a.post}}",
+    "{{e.a.email}}",
+    "{{e.dob}}",
+    "{{e.dlnum}}",
+    "{{e.init}}",
+    "{{e.init}}",
+    "{{e.init}}",
+    "{{e.init}}"
+  ]
+}

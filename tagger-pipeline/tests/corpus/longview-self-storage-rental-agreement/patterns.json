@@ -1,0 +1,395 @@
+[
+  {
+    "tag_key": "d.now",
+    "label": "DATE",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.address",
+    "label": "ADDRESS:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "ALTERNATE NAME",
+      "within_chars": 120
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.address",
+    "label": "Address:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "MAY BE SENT.",
+      "within_chars": 100
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.city",
+    "label": "City:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "MAY BE SENT.",
+      "within_chars": 100
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.email",
+    "label": "EMAIL ADDRESS",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "ALTERNATE NAME",
+      "within_chars": 220
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.email",
+    "label": "Email:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "ANOTHER PERSON",
+      "within_chars": 700
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.name",
+    "label": "ALTERNATE NAME",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.name",
+    "label": "Name:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "ANOTHER PERSON",
+      "within_chars": 350
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.phone",
+    "label": "PHONE",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "ALTERNATE NAME",
+      "within_chars": 200
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.phone",
+    "label": "Phone:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "MAY BE SENT.",
+      "within_chars": 100
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.post",
+    "label": "Zip:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "MAY BE SENT.",
+      "within_chars": 100
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.a.state",
+    "label": "State:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "MAY BE SENT.",
+      "within_chars": 100
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.address",
+    "label": "ADDRESS:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "OCCUPANT NAME",
+      "within_chars": 120
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.city",
+    "label": "CITY",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.city",
+    "label": "City:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "Occupant Name - First:",
+      "within_chars": 150
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.dlnum",
+    "label": "Driver’s License:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.dob",
+    "label": "D.O.B.",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.email",
+    "label": "EMAIL ADDRESS",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "CONTACT PHONE",
+      "within_chars": 60
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.email",
+    "label": "Email:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "Occupant Name - First:",
+      "within_chars": 150
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.fname",
+    "label": "Occupant Name - First:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.init",
+    "label": "Customer's Initials",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.init",
+    "label": "initials here",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": true
+  },
+  {
+    "tag_key": "e.keycodes",
+    "label": "Access Code",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.lname",
+    "label": "Last:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "Occupant Name - First:",
+      "within_chars": 150
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.name",
+    "label": "OCCUPANT NAME",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.name",
+    "label": "SECOND PARTY",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.name",
+    "label": "TO:",
+    "position": "After",
+    "max_gap_chars": 30,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.phone",
+    "label": "CONTACT PHONE",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.phone",
+    "label": "Cell:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "Occupant Name - First:",
+      "within_chars": 300
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.phone",
+    "label": "_Phone:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "Occupant Name - First:",
+      "within_chars": 150
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.post",
+    "label": "ZIP CODE",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.post",
+    "label": "Zip:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "Occupant Name - First:",
+      "within_chars": 150
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "e.state",
+    "label": "ST",
+    "position": "After",
+    "max_gap_chars": 3,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "e.state",
+    "label": "State:",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": {
+      "text": "Occupant Name - First:",
+      "within_chars": 150
+    },
+    "repeats": false
+  },
+  {
+    "tag_key": "f.name",
+    "label": "FROM:",
+    "position": "After",
+    "max_gap_chars": 30,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "m.effrate",
+    "label": "Rental Rate Per Month",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "m.indate",
+    "label": "DATE OF LEASE",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "m.secdep",
+    "label": "SECURITY DEPOSIT",
+    "position": "After",
+    "max_gap_chars": 10,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "u.dim",
+    "label": "SIZE",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "u.num",
+    "label": "LVSS",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "u.num",
+    "label": "UNIT #",
+    "position": "After",
+    "max_gap_chars": 5,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  },
+  {
+    "tag_key": "u.num",
+    "label": "Unit",
+    "position": "After",
+    "max_gap_chars": 10,
+    "requires_preceding_anchor": null,
+    "repeats": false
+  }
+]
