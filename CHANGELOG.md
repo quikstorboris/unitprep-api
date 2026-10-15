@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.126] - 2026-10-15
+
+Fixes Process Street 429s during "Sync Now". No migration.
+
+### Fixed
+- Process Street calls are now paced process-wide (40 per 10 s), because PS enforces a short-window limit on top of the hourly one and an unpaced sync tripped it within ~30 s. On a 429 the call waits until the reset time in PS's body (PS sends no `Retry-After`), up to 90 s, instead of retrying after under a second; 5xx retries back off 1 s, 2 s, 3 s. Adds `RetryPolicy::ONCE`.
+
 ## [1.9.125] - 2026-10-14
 
 Tests and tooling only; no behavior change, no migration.

@@ -1,14 +1,46 @@
+use std::sync::OnceLock;
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::config::ProcessStreetConfig;
+use crate::clickup::rate_limit::RateLimiter;
 use crate::integrations::http::{
     client_builder, send_with_retry, truncate_for_log, RetryPolicy, MAX_LOGGED_BODY_BYTES,
 };
 
 const BASE_URL: &str = "https://public-api.process.st/api/v1.1";
+
+/// Total tries per request, counting the first.
+const MAX_ATTEMPTS: u32 = 4;
+
+/// Longest wait for PS's rate limit to reset that a request will sit
+/// through; a reset further out (the hourly cap) fails the call instead.
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(90);
+
+/// PS rate-limits in short windows as well as hourly: a sync that fetched
+/// every run as fast as the network allowed hit 429s within half a minute
+/// (2026-10-15). 40 calls per 10 s is well under that and still fast
+/// enough -- a 700-run sync takes about three minutes.
+fn request_pacer() -> &'static RateLimiter {
+    static PACER: OnceLock<RateLimiter> = OnceLock::new();
+    PACER.get_or_init(|| RateLimiter::new(40, Duration::from_secs(10)))
+}
+
+/// How long to wait after a 429, read from PS's body ("Please try again
+/// at Thu, 15 Oct 2026 18:03:47 GMT" -- PS sends no `Retry-After`
+/// header). `None` when the reset is unreadable or beyond
+/// [`MAX_RATE_LIMIT_WAIT`], so the caller gives up.
+fn rate_limit_wait(body: &str, now: DateTime<Utc>) -> Option<Duration> {
+    let (_, tail) = body.split_once("try again at ")?;
+    let stamp = tail.split('"').next()?.trim().trim_end_matches('.');
+    let reset = DateTime::parse_from_rfc2822(stamp).ok()?.with_timezone(&Utc);
+    let wait = (reset - now).to_std().unwrap_or_default() + Duration::from_secs(1);
+    (wait <= MAX_RATE_LIMIT_WAIT).then_some(wait)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProcessStreetError {
@@ -145,13 +177,40 @@ impl ProcessStreetClient {
 
     async fn get_page(&self, url: &str) -> Result<Value, ProcessStreetError> {
         // Every call here is a GET, so repeating one is always safe.
-        let response = send_with_retry(RetryPolicy::STANDARD, || {
-            self.http.get(url).header("X-API-KEY", &self.config.api_key)
-        })
-        .await?;
+        let mut attempt = 0u32;
+        let (status, body) = loop {
+            attempt += 1;
+            // Paced across the whole process: a sync's concurrent fetches,
+            // a search and a re-sync all draw from this one budget.
+            request_pacer().acquire().await;
 
-        let status = response.status();
-        let body = response.text().await?;
+            // One try per call: 429s and 5xx are retried below, where the
+            // retry can be spaced to PS's own reset time.
+            let response = send_with_retry(RetryPolicy::ONCE, || {
+                self.http.get(url).header("X-API-KEY", &self.config.api_key)
+            })
+            .await?;
+            let status = response.status();
+            let body = response.text().await?;
+
+            if attempt < MAX_ATTEMPTS {
+                if status.as_u16() == 429 {
+                    if let Some(wait) = rate_limit_wait(&body, Utc::now()) {
+                        tracing::warn!(
+                            wait_ms = wait.as_millis() as u64,
+                            attempt,
+                            "Process Street rate limit reached, waiting for its reset"
+                        );
+                        tokio::time::sleep(wait).await;
+                        continue;
+                    }
+                } else if status.is_server_error() {
+                    tokio::time::sleep(Duration::from_secs(u64::from(attempt))).await;
+                    continue;
+                }
+            }
+            break (status, body);
+        };
 
         if !status.is_success() {
             // The full body still rides in the returned error; only the
@@ -325,6 +384,27 @@ impl ProcessStreetClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn at(rfc3339: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(rfc3339).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn reads_the_reset_time_from_a_429_body() {
+        let body = r#"{"error":"Response rate limit was reached. Please try again at Thu, 15 Oct 2026 18:03:47 GMT"}"#;
+        assert_eq!(
+            rate_limit_wait(body, at("2026-10-15T18:03:19Z")),
+            Some(Duration::from_secs(29))
+        );
+    }
+
+    #[test]
+    fn gives_up_on_a_distant_or_unreadable_reset() {
+        let now = at("2026-10-15T18:03:19Z");
+        let far = r#"{"error":"try again at Thu, 15 Oct 2026 19:03:47 GMT"}"#;
+        assert_eq!(rate_limit_wait(far, now), None);
+        assert_eq!(rate_limit_wait("nonsense", now), None);
+    }
 
     // Real (trimmed) captures from this session's exploration against
     // Prairie Enterprises' Highway 20 Intake/Progress run -- not

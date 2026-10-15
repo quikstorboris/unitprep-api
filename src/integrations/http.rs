@@ -60,6 +60,13 @@ pub struct RetryPolicy {
 }
 
 impl RetryPolicy {
+    /// A single try. For callers that run their own retry loop.
+    pub const ONCE: Self = Self {
+        max_attempts: 1,
+        base_delay: Duration::ZERO,
+        max_delay: Duration::ZERO,
+    };
+
     /// Three tries with 0.5 s / 1 s backoff. For ordinary reads.
     pub const STANDARD: Self = Self {
         max_attempts: 3,
