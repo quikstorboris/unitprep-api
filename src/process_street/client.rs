@@ -67,7 +67,9 @@ fn log_call(url: &str, status: u16, headers: &reqwest::header::HeaderMap) {
 fn rate_limit_wait(body: &str, now: DateTime<Utc>) -> Option<Duration> {
     let (_, tail) = body.split_once("try again at ")?;
     let stamp = tail.split('"').next()?.trim().trim_end_matches('.');
-    let reset = DateTime::parse_from_rfc2822(stamp).ok()?.with_timezone(&Utc);
+    let reset = DateTime::parse_from_rfc2822(stamp)
+        .ok()?
+        .with_timezone(&Utc);
     let wait = (reset - now).to_std().unwrap_or_default() + Duration::from_secs(1);
     (wait <= MAX_RATE_LIMIT_WAIT).then_some(wait)
 }
@@ -417,7 +419,9 @@ mod tests {
     use super::*;
 
     fn at(rfc3339: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(rfc3339).unwrap().with_timezone(&Utc)
+        DateTime::parse_from_rfc3339(rfc3339)
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     #[test]
