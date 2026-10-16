@@ -1,0 +1,39 @@
+// Ships the API's rotated JSON log files (written when LOG_DIR is set; see
+// src/startup/logging.rs) to Grafana Cloud Loki. Run via the "logs"
+// compose profile -- see docker-compose.yml.
+
+local.file_match "api_logs" {
+  path_targets = [{
+    "__path__" = "/logs/unitprep-api.*.log",
+    "job"      = "unitprep-api",
+    "env"      = "dev",
+  }]
+}
+
+loki.source.file "api_logs" {
+  targets    = local.file_match.api_logs.targets
+  forward_to = [loki.process.api_logs.receiver]
+}
+
+// Promote only `level` to a label (a handful of values). Everything else
+// stays in the JSON line and is queried with `| json` -- request_id and
+// the like must never become labels (unbounded cardinality).
+loki.process "api_logs" {
+  stage.json {
+    expressions = { level = "level" }
+  }
+  stage.labels {
+    values = { level = "" }
+  }
+  forward_to = [loki.write.grafana.receiver]
+}
+
+loki.write "grafana" {
+  endpoint {
+    url = "https://logs-prod-021.grafana.net/loki/api/v1/push"
+    basic_auth {
+      username = "1836339"
+      password = sys.env("GRAFANA_API_KEY")
+    }
+  }
+}

@@ -49,3 +49,6 @@ REFACTOR.md
 # Claude Code local session config -- machine-local permissions/MCP
 # toggles, not shared project config.
 .claude/settings.local.json
+
+# Local rotated JSON server logs (LOG_DIR) -- see src/startup/logging.rs
+/logs/

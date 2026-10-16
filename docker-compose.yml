@@ -161,6 +161,13 @@ services:
       # password here is set by scripts/bootstrap_test_db.sh, which
       # must run first against any freshly-recreated test-db.
       TEST_DATABASE_URL: postgres://app_service:app_service@test-db:5432/unitprep_test
+      # Server logs as daily-rotated JSON files, last 7 kept (see
+      # src/startup/logging.rs). A file rather than Docker's own log
+      # capture because the server is started with `docker compose exec
+      # api-dev cargo run`, an exec process Docker doesn't capture.
+      # /app is the bind-mounted checkout, so the files appear in ./logs
+      # on the host (gitignored) -- where the alloy service below reads them.
+      LOG_DIR: "/app/logs"
     depends_on:
       test-db:
         condition: service_healthy
@@ -170,7 +177,32 @@ services:
     # A HEALTHCHECK hitting /health would just be wrong most of the
     # time under normal operation, not merely unused.
 
+  # Ships ./logs to Grafana Cloud Loki (config: dev-tools/alloy/config.alloy).
+  # Its own "logs" profile, so a plain `--profile dev` is unchanged.
+  # Only GRAFANA_API_KEY is passed in -- via `--env-file`, interpolated
+  # below -- never `env_file:`, which would hand this container every
+  # secret in .env.local (including the Neon URLs this file must never
+  # touch).
+  # Run: docker compose --env-file .env.local --profile dev --profile logs up -d
+  alloy:
+    image: grafana/alloy:v1.10.0
+    profiles: ["logs"]
+    command:
+      - run
+      - --storage.path=/var/lib/alloy/data
+      - --server.http.listen-addr=127.0.0.1:12345
+      - /etc/alloy/config.alloy
+    environment:
+      GRAFANA_API_KEY: ${GRAFANA_API_KEY:?run with --env-file .env.local}
+    volumes:
+      - ./dev-tools/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - ./logs:/logs:ro
+      # Remembers how far each file was read, so a restart doesn't
+      # re-send everything.
+      - alloy-data:/var/lib/alloy/data
+
 volumes:
+  alloy-data:
   cargo-registry:
   cargo-git:
   cargo-rustup:

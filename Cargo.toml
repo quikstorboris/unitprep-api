@@ -126,7 +126,10 @@ tower-http = { version = "0.6", features = ["cors", "catch-panic", "trace", "req
 
 # Logging
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# Daily-rotated JSON log files (see startup::logging), pruned to the last
+# 7 files by the appender's own max_log_files -- no cron/cleanup job.
+tracing-appender = "0.2"
 
 # Session IDs
 uuid = { workspace = true }
