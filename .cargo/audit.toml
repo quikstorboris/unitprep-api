@@ -13,4 +13,21 @@ ignore = [
     # compiled into the binary. Revisit if sqlx's "mysql" feature is ever
     # enabled, or if a fixed rsa release ships.
     "RUSTSEC-2023-0071",
+
+    # `zip` extraction advisories (published 2026-10-09/10; fixed in zip
+    # 9.0.0): 0367 (SUID/SGID bits kept on extract), 0368 and 0369
+    # (`ZipArchive::extract` / `ZipStreamReader::extract` follow symlinks
+    # out of the destination). All three are in the *extract-to-disk* API.
+    # This workspace never calls `extract`, `extract_file` or
+    # `ZipStreamReader` (verified 2026-10-16 with a grep over every crate):
+    # uploaded .docx/.xlsx files are read entry by entry in memory
+    # (`ZipArchive::new(Cursor)` + `by_name`/`by_index`) and ZIPs are only
+    # ever WRITTEN (`ZipWriter`), never unpacked onto a filesystem. The
+    # vulnerable path is therefore not reachable. zip 2.4.2 is our direct
+    # dependency; 7.2.0 comes in transitively. REVIEW by 2026-11-16: bump
+    # the direct `zip = "2"` to 9 (API changes expected in docx-surgeon's
+    # FileOptions use) and drop whatever transitive copy is then fixed.
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]

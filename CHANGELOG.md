@@ -20,6 +20,9 @@ Second pass of the efficiency refactor, finished. No behavior change and no migr
 - **The large ClickUp modules are split into focused files**, code moved verbatim, every caller and the router untouched: `clickup_connection/` (status, token, credentials, tests), `clickup_run_update/` (prepare, link, candidates, post), `clickup_copy/bulk/` (context, tasks, pairs, comment, copy, runner), and the 1,400-line `clickup_copy_db_tests.rs` into a mock, a fixture and five topic test files. Test names are unchanged (1,617 listed tests before and after, 161 ignored, 117 `_db_`), so the CI allowlist and `_db_` filter still match.
 - RUNBOOK: "Database pool and load" (the 1/4/8/16-operator load table, remote-database sizing rules) and "Stored tool runs (retention)" (about 1.9 MB per dedup run, the options, the decision point).
 
+### Security
+- `cargo audit` started failing on three `zip` extraction advisories (RUSTSEC-2026-0367, -0368, -0369; fixed in zip 9). They are in the extract-to-disk API, which this workspace never calls (uploaded .docx/.xlsx are read entry by entry in memory, ZIPs are only written), so they are accepted in `.cargo/audit.toml` with the reasoning and a review date of 2026-11-16: bump the direct `zip = "2"` to 9 and drop the transitive 7.2.0 copy once fixed.
+
 ### Decisions (no code change)
 - ClickUp fan-outs keep their own bounds (`WRITE_CONCURRENCY`, `CHUNK_SIZE = 4`, `LIST_READ_CONCURRENCY`, the 2-then-N page batch, the per-user rate limiter); moving them onto `join_all_bounded` (6) would change throughput for no gain. The two remaining `join_all`s are post-commit audit-log writes.
 - Tagger parsed-document cache: not built (parse is 0.5-9 ms and already off the async workers; a cache would hold a document several times the size of its bytes per session and could not be persisted).
