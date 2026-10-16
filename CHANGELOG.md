@@ -6,9 +6,12 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-Server logging and observability; one connection-pool fix. No migration. Not yet released (version still 1.9.128).
+## [1.9.129] - 2026-10-16
+
+Company page editing, server logging and observability, and one connection-pool fix. No migration.
 
 ### Added
+- Hand edits on a client company: `PUT /clients/{id}/info` saves the 14 editable company fields and `PUT /clients/{id}/implementation-manager` assigns or clears the Implementation Manager (both need `client_ops.perform`); `GET /clients/staff` lists active staff for the picker (any signed-in user). Only fields that changed are written, each is added to `manually_edited_fields` so the next Process Street sync leaves it alone, and the changes are audit-logged (`client_info_updated`, `client_implementation_manager_changed`). A manager chosen by hand sticks; clearing it hands it back to sync.
 - Stored server logs: setting `LOG_DIR` writes a second, JSON copy of every log line to daily-rotated files (`unitprep-api.YYYY-MM-DD.log`, last 7 kept); `LOG_FORMAT=json` also makes stdout JSON. The `api-dev` container sets `LOG_DIR=/app/logs`, and a new `alloy` compose service (profile `logs`, config in `dev-tools/alloy/`) ships those files to Grafana Cloud Loki. New dependency: `tracing-appender`.
 - ClickUp calls are now logged (they were silent): one INFO line per call (endpoint without query, status, latency), WARN on rate-limiter waits and 429s, ERROR with a bounded body on failures, and INFO/WARN/ERROR for copy-job start, finish and interruption. The token is never logged.
 - Grafana dashboard "UnitPrep API Logs" as importable JSON (`dev-tools/grafana/`), covering errors, panics, per-route latency, database connection errors, Process Street, Dropbox, ClickUp and slow SQL.
