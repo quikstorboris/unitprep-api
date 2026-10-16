@@ -41,6 +41,39 @@ Claude Code asks you to approve a new project MCP server the first time a sessio
 
 **The files themselves**: `./logs/*.log` (JSON lines), readable with `jq` or `grep`; the last 7 days only.
 
+## Alert emails (Grafana alerting, contact point `email-boris`)
+
+Alert rules live in Grafana, not in this repo; their definitions are recorded here so they can be recreated (for
+example for a prod stack). Both evaluate every minute in folder `GrafanaCloud`, group `unitprep-api`, no pending period,
+no-data = OK, notify `email-boris`.
+
+**"UnitPrep API errors"**: fires once per distinct error, so the email says *which* one. Query (instant, 5 m):
+
+```
+sum by (target, fields_message, span_method, span_path, err) (count_over_time({job="unitprep-api", level="ERROR"} | json | label_format err=`{{ trunc 140 .fields_error }}` [5m]))
+```
+
+Condition: above 0. Annotations: `summary` = `{{ $labels.fields_message }} on {{ $labels.span_method }} {{ $labels.span_path }}`;
+`description` = occurrence count, module (`$labels.target`), the error text (`$labels.err`) and a note that in the email's
+Values section **A is the number of ERROR lines in the window and C=1 means firing**; `runbook_url` = the dashboard;
+dashboard + panel link = "UnitPrep API Logs" / "Errors and warnings" (`__dashboardUid__`, `__panelId__`=6).
+
+**"UnitPrep API panic"**: same shape, one instance per distinct panic. Query (instant, 5 m):
+
+```
+sum by (target, panic_info, span_method, span_path) (count_over_time({job="unitprep-api", level="ERROR"} |= "panicked" | json | label_format panic_info=`{{ trunc 200 .fields_panic }}` [5m]))
+```
+
+Condition above 0; `summary` = `PANIC: {{ $labels.panic_info }}`; `description` = count, module, request, a one-line explanation of
+what a panic is, and what A and C mean; same runbook and dashboard-panel link. The `panic` field is the Rust panic message
+plus its source location (the panic hook in `src/startup/logging.rs` logs `panic = %panic_info`). Not yet seen firing: there
+have been no panics; the query returns no data over 24 h and the label template was checked on real error lines.
+
+The contact point's email subject is the template
+`[UnitPrep {{ .Status }}] {{ .CommonLabels.alertname }}{{ with .CommonAnnotations.summary }}: {{ . }}{{ end }}`.
+Grafana's alert email is a fixed layout: the content (labels, annotations, values) can be shaped as above, but its
+HTML and logo cannot be replaced from the contact point.
+
 ## One-time token setup (two tokens, both read-only, both go in `.env.local`)
 
 The write token Alloy uses (`GRAFANA_API_KEY`) cannot read. Create these yourself in the Grafana portal and paste each
