@@ -102,3 +102,12 @@ Upgrade by downloading the newer release asset the same way and replacing the fi
 Nothing here depends on where the server runs: the Loki address, user and tokens are the same. Only the *shipping*
 side changes (see the vault note "UnitPrep Fly.io and Deployment Notes"). Prod logs should carry `env=prod`; add
 `env="prod"` to the queries above.
+
+## Sentry (error reporting)
+
+Errors and panics also go to Sentry (org `quikstor-wf`, project `orchestrator`) when `SENTRY_DSN` is set in `.env.local`
+(the DSN is a public ingest key, not a secret). Code: `src/startup/sentry.rs`; the tracing hookup is in
+`src/startup/logging.rs` and the per-request layers are in `src/api/router/mod.rs`. Set `SENTRY_ENVIRONMENT=production`
+on the prod host. Check the wiring with
+`SENTRY_DSN=... cargo test sends_a_test_event -- --ignored`, then read the issue with `sentry issue list quikstor-wf/orchestrator`.
+Never log a tenant value in a `tracing::error!` field: field text is sent to Sentry unredacted.

@@ -9,6 +9,7 @@ use axum::{
     Router,
 };
 
+use sentry::integrations::tower::{NewSentryLayer, SentryHttpLayer};
 use tower_governor::GovernorError;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -180,6 +181,13 @@ fn with_response_layers(router: Router) -> Router {
                     },
                 ),
         )
+        // Sentry request context (method, URL, headers; the scrubber in
+        // startup::sentry strips body/cookies/query). The hub layer is
+        // the outer of the two and gives each request its own Sentry
+        // scope, so nothing tagged on one request leaks onto a
+        // concurrent one. Inert without a Sentry client.
+        .layer(SentryHttpLayer::new())
+        .layer(NewSentryLayer::<Request>::new_from_top())
         // Outermost layer overall -- assigns the id before anything else
         // (cors, body-limit, catch-panic, every route) sees the request,
         // so every request gets one regardless of how it's ultimately

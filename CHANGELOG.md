@@ -6,6 +6,11 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.130] - 2026-10-16
+
+### Added
+- Sentry error reporting (project `orchestrator` in org `quikstor-wf`), off unless `SENTRY_DSN` is set. Panics (with stack traces) and every `tracing::error!` become issues, WARN/INFO lines become breadcrumbs, and each request gets its own Sentry scope with method/URL/headers. Releases are tagged `unitprep-api@<version>`; `SENTRY_ENVIRONMENT` (default `development`) and `SENTRY_TRACES_SAMPLE_RATE` (default off) are optional. `send_default_pii` is off and the scrubber in `src/startup/sentry.rs` strips request bodies, cookies, query strings and credential headers. New dependency: `sentry` (rustls transport).
+
 ## [1.9.129] - 2026-10-16
 
 Company page editing, server logging and observability, and one connection-pool fix. No migration.

@@ -44,7 +44,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 [package]
 name = "unitprep"
-version = "1.9.129"
+version = "1.9.130"
 edition.workspace = true
 
 authors = ["Boris Maksimov <bmaksimov@quikstor.com>"]
@@ -130,6 +130,23 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 # Daily-rotated JSON log files (see startup::logging), pruned to the last
 # 7 files by the appender's own max_log_files -- no cron/cleanup job.
 tracing-appender = "0.2"
+
+# Error reporting to Sentry (see src/startup/sentry.rs) -- inert unless
+# SENTRY_DSN is set. Default features are replaced so the HTTP transport
+# uses rustls like sqlx does, not native-tls; "tracing" turns
+# `tracing::error!` into Sentry events, "tower"/"tower-http" attach the
+# per-request context (see api::router).
+sentry = { version = "0.49", default-features = false, features = [
+    "backtrace",
+    "contexts",
+    "debug-images",
+    "panic",
+    "reqwest",
+    "rustls",
+    "tracing",
+    "tower",
+    "tower-http",
+] }
 
 # Session IDs
 uuid = { workspace = true }

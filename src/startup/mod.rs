@@ -6,6 +6,7 @@
 mod cli;
 mod config;
 mod logging;
+mod sentry;
 mod serve;
 mod state;
 mod tasks;
@@ -26,6 +27,11 @@ pub(crate) async fn run() {
     if let cli::Dispatch::Handled = cli::dispatch().await {
         return;
     }
+
+    // Before logging::init so the panic hook it installs wraps the
+    // SDK's. Held for the life of the process: dropping it flushes
+    // queued events.
+    let _sentry = sentry::init();
 
     logging::init();
 

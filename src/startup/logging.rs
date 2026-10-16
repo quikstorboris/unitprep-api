@@ -3,6 +3,7 @@
 
 use std::sync::OnceLock;
 
+use sentry::integrations::tracing as sentry_tracing;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -81,6 +82,9 @@ pub(super) fn init() {
     tracing_subscriber::registry()
         .with(stdout_layer.with_filter(filter()))
         .with(file_layer.map(|layer| layer.with_filter(filter())))
+        // ERROR becomes a Sentry event, WARN/INFO a breadcrumb; a no-op
+        // when no Sentry client is bound (SENTRY_DSN unset).
+        .with(sentry_tracing::layer().with_filter(filter()))
         .init();
 
     // A panic (the db_pool/dropbox_client/auth_backend/cookie-security
