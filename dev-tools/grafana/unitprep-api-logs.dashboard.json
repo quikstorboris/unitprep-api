@@ -6,14 +6,39 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 3,
+  "version": 4,
   "refresh": "1m",
   "time": {
     "from": "now-6h",
     "to": "now"
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "env",
+        "label": "Environment",
+        "type": "query",
+        "datasource": {
+          "type": "loki",
+          "uid": "grafanacloud-logs"
+        },
+        "query": {
+          "label": "env",
+          "stream": "{job=\"unitprep-api\"}",
+          "type": 1
+        },
+        "definition": "label_values({job=\"unitprep-api\"}, env)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "sort": 1
+      }
+    ]
   },
   "panels": [
     {
@@ -34,7 +59,7 @@
         {
           "refId": "A",
           "queryType": "instant",
-          "expr": "sum(count_over_time({job=\"unitprep-api\", level=\"ERROR\"}[$__range]))"
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\", level=\"ERROR\"}[$__range]))"
         }
       ],
       "fieldConfig": {
@@ -84,7 +109,7 @@
         {
           "refId": "A",
           "queryType": "instant",
-          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"panicked\" [$__range]))"
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"panicked\" [$__range]))"
         }
       ],
       "fieldConfig": {
@@ -133,7 +158,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (level) (count_over_time({job=\"unitprep-api\"}[$__interval]))",
+          "expr": "sum by (level) (count_over_time({job=\"unitprep-api\", env=~\"$env\"}[$__interval]))",
           "legendFormat": "{{level}}"
         }
       ],
@@ -166,7 +191,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (fields_status) (count_over_time({job=\"unitprep-api\"} |= \"request completed\" | json [$__interval]))",
+          "expr": "sum by (fields_status) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json [$__interval]))",
           "legendFormat": "{{fields_status}}"
         }
       ],
@@ -199,7 +224,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(max_over_time({job=\"unitprep-api\"} |= \"request completed\" | json | unwrap fields_latency_ms [$__interval]))",
+          "expr": "max(max_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | unwrap fields_latency_ms [$__interval]))",
           "legendFormat": "max latency"
         }
       ],
@@ -227,7 +252,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(10, avg by (route) (avg_over_time({job=\"unitprep-api\"} |= \"request completed\" | json | label_format route=`{{ .span_method }} {{ regexReplaceAll \"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{2,}\" .span_path \":id\" }}` | unwrap fields_latency_ms [$__range])))",
+          "expr": "topk(10, avg by (route) (avg_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | label_format route=`{{ .span_method }} {{ regexReplaceAll \"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{2,}\" .span_path \":id\" }}` | unwrap fields_latency_ms [$__range])))",
           "queryType": "instant"
         }
       ],
@@ -255,7 +280,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "topk(8, quantile_over_time(0.95, {job=\"unitprep-api\"} |= \"request completed\" | json | label_format route=`{{ .span_method }} {{ regexReplaceAll \"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{2,}\" .span_path \":id\" }}` | unwrap fields_latency_ms [$__interval]) by (route))",
+          "expr": "topk(8, quantile_over_time(0.95, {job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | label_format route=`{{ .span_method }} {{ regexReplaceAll \"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{2,}\" .span_path \":id\" }}` | unwrap fields_latency_ms [$__interval]) by (route))",
           "legendFormat": "{{route}}"
         }
       ],
@@ -283,7 +308,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (route) (count_over_time({job=\"unitprep-api\"} |= \"request completed\" | json | fields_status >= 500 | label_format route=`{{ .span_method }} {{ regexReplaceAll \"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{2,}\" .span_path \":id\" }}` [$__interval]))",
+          "expr": "sum by (route) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | fields_status >= 500 | label_format route=`{{ .span_method }} {{ regexReplaceAll \"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9]{2,}\" .span_path \":id\" }}` [$__interval]))",
           "legendFormat": "{{route}}"
         }
       ],
@@ -316,7 +341,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"error communicating with database\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"error communicating with database\" [$__interval]))",
           "legendFormat": "DB connection errors"
         }
       ],
@@ -349,7 +374,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (fields_status) (count_over_time({job=\"unitprep-api\"} |= \"Process Street call\" | json [$__interval]))",
+          "expr": "sum by (fields_status) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"Process Street call\" | json [$__interval]))",
           "legendFormat": "{{fields_status}}"
         }
       ],
@@ -382,12 +407,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"Process Street rate limit reached\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"Process Street rate limit reached\" [$__interval]))",
           "legendFormat": "429 waits"
         },
         {
           "refId": "B",
-          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"Process Street request failed\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"Process Street request failed\" [$__interval]))",
           "legendFormat": "failed requests"
         }
       ],
@@ -420,12 +445,12 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(count_over_time({job=\"unitprep-api\"} |~ \"dropbox (download|upload) succeeded\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |~ \"dropbox (download|upload) succeeded\" [$__interval]))",
           "legendFormat": "succeeded"
         },
         {
           "refId": "B",
-          "expr": "sum(count_over_time({job=\"unitprep-api\", level=\"ERROR\"} | json | target=~\"unitprep::dropbox.*\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\", level=\"ERROR\"} | json | target=~\"unitprep::dropbox.*\" [$__interval]))",
           "legendFormat": "errors"
         }
       ],
@@ -458,7 +483,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (target) (count_over_time({job=\"unitprep-api\", level=~\"ERROR|WARN\"} | json [$__interval]))",
+          "expr": "sum by (target) (count_over_time({job=\"unitprep-api\", env=~\"$env\", level=~\"ERROR|WARN\"} | json [$__interval]))",
           "legendFormat": "{{target}}"
         }
       ],
@@ -491,7 +516,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{job=\"unitprep-api\"} | json | target=~\"sqlx.*\""
+          "expr": "{job=\"unitprep-api\", env=~\"$env\"} | json | target=~\"sqlx.*\""
         }
       ],
       "options": {
@@ -518,7 +543,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (fields_status) (count_over_time({job=\"unitprep-api\"} |= \"ClickUp call\" | json [$__interval]))",
+          "expr": "sum by (fields_status) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"ClickUp call\" | json [$__interval]))",
           "legendFormat": "{{fields_status}}"
         }
       ],
@@ -551,27 +576,27 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"ClickUp rate limiter full\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"ClickUp rate limiter full\" [$__interval]))",
           "legendFormat": "limiter waits"
         },
         {
           "refId": "B",
-          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"ClickUp rate limit hit (429)\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"ClickUp rate limit hit (429)\" [$__interval]))",
           "legendFormat": "429s"
         },
         {
           "refId": "C",
-          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"ClickUp request failed\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"ClickUp request failed\" [$__interval]))",
           "legendFormat": "failed requests"
         },
         {
           "refId": "D",
-          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"ClickUp Copy job ended unsuccessfully\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"ClickUp Copy job ended unsuccessfully\" [$__interval]))",
           "legendFormat": "copy jobs failed"
         },
         {
           "refId": "E",
-          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"ClickUp Copy job was interrupted\" [$__interval]))",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"ClickUp Copy job was interrupted\" [$__interval]))",
           "legendFormat": "copy jobs interrupted"
         }
       ],
@@ -604,7 +629,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "{job=\"unitprep-api\", level=~\"ERROR|WARN\"} | json"
+          "expr": "{job=\"unitprep-api\", env=~\"$env\", level=~\"ERROR|WARN\"} | json"
         }
       ],
       "options": {
@@ -612,6 +637,410 @@
         "wrapLogMessage": true,
         "sortOrder": "Descending",
         "enableLogDetails": true
+      }
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "Tools and people (IDs only, no names)",
+      "gridPos": {
+        "x": 0,
+        "y": 59,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 31,
+      "type": "stat",
+      "title": "Requests (selected range)",
+      "gridPos": {
+        "x": 0,
+        "y": 60,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "sum(count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json [$__range]))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 32,
+      "type": "stat",
+      "title": "Active users",
+      "gridPos": {
+        "x": 6,
+        "y": 60,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "count(sum by (span_user_id) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | span_user_id != \"\" [$__range])))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 33,
+      "type": "stat",
+      "title": "Clients touched",
+      "gridPos": {
+        "x": 12,
+        "y": 60,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "count(sum by (span_client_id) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | span_client_id != \"\" [$__range])))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 34,
+      "type": "stat",
+      "title": "Facilities touched",
+      "gridPos": {
+        "x": 18,
+        "y": 60,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "count(sum by (span_facility_id) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | span_facility_id != \"\" [$__range])))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0"
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "Requests by tool area",
+      "gridPos": {
+        "x": 0,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (area) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | label_format area=`{{ regexReplaceAll \"^/([a-z-]+).*\" .span_path \"$1\" }}` [$__interval]))",
+          "legendFormat": "{{area}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 40
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 36,
+      "type": "timeseries",
+      "title": "p95 latency by tool area (ms)",
+      "gridPos": {
+        "x": 12,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "quantile_over_time(0.95, {job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | label_format area=`{{ regexReplaceAll \"^/([a-z-]+).*\" .span_path \"$1\" }}` | unwrap fields_latency_ms [$__interval]) by (area)",
+          "legendFormat": "{{area}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 37,
+      "type": "bargauge",
+      "title": "Busiest tool areas",
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "topk(8, sum by (area) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | label_format area=`{{ regexReplaceAll \"^/([a-z-]+).*\" .span_path \"$1\" }}` [$__range])))",
+          "legendFormat": "{{area}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "color": {
+            "mode": "continuous-BlPu"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 38,
+      "type": "bargauge",
+      "title": "Most active clients (client_id)",
+      "gridPos": {
+        "x": 8,
+        "y": 72,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "topk(10, sum by (span_client_id) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | span_client_id != \"\" [$__range])))",
+          "legendFormat": "{{span_client_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "color": {
+            "mode": "continuous-BlPu"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 39,
+      "type": "bargauge",
+      "title": "Most active users (user_id)",
+      "gridPos": {
+        "x": 16,
+        "y": 72,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "instant",
+          "expr": "topk(10, sum by (span_user_id) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | span_user_id != \"\" [$__range])))",
+          "legendFormat": "{{span_user_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "noValue": "0",
+          "color": {
+            "mode": "continuous-BlPu"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Requests by role",
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (span_roles) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | span_roles != \"\" [$__interval]))",
+          "legendFormat": "{{span_roles}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 40
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "Server errors (5xx) by tool area",
+      "gridPos": {
+        "x": 12,
+        "y": 80,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (area) (count_over_time({job=\"unitprep-api\", env=~\"$env\"} |= \"request completed\" | json | fields_status >= 500 | label_format area=`{{ regexReplaceAll \"^/([a-z-]+).*\" .span_path \"$1\" }}` [$__interval]))",
+          "legendFormat": "{{area}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
       }
     }
   ]

@@ -86,7 +86,12 @@ fn scrub(mut event: Event<'static>) -> Option<Event<'static>> {
             .headers
             .retain(|name, _| !SENSITIVE_HEADERS.contains(&name.to_ascii_lowercase().as_str()));
     }
-    event.user = None;
+    // Keep only the user's ID (set by `record_request_identity`); drop the
+    // IP address, email and username the SDK could otherwise attach.
+    event.user = event.user.map(|user| sentry::User {
+        id: user.id,
+        ..Default::default()
+    });
     Some(event)
 }
 
@@ -124,6 +129,23 @@ mod tests {
             request.headers.get("User-Agent").map(String::as_str),
             Some("curl")
         );
+    }
+
+    #[test]
+    fn scrub_keeps_only_the_user_id() {
+        let event = Event {
+            user: Some(sentry::User {
+                id: Some("u-1".into()),
+                email: Some("a@b.c".into()),
+                username: Some("boris".into()),
+                ip_address: Some(sentry::protocol::IpAddress::Auto),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let user = scrub(event).expect("kept").user.expect("user");
+        assert_eq!(user.id.as_deref(), Some("u-1"));
+        assert!(user.email.is_none() && user.username.is_none() && user.ip_address.is_none());
     }
 
     #[test]

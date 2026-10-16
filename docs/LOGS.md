@@ -43,6 +43,10 @@ Claude Code asks you to approve a new project MCP server the first time a sessio
 
 ## Alert emails (Grafana alerting, contact point `email-boris`)
 
+**Decision 2026-10-16: Sentry owns error and panic emails; Grafana is for logs and log-derived health (5xx rate, latency).**
+The two rules below ("UnitPrep API errors", "UnitPrep API panic") are RETIRED: pause or delete them in Grafana so each error
+does not email twice. They are kept here only as a recipe. The two active Grafana rules are under "Health alerts" further down.
+
 Alert rules live in Grafana, not in this repo; their definitions are recorded here so they can be recreated (for
 example for a prod stack). Both evaluate every minute in folder `GrafanaCloud`, group `unitprep-api`, no pending period,
 no-data = OK, notify `email-boris`.
@@ -111,3 +115,49 @@ Errors and panics also go to Sentry (org `quikstor-wf`, project `orchestrator`) 
 on the prod host. Check the wiring with
 `SENTRY_DSN=... cargo test sends_a_test_event -- --ignored`, then read the issue with `sentry issue list quikstor-wf/orchestrator`.
 Never log a tenant value in a `tracing::error!` field: field text is sent to Sentry unredacted.
+
+Sentry emails (set up 2026-10-16, via the Sentry CLI, both projects): "new or regressed issue" and "error spike (10+ events
+in 1 hour)", sent to Boris. They currently fire for every environment, dev included. **When prod exists, restrict them to
+`environment:production`** (`sentry alert issues edit quikstor-wf/<project>/<rule-id> --environment production`).
+
+## Health alerts to create in Grafana (5xx rate, p95 latency)
+
+Not created from the repo (Grafana alert rules live in Grafana, and the tokens here are read-only). Create both by hand in
+folder `GrafanaCloud`, group `unitprep-api`, evaluate every minute, no-data = OK, notify `email-boris`, same email template
+as above. Both group by `env`, so one rule covers dev and prod. A "no logs at all" alert is deliberately NOT created until
+there is a live host (an idle dev server would fire it constantly).
+
+**"UnitPrep API 5xx rate"**, instant query over 5 m, condition above 5:
+
+```
+sum by (env) (count_over_time({job="unitprep-api"} |= "request completed" | json | fields_status >= 500 [5m]))
+```
+
+**"UnitPrep API p95 latency"**, instant query over 5 m, condition above 2000 (ms):
+
+```
+quantile_over_time(0.95, {job="unitprep-api"} |= "request completed" | json | unwrap fields_latency_ms [5m]) by (env)
+```
+
+Thresholds are a first guess; tune them once real traffic exists. Dev's debug build is slower than a release build (see
+`CLAUDE.md`), so expect a higher p95 in dev than prod.
+
+## Correlating Grafana logs with Sentry issues
+
+Every request has a `request_id` (the `x-request-id` header). It is a field on every log line and a tag on every Sentry
+event, so either tool leads to the other:
+
+- Sentry issue -> logs: copy the `request_id` tag, then in Grafana Explore run
+  `{job="unitprep-api"} | json | request_id="<id>"`.
+- Logs -> Sentry: in Sentry search `request_id:<id>`.
+
+Also on every request span (so on every log line from inside a request, as `span_<name>` in `| json`) and as Sentry tags:
+`client_id` and `facility_id` (read off the URL path; UUIDs only), and, once a session resolves, `user_id` and `roles`
+(role keys such as `admin`). IDs only: never a name, email or phone. Code: `src/api/router/request_context.rs` and
+`record_request_identity` in `src/auth/authenticated_user.rs`.
+
+## The `env` label
+
+Every shipped log line carries `env` (a Loki label): `dev` by default, or whatever `LOG_ENV` is set to for the Alloy
+service (`LOG_ENV=prod` on the prod host's shipper). The dashboard has an Environment picker that filters every panel by it.
+Add `env="prod"` to queries and alerts when you want only prod.

@@ -6,6 +6,19 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.131] - 2026-10-16
+
+Logs and Sentry events now share identifiers. No migration.
+
+### Added
+- Every request's log lines and Sentry events carry `request_id`, plus `client_id` and `facility_id` (read off the URL path, UUIDs only) and, once a session resolves, `user_id` and `roles`. IDs only, never names, emails or phones. A Sentry issue's `request_id` tag finds the exact Grafana log lines, and the reverse. Code: `src/api/router/request_context.rs`, `record_request_identity` in `src/auth/authenticated_user.rs`.
+- Grafana dashboard: an Environment picker and a "Tools and people" section (requests, p95 latency and 5xx by tool area, active users, clients and facilities touched, busiest tools, clients and users by ID, requests by role).
+- `LOG_ENV` sets the `env` label on shipped logs (default `dev`; `prod` on the prod host).
+
+### Changed
+- The Sentry scrubber now keeps the user's ID (and nothing else about the user).
+- Error and panic emails move to Sentry; the two Grafana email rules are retired (docs/LOGS.md), and the 5xx-rate and p95-latency rules are specified there instead.
+
 ## [1.9.130] - 2026-10-16
 
 ### Added

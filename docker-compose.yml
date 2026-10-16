@@ -199,6 +199,8 @@ services:
       # alloy is started without it, Loki rejects the pushes (401) -- visible
       # in `docker compose logs alloy`.
       GRAFANA_API_KEY: ${GRAFANA_API_KEY:-}
+      # Becomes the `env` label on every shipped log line (default `dev`).
+      LOG_ENV: ${LOG_ENV:-dev}
     volumes:
       - ./dev-tools/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - ./logs:/logs:ro

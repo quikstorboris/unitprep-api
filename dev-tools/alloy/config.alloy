@@ -6,7 +6,9 @@ local.file_match "api_logs" {
   path_targets = [{
     "__path__" = "/logs/unitprep-api.*.log",
     "job"      = "unitprep-api",
-    "env"      = "dev",
+    // `dev` unless LOG_ENV says otherwise (set it to `prod` on the prod
+    // host's shipper). Low-cardinality, so it is safe as a Loki label.
+    "env"      = coalesce(sys.env("LOG_ENV"), "dev"),
   }]
 }
 

@@ -13,9 +13,7 @@ use sentry::integrations::tower::{NewSentryLayer, SentryHttpLayer};
 use tower_governor::GovernorError;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tower_http::request_id::{
-    MakeRequestUuid, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
-};
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tower_http::trace::TraceLayer;
 
 use super::{error_response, internal_error, AppState};
@@ -28,6 +26,10 @@ mod routes;
 /// gzip response compression, split out so the predicate and its tests
 /// live beside each other rather than inflating this file.
 mod compression;
+
+/// Request id, user, client and facility IDs on every log line and Sentry
+/// event, so the two can be cross-referenced.
+mod request_context;
 
 /// The runtime proof that every `RouteAccess::Permission` route `routes`
 /// declares is actually enforced by the handler wired up to it -- split
@@ -144,21 +146,7 @@ fn with_response_layers(router: Router) -> Router {
         // no need to thread the id through each handler by hand.
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(|request: &Request| {
-                    let request_id = request
-                        .extensions()
-                        .get::<RequestId>()
-                        .and_then(|id| id.header_value().to_str().ok())
-                        .unwrap_or("unknown")
-                        .to_string();
-
-                    tracing::info_span!(
-                        "http_request",
-                        method = %request.method(),
-                        path = %request.uri().path(),
-                        request_id = %request_id,
-                    )
-                })
+                .make_span_with(request_context::make_span)
                 .on_response(
                     |response: &Response, latency: Duration, _span: &tracing::Span| {
                         // Read back off the response rather than threading
@@ -186,6 +174,7 @@ fn with_response_layers(router: Router) -> Router {
         // the outer of the two and gives each request its own Sentry
         // scope, so nothing tagged on one request leaks onto a
         // concurrent one. Inert without a Sentry client.
+        .layer(middleware::from_fn(request_context::sentry_request_context))
         .layer(SentryHttpLayer::new())
         .layer(NewSentryLayer::<Request>::new_from_top())
         // Outermost layer overall -- assigns the id before anything else

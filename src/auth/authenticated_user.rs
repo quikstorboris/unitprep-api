@@ -205,9 +205,12 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             return Err(step_up_required());
         }
 
+        let role_keys = role_keys.unwrap_or_default();
+        record_request_identity(user_id, &role_keys);
+
         Ok(AuthenticatedUser {
             user_id,
-            role_keys: role_keys.unwrap_or_default(),
+            role_keys,
             permission_keys: permission_keys.unwrap_or_default().into_iter().collect(),
             token_hash,
             elevated_until,
@@ -215,6 +218,27 @@ impl FromRequestParts<AppState> for AuthenticatedUser {
             passkey_reverified_until,
         })
     }
+}
+
+/// Puts the signed-in user's ID and role keys on this request's log span
+/// and Sentry scope, so every later log line and error for the request
+/// carries them. IDs and role keys only -- never a name or email. The
+/// span fields are declared (empty) in `api::router::request_context`;
+/// recording a field the current span doesn't declare is a no-op, so this
+/// is safe from a test or a handler running outside the request span.
+fn record_request_identity(user_id: Uuid, role_keys: &[String]) {
+    let roles = role_keys.join(",");
+    let span = tracing::Span::current();
+    span.record("user_id", tracing::field::display(user_id));
+    span.record("roles", roles.as_str());
+
+    sentry::configure_scope(|scope| {
+        scope.set_user(Some(sentry::User {
+            id: Some(user_id.to_string()),
+            ..Default::default()
+        }));
+        scope.set_tag("roles", &roles);
+    });
 }
 
 /// One row of `auth.resolve_session`, named instead of the six-element tuple
