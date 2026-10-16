@@ -326,8 +326,32 @@ mod clients_facility_people_db_tests;
 mod clients_onboarding_summary_db_tests;
 
 #[cfg(test)]
-#[path = "clickup_copy_db_tests.rs"]
-mod clickup_copy_db_tests;
+#[path = "clickup_copy_db_mock.rs"]
+mod clickup_copy_db_mock;
+
+#[cfg(test)]
+#[path = "clickup_copy_db_fixture.rs"]
+mod clickup_copy_db_fixture;
+
+#[cfg(test)]
+#[path = "clickup_copy_dialog_db_tests.rs"]
+mod clickup_copy_dialog_db_tests;
+
+#[cfg(test)]
+#[path = "clickup_copy_sync_log_db_tests.rs"]
+mod clickup_copy_sync_log_db_tests;
+
+#[cfg(test)]
+#[path = "clickup_copy_bulk_db_tests.rs"]
+mod clickup_copy_bulk_db_tests;
+
+#[cfg(test)]
+#[path = "clickup_copy_bulk_jobs_db_tests.rs"]
+mod clickup_copy_bulk_jobs_db_tests;
+
+#[cfg(test)]
+#[path = "clickup_copy_bulk_complete_db_tests.rs"]
+mod clickup_copy_bulk_complete_db_tests;
 
 #[cfg(test)]
 #[path = "clients_clickup_parent_db_tests.rs"]
