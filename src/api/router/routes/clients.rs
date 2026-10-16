@@ -7,8 +7,8 @@ use axum::{
 
 use crate::api::route_access::{GatedRouter, RouteAccess};
 use crate::api::{
-    clients_clickup_parent, clients_companies, clients_create, clients_detail,
-    clients_dropbox_folder, clients_elavon, clients_facility_people,
+    clients_clickup_parent, clients_companies, clients_company_edit, clients_create,
+    clients_detail, clients_dropbox_folder, clients_elavon, clients_facility_people,
     clients_facility_policies_edit, clients_filter_options, clients_implementation_status,
     clients_manual_link, clients_onboarding_summary, clients_preview, clients_resync,
     clients_search, clients_sync, dedup_rematch, tool_runs, AppState,
@@ -76,6 +76,37 @@ pub(super) fn client_routes() -> GatedRouter<AppState> {
                 RouteAccess::Permission {
                     keys: &["client_ops.perform"],
                     action: "unarchive_company",
+                },
+            )],
+        )
+        // Any authenticated caller -- the Implementation Manager picker's
+        // list of staff, same reasoning as filter-options above.
+        .gated_route(
+            "/clients/staff",
+            get(clients_company_edit::list_staff),
+            [(Method::GET, RouteAccess::Authenticated)],
+        )
+        // Requires client_ops.perform -- see clients_company_edit's own
+        // module doc. Hand edits to the company's fields; sync-protected.
+        .gated_route(
+            "/clients/{company_id}/info",
+            put(clients_company_edit::update_company_info),
+            [(
+                Method::PUT,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "update_company_info",
+                },
+            )],
+        )
+        .gated_route(
+            "/clients/{company_id}/implementation-manager",
+            put(clients_company_edit::set_implementation_manager),
+            [(
+                Method::PUT,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "set_implementation_manager",
                 },
             )],
         )

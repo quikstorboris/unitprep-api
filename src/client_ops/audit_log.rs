@@ -147,6 +147,13 @@ pub mod event {
     /// this pass's gaps to close: an irreversible action previously left
     /// no record at all.
     pub const CLIENT_DELETED: &str = "client_deleted";
+    /// A client company's own fields were edited by hand from the company
+    /// page (`api::clients_company_edit::update_company_info`). `Change`
+    /// carries only the fields that actually changed, before and after.
+    pub const CLIENT_INFO_UPDATED: &str = "client_info_updated";
+    /// A client company's Implementation Manager was assigned, changed or
+    /// cleared by hand (`api::clients_company_edit::set_implementation_manager`).
+    pub const CLIENT_IMPLEMENTATION_MANAGER_CHANGED: &str = "client_implementation_manager_changed";
 
     /// A facility's tool run (Onboarding Work tab -- Dedup, so far) was
     /// deleted (`api::tool_runs::delete_tool_run`) -- the "clear a
@@ -216,6 +223,8 @@ pub mod event {
         CLIENT_IMPLEMENTATION_COMPLETED,
         CLIENT_IMPLEMENTATION_REOPENED,
         CLIENT_DELETED,
+        CLIENT_INFO_UPDATED,
+        CLIENT_IMPLEMENTATION_MANAGER_CHANGED,
         TOOL_RUN_DELETED,
         FACILITY_INTAKE_RELINKED,
         CLIENT_CLICKUP_PARENT_CHANGED,

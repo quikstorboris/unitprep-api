@@ -26,9 +26,9 @@ use crate::api::{
     auth_user_permissions, auth_user_role, auth_user_status, auth_users, clickup_connection,
     clickup_copy, clickup_lookup, clickup_prefetch, clickup_run_update, client_ops_activity_logs,
     client_ops_activity_logs_export, client_ops_qms_tags, clients_clickup_links,
-    clients_clickup_parent, clients_create, clients_elavon, clients_implementation_status,
-    clients_manual_link, clients_resync, clients_sync, dedup_rematch, dropbox_settings,
-    process_street_settings, process_street_task_roles, tool_runs,
+    clients_clickup_parent, clients_company_edit, clients_create, clients_elavon,
+    clients_implementation_status, clients_manual_link, clients_resync, clients_sync,
+    dedup_rematch, dropbox_settings, process_street_settings, process_street_task_roles, tool_runs,
 };
 
 use super::routes::build;
@@ -668,6 +668,43 @@ fn permission_route_checks() -> Vec<PermissionRouteCheck> {
                     test_user(),
                     HeaderMap::new(),
                     Path(Uuid::new_v4()),
+                ))
+            },
+        ),
+        ("/clients/{company_id}/info", Method::PUT, || {
+            Box::pin(clients_company_edit::update_company_info(
+                axum::extract::State(empty_state()),
+                test_user(),
+                HeaderMap::new(),
+                Path(Uuid::new_v4()),
+                Json(clients_company_edit::CompanyInfoFields {
+                    legal_name: Some("x".to_string()),
+                    corporate_email: None,
+                    corporate_phone: None,
+                    corporate_address_street: None,
+                    corporate_address_city: None,
+                    corporate_address_state: None,
+                    corporate_address_zip: None,
+                    subdomain: None,
+                    website_url: None,
+                    accepted_payment_methods: None,
+                    accounting_basis: None,
+                    payment_scheme: None,
+                    offers_tenant_insurance_raw: None,
+                    insurance_provider: None,
+                }),
+            ))
+        }),
+        (
+            "/clients/{company_id}/implementation-manager",
+            Method::PUT,
+            || {
+                Box::pin(clients_company_edit::set_implementation_manager(
+                    axum::extract::State(empty_state()),
+                    test_user(),
+                    HeaderMap::new(),
+                    Path(Uuid::new_v4()),
+                    Json(clients_company_edit::SetImplementationManagerRequest { user_id: None }),
                 ))
             },
         ),

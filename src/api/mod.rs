@@ -27,6 +27,7 @@ mod client_ops_qms_tags;
 mod clients_clickup_links;
 mod clients_clickup_parent;
 mod clients_companies;
+mod clients_company_edit;
 mod clients_create;
 mod clients_detail;
 mod clients_dropbox_folder;
@@ -339,6 +340,10 @@ mod auth_register_db_tests;
 #[cfg(test)]
 #[path = "clients_implementation_status_db_tests.rs"]
 mod clients_implementation_status_db_tests;
+
+#[cfg(test)]
+#[path = "clients_company_edit_db_tests.rs"]
+mod clients_company_edit_db_tests;
 
 #[cfg(test)]
 #[path = "integration_settings_audit_db_tests.rs"]
