@@ -6,6 +6,18 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+Server logging and observability; one connection-pool fix. No migration. Not yet released (version still 1.9.128).
+
+### Added
+- Stored server logs: setting `LOG_DIR` writes a second, JSON copy of every log line to daily-rotated files (`unitprep-api.YYYY-MM-DD.log`, last 7 kept); `LOG_FORMAT=json` also makes stdout JSON. The `api-dev` container sets `LOG_DIR=/app/logs`, and a new `alloy` compose service (profile `logs`, config in `dev-tools/alloy/`) ships those files to Grafana Cloud Loki. New dependency: `tracing-appender`.
+- ClickUp calls are now logged (they were silent): one INFO line per call (endpoint without query, status, latency), WARN on rate-limiter waits and 429s, ERROR with a bounded body on failures, and INFO/WARN/ERROR for copy-job start, finish and interruption. The token is never logged.
+- Grafana dashboard "UnitPrep API Logs" as importable JSON (`dev-tools/grafana/`), covering errors, panics, per-route latency, database connection errors, Process Street, Dropbox, ClickUp and slow SQL.
+- `scripts/logcli.sh` and `scripts/grafana-mcp.sh` (Loki CLI and Grafana's read-only MCP server, tokens read from `.env.local`) and `docs/LOGS.md` explaining where logs go and how to read them.
+
+### Fixed
+- Idle pooled database connections are now checked with a real `SELECT 1` instead of sqlx's bare-Sync `ping()`. A PgBouncer pooler can answer the bare ping without reaching a backend, so a connection whose backend died when Neon suspended could pass the check and fail a request with `expected to read 5 bytes, got 0 bytes at EOF` (seen as 500s on login after about 10 idle minutes). The 500 itself could not be reproduced on demand, so the fix is not yet confirmed against the pooler.
+- `rustfmt` line wrapping in `process_street/client.rs` (the pre-push format check was failing on it).
+
 ## [1.9.128] - 2026-10-15
 
 Logging only; no behavior change, no migration.
