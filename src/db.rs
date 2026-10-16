@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
-use sqlx::{ConnectOptions, Connection};
+use sqlx::ConnectOptions;
 
 /// Builds the application database connection pool from DATABASE_URL.
 ///
@@ -102,11 +102,33 @@ pub(crate) fn pool_options(ping_idle_threshold: Duration) -> PgPoolOptions {
         .before_acquire(move |conn, meta| {
             Box::pin(async move {
                 if meta.idle_for >= ping_idle_threshold {
-                    conn.ping().await?;
+                    ping_through_to_backend(conn).await?;
                 }
                 Ok(true)
             })
         })
+}
+
+/// Liveness check for an idle pooled connection: a real `SELECT 1`, not
+/// sqlx's own `ping()`.
+///
+/// sqlx 0.8's `ping()` writes a bare protocol `Sync` and waits for
+/// `ReadyForQuery`. That proves the TCP socket to the *pooler* is open but
+/// not that anything behind it is alive: Neon's `-pooler` endpoint is
+/// PgBouncer, and after the compute auto-suspends (or the pooler recycles
+/// its backends) a connection can still pass a Sync-only ping and then die
+/// with `expected to read 5 bytes, got 0 bytes at EOF` on the request's
+/// first real statement -- observed 2026-10-16 as four consecutive HTTP 500s
+/// in ~1 ms after the dev server sat idle (see the vault's Gotchas). A real
+/// statement has to be routed to a backend, so it fails here, on a
+/// connection that is then discarded and replaced, instead of in a handler.
+/// Unnamed, unprepared: nothing is cached per connection.
+async fn ping_through_to_backend(conn: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT 1")
+        .persistent(false)
+        .execute(conn)
+        .await
+        .map(|_| ())
 }
 
 /// Builds a database connection pool for `#[ignore]`'d real-DB tests
@@ -249,6 +271,43 @@ mod tests {
                     .unwrap();
                 assert_eq!(one, 1);
             }
+        }
+    }
+
+    /// Needs the local `test-db`. Kills every pooled backend server-side
+    /// (what a Neon suspend or pooler recycle does), then checks the next
+    /// acquires discard the dead connections and succeed rather than
+    /// handing one to the caller.
+    #[tokio::test]
+    #[ignore = "needs the local test-db"]
+    async fn the_idle_ping_discards_connections_whose_backend_was_killed() {
+        let _ = dotenvy::from_filename(".env.local");
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        assert!(!url.contains("neon.tech"), "never run against Neon");
+        let connect_options: PgConnectOptions = url.parse().unwrap();
+
+        let pool = pool_options(Duration::ZERO)
+            .max_connections(4)
+            .connect_lazy_with(connect_options.clone());
+        // Grow the pool to several idle connections.
+        let held = futures::future::join_all((0..4).map(|_| pool.acquire())).await;
+        drop(held);
+
+        // A separate connection terminates every other backend of this user.
+        let mut killer = PgConnectOptions::connect(&connect_options).await.unwrap();
+        sqlx::query(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity              WHERE pid <> pg_backend_pid() AND usename = current_user",
+        )
+        .execute(&mut killer)
+        .await
+        .unwrap();
+
+        for _ in 0..6 {
+            let one: i32 = sqlx::query_scalar("SELECT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(one, 1);
         }
     }
 }
