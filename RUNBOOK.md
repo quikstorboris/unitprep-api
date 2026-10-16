@@ -12,6 +12,7 @@ happens — and what to do — when the process restarts or crashes.
 | `WEBAUTHN_RP_ID` | No (defaults `localhost`) | Must be a valid domain suffix of `WEBAUTHN_RP_ORIGIN`. |
 | `WEBAUTHN_RP_ORIGIN` | No (defaults `http://localhost:3000`) | A non-`localhost` origin without `https://` is a **hard startup failure** (`auth::validate_cookie_security`) — session cookies would otherwise travel unencrypted. |
 | `SESSION_COOKIE_SECURE` | No | Legitimate escape hatch for local HTTP dev only. |
+| `DB_POOL_MAX_CONNECTIONS` | No (default `20`) | Size of the app's Postgres connection pool, 1-200; anything else falls back to 20. See "Database pool and load" below before changing it. |
 | `HOST` / `PORT` | No (default `0.0.0.0:8080`) | |
 | `CORS_ALLOWED_ORIGINS` | No (defaults to the two frontend dev origins) | Comma-separated. Set to the real deployed frontend origin(s) in any non-dev deployment. |
 
@@ -120,3 +121,31 @@ with "already exists".
 
 `SCHEMA.sql` is a read-only snapshot of the schema the migrations produce;
 regenerate it after a migration lands with `scripts/regenerate_schema_sql.sh`.
+
+## Database pool and load (measured 2026-10-09, efficiency refactor)
+
+The pool is **20 connections** (`DB_POOL_MAX_CONNECTIONS`), a caller waits at most 10 s for one (`POOL_ACQUIRE_TIMEOUT`), and connections idle 30 s or longer get a real `SELECT 1` before reuse. CPU-heavy handlers (parsing, matching, XLSX/ZIP/PDF building, sealing) run on tokio's blocking pool, not the async workers.
+
+Measured with `concurrent_load_report` (`src/api/concurrent_load_tests.rs`, ignored; command and knobs in its module doc): the real router, real session cookies and RLS, a local Postgres, 4 server worker threads, 2,400-row dedup uploads with no think time, plus a cheap canary request (`GET /health/whoami`) every 20 ms. The canary's latency is what other users feel while operators run heavy tools. Machine: 22 cores, loopback Postgres 18 in Docker, so read the ratios, not the milliseconds.
+
+| Concurrent dedup operators | Canary p50 / p95 / p99 (ms) | Dedup check p50 / p95 (ms) | Checks per second | Peak pool in use |
+|---|---|---|---|---|
+| 0 (idle) | 1.3 / 1.7 / 2.1 | - | - | - |
+| 1 | 2.3 / 3.5 / 5.4 | 200 / 228 | 4.9 | 6 of 20 |
+| 4 | 2.5 / 5.5 / 9.4 | 234 / 267 | 17.2 | 5 |
+| 8 | 3.1 / 7.3 / 14 | 294 / 376 | 26.8 | 11 |
+| 16 | 3.9 / 15 / 25 | 375 / 750 | 38.7 | 18 |
+
+No request failed at any level. With only 2 server workers, 16 operators gave a canary of 5.3 / 49 / 88 ms and filled the pool (20 of 20), still responsive. Running the same work inline on the async workers (the pre-refactor shape) made the canary 39 ms at 4 operators and 857 ms at 16, so keeping CPU off the workers is what holds this up.
+
+**Sizing for a remote database.** Through a 20 ms round-trip stand-in for a remote Neon, a single dedup check costs about 690 ms instead of 200, and the pool reaches 20 of 20 at 8 operators: **with a remote database the pool, not the CPU, saturates first.** Rules of thumb, in order:
+
+1. Watch for `PoolTimedOut` (a request failing after 10 s waiting for a connection). If it appears under normal use, raise `DB_POOL_MAX_CONNECTIONS` in steps of 10.
+2. Never exceed what the database allows across ALL instances: on Neon, stay under the pooled endpoint's client limit and remember a second app instance doubles the total. Reload the value only by restarting.
+3. After any change, rerun `concurrent_load_report` through `dev-tools/latency_proxy.py --delay-ms 10` and compare the peak pool figure and the canary tail.
+
+## Stored tool runs (retention)
+
+`client_ops.tool_runs` keeps every Onboarding Work run per facility, indefinitely. A dedup run of 2,400 rows stores about **1.9 MB** (encrypted source file about 272 KB plus encrypted parsed records about 1.6 MB; encrypted data does not compress), so **1,000 runs is about 1.9 GB** on Neon. No retention policy exists yet, deliberately: dropping a run's stored records or source removes a facility's history and the ability to re-run matching from it, which is a data-deletion decision for the business, not an efficiency tweak.
+
+Run `scripts/tool_runs_storage.sql` (read-only) for the current footprint by tool and by age. Decide before either of these: stored runs pass roughly 500, or the move to a cloud host. The options, cheapest first: (a) keep everything and pay for storage; (b) after N days keep only the report summary and output, and drop `records` and the source file (a run can then no longer be re-matched, only viewed); (c) archive old rows to cold storage. Until then nothing deletes anything.

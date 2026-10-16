@@ -13,16 +13,21 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ts_rs::TS)]
+#[ts(export)]
 pub struct CreateInviteRequest {
     pub email: String,
     pub first_name: String,
     pub last_name: String,
 
     /// One of `VALID_COMPANIES`, mirroring the `auth.user_company` enum.
+    /// The TypeScript side gets the closed union (the generated type is
+    /// what the UI's company picker is typed against).
+    #[ts(type = "\"trojan\" | \"cobre\" | \"quikstor\"")]
     pub company: String,
 
     #[serde(default)]
+    #[ts(optional)]
     pub job_title: Option<String>,
 
     /// Any key currently in `auth.roles` -- resolved and validated inside

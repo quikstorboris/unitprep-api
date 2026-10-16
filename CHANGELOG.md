@@ -6,6 +6,25 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.132] - 2026-10-16
+
+Second pass of the efficiency refactor, finished. No behavior change and no migration. Needs `unitprep-ui` 1.6.101 for the generated types (backwards compatible: the new files only add exports).
+
+### Added
+- **`DB_POOL_MAX_CONNECTIONS`** (default 20, accepted 1-200, anything else falls back to 20): the Postgres pool size is now configurable, for the move to a remote database where the pool saturates before the CPU does. RUNBOOK has the sizing rules and the measured load table.
+- **ts-rs bindings** for `UserSummary` (and `ListUsersResponse`), `CreateInviteRequest` and `SyncStatusResponse`, replacing the UI's hand-written copies. The company union and the sync `state` union are declared on the Rust fields with `#[ts(type = ...)]`, `job_title` is `#[ts(optional)]`.
+- `scripts/tool_runs_storage.sql`: read-only size report for `client_ops.tool_runs` by tool and by age (the retention decision input).
+- `docx-surgeon/tests/read_docx_timing.rs` (ignored, report only): `read_docx` takes 0.5 ms (18 KB contract) to 4 ms (48 KB agreement) at p50, 9 ms at p95 for the larger one. That is why the parsed document is NOT cached in a Tagger session (see Decisions).
+
+### Changed
+- **The large ClickUp modules are split into focused files**, code moved verbatim, every caller and the router untouched: `clickup_connection/` (status, token, credentials, tests), `clickup_run_update/` (prepare, link, candidates, post), `clickup_copy/bulk/` (context, tasks, pairs, comment, copy, runner), and the 1,400-line `clickup_copy_db_tests.rs` into a mock, a fixture and five topic test files. Test names are unchanged (1,617 listed tests before and after, 161 ignored, 117 `_db_`), so the CI allowlist and `_db_` filter still match.
+- RUNBOOK: "Database pool and load" (the 1/4/8/16-operator load table, remote-database sizing rules) and "Stored tool runs (retention)" (about 1.9 MB per dedup run, the options, the decision point).
+
+### Decisions (no code change)
+- ClickUp fan-outs keep their own bounds (`WRITE_CONCURRENCY`, `CHUNK_SIZE = 4`, `LIST_READ_CONCURRENCY`, the 2-then-N page batch, the per-user rate limiter); moving them onto `join_all_bounded` (6) would change throughput for no gain. The two remaining `join_all`s are post-commit audit-log writes.
+- Tagger parsed-document cache: not built (parse is 0.5-9 ms and already off the async workers; a cache would hold a document several times the size of its bytes per session and could not be persisted).
+- Tool-run retention: documented, nothing deletes anything. Dropping stored records removes a facility's history and re-match ability, a business decision.
+
 ## [1.9.131] - 2026-10-16
 
 Logs and Sentry events now share identifiers. No migration.

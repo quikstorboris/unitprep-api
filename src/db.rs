@@ -69,6 +69,23 @@ const PING_IDLE_THRESHOLD: Duration = Duration::from_secs(30);
 /// compute while failing a starved request in a bounded, visible way.
 const POOL_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Pool size when `DB_POOL_MAX_CONNECTIONS` is unset or unusable. See
+/// `pool_options` for why 20.
+const DEFAULT_POOL_MAX_CONNECTIONS: u32 = 20;
+
+/// Largest value `DB_POOL_MAX_CONNECTIONS` may take. A typo like `2000`
+/// would otherwise open far more connections than the database allows.
+const MAX_POOL_MAX_CONNECTIONS: u32 = 200;
+
+/// Reads `DB_POOL_MAX_CONNECTIONS`: a whole number from 1 to
+/// [`MAX_POOL_MAX_CONNECTIONS`], else the default. A bad value falls back
+/// rather than failing startup (the pool is lazy and the default is safe).
+fn pool_max_connections(raw: Option<&str>) -> u32 {
+    raw.and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|n| (1..=MAX_POOL_MAX_CONNECTIONS).contains(n))
+        .unwrap_or(DEFAULT_POOL_MAX_CONNECTIONS)
+}
+
 /// The application pool's sizing and health-check policy, separate from
 /// `connect()` so it can be asserted on and benchmarked.
 ///
@@ -96,7 +113,9 @@ pub(crate) fn pool_options(ping_idle_threshold: Duration) -> PgPoolOptions {
     // (`-pooler`) endpoint, itself a PgBouncer in front of Postgres, so
     // the app holding 20 connections against it is unremarkable.
     PgPoolOptions::new()
-        .max_connections(20)
+        .max_connections(pool_max_connections(
+            std::env::var("DB_POOL_MAX_CONNECTIONS").ok().as_deref(),
+        ))
         .acquire_timeout(POOL_ACQUIRE_TIMEOUT)
         .test_before_acquire(false)
         .before_acquire(move |conn, meta| {
@@ -184,12 +203,29 @@ mod tests {
     fn the_pool_pings_only_idle_connections_and_bounds_the_wait_for_one() {
         let options = pool_options(PING_IDLE_THRESHOLD);
 
-        assert_eq!(options.get_max_connections(), 20);
+        assert_eq!(
+            options.get_max_connections(),
+            pool_max_connections(std::env::var("DB_POOL_MAX_CONNECTIONS").ok().as_deref())
+        );
         assert_eq!(options.get_acquire_timeout(), POOL_ACQUIRE_TIMEOUT);
         assert!(
             !options.get_test_before_acquire(),
             "the unconditional ping-on-every-acquire must stay off; the idle-gated before_acquire replaces it"
         );
+    }
+
+    #[test]
+    fn the_pool_size_comes_from_the_environment_within_bounds_else_the_default() {
+        assert_eq!(pool_max_connections(None), 20);
+        assert_eq!(pool_max_connections(Some("35")), 35);
+        assert_eq!(pool_max_connections(Some(" 8 ")), 8);
+        assert_eq!(pool_max_connections(Some("200")), 200);
+        // Unusable values fall back to the default instead of failing startup.
+        assert_eq!(pool_max_connections(Some("0")), 20);
+        assert_eq!(pool_max_connections(Some("201")), 20);
+        assert_eq!(pool_max_connections(Some("-3")), 20);
+        assert_eq!(pool_max_connections(Some("lots")), 20);
+        assert_eq!(pool_max_connections(Some("")), 20);
     }
 
     /// Benchmark, not a pass/fail test: what the idle-gated ping saves.

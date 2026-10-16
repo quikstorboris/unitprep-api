@@ -23,7 +23,8 @@ use crate::auth::AuthenticatedUser;
 use crate::infrastructure::csv_export::write_csv;
 use crate::infrastructure::csv_safety::sanitize_cell;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct UserSummary {
     pub id: Uuid,
     pub email: String,
@@ -34,6 +35,7 @@ pub struct UserSummary {
     pub roles: Vec<String>,
     pub status: String,
     pub created_at: DateTime<Utc>,
+    #[ts(type = "number")]
     pub credential_count: i64,
     pub totp_enrolled: bool,
     /// The most recent `last_seen_at` across every session this user has
@@ -45,7 +47,8 @@ pub struct UserSummary {
     pub last_seen_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ts_rs::TS)]
+#[ts(export)]
 pub struct ListUsersResponse {
     pub users: Vec<UserSummary>,
 }
