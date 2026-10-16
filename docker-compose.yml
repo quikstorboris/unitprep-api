@@ -193,7 +193,12 @@ services:
       - --server.http.listen-addr=127.0.0.1:12345
       - /etc/alloy/config.alloy
     environment:
-      GRAFANA_API_KEY: ${GRAFANA_API_KEY:?run with --env-file .env.local}
+      # Optional (":-"), NOT required (":?"): Compose interpolates the whole
+      # file for every command, profile or not, so a required variable would
+      # break every `docker compose exec`/`up` run without --env-file. If
+      # alloy is started without it, Loki rejects the pushes (401) -- visible
+      # in `docker compose logs alloy`.
+      GRAFANA_API_KEY: ${GRAFANA_API_KEY:-}
     volumes:
       - ./dev-tools/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - ./logs:/logs:ro
