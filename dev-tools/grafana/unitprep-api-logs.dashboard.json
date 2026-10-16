@@ -6,7 +6,7 @@
   ],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 2,
+  "version": 3,
   "refresh": "1m",
   "time": {
     "from": "now-6h",
@@ -502,12 +502,98 @@
       }
     },
     {
+      "id": 16,
+      "type": "timeseries",
+      "title": "ClickUp calls by HTTP status",
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (fields_status) (count_over_time({job=\"unitprep-api\"} |= \"ClickUp call\" | json [$__interval]))",
+          "legendFormat": "{{fields_status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "ClickUp rate limits, failures and copy jobs",
+      "gridPos": {
+        "x": 12,
+        "y": 42,
+        "w": 12,
+        "h": 7
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "grafanacloud-logs"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"ClickUp rate limiter full\" [$__interval]))",
+          "legendFormat": "limiter waits"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"ClickUp rate limit hit (429)\" [$__interval]))",
+          "legendFormat": "429s"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"ClickUp request failed\" [$__interval]))",
+          "legendFormat": "failed requests"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"ClickUp Copy job ended unsuccessfully\" [$__interval]))",
+          "legendFormat": "copy jobs failed"
+        },
+        {
+          "refId": "E",
+          "expr": "sum(count_over_time({job=\"unitprep-api\"} |= \"ClickUp Copy job was interrupted\" [$__interval]))",
+          "legendFormat": "copy jobs interrupted"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
       "id": 6,
       "type": "logs",
       "title": "Errors and warnings",
       "gridPos": {
         "x": 0,
-        "y": 42,
+        "y": 49,
         "w": 24,
         "h": 10
       },

@@ -1,9 +1,11 @@
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::integrations::http::{client_builder, send_with_retry, RetryPolicy};
+use crate::integrations::http::{
+    client_builder, send_with_retry, truncate_for_log, RetryPolicy, MAX_LOGGED_BODY_BYTES,
+};
 
 /// ClickUp's public REST API, v2. Overridable (see `ClickUpClient::new`)
 /// only so tests can aim the client at a local mock server.
@@ -183,6 +185,53 @@ fn shared_http() -> reqwest::Client {
         .clone()
 }
 
+/// The request path without its query string, for log lines. Ids in the
+/// path are ClickUp ids, not customer data; the query can carry search
+/// terms, so it is dropped.
+fn endpoint(path: &str) -> &str {
+    path.split('?').next().unwrap_or(path)
+}
+
+/// One line per ClickUp call, so what spends the rate budget and what
+/// fails can be read from the log. A 429 is a WARN (the retries inside
+/// `send_with_retry` are already spent by the time it shows here); any
+/// other failure is an ERROR with a bounded body, since a ClickUp error
+/// body can echo customer data. The token is never logged.
+fn log_call(
+    method: &reqwest::Method,
+    path: &str,
+    status: reqwest::StatusCode,
+    started: Instant,
+    body: &str,
+) {
+    let latency_ms = started.elapsed().as_millis() as u64;
+    let endpoint = endpoint(path);
+    tracing::info!(%method, endpoint, status = status.as_u16(), latency_ms, "ClickUp call");
+
+    if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        tracing::warn!(%method, endpoint, latency_ms, "ClickUp rate limit hit (429)");
+    }
+    if !status.is_success() {
+        tracing::error!(
+            %method,
+            endpoint,
+            status = status.as_u16(),
+            body = %truncate_for_log(body, MAX_LOGGED_BODY_BYTES),
+            "ClickUp request failed"
+        );
+    }
+}
+
+fn log_unreachable(method: &reqwest::Method, path: &str, started: Instant, err: &reqwest::Error) {
+    tracing::error!(
+        %method,
+        endpoint = endpoint(path),
+        latency_ms = started.elapsed().as_millis() as u64,
+        error = %err,
+        "ClickUp request failed, no response"
+    );
+}
+
 /// Maps a ClickUp HTTP answer to its body or the matching [`ClickUpError`].
 fn into_result(status: reqwest::StatusCode, body: String) -> Result<String, ClickUpError> {
     if status.is_success() {
@@ -234,15 +283,21 @@ impl ClickUpClient {
     pub(super) async fn get(&self, token: &str, path: &str) -> Result<String, ClickUpError> {
         // GET only, so repeating it on a transient failure is safe.
         let url = format!("{}{}", self.base_url, path);
+        let started = Instant::now();
         let response = send_with_retry(RetryPolicy::STANDARD, || {
             self.http
                 .get(&url)
                 .header(reqwest::header::AUTHORIZATION, token)
         })
-        .await?;
+        .await
+        .inspect_err(|err| log_unreachable(&reqwest::Method::GET, path, started, err))?;
 
         let status = response.status();
-        let body = response.text().await?;
+        let body = response
+            .text()
+            .await
+            .inspect_err(|err| log_unreachable(&reqwest::Method::GET, path, started, err))?;
+        log_call(&reqwest::Method::GET, path, status, started, &body);
         into_result(status, body)
     }
 
@@ -256,16 +311,22 @@ impl ClickUpClient {
         path: &str,
         body: &serde_json::Value,
     ) -> Result<String, ClickUpError> {
+        let started = Instant::now();
         let response = self
             .http
-            .request(method, format!("{}{}", self.base_url, path))
+            .request(method.clone(), format!("{}{}", self.base_url, path))
             .header(reqwest::header::AUTHORIZATION, token)
             .json(body)
             .send()
-            .await?;
+            .await
+            .inspect_err(|err| log_unreachable(&method, path, started, err))?;
 
         let status = response.status();
-        let text = response.text().await?;
+        let text = response
+            .text()
+            .await
+            .inspect_err(|err| log_unreachable(&method, path, started, err))?;
+        log_call(&method, path, status, started, &text);
         into_result(status, text)
     }
 
@@ -485,6 +546,12 @@ mod tests {
                 Json(json!({ "err": "View not found", "ECODE": "ACCESS_118" })),
             )),
         }
+    }
+
+    #[test]
+    fn the_logged_endpoint_drops_the_query_string() {
+        assert_eq!(endpoint("/team/1/space?archived=false"), "/team/1/space");
+        assert_eq!(endpoint("/user"), "/user");
     }
 
     async fn spawn_mock() -> (String, SeenAuth) {

@@ -579,6 +579,8 @@ async fn run_job(
         user_agent.as_deref(),
     )
     .await;
+    let copied = results.iter().filter(|r| r.comment.ok).count();
+    tracing::info!(%job_id, total = results.len(), copied, failed = results.len() - copied, "ClickUp Copy job results");
     jobs::finish(&state.db, user_id, &role_keys, job_id, "done", None).await;
 }
 

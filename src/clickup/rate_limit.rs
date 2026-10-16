@@ -43,6 +43,8 @@ impl RateLimiter {
     /// Waits until a call may be made, then counts it. Callers are served
     /// in no particular order, but none waits longer than one window.
     pub async fn acquire(&self) {
+        // Logged once per call, not once per wake-up.
+        let mut waited = false;
         loop {
             let wait = {
                 let mut calls = self.calls.lock().expect("rate limiter lock");
@@ -60,7 +62,17 @@ impl RateLimiter {
                 }
                 // Full: the oldest call frees a slot when it leaves the window.
                 let oldest = *calls.front().expect("a full window has calls");
-                (oldest + self.window).saturating_duration_since(now)
+                let wait = (oldest + self.window).saturating_duration_since(now);
+                if !waited {
+                    tracing::warn!(
+                        wait_ms = wait.as_millis() as u64,
+                        limit = self.limit,
+                        window_secs = self.window.as_secs(),
+                        "ClickUp rate limiter full, call is waiting"
+                    );
+                    waited = true;
+                }
+                wait
             };
             tokio::time::sleep(wait.max(Duration::from_millis(1))).await;
         }

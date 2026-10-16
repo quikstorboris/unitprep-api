@@ -51,6 +51,7 @@ pub(super) async fn create(
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
+    tracing::info!(job_id = %id, %user_id, %company_id, total, "ClickUp Copy job started");
     Ok(id)
 }
 
@@ -115,8 +116,16 @@ pub(super) async fn finish(
     }
     .await;
 
-    if let Err(err) = outcome {
-        tracing::error!(error = %err, %job_id, "could not mark a ClickUp Copy job finished");
+    match outcome {
+        Err(err) => {
+            tracing::error!(error = %err, %job_id, "could not mark a ClickUp Copy job finished");
+        }
+        Ok(()) if status == "done" => {
+            tracing::info!(%job_id, status, "ClickUp Copy job finished");
+        }
+        Ok(()) => {
+            tracing::error!(%job_id, status, message = message.unwrap_or(""), "ClickUp Copy job ended unsuccessfully");
+        }
     }
 }
 
@@ -135,6 +144,19 @@ pub struct JobView {
     pub message: Option<String>,
     pub created_at: DateTime<Utc>,
     pub finished_at: Option<DateTime<Utc>>,
+}
+
+/// A job still marked running but quiet past [`STALE_AFTER`] (the server
+/// restarted mid-copy). Only noticed when someone reads it, so this line
+/// repeats on every read of the same job.
+fn log_interrupted(job: &JobView) {
+    tracing::warn!(
+        job_id = %job.id,
+        total = job.total,
+        copied = job.copied,
+        failed = job.failed,
+        "ClickUp Copy job was interrupted"
+    );
 }
 
 fn select_jobs(filter: &str) -> String {
@@ -175,7 +197,12 @@ pub async fn list_copy_jobs(
     .await;
 
     match rows {
-        Ok(jobs) => Json(jobs).into_response(),
+        Ok(jobs) => {
+            for job in jobs.iter().filter(|job| job.status == "interrupted") {
+                log_interrupted(job);
+            }
+            Json(jobs).into_response()
+        }
         Err(err) => {
             tracing::error!(error = %err, user_id = %user.user_id, "ClickUp Copy job listing failed");
             internal_error("Could not load your ClickUp Copy jobs")
@@ -208,7 +235,12 @@ pub async fn get_copy_job(
     .await;
 
     match row {
-        Ok(Some(job)) => Json(job).into_response(),
+        Ok(Some(job)) => {
+            if job.status == "interrupted" {
+                log_interrupted(&job);
+            }
+            Json(job).into_response()
+        }
         // Someone else's job and a missing one look the same (RLS).
         Ok(None) => not_found("not_found", "No such ClickUp Copy job.".to_string()),
         Err(err) => {
