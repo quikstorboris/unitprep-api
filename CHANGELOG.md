@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.133] - 2026-10-19
+
+Company page: add a Process Street facility to an existing company. No migration. Needs `unitprep-ui` 1.6.102.
+
+### Added
+- `GET /clients/ps-runs?q=` -- a typeahead over Process Street Intake runs, matching a run's title or an owner/manager's name or email. It reads only OO's synced tables (`ps_sync_state`, `ps_person_index`), never Process Street live (PS allows about 0.7 calls/second), so results are as fresh as the last sync. Each result says whether the run is already in OO and under which company. Any authenticated caller. Code: `src/api/clients_add_facility.rs`.
+- `POST /clients/{company_id}/facilities` (needs `client_ops.perform`) -- imports one Intake run (and optionally its New Merchant Account run) as a facility of an existing company, with Process Street's own values and the people it names. Refuses a run already in OO (409). Audit event `facility_added_to_client`.
+
+### Changed
+- `clients::create` now writes each facility through one shared `write_one_facility`, used by both the New Client batch and the new add-facility path. No behavior change for New Client.
+
 ## [1.9.132] - 2026-10-16
 
 Second pass of the efficiency refactor, finished. No behavior change and no migration. Needs `unitprep-ui` 1.6.101 for the generated types (backwards compatible: the new files only add exports).

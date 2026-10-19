@@ -24,6 +24,7 @@ mod clickup_run_update;
 mod client_ops_activity_logs;
 mod client_ops_activity_logs_export;
 mod client_ops_qms_tags;
+mod clients_add_facility;
 mod clients_clickup_links;
 mod clients_clickup_parent;
 mod clients_companies;
@@ -368,6 +369,10 @@ mod clients_implementation_status_db_tests;
 #[cfg(test)]
 #[path = "clients_company_edit_db_tests.rs"]
 mod clients_company_edit_db_tests;
+
+#[cfg(test)]
+#[path = "clients_add_facility_db_tests.rs"]
+mod clients_add_facility_db_tests;
 
 #[cfg(test)]
 #[path = "integration_settings_audit_db_tests.rs"]

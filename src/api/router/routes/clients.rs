@@ -7,11 +7,12 @@ use axum::{
 
 use crate::api::route_access::{GatedRouter, RouteAccess};
 use crate::api::{
-    clients_clickup_parent, clients_companies, clients_company_edit, clients_create,
-    clients_detail, clients_dropbox_folder, clients_elavon, clients_facility_people,
-    clients_facility_policies_edit, clients_filter_options, clients_implementation_status,
-    clients_manual_link, clients_onboarding_summary, clients_preview, clients_resync,
-    clients_search, clients_sync, dedup_rematch, tool_runs, AppState,
+    clients_add_facility, clients_clickup_parent, clients_companies, clients_company_edit,
+    clients_create, clients_detail, clients_dropbox_folder, clients_elavon,
+    clients_facility_people, clients_facility_policies_edit, clients_filter_options,
+    clients_implementation_status, clients_manual_link, clients_onboarding_summary,
+    clients_preview, clients_resync, clients_search, clients_sync, dedup_rematch, tool_runs,
+    AppState,
 };
 
 /// Client search/create/list/archive/resync/detail and the onboarding summary.
@@ -76,6 +77,26 @@ pub(super) fn client_routes() -> GatedRouter<AppState> {
                 RouteAccess::Permission {
                     keys: &["client_ops.perform"],
                     action: "unarchive_company",
+                },
+            )],
+        )
+        // Any authenticated caller -- local-only typeahead over synced
+        // Intake runs; see clients_add_facility's own module doc.
+        .gated_route(
+            "/clients/ps-runs",
+            get(clients_add_facility::search_ps_runs),
+            [(Method::GET, RouteAccess::Authenticated)],
+        )
+        // Requires client_ops.perform. Imports one more PS Intake run as a
+        // facility of an existing company.
+        .gated_route(
+            "/clients/{company_id}/facilities",
+            post(clients_add_facility::add_facility),
+            [(
+                Method::POST,
+                RouteAccess::Permission {
+                    keys: &["client_ops.perform"],
+                    action: "add_facility",
                 },
             )],
         )

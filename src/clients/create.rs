@@ -500,56 +500,136 @@ pub async fn write_create_data(
 
     let mut facility_ids = Vec::with_capacity(facility_selections.len());
     for (run_id, overrides, merchant_account_run_id) in facility_selections {
-        let fields = fetched
-            .fields_by_run_id
-            .get(run_id.as_str())
-            .expect("every facility's own run was fetched above");
-        let mut mapped = map_intake_fields(fields);
-        let facility_manually_edited_fields = diff_facility_fields(&mapped.facility, overrides);
-        mapped.facility = apply_facility_overrides(mapped.facility, overrides.clone());
-        let snapshot: Value = serde_json::to_value(fields).unwrap_or(Value::Null);
-
-        let facility_id = insert_facility(
-            tx,
-            company_id,
-            &mapped.facility,
-            run_id,
-            &snapshot,
-            &facility_manually_edited_fields,
-        )
-        .await?;
-        insert_facility_policies_and_people(tx, facility_id, &mapped, &snapshot, &overrides.people)
-            .await?;
-
-        if let Some(ma_run_id) = merchant_account_run_id {
-            let ma_fields = fetched
-                .fields_by_run_id
-                .get(ma_run_id.as_str())
-                .expect("every resolved Merchant Account run was fetched above");
-            let mapped_ma = map_merchant_account_fields(ma_fields);
-            let ma_tasks = fetched
-                .tasks_by_ma_run_id
-                .get(ma_run_id.as_str())
-                .expect("every resolved Merchant Account run's tasks were fetched above");
-            let credentials_added_to_qms =
-                credentials_added_to_qms_from_tasks(ma_tasks, &qms_credential_task_names);
-            ingest_merchant_account_run(
+        facility_ids.push(
+            write_one_facility(
                 tx,
-                facility_id,
-                &mapped_ma,
-                ma_run_id,
-                credentials_added_to_qms,
+                company_id,
+                run_id,
+                overrides,
+                merchant_account_run_id.as_deref(),
+                fetched,
+                &qms_credential_task_names,
             )
-            .await?;
-        }
-
-        facility_ids.push(facility_id);
+            .await?,
+        );
     }
 
     Ok(CreatedFromSelection {
         company_id,
         facility_ids,
     })
+}
+
+/// One facility's rows: the facility itself (with the reviewed
+/// `overrides` laid over PS's fresh mapping), its policies and people,
+/// and its Merchant Account ingest when a run was resolved. Shared by
+/// the New Client batch and `write_added_facility`.
+async fn write_one_facility(
+    tx: &mut Transaction<'_, Postgres>,
+    company_id: Uuid,
+    run_id: &str,
+    overrides: &EditableFacilityFields,
+    merchant_account_run_id: Option<&str>,
+    fetched: &FetchedCreateData,
+    qms_credential_task_names: &[String],
+) -> Result<Uuid, CreateError> {
+    let fields = fetched
+        .fields_by_run_id
+        .get(run_id)
+        .expect("every facility's own run was fetched above");
+    let mut mapped = map_intake_fields(fields);
+    let facility_manually_edited_fields = diff_facility_fields(&mapped.facility, overrides);
+    mapped.facility = apply_facility_overrides(mapped.facility, overrides.clone());
+    let snapshot: Value = serde_json::to_value(fields).unwrap_or(Value::Null);
+
+    let facility_id = insert_facility(
+        tx,
+        company_id,
+        &mapped.facility,
+        run_id,
+        &snapshot,
+        &facility_manually_edited_fields,
+    )
+    .await?;
+    insert_facility_policies_and_people(tx, facility_id, &mapped, &snapshot, &overrides.people)
+        .await?;
+
+    if let Some(ma_run_id) = merchant_account_run_id {
+        let ma_fields = fetched
+            .fields_by_run_id
+            .get(ma_run_id)
+            .expect("every resolved Merchant Account run was fetched above");
+        let mapped_ma = map_merchant_account_fields(ma_fields);
+        let ma_tasks = fetched
+            .tasks_by_ma_run_id
+            .get(ma_run_id)
+            .expect("every resolved Merchant Account run's tasks were fetched above");
+        let credentials_added_to_qms =
+            credentials_added_to_qms_from_tasks(ma_tasks, qms_credential_task_names);
+        ingest_merchant_account_run(
+            tx,
+            facility_id,
+            &mapped_ma,
+            ma_run_id,
+            credentials_added_to_qms,
+        )
+        .await?;
+    }
+
+    Ok(facility_id)
+}
+
+/// Adds one Process Street Intake run to a company that already exists
+/// (the Company page's "Add facility"). Takes PS's own values as they
+/// are -- no review screen, the facility's page edits them afterwards --
+/// and the people PS names on the run. Refuses a run that is already a
+/// facility or a company source anywhere in OO.
+pub async fn write_added_facility(
+    tx: &mut Transaction<'_, Postgres>,
+    company_id: Uuid,
+    run_id: &str,
+    merchant_account_run_id: Option<&str>,
+    fetched: &FetchedCreateData,
+) -> Result<Uuid, CreateError> {
+    check_not_already_imported(tx, &[run_id]).await?;
+
+    let fields = fetched
+        .fields_by_run_id
+        .get(run_id)
+        .expect("the facility's own run was fetched above");
+    let mapped = map_intake_fields(fields);
+    let defaults = EditableFacilityFields {
+        name: mapped.facility.name.clone(),
+        street_address: mapped.facility.street_address.clone(),
+        city: mapped.facility.city.clone(),
+        state: mapped.facility.state.clone(),
+        zip: mapped.facility.zip.clone(),
+        phone: mapped.facility.phone.clone(),
+        email: mapped.facility.email.clone(),
+        units_count: mapped.facility.units_count,
+        primary_storage_offering: mapped.facility.primary_storage_offering.clone(),
+        previous_pms: mapped.facility.previous_pms.clone(),
+        access_control_system: mapped.facility.access_control_system.clone(),
+        dropbox_folder_url: mapped.facility.dropbox_folder_url.clone(),
+        subdomain: mapped.facility.subdomain.clone(),
+        subdomain_exists_in_qms_raw: mapped.facility.subdomain_exists_in_qms_raw.clone(),
+        system_email: mapped.facility.system_email.clone(),
+        website_url: mapped.facility.website_url.clone(),
+        people: mapped.people(),
+    };
+    let qms_credential_task_names =
+        ps_task_roles::load_task_names(tx, ps_task_roles::QMS_CREDENTIALS_ROLE).await?;
+
+    write_one_facility(
+        tx,
+        company_id,
+        run_id,
+        &defaults,
+        merchant_account_run_id,
+        fetched,
+        &qms_credential_task_names,
+    )
+    .await
 }
 
 #[cfg(test)]

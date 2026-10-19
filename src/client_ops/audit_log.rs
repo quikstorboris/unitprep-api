@@ -154,6 +154,9 @@ pub mod event {
     /// A client company's Implementation Manager was assigned, changed or
     /// cleared by hand (`api::clients_company_edit::set_implementation_manager`).
     pub const CLIENT_IMPLEMENTATION_MANAGER_CHANGED: &str = "client_implementation_manager_changed";
+    /// One more Process Street Intake run was added to an existing company
+    /// as a facility (`api::clients_add_facility::add_facility`).
+    pub const FACILITY_ADDED_TO_CLIENT: &str = "facility_added_to_client";
 
     /// A facility's tool run (Onboarding Work tab -- Dedup, so far) was
     /// deleted (`api::tool_runs::delete_tool_run`) -- the "clear a
@@ -225,6 +228,7 @@ pub mod event {
         CLIENT_DELETED,
         CLIENT_INFO_UPDATED,
         CLIENT_IMPLEMENTATION_MANAGER_CHANGED,
+        FACILITY_ADDED_TO_CLIENT,
         TOOL_RUN_DELETED,
         FACILITY_INTAKE_RELINKED,
         CLIENT_CLICKUP_PARENT_CHANGED,
