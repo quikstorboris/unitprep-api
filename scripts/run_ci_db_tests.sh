@@ -68,7 +68,10 @@ DB_ONLY_IGNORED_TESTS=(
 # instead of eighteen-plus separate ones.
 echo "==> Running ${#DB_ONLY_IGNORED_TESTS[@]} allowlisted DB-only #[ignore]'d tests plus every ignored test named *_db_ (convention: local test-db only)"
 fail=0
-if ! cargo test --workspace -- --ignored _db_ "${DB_ONLY_IGNORED_TESTS[@]}"; then
+# `--skip known_gap`: tests that assert the INTENDED behaviour of a documented,
+# not-yet-fixed gap stay #[ignore]d with the reason in the attribute; the
+# module name of a *_db_tests file would otherwise pull them into this sweep.
+if ! cargo test --workspace -- --ignored _db_ "${DB_ONLY_IGNORED_TESTS[@]}" --skip known_gap; then
     fail=1
 fi
 

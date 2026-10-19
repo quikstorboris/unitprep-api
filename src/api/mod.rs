@@ -310,6 +310,26 @@ mod concurrent_load_tests;
 #[path = "clickup_links_db_tests.rs"]
 mod clickup_links_db_tests;
 
+/// Real-database tests for admin role grant/revoke and deactivate/reactivate.
+#[cfg(test)]
+#[path = "auth_user_admin_db_tests.rs"]
+mod auth_user_admin_db_tests;
+
+/// Real-database tests for TOTP enrolment, lockout, replay guard and step-up.
+#[cfg(test)]
+#[path = "auth_totp_db_tests.rs"]
+mod auth_totp_db_tests;
+
+/// Real-database tests for invite creation and admin account recovery.
+#[cfg(test)]
+#[path = "auth_invites_db_tests.rs"]
+mod auth_invites_db_tests;
+
+/// Real-database tests for passkey login: enumeration, single-use ceremony, anomaly gate.
+#[cfg(test)]
+#[path = "auth_login_db_tests.rs"]
+mod auth_login_db_tests;
+
 #[cfg(test)]
 #[path = "clickup_run_update_db_tests.rs"]
 mod clickup_run_update_db_tests;
