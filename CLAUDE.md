@@ -42,3 +42,15 @@ Added 2026-10-01. The vault note `reference/UnitPrep Tech Stack.md` is the canon
 # Migrations and `SCHEMA.sql` (standing rule)
 
 Added 2026-10-05. After any change that adds or alters a migration, run `./scripts/bootstrap_test_db.sh` (applies it to the local test-db) and then `./scripts/regenerate_schema_sql.sh`, and commit the regenerated `SCHEMA.sql` with the change -- it had drifted 15 migrations behind before this rule. Apply migrations with sqlx only, never by pasting SQL into `psql` (a hand-run migration leaves no `_sqlx_migrations` record and the next run fails). The production scripts (`scripts/prod_db_status.sh`, `scripts/prod_db_sync.sh`) are run by hand by Boris only; see RUNBOOK.md.
+
+
+# Troubleshooting and monitoring: check Sentry and the logs first (standing rule)
+
+Added 2026-10-19. Sentry (errors) and the server logs (everything else) exist so a session can look for itself instead of asking Boris to paste output. **You can and should check them**: at the start of any "it broke / it is slow / I got a 500" investigation, before asking for pasted output; after shipping a change that touches runtime behaviour; and routinely (a scheduled routine does it at 07:30 and 19:30 PT, see below). Where to look, in order:
+
+1. **`python3 scripts/anomaly_check.py [--hours N]`**: one read-only report: unresolved Sentry issues in both projects, ERROR lines and HTTP 5xx in the last N hours, whether the checkouts or the running server are stale. Ends with `STATUS=ALL_CLEAR` or `ATTENTION`.
+2. **The log files** `./logs/unitprep-api.DATE.log` (JSON, one line per event, last 7 days, written because `LOG_DIR` is set) and **`scripts/logcli.sh query '{job="unitprep-api", level="ERROR"}' --since=24h`** for Grafana Loki. Every request line carries `request_id`.
+3. **Sentry**: `sentry issue list quikstor-wf/orchestrator` and `.../orchestrator-ui`, `sentry issue view <ID>`. The list is **unresolved only** by default (add `--query "is:resolved"`); "No issues found" does not mean empty.
+4. The `grafana` MCP server (sessions started here) or Chrome driving Grafana, for dashboards and alert rules.
+
+Rules: everything above is read-only; never `source` `.env.local` and never paste a token into chat or the vault; a quiet log means an idle app, not a broken pipeline (compare the newest local line with the newest Loki line before suspecting Alloy); **the running server is often older than HEAD** (`cargo run` does not reload) so check that before debugging "fixed" bugs; a `WARN before_acquire ... expected to read 5 bytes, got 0 bytes at EOF` with no ERROR beside it is the connection pool working, not a failure. Boris's dev server runs from this checkout and other sessions may have uncommitted work here: **never switch branches, reset, stash or revert in this checkout to chase a bug**; use a separate `git worktree` for experiments. Full playbook, known-benign patterns and the routine's guardrails: vault `work/active/UnitPrep/Server Logging and Grafana/Routine Monitoring and Troubleshooting Playbook.md` (index: `Server Logging and Grafana - Index.md`).
