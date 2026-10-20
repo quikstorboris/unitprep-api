@@ -34,6 +34,17 @@ fn is_uuid(segment: &str) -> bool {
             .all(|(g, len)| g.len() == len && g.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+/// Reads the `client_id` and `facility_id` out of a request path of the form
+/// `/clients/{id}/facilities/{id}/...`, borrowing from `path`.
+///
+/// Each ID is returned only if the segment right after `clients` or
+/// `facilities` is a canonical UUID; anything else (route words, junk)
+/// yields `None`, so nothing attacker-supplied reaches a log field or tag.
+///
+/// ```text
+/// /clients/0f8fad5b-d9cb-469f-a165-70867728950e/info
+///   -> client_id = 0f8fad5b-d9cb-469f-a165-70867728950e, facility_id = none
+/// ```
 pub(super) fn path_ids(path: &str) -> PathIds<'_> {
     let mut ids = PathIds::default();
     let mut segments = path.split('/').filter(|s| !s.is_empty());
@@ -50,6 +61,8 @@ pub(super) fn path_ids(path: &str) -> PathIds<'_> {
     ids
 }
 
+/// The request's `x-request-id` (set by the request-id layer), or
+/// `"unknown"` if it is somehow missing.
 fn request_id(request: &Request) -> &str {
     request
         .extensions()

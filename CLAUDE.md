@@ -34,6 +34,18 @@ Added 2026-10-01 after a dedup check went from under a second to ~9 s. Docker wa
 - `Cargo.toml` optimizes the dedup/core/unit-group crates and the csv/calamine parsers in the dev profile so debug runs stay near production speed; keep new hot-path crates on that list.
 
 
+# Rustdoc comments (standing rule)
+
+Added 2026-10-20. The backend's `cargo doc` pages are only as good as its comments, so code written or touched from now on carries doc comments that make them informative and consistent. Not retroactive: do not go rewrite old files, but follow this wherever you work. Full rule and rationale in the vault note `brain/Rustdoc and Code Comment Standard.md`; the essentials:
+
+- **Every module has a `//!` header** whose first sentence says, in plain English a non-developer could follow, what that part of the app is for. Keep it current when the module's job changes.
+- **Every non-trivial item has a `///` summary** (one sentence, third person, does not restate the signature). Say what the signature cannot: why it exists, invariants, side effects, what it must never do. Add `# Errors` / `# Panics` / `# Examples` only when true. No change history in comments (that is the changelog's job).
+- **Format for rustdoc:** identifiers and types in backticks (`` `Vec<String>` ``, an unquoted one is parsed as HTML); link with `` [`Item`] `` only to documented, visible items; escape literal brackets `\[like this\]`; URLs in `<...>`; **never a vault wikilink `[[...]]`** in a code comment (name the note in backticks instead).
+- **Snippets:** in the library crates a ```` ```rust ```` block is compiled and run by `cargo test --doc`; in the `unitprep` binary crate doc examples are not run, so mark unverified ones ```` ```text ````. Fake data only, never a real tenant name, email, phone or ID.
+- **Flag quick wins as you work:** while editing, say in the same turn what is cheap to improve for the rustdoc (missing `//!`, item with no `///`, stale overview, broken link, an obviously useful snippet), or just do it in files you are already changing. Flag, do not launch a repo-wide cleanup unless asked.
+- **Check:** `cargo doc --workspace --no-deps --document-private-items` (private items are required: a binary crate has no public API). New code must add no new warnings. 11 older warnings exist (see the vault note's "Open" section); fix them opportunistically when touching those files.
+
+
 # Tech stack list (standing rule)
 
 Added 2026-10-01. The vault note `reference/UnitPrep Tech Stack.md` is the canonical list of every tool, library, service and infrastructure piece used across both repos (name, area, what/why). **Whenever you introduce a new one in this repo — a Cargo/npm dependency, CI/security tool, external service or integration, infra component — add a row to that note in the same session and bump its "Last updated" line.** Also update the row if a tool is removed or replaced. Boris uses that note for CTO/architecture presentations, so it must not go stale.

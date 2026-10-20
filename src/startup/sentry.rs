@@ -67,7 +67,13 @@ pub(super) fn init() -> Option<ClientInitGuard> {
     guard.is_enabled().then_some(guard)
 }
 
-/// `None` drops the event.
+/// Runs on every event just before it leaves the process: removes
+/// anything that could carry personal data and drops duplicates.
+///
+/// Strips the request body, cookies, query string and credential headers,
+/// and keeps only the user's ID (never their IP, email or username).
+/// Returns `None` to drop the event entirely, which is done for the
+/// `tracing` lines that merely echo a panic the SDK already reports.
 fn scrub(mut event: Event<'static>) -> Option<Event<'static>> {
     if event
         .message

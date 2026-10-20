@@ -6,6 +6,9 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- Doc comments only, no behavior change: a standing rule for how backend comments are written so the `cargo doc` pages stay informative and consistent (new section in `CLAUDE.md`), applied to `startup/sentry.rs` and `api/router/request_context.rs`.
+
 ## [1.9.133] - 2026-10-19
 
 Company page: add a Process Street facility to an existing company. No migration. Needs `unitprep-ui` 1.6.102.
