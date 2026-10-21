@@ -7,6 +7,7 @@ versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- `GET /clients/filter-options` now reads its states, previous-PMS values and assigned staff in one SQL statement instead of three, saving two database round trips per call (about 70 ms against the remote dev database) and calling `auth.staff_directory()` once. Same response, same transaction and RLS behavior; new real-database test `get_filter_options_db_returns_canonical_states_sorted_pms_and_assigned_staff`.
 - Doc comments only, no behavior change: a standing rule for how backend comments are written so the `cargo doc` pages stay informative and consistent (new section in `CLAUDE.md`), applied to `startup/sentry.rs` and `api/router/request_context.rs`.
 
 ## [1.9.133] - 2026-10-19
