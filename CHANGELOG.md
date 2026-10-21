@@ -6,6 +6,10 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.134] - 2026-10-21
+
+Database round trips and idle Neon wake-ups, plus a pool-ping fix. No migration, no API shape change, no `unitprep-ui` change needed (stays compatible with 1.6.103).
+
 ### Changed
 - The vendor-format and file-meta registries are no longer re-read from the database every 4 hours. Nothing writes those tables while the server runs (migrations only, and a deploy restarts the server), so the three timers only woke the scale-to-zero database about six times a day on an idle server. Each registry now loads once at startup; `start_retry_if_unloaded` retries (30 s, doubling, capped at 15 min) only if that load failed, then stops. `vendor_format::refresh` / `vendor_file_meta::refresh` are there for a future vendor-editing UI to call after saving. Startup also does half the registry loads it did (the timers' immediate first tick duplicated them). New tests: retry timing on a paused clock and a real-database `refresh` test.
 - `GET /clients/filter-options` now reads its states, previous-PMS values and assigned staff in one SQL statement instead of three, saving two database round trips per call (about 70 ms against the remote dev database) and calling `auth.staff_directory()` once. Same response, same transaction and RLS behavior; new real-database test `get_filter_options_db_returns_canonical_states_sorted_pms_and_assigned_staff`.
