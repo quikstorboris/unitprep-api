@@ -11,6 +11,9 @@ versioning follows [Semantic Versioning](https://semver.org/).
 - `GET /clients/filter-options` now reads its states, previous-PMS values and assigned staff in one SQL statement instead of three, saving two database round trips per call (about 70 ms against the remote dev database) and calling `auth.staff_directory()` once. Same response, same transaction and RLS behavior; new real-database test `get_filter_options_db_returns_canonical_states_sorted_pms_and_assigned_staff`.
 - Doc comments only, no behavior change: a standing rule for how backend comments are written so the `cargo doc` pages stay informative and consistent (new section in `CLAUDE.md`), applied to `startup/sentry.rs` and `api/router/request_context.rs`.
 
+### Fixed
+- The idle-connection ping (`db::ping_through_to_backend`) is now sent over the simple query protocol (`raw_sql`) instead of as an unnamed prepared statement. Through Neon's transaction-mode PgBouncer an unnamed statement's Parse and Bind can reach different backends; on 2026-10-21 a burst of `unnamed prepared statement does not exist` from this hook discarded a run of idle connections, and four requests then hit the 10 s pool timeout as HTTP 500s (cause inferred from the error text, not reproduced). A simple `Query` is one self-contained message and still reaches a real backend. New test `the_idle_ping_leaves_no_prepared_statement_behind`.
+
 ## [1.9.133] - 2026-10-19
 
 Company page: add a Process Street facility to an existing company. No migration. Needs `unitprep-ui` 1.6.102.

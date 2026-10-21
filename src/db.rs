@@ -141,13 +141,22 @@ pub(crate) fn pool_options(ping_idle_threshold: Duration) -> PgPoolOptions {
 /// in ~1 ms after the dev server sat idle (see the vault's Gotchas). A real
 /// statement has to be routed to a backend, so it fails here, on a
 /// connection that is then discarded and replaced, instead of in a handler.
-/// Unnamed, unprepared: nothing is cached per connection.
+///
+/// **Sent over the simple query protocol (`raw_sql`), never as a prepared
+/// statement.** The first version used `query(..).persistent(false)`, an
+/// *unnamed* prepared statement: Parse, Bind and Execute are separate
+/// protocol messages, and a transaction-mode PgBouncer may hand them to
+/// different backends. Observed 2026-10-21 (first time in 7 days of logs):
+/// a burst of `unnamed prepared statement does not exist` from this very
+/// hook discarded a run of idle connections, and the requests that needed
+/// them hit the 10 s pool timeout as HTTP 500s (cause inferred from the
+/// error text and the ping being the app's only unnamed statement, not
+/// reproduced). A simple `Query` is one self-contained message, so there
+/// is nothing to split, and it is still routed to a real backend. Do not
+/// turn this back into a `query(..)`, named or unnamed.
 async fn ping_through_to_backend(conn: &mut sqlx::PgConnection) -> Result<(), sqlx::Error> {
-    sqlx::query("SELECT 1")
-        .persistent(false)
-        .execute(conn)
-        .await
-        .map(|_| ())
+    use sqlx::Executor;
+    conn.execute(sqlx::raw_sql("SELECT 1")).await.map(|_| ())
 }
 
 /// Builds a database connection pool for `#[ignore]`'d real-DB tests
@@ -345,5 +354,31 @@ mod tests {
                 .unwrap();
             assert_eq!(one, 1);
         }
+    }
+
+    /// The ping must go over the simple query protocol: no prepared
+    /// statement of any kind on the connection afterwards. (An unnamed
+    /// statement would not show here either, so this guards against a
+    /// regression to a *named* one; the unnamed case is covered by the
+    ///  rustdoc and the vault Gotchas entry,
+    /// because only a transaction-mode PgBouncer can split it.)
+    #[tokio::test]
+    #[ignore = "needs the local test-db"]
+    async fn the_idle_ping_leaves_no_prepared_statement_behind() {
+        let _ = dotenvy::from_filename(".env.local");
+        let url = std::env::var("TEST_DATABASE_URL").expect("TEST_DATABASE_URL");
+        assert!(!url.contains("neon.tech"), "never run against Neon");
+        let mut conn = PgConnectOptions::connect(&url.parse().unwrap())
+            .await
+            .unwrap();
+
+        ping_through_to_backend(&mut conn).await.unwrap();
+
+        let prepared: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_prepared_statements")
+            .persistent(false)
+            .fetch_one(&mut conn)
+            .await
+            .unwrap();
+        assert_eq!(prepared, 0);
     }
 }
