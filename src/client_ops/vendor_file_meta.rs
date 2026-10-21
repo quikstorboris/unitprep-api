@@ -10,10 +10,11 @@
 //!
 //! Same caching stance as `vendor_format`: an in-memory snapshot read
 //! synchronously on the request path (never a per-request DB call),
-//! refreshed on a timer.
+//! loaded once at startup and, like `vendor_format`, never re-read on a
+//! timer (see that module's doc for why); only a failed startup load is
+//! retried.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use parking_lot::RwLock;
 use sqlx::PgPool;
@@ -30,12 +31,8 @@ pub type FileMetaCache = Arc<RwLock<Vec<FileFormatMeta>>>;
 /// with no authenticated caller, satisfying the same SELECT policy.
 const SYSTEM_USER_ID: Uuid = Uuid::nil();
 
-/// Matches `vendor_format::start_refresh_task`'s interval, for the same
-/// Neon autosuspend reason documented there.
-const REFRESH_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60);
-
 /// Best-effort initial load; an unreachable database yields an empty
-/// snapshot (the refresh task retries) instead of failing startup.
+/// snapshot (the retry task keeps trying) instead of failing startup.
 pub async fn initial_cache(db: &PgPool, content_type: ContentType) -> FileMetaCache {
     let metas = match load_file_meta(db, SYSTEM_USER_ID, &[], content_type).await {
         Ok(metas) => metas,
@@ -52,23 +49,35 @@ pub async fn initial_cache(db: &PgPool, content_type: ContentType) -> FileMetaCa
     Arc::new(RwLock::new(metas))
 }
 
-pub fn start_refresh_task(cache: FileMetaCache, db: PgPool, content_type: ContentType) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(REFRESH_INTERVAL);
+/// Re-reads the file metadata for `content_type` into `cache`; see
+/// `vendor_format::refresh`.
+pub(crate) async fn refresh(
+    cache: &FileMetaCache,
+    db: &PgPool,
+    content_type: ContentType,
+) -> anyhow::Result<()> {
+    let metas = load_file_meta(db, SYSTEM_USER_ID, &[], content_type).await?;
+    *cache.write() = metas;
+    Ok(())
+}
 
-        loop {
-            interval.tick().await;
+/// Retries the load in the background only if the startup load left the
+/// snapshot empty; see `vendor_format::start_retry_if_unloaded`.
+pub fn start_retry_if_unloaded(cache: FileMetaCache, db: PgPool, content_type: ContentType) {
+    if !cache.read().is_empty() {
+        return;
+    }
 
-            match load_file_meta(&db, SYSTEM_USER_ID, &[], content_type).await {
-                Ok(metas) => *cache.write() = metas,
-                Err(err) => tracing::error!(
-                    error = %err,
-                    content_type = content_type.as_db_str(),
-                    "Vendor file-metadata refresh failed; keeping the previous snapshot"
-                ),
-            }
-        }
-    });
+    super::vendor_format::spawn_retry_until_ok(
+        content_type.as_db_str(),
+        super::vendor_format::RETRY_FIRST_DELAY,
+        super::vendor_format::RETRY_MAX_DELAY,
+        move || {
+            let cache = cache.clone();
+            let db = db.clone();
+            async move { refresh(&cache, &db, content_type).await }
+        },
+    );
 }
 
 #[derive(sqlx::FromRow)]

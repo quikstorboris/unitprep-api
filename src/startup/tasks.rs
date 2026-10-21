@@ -27,20 +27,23 @@ pub(super) fn spawn(state: &AppState, stores: &DurableStores) {
     // Group Prep's and dedup's vendor-format registries -- an in-memory
     // snapshot per content type, loaded once at startup (best-effort; see
     // `initial_cache`'s own doc comment for why a failure there doesn't
-    // panic startup) and kept fresh by these tasks, never queried per
-    // request. See `client_ops::vendor_format`'s module doc comment for
-    // the full reasoning.
-    client_ops::vendor_format::start_refresh_task(
+    // panic startup) and never queried per request. There is deliberately
+    // no periodic refresh: nothing writes these tables while the server
+    // runs, and a timer would wake a scale-to-zero database on a schedule.
+    // These tasks only retry a startup load that failed, then end. See
+    // `client_ops::vendor_format`'s module doc comment for the full
+    // reasoning.
+    client_ops::vendor_format::start_retry_if_unloaded(
         state.unit_vendors.clone(),
         state.db.clone(),
         ContentType::Units,
     );
-    client_ops::vendor_format::start_refresh_task(
+    client_ops::vendor_format::start_retry_if_unloaded(
         state.tenant_vendors.clone(),
         state.db.clone(),
         ContentType::Tenants,
     );
-    client_ops::vendor_file_meta::start_refresh_task(
+    client_ops::vendor_file_meta::start_retry_if_unloaded(
         state.tenant_file_meta.clone(),
         state.db.clone(),
         ContentType::Tenants,

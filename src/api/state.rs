@@ -55,9 +55,9 @@ pub struct AppState {
 
     // Group Prep's recognized unit-file vendor registry (`client_ops.
     // vendor_format` where content_type = 'units') -- an in-memory
-    // snapshot refreshed on a timer by
-    // `client_ops::vendor_format::start_refresh_task`, not queried per
-    // request. See that module's doc comment for why: discovery's own
+    // snapshot loaded once at startup (retried by
+    // `client_ops::vendor_format::start_retry_if_unloaded` only if that
+    // load failed), not queried per request. See that module's doc comment for why: discovery's own
     // handlers are called directly by a large existing test suite
     // against a pool that never connects, and those tests must stay
     // DB-free.

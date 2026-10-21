@@ -173,11 +173,10 @@ pub(super) async fn sleep_until_next_scheduled_sync(db: &PgPool) {
 /// Spawns the scheduled sync loop -- runs every configured
 /// `sync_interval_hours` (`integrations.process_street_settings`, default
 /// 24) or when `api::clients_sync::start_sync` triggers one manually.
-/// Deliberately does NOT also fire immediately on startup the
-/// way `client_ops::vendor_format::start_refresh_task` does -- that
-/// task's cache would otherwise sit empty until the first tick and
-/// block real request handling; an empty `ps_person_index` just means
-/// fewer search results, and firing on every restart would mean every
+/// Deliberately does NOT also fire immediately on startup: an empty
+/// `ps_person_index` just means fewer search results (unlike the vendor
+/// registries in `client_ops::vendor_format`, which request handling
+/// needs at once and so load at startup), and firing on every restart would mean every
 /// local dev run or every prod deploy kicks off a real, resource-
 /// competing sync against the live PS API whether anyone wants one
 /// right then or not (confirmed directly, 2026-08-31: a restart-

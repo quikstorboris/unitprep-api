@@ -10,7 +10,7 @@
 //! logic in both would recreate exactly the "two copies that quietly
 //! drift apart" pattern this project's own review flagged elsewhere.
 //!
-//! `VendorFormatCache` + `start_refresh_task` exist because vendor rows
+//! `VendorFormatCache` + `start_retry_if_unloaded` exist because vendor rows
 //! must NOT be queried per HTTP request: `AppState::db` is deliberately
 //! lazy and never blocks startup on Postgres being reachable (see
 //! `db.rs`), and both discovery's and dedup's own request handlers are
@@ -19,11 +19,18 @@
 //! were never supposed to need a database, and a per-request vendor
 //! lookup would silently turn every one of them into a ~50ms failure
 //! instead of the instant in-memory result they are today. Loading once
-//! at startup and refreshing on a timer (same shape as
-//! `InMemorySessionStore::start_cleanup_task`) keeps request handling
-//! itself synchronous and DB-free, while still picking up a
-//! self-service-added vendor row within one refresh interval without a
-//! restart.
+//! at startup keeps request handling itself synchronous and DB-free.
+//!
+//! **No periodic refresh, on purpose.** Nothing writes `vendor_format`
+//! while the server runs: rows change through migrations, and a deploy
+//! restarts the server, which reloads them. A timer would only wake a
+//! scale-to-zero database (Neon) on a schedule to re-read a table that has
+//! not changed -- a 4-hour timer here (three of them, with the file-meta
+//! cache) meant about six compute wakes a day on an idle server. What is
+//! left is a retry that runs only when the startup load failed (see
+//! [`start_retry_if_unloaded`]). A future self-service "add a vendor" UI
+//! should call [`refresh`] from its save handler so the new row shows up
+//! at once, rather than reintroducing a timer.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -52,8 +59,8 @@ const SYSTEM_USER_ID: Uuid = Uuid::nil();
 /// Best-effort initial load for `AppState` construction. Returns an
 /// empty cache (logged, not propagated as a startup failure) if
 /// Postgres isn't reachable yet -- consistent with `db.rs`'s own
-/// "never block startup on the database" stance. `start_refresh_task`
-/// will fill it in on its first tick once Postgres is reachable.
+/// "never block startup on the database" stance. [`start_retry_if_unloaded`]
+/// fills it in once Postgres is reachable.
 pub async fn initial_cache(db: &PgPool, content_type: ContentType) -> VendorFormatCache {
     let vendors = match load_vendor_formats(db, SYSTEM_USER_ID, &[], content_type).await {
         Ok(vendors) => vendors,
@@ -61,7 +68,7 @@ pub async fn initial_cache(db: &PgPool, content_type: ContentType) -> VendorForm
             tracing::warn!(
                 error = %err,
                 content_type = content_type.as_db_str(),
-                "Initial vendor-format load failed -- starting with an empty registry; the refresh task will retry"
+                "Initial vendor-format load failed -- starting with an empty registry; the retry task will keep trying"
             );
             Vec::new()
         }
@@ -70,34 +77,85 @@ pub async fn initial_cache(db: &PgPool, content_type: ContentType) -> VendorForm
     Arc::new(RwLock::new(vendors))
 }
 
-/// Refreshes `cache` from `client_ops.vendor_format` every 4 hours --
-/// long enough that this never collides with Neon's default 5-minute
-/// autosuspend window (a tighter interval kept the compute permanently
-/// "active" any time the server was left running, since each tick reset
-/// the idle timer just before it would have fired -- see the vault's
-/// Neon compute-usage investigation, 2026-09-21), short enough that a
-/// vendor added through the (future) self-service UI, or a Postgres
-/// connection that wasn't up yet at boot, still shows up same-day
-/// without a restart. Mirrors `InMemorySessionStore::start_cleanup_task`'s
-/// shape: spawned once at startup, loops forever, one failed tick is
-/// logged and skipped rather than ending the task.
-pub fn start_refresh_task(cache: VendorFormatCache, db: PgPool, content_type: ContentType) {
+/// Re-reads `client_ops.vendor_format` for `content_type` into `cache`.
+/// Used by the startup retry below and meant for a future vendor-editing
+/// handler to call after it saves, so a new row is live without a restart.
+pub(crate) async fn refresh(
+    cache: &VendorFormatCache,
+    db: &PgPool,
+    content_type: ContentType,
+) -> anyhow::Result<()> {
+    let vendors = load_vendor_formats(db, SYSTEM_USER_ID, &[], content_type).await?;
+    *cache.write() = vendors;
+    Ok(())
+}
+
+/// If the startup load left `cache` empty (Postgres was unreachable at
+/// boot), retries in the background with a growing delay until one load
+/// succeeds, then stops. Does nothing when the cache loaded fine -- the
+/// table is seeded by migrations, so a healthy startup never comes back
+/// empty. Unlike the 4-hour timer this replaced, a healthy server never
+/// touches the database from here again.
+pub fn start_retry_if_unloaded(cache: VendorFormatCache, db: PgPool, content_type: ContentType) {
+    if !cache.read().is_empty() {
+        return;
+    }
+
+    spawn_retry_until_ok(
+        content_type.as_db_str(),
+        RETRY_FIRST_DELAY,
+        RETRY_MAX_DELAY,
+        move || {
+            let cache = cache.clone();
+            let db = db.clone();
+            async move { refresh(&cache, &db, content_type).await }
+        },
+    );
+}
+
+/// Delay before the first retry after a failed startup load.
+pub(crate) const RETRY_FIRST_DELAY: Duration = Duration::from_secs(30);
+
+/// Longest the retry delay grows to (it doubles after each failure).
+pub(crate) const RETRY_MAX_DELAY: Duration = Duration::from_secs(15 * 60);
+
+/// Runs `attempt` after `first_delay`, again after twice that and so on
+/// (capped at `max_delay`), until it returns `Ok`, then ends. Shared by
+/// this module's cache and `vendor_file_meta`'s so the two cannot drift.
+/// Returns the task handle so a test can await it.
+pub(crate) fn spawn_retry_until_ok<F, Fut>(
+    label: &'static str,
+    first_delay: Duration,
+    max_delay: Duration,
+    mut attempt: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: FnMut() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = anyhow::Result<()>> + Send,
+{
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(4 * 60 * 60));
-
+        let mut delay = first_delay;
         loop {
-            interval.tick().await;
-
-            match load_vendor_formats(&db, SYSTEM_USER_ID, &[], content_type).await {
-                Ok(vendors) => *cache.write() = vendors,
-                Err(err) => tracing::error!(
-                    error = %err,
-                    content_type = content_type.as_db_str(),
-                    "Vendor-format refresh tick failed; keeping the previous snapshot"
-                ),
+            tokio::time::sleep(delay).await;
+            match attempt().await {
+                Ok(()) => {
+                    tracing::info!(
+                        content_type = label,
+                        "Registry loaded on retry; retry task done"
+                    );
+                    return;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        error = %err,
+                        content_type = label,
+                        "Registry load still failing; keeping the empty snapshot and retrying"
+                    );
+                    delay = (delay * 2).min(max_delay);
+                }
             }
         }
-    });
+    })
 }
 
 #[derive(sqlx::FromRow)]
@@ -163,4 +221,76 @@ pub async fn load_vendor_formats(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use tokio::time::Instant;
+
+    use super::*;
+
+    /// Runs the retry helper against an attempt that fails `failures` times
+    /// and then succeeds, on a paused clock, returning how many attempts it
+    /// made and how much (virtual) time passed. First delay 10 s, cap 25 s.
+    async fn run_with_failures(failures: usize) -> (usize, Duration) {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counter = attempts.clone();
+        let started = Instant::now();
+
+        spawn_retry_until_ok(
+            "test",
+            Duration::from_secs(10),
+            Duration::from_secs(25),
+            move || {
+                let counter = counter.clone();
+                async move {
+                    let attempt = counter.fetch_add(1, Ordering::SeqCst);
+                    if attempt < failures {
+                        Err(anyhow::anyhow!("database not reachable"))
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        (attempts.load(Ordering::SeqCst), started.elapsed())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_retry_waits_the_first_delay_and_stops_after_one_success() {
+        let (attempts, elapsed) = run_with_failures(0).await;
+
+        assert_eq!(attempts, 1);
+        assert_eq!(elapsed, Duration::from_secs(10));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_retry_delay_doubles_after_each_failure_and_caps() {
+        // Delays: 10 s, then 20 s, then 40 s capped to 25 s, then 25 s.
+        let (attempts, elapsed) = run_with_failures(3).await;
+
+        assert_eq!(attempts, 4);
+        assert_eq!(elapsed, Duration::from_secs(10 + 20 + 25 + 25));
+    }
+
+    /// Needs the local `test-db`: `refresh` must fill an empty cache from
+    /// the seeded registry, through the app role's RLS like production.
+    #[tokio::test]
+    #[ignore = "needs the local test-db"]
+    async fn refresh_fills_an_empty_cache_from_the_seeded_registry() {
+        let _ = dotenvy::from_filename(".env.local");
+        let db = crate::db::connect_test();
+        let cache: VendorFormatCache = Arc::new(RwLock::new(Vec::new()));
+
+        refresh(&cache, &db, ContentType::Tenants).await.unwrap();
+
+        assert!(!cache.read().is_empty());
+    }
 }

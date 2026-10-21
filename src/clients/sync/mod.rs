@@ -19,7 +19,7 @@
 //!
 //! **RLS**: this task has no real authenticated caller (it runs on a
 //! timer, not behind a request) -- same situation
-//! `client_ops::vendor_format::start_refresh_task` already solves. Its
+//! `client_ops::vendor_format::refresh` already solves. Its
 //! own `SYSTEM_USER_ID` placeholder works because the relevant SELECT
 //! policy only checks that `app.current_user_id` is set, not that it
 //! names a real user; this module's writes need one step further, since
