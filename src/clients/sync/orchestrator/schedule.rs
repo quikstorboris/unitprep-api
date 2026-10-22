@@ -140,8 +140,12 @@ pub(super) async fn sleep_until_next_scheduled_sync(db: &PgPool) {
             (Some(sync_time), Some(tz)) => {
                 let now = Utc::now();
                 let next = next_daily_occurrence(now, sync_time, tz);
+                // The same instant twice: in the configured zone (what the
+                // admin set, e.g. "2026-10-23 03:00:00 PDT") and in UTC, so
+                // the zone name and the time shown beside it always agree.
                 tracing::info!(
-                    next_sync_at = %next,
+                    next_sync_at = %next.with_timezone(&tz),
+                    next_sync_at_utc = %next,
                     timezone = %tz,
                     "Process Street sync scheduled (daily_time)"
                 );
