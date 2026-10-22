@@ -12,6 +12,7 @@ mod dropbox;
 mod infrastructure;
 mod integrations;
 mod process_street;
+mod rate_limit;
 mod reencrypt_sources;
 mod startup;
 

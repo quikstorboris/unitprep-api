@@ -13,9 +13,9 @@ use serde::Serialize;
 use super::lists::ListInfo;
 use crate::clickup::comments::ClickUpComment;
 use crate::clickup::copy_text;
-use crate::clickup::rate_limit::RateLimiter;
 use crate::clickup::tasks::{completion_status, ClickUpTask};
 use crate::clickup::{ClickUpClient, ClickUpError};
+use crate::rate_limit::RateLimiter;
 
 /// A bulk copy whose ClickUp calls fit in this many runs inside the
 /// request that asked for it; a bigger one becomes a background job the

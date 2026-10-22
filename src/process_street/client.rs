@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::config::ProcessStreetConfig;
-use crate::clickup::rate_limit::RateLimiter;
 use crate::integrations::http::{
     client_builder, send_with_retry, truncate_for_log, RetryPolicy, MAX_LOGGED_BODY_BYTES,
 };
+use crate::rate_limit::RateLimiter;
 
 const BASE_URL: &str = "https://public-api.process.st/api/v1.1";
 
