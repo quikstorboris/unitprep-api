@@ -6,6 +6,9 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **`LOG_RETENTION_DAYS`** sets how many daily log files are kept in `LOG_DIR` (default 7, accepted 1-365; anything else prints one warning on stderr and keeps 7). It replaces the hardcoded `LOG_FILE_RETENTION_DAYS = 7`, in the same shape as `DB_POOL_MAX_CONNECTIONS`. It counts daily files, not calendar days. See `docs/LOGS.md`.
+
 ## [1.9.136] - 2026-10-22
 
 Refactor and log wording only. No migration, no API shape change, no `unitprep-ui` change needed.

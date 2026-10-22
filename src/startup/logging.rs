@@ -9,8 +9,33 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
-/// Days of rotated JSON log files kept when `LOG_DIR` is set.
-const LOG_FILE_RETENTION_DAYS: usize = 7;
+/// Daily log files kept when `LOG_DIR` is set and `LOG_RETENTION_DAYS` is
+/// unset or unusable.
+const DEFAULT_LOG_RETENTION_DAYS: usize = 7;
+
+/// Largest value `LOG_RETENTION_DAYS` may take. A typo like `7000` would
+/// otherwise keep a year's worth of lines per day for twenty years.
+const MAX_LOG_RETENTION_DAYS: usize = 365;
+
+/// A usable `LOG_RETENTION_DAYS`: a whole number from 1 to
+/// [`MAX_LOG_RETENTION_DAYS`], surrounding spaces ignored. Anything else
+/// (empty, `0`, negative, text, too large) is `None`.
+fn parse_log_retention_days(raw: &str) -> Option<usize> {
+    raw.trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|n| (1..=MAX_LOG_RETENTION_DAYS).contains(n))
+}
+
+/// Reads `LOG_RETENTION_DAYS`; a missing or bad value falls back to
+/// [`DEFAULT_LOG_RETENTION_DAYS`] rather than failing startup, the same
+/// shape as `DB_POOL_MAX_CONNECTIONS` in `db.rs`. Note the appender counts
+/// daily *files*, not calendar days: a day with no log writes creates no
+/// file, so the files kept can span more than this many days.
+fn log_retention_days(raw: Option<&str>) -> usize {
+    raw.and_then(parse_log_retention_days)
+        .unwrap_or(DEFAULT_LOG_RETENTION_DAYS)
+}
 
 /// The file appender's background writer flushes when this guard drops,
 /// so it must live as long as the process -- parked here rather than
@@ -33,8 +58,8 @@ static FILE_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 ///   `LOG_FORMAT=json` switches it to JSON for a platform that
 ///   collects stdout (journald, a cloud log service).
 /// - `LOG_DIR`, when set: a second JSON copy in daily-rotated files
-///   (`unitprep-api.log.YYYY-MM-DD`), keeping the last
-///   `LOG_FILE_RETENTION_DAYS`. A file rather than stdout because the
+///   (`unitprep-api.YYYY-MM-DD.log`), keeping the last `LOG_RETENTION_DAYS`
+///   of them (default 7, see [`log_retention_days`]). A file rather than stdout because the
 ///   dev server is started with `docker compose exec ... cargo run`,
 ///   whose output Docker's own log capture never sees.
 pub(super) fn init() {
@@ -54,11 +79,21 @@ pub(super) fn init() {
         .ok()
         .filter(|dir| !dir.is_empty())
         .and_then(|dir| {
+            let raw_retention = std::env::var("LOG_RETENTION_DAYS").ok();
+            if let Some(raw) = raw_retention.as_deref() {
+                if parse_log_retention_days(raw).is_none() {
+                    // Subscriber isn't installed yet, so plain stderr.
+                    eprintln!(
+                        "LOG_RETENTION_DAYS={raw:?} is not a whole number from 1 to \
+                         {MAX_LOG_RETENTION_DAYS}; keeping {DEFAULT_LOG_RETENTION_DAYS} daily log files"
+                    );
+                }
+            }
             let appender = tracing_appender::rolling::Builder::new()
                 .rotation(tracing_appender::rolling::Rotation::DAILY)
                 .filename_prefix("unitprep-api")
                 .filename_suffix("log")
-                .max_log_files(LOG_FILE_RETENTION_DAYS)
+                .max_log_files(log_retention_days(raw_retention.as_deref()))
                 .build(&dir);
             match appender {
                 Ok(appender) => {
@@ -101,4 +136,37 @@ pub(super) fn init() {
         tracing::error!(panic = %panic_info, "panicked");
         default_panic_hook(panic_info);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_retention_comes_from_the_environment_within_bounds_else_the_default() {
+        // Unset: the documented default.
+        assert_eq!(log_retention_days(None), 7);
+        // Usable values, spaces ignored, both ends of the range accepted.
+        assert_eq!(log_retention_days(Some("14")), 14);
+        assert_eq!(log_retention_days(Some(" 30 ")), 30);
+        assert_eq!(log_retention_days(Some("1")), 1);
+        assert_eq!(log_retention_days(Some("365")), 365);
+        // Anything else falls back instead of failing startup or keeping
+        // logs without limit: zero, over the cap, negative, text, empty.
+        assert_eq!(log_retention_days(Some("0")), 7);
+        assert_eq!(log_retention_days(Some("366")), 7);
+        assert_eq!(log_retention_days(Some("7000")), 7);
+        assert_eq!(log_retention_days(Some("-3")), 7);
+        assert_eq!(log_retention_days(Some("two weeks")), 7);
+        assert_eq!(log_retention_days(Some("")), 7);
+    }
+
+    #[test]
+    fn only_a_whole_number_in_range_counts_as_usable() {
+        assert_eq!(parse_log_retention_days("21"), Some(21));
+        assert_eq!(parse_log_retention_days("0"), None);
+        assert_eq!(parse_log_retention_days("366"), None);
+        assert_eq!(parse_log_retention_days("7.5"), None);
+        assert_eq!(parse_log_retention_days("seven"), None);
+    }
 }

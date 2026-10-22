@@ -5,11 +5,13 @@
 | Where | What | Kept |
 |---|---|---|
 | The terminal running `cargo run` | Human-readable text | Until the terminal closes |
-| `./logs/unitprep-api.YYYY-MM-DD.log` (set by `LOG_DIR`, see `src/startup/logging.rs`) | JSON, one object per line | Last 7 daily files |
-| Grafana Cloud Loki (shipped by the `alloy` compose service, `dev-tools/alloy/config.alloy`) | The same JSON | Per the Grafana plan (trial ends 2026-10-30; permanent limits unverified) |
+| `./logs/unitprep-api.YYYY-MM-DD.log` (set by `LOG_DIR`, see `src/startup/logging.rs`) | JSON, one object per line | Last 7 daily files by default; set `LOG_RETENTION_DAYS` to change it |
+| Grafana Cloud Loki (shipped by the `alloy` compose service, `dev-tools/alloy/config.alloy`) | The same JSON | Set by the Grafana plan, not by this repo: the Free plan keeps **14 days** and allows 50 GB ingested per month (verified on Grafana's pricing page 2026-10-22; Pro is 30 days) |
 
 Run the shipper with: `docker compose --env-file .env.local --profile dev --profile logs up -d`.
 A running server only picks up logging/code changes after it is restarted (`cargo run` does not reload).
+
+**Log-file retention**: `LOG_RETENTION_DAYS` (environment variable, read at startup) is the number of daily log files kept in `LOG_DIR`. Default **7**; accepted values are whole numbers from **1 to 365**. Anything else (empty, `0`, negative, text, over 365) prints one warning line to stderr and keeps the default. It counts daily *files*, not calendar days: a day with no log writes creates no file, so the files kept can span more than that many days. Pruning happens when a new daily file is created, and a restart is needed to change the value. Example: `LOG_RETENTION_DAYS=14 cargo run`; for the dev container set it under `api-dev` in `docker-compose.yml` next to `LOG_DIR`.
 
 ## Reading logs
 
@@ -39,7 +41,7 @@ query Loki, list dashboards and alert rules. Runs **read-only** (`--disable-writ
 loki, alerting, dashboard, folder and navigation tool groups, and with its anonymous usage statistics turned off.
 Claude Code asks you to approve a new project MCP server the first time a session starts in this repo.
 
-**The files themselves**: `./logs/*.log` (JSON lines), readable with `jq` or `grep`; the last 7 days only.
+**The files themselves**: `./logs/*.log` (JSON lines), readable with `jq` or `grep`; the last 7 daily files unless `LOG_RETENTION_DAYS` says otherwise.
 
 ## Alert emails (Grafana alerting, contact point `email-boris`)
 
