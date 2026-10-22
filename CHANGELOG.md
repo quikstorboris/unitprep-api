@@ -6,6 +6,15 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.136] - 2026-10-22
+
+Refactor and log wording only. No migration, no API shape change, no `unitprep-ui` change needed.
+
+### Changed
+
+- `RateLimiter` moved from `clickup::rate_limit` to a neutral crate-root `rate_limit` module, since the Process Street sync pacer uses it too. `clickup::rate_limit` keeps only the per-user ClickUp limiter.
+- The "Process Street sync scheduled" log line now shows `next_sync_at` in the configured timezone (for example `2026-10-23 03:00:00 PDT`) and adds `next_sync_at_utc`; before, the UTC time sat next to the zone name and read as inconsistent. The schedule itself was always correct.
+
 ## [1.9.135] - 2026-10-22
 
 Log label fix only. No migration, no API shape change, no `unitprep-ui` change needed.
