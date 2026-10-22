@@ -6,9 +6,9 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [1.9.134] - 2026-10-21
+## [1.9.134] - 2026-10-22
 
-Database round trips and idle Neon wake-ups, plus a pool-ping fix. No migration, no API shape change, no `unitprep-ui` change needed (stays compatible with 1.6.103).
+Database round trips and idle Neon wake-ups, a pool-ping fix and a TLS certificate-crate security update. No migration, no API shape change, no `unitprep-ui` change needed (stays compatible with 1.6.103).
 
 ### Changed
 - The vendor-format and file-meta registries are no longer re-read from the database every 4 hours. Nothing writes those tables while the server runs (migrations only, and a deploy restarts the server), so the three timers only woke the scale-to-zero database about six times a day on an idle server. Each registry now loads once at startup; `start_retry_if_unloaded` retries (30 s, doubling, capped at 15 min) only if that load failed, then stops. `vendor_format::refresh` / `vendor_file_meta::refresh` are there for a future vendor-editing UI to call after saving. Startup also does half the registry loads it did (the timers' immediate first tick duplicated them). New tests: retry timing on a paused clock and a real-database `refresh` test.
@@ -17,6 +17,9 @@ Database round trips and idle Neon wake-ups, plus a pool-ping fix. No migration,
 
 ### Fixed
 - The idle-connection ping (`db::ping_through_to_backend`) is now sent over the simple query protocol (`raw_sql`) instead of as an unnamed prepared statement. Through Neon's transaction-mode PgBouncer an unnamed statement's Parse and Bind can reach different backends; on 2026-10-21 a burst of `unnamed prepared statement does not exist` from this hook discarded a run of idle connections, and four requests then hit the 10 s pool timeout as HTTP 500s (cause inferred from the error text, not reproduced). A simple `Query` is one self-contained message and still reaches a real backend. New test `the_idle_ping_leaves_no_prepared_statement_behind`.
+
+### Security
+- `Cargo.lock` only: `rustls-webpki` 0.103.15 to 0.103.16 (RUSTSEC-2026-0382, certificate verification could accept distrusted intermediates) and `webpki-roots` / `webpki-root-certs` 1.0.9 to 1.0.10 (RUSTSEC-2026-0381 / -0383, bundled roots trusted distrusted emSign intermediates). All three were published 2026-10-19/20 and failed the preflight `cargo audit` gate; they are patch bumps with no API change. These crates sit under every outbound TLS connection (Neon, Process Street, ClickUp, Dropbox).
 
 ## [1.9.133] - 2026-10-19
 
