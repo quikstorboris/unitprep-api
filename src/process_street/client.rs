@@ -31,7 +31,7 @@ const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(90);
 /// resync of N runs therefore takes about N / 0.6 seconds.
 fn request_pacer() -> &'static RateLimiter {
     static PACER: OnceLock<RateLimiter> = OnceLock::new();
-    PACER.get_or_init(|| RateLimiter::new(6, Duration::from_secs(10)))
+    PACER.get_or_init(|| RateLimiter::new("process_street", 6, Duration::from_secs(10)))
 }
 
 /// One line per request to PS, so what spends the rate budget can be read

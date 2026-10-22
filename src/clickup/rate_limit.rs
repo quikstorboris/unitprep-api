@@ -26,14 +26,16 @@ pub const REQUESTS_PER_WINDOW: usize = 80;
 pub const WINDOW: Duration = Duration::from_secs(60);
 
 pub struct RateLimiter {
+    name: &'static str,
     limit: usize,
     window: Duration,
     calls: Mutex<VecDeque<Instant>>,
 }
 
 impl RateLimiter {
-    pub fn new(limit: usize, window: Duration) -> Self {
+    pub fn new(name: &'static str, limit: usize, window: Duration) -> Self {
         Self {
+            name,
             limit,
             window,
             calls: Mutex::new(VecDeque::new()),
@@ -65,10 +67,11 @@ impl RateLimiter {
                 let wait = (oldest + self.window).saturating_duration_since(now);
                 if !waited {
                     tracing::warn!(
+                        limiter = self.name,
                         wait_ms = wait.as_millis() as u64,
                         limit = self.limit,
                         window_secs = self.window.as_secs(),
-                        "ClickUp rate limiter full, call is waiting"
+                        "Rate limiter full, call is waiting"
                     );
                     waited = true;
                 }
@@ -100,7 +103,7 @@ pub fn for_user(user_id: Uuid) -> Arc<RateLimiter> {
         .lock()
         .expect("rate limiter map lock")
         .entry(user_id)
-        .or_insert_with(|| Arc::new(RateLimiter::new(REQUESTS_PER_WINDOW, WINDOW)))
+        .or_insert_with(|| Arc::new(RateLimiter::new("clickup", REQUESTS_PER_WINDOW, WINDOW)))
         .clone()
 }
 
@@ -110,7 +113,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn calls_under_the_limit_go_straight_through() {
-        let limiter = RateLimiter::new(3, Duration::from_secs(60));
+        let limiter = RateLimiter::new("test", 3, Duration::from_secs(60));
         let started = Instant::now();
 
         for _ in 0..3 {
@@ -123,7 +126,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_call_over_the_limit_waits_for_the_oldest_to_age_out() {
-        let limiter = RateLimiter::new(2, Duration::from_secs(60));
+        let limiter = RateLimiter::new("test", 2, Duration::from_secs(60));
         limiter.acquire().await;
         tokio::time::advance(Duration::from_secs(10)).await;
         limiter.acquire().await;
@@ -137,7 +140,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_burst_far_over_the_limit_is_spread_across_windows() {
-        let limiter = RateLimiter::new(5, Duration::from_secs(60));
+        let limiter = RateLimiter::new("test", 5, Duration::from_secs(60));
         let started = Instant::now();
 
         for _ in 0..12 {
@@ -151,7 +154,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn slots_come_back_as_calls_leave_the_window() {
-        let limiter = RateLimiter::new(2, Duration::from_secs(60));
+        let limiter = RateLimiter::new("test", 2, Duration::from_secs(60));
         limiter.acquire().await;
         limiter.acquire().await;
         assert_eq!(limiter.available(), 0);

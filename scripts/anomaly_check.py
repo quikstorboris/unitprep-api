@@ -171,10 +171,16 @@ def main():
         # information only (known-benign patterns, never counted)
         ba = [r for r in win if "before_acquire" in str(r.get("fields", {}).get("message", ""))]
         slow = [r for r in win if "slow statement" in str(r.get("fields", {}).get("message", ""))]
-        cu = [r for r in win if "ClickUp rate limiter full" in str(r.get("fields", {}).get("message", ""))]
+        # Named limiter (api >= 1.9.135); the older hard-coded "ClickUp rate limiter full" text was
+        # also what the Process Street pacer logged, so pre-1.9.135 lines cannot be split by source.
+        limiter_waits = [r for r in win if "rate limiter full" in str(r.get("fields", {}).get("message", "")).lower()]
+        cu = [r for r in limiter_waits if r.get("fields", {}).get("limiter") == "clickup"]
+        psw = [r for r in limiter_waits if r.get("fields", {}).get("limiter") == "process_street"]
+        unnamed = len(limiter_waits) - len(cu) - len(psw)
         ps429 = [r for r in win if "rate limit reached" in str(r.get("fields", {}).get("message", ""))]
         print("information only (known-benign, not counted): %d pool before_acquire warning(s), %d slow statement(s), "
-              "%d ClickUp limiter wait(s), %d Process Street 429 wait(s)" % (len(ba), len(slow), len(cu), len(ps429)))
+              "%d ClickUp limiter wait(s), %d Process Street pacer wait(s), %d unlabelled limiter wait(s) "
+              "(older logs), %d Process Street 429 wait(s)" % (len(ba), len(slow), len(cu), len(psw), unnamed, len(ps429)))
     print()
 
     # ---------------- freshness ----------------
