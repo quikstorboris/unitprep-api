@@ -6,6 +6,14 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.135] - 2026-10-22
+
+Log label fix only. No migration, no API shape change, no `unitprep-ui` change needed.
+
+### Changed
+
+- The rate-limit warning now names its limiter (`limiter=clickup` or `limiter=process_street`) instead of always saying "ClickUp". The Process Street sync pacer (6 calls per 10 s) shares the type, so its nightly waits were mislabelled. `scripts/anomaly_check.py` reports the two separately.
+
 ## [1.9.134] - 2026-10-22
 
 Database round trips and idle Neon wake-ups, a pool-ping fix and a TLS certificate-crate security update. No migration, no API shape change, no `unitprep-ui` change needed (stays compatible with 1.6.103).
