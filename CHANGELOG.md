@@ -6,6 +6,9 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Tooling
+- `scripts/anomaly_check.py` (the twice-daily check) now also reports **dependencies and CI**: `cargo audit`, `npm audit` for the UI, review dates of the exceptions in `.cargo/audit.toml` (`REVIEW by YYYY-MM-DD`; past due is an anomaly), whether the UI's installed `node_modules` match `package-lock.json` (and Next.js specifically: `npm audit` reads the lockfile, so a stale install looked clean), the latest GitHub Actions run per branch/tag in both repos, and a Sentry login expiring within 7 days. `--deps-only` runs just that part (about 15 s); `--skip-deps` omits it. Read-only. Its first run found the UI dev checkout still on Next.js 16.4.0 while the lockfile pinned 16.4.3.
+
 ### Added
 - **`LOG_RETENTION_DAYS`** sets how many daily log files are kept in `LOG_DIR` (default 7, accepted 1-365; anything else prints one warning on stderr and keeps 7). It replaces the hardcoded `LOG_FILE_RETENTION_DAYS = 7`, in the same shape as `DB_POOL_MAX_CONNECTIONS`. It counts daily files, not calendar days. See `docs/LOGS.md`.
 

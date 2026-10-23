@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Read-only anomaly check for UnitPrep: Sentry, the local server logs, and
-whether the checkouts / running server are stale.
+"""Read-only anomaly check for UnitPrep: Sentry, the local server logs,
+dependency advisories (cargo audit, npm audit, dated exceptions), CI health
+(GitHub Actions) and whether the checkouts / running server are stale.
 
 Run it with:  python3 scripts/anomaly_check.py [--hours 14] [--include-resolved]
+              [--deps-only] [--skip-deps]
 
 It changes nothing (no git writes beyond `git fetch`, no Sentry writes). It
 prints a plain-text report and ends with two machine-readable lines:
@@ -11,7 +13,10 @@ prints a plain-text report and ends with two machine-readable lines:
     STATUS=ALL_CLEAR | ATTENTION
 
 An anomaly is: an UNRESOLVED Sentry issue in either project, an ERROR log
-line in the window, or an HTTP 5xx in the window. (A panic is also an ERROR
+line in the window, an HTTP 5xx in the window, a dependency vulnerability
+(`cargo audit` / `npm audit`), an advisory exception past its review date, a
+failed latest GitHub Actions run on a branch or tag, or a check that could
+not run (blind). (A panic is also an ERROR
 line, so it is not counted twice.) Known-benign patterns (see the vault note
 "Routine Monitoring and Troubleshooting Playbook") are reported as
 INFORMATION only and never counted.
@@ -74,10 +79,151 @@ def sentry_issues(project, query):
     return items, ""
 
 
+NVM_PREFIX = '. "$HOME/.nvm/nvm.sh" >/dev/null 2>&1; nvm use default >/dev/null 2>&1; '
+
+
+def bash(script, cwd=None, timeout=180):
+    """Run a snippet through bash with nvm's Node first on PATH (a bare `npm`
+    in WSL can resolve to the Windows one)."""
+    return sh(["bash", "-c", NVM_PREFIX + script], cwd=cwd, timeout=timeout)
+
+
+def check_dependencies(today, since_unused=None):
+    """Dependency advisories, dated advisory exceptions and CI health.
+    Returns (anomaly_count, lines_printed). Prints as it goes."""
+    n = 0
+    print("== DEPENDENCIES AND ADVISORIES")
+
+    # -- cargo audit (api). Exceptions in .cargo/audit.toml are already applied by cargo audit.
+    code, out = sh([os.path.expanduser("~/.cargo/bin/cargo"), "audit", "--json"], cwd=ROOT, timeout=240)
+    try:
+        report = json.loads(out[out.index("{"):])
+        found = report["vulnerabilities"]["list"]
+        warn = report.get("warnings", {})
+    except (ValueError, KeyError):
+        report = None
+    if report is None:
+        n += 1
+        print("api cargo audit: !! could not run or parse (BLIND): %s" % out.strip()[:200])
+    else:
+        print("api cargo audit: %d vulnerabilit%s" % (len(found), "y" if len(found) == 1 else "ies"))
+        for v in found:
+            n += 1
+            adv, pkg = v.get("advisory", {}), v.get("package", {})
+            print("  - %s %s %s | %s" % (adv.get("id"), pkg.get("name"), pkg.get("version"), str(adv.get("title"))[:110]))
+        print("  information only: %s" % (", ".join("%d %s" % (len(v), k) for k, v in warn.items()) or "no warnings"))
+
+    # -- dated exceptions in .cargo/audit.toml ("REVIEW by YYYY-MM-DD")
+    try:
+        with open(os.path.join(ROOT, ".cargo", "audit.toml"), encoding="utf-8") as fh:
+            toml_text = fh.read()
+    except OSError:
+        toml_text = ""
+    reviews = re.findall(r"REVIEW by (\d{4}-\d{2}-\d{2})", toml_text)
+    for d in sorted(set(reviews)):
+        due = dt.date.fromisoformat(d)
+        left = (due - today).days
+        if left < 0:
+            n += 1
+            print("  !! advisory exception in .cargo/audit.toml is %d day(s) PAST its review date (%s)" % (-left, d))
+        else:
+            print("  advisory exception review date %s (in %d day(s))%s" % (d, left, "  <- due soon" if left <= 14 else ""))
+    if not reviews:
+        print("  no dated advisory exceptions")
+
+    # -- npm audit (ui)
+    if os.path.isdir(UI_ROOT):
+        code, out = bash("npm audit --json 2>/dev/null", cwd=UI_ROOT, timeout=180)
+        try:
+            j = json.loads(out[out.index("{"):])
+            meta = j["metadata"]["vulnerabilities"]
+            vulns = j.get("vulnerabilities", {})
+        except (ValueError, KeyError):
+            n += 1
+            print("ui npm audit: !! could not run or parse (BLIND): %s" % out.strip()[:200])
+            vulns = None
+        if vulns is not None:
+            total = meta.get("total", 0)
+            print("ui npm audit: %d vulnerabilit%s (%s)" % (
+                total, "y" if total == 1 else "ies",
+                ", ".join("%d %s" % (meta.get(k, 0), k) for k in ("critical", "high", "moderate", "low") if meta.get(k, 0)) or "none"))
+            for name, v in sorted(vulns.items()):
+                n += 1
+                titles = [x.get("title") for x in v.get("via", []) if isinstance(x, dict)]
+                print("  - %s (%s) fix: %s | %s" % (name, v.get("severity"), "yes" if v.get("fixAvailable") else "NONE yet",
+                                                  "; ".join(t for t in titles[:2] if t)[:140]))
+        # Installed vs locked: `npm audit` reads package-lock.json, so a checkout whose
+        # node_modules is older than its lockfile (after a pull) shows "0 vulnerabilities"
+        # while the dev server still runs the vulnerable code. `npm ls` reports that.
+        code, out = bash("npm ls --depth=0 --json 2>/dev/null", cwd=UI_ROOT, timeout=120)
+        try:
+            problems = json.loads(out[out.index("{"):]).get("problems", [])
+        except (ValueError, KeyError):
+            problems = None
+        if problems is None:
+            n += 1
+            print("ui node_modules: !! could not run `npm ls` (BLIND)")
+        elif problems:
+            n += 1
+            print("ui node_modules: !! %d package(s) installed differ from package-lock.json "
+                  "(run `npm ci` in unitprep-ui, then restart the dev server):" % len(problems))
+            for pr in problems[:6]:
+                print("  - %s" % pr[:140])
+        else:
+            print("ui node_modules: match package-lock.json")
+        code, out = bash("node -e 'console.log(require(\"next/package.json\").version)'; npm view next version 2>/dev/null", cwd=UI_ROOT, timeout=60)
+        vers = [l.strip() for l in out.splitlines() if re.match(r"^\d+\.\d+\.\d+", l.strip())]
+        if len(vers) >= 2:
+            note = "" if vers[0] == vers[1] else "  <- newer release exists (information; `npm audit` decides whether it is a security fix)"
+            print("  Next.js installed %s, latest %s%s" % (vers[0], vers[1], note))
+            # `npm ls` accepts any version inside package.json's range, so also compare Next
+            # (the one that carries our internet-facing risk) with the version the lockfile pins.
+            try:
+                with open(os.path.join(UI_ROOT, "package-lock.json"), encoding="utf-8") as fh:
+                    locked = json.load(fh)["packages"]["node_modules/next"]["version"]
+                if locked != vers[0]:
+                    n += 1
+                    print("  !! Next.js installed %s but package-lock.json pins %s (run `npm ci` in unitprep-ui, "
+                          "then restart the dev server)" % (vers[0], locked))
+            except (OSError, KeyError, ValueError):
+                pass
+    else:
+        print("ui: checkout not found at %s" % UI_ROOT)
+
+    # -- CI health (GitHub Actions) for both repos
+    gh = shutil.which("gh") or os.path.expanduser("~/.local/bin/gh")
+    for name, path in (("api", ROOT), ("ui", UI_ROOT)):
+        if not os.path.isdir(path):
+            continue
+        code, out = sh([gh, "run", "list", "--limit", "12", "--json",
+                        "status,conclusion,headBranch,displayTitle,createdAt,workflowName"], cwd=path, timeout=60)
+        try:
+            runs = json.loads(out)
+        except ValueError:
+            n += 1
+            print("%s CI: !! could not read GitHub Actions (BLIND): %s" % (name, out.strip()[:160]))
+            continue
+        latest = {}
+        for r in runs:  # newest first, so setdefault keeps the newest per branch/tag
+            latest.setdefault(r.get("headBranch"), r)
+        bad = [r for r in latest.values() if r.get("conclusion") in ("failure", "timed_out", "startup_failure")]
+        running = [r for r in latest.values() if r.get("status") != "completed"]
+        print("%s CI: latest run per branch/tag: %d ok, %d failed, %d still running" % (
+            name, len(latest) - len(bad) - len(running), len(bad), len(running)))
+        for r in bad:
+            n += 1
+            print("  - FAILED %s on %s (%s) | %s" % (r.get("workflowName"), r.get("headBranch"),
+                                                     str(r.get("createdAt"))[:16], str(r.get("displayTitle"))[:80]))
+    print()
+    return n
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hours", type=float, default=14.0, help="look-back window for the log part (default 14)")
     ap.add_argument("--include-resolved", action="store_true", help="also list resolved Sentry issues (informational)")
+    ap.add_argument("--deps-only", action="store_true", help="only the dependency / CI section (fast, for hand use)")
+    ap.add_argument("--skip-deps", action="store_true", help="skip the dependency / CI section")
     a = ap.parse_args()
     now = dt.datetime.now(dt.timezone.utc)
     since = now - dt.timedelta(hours=a.hours)
@@ -87,12 +233,26 @@ def main():
     print("now      : %s UTC  (%s local)" % (now.strftime("%Y-%m-%d %H:%M:%S"), dt.datetime.now().strftime("%a %Y-%m-%d %H:%M:%S")))
     print("log window: last %.1f h (since %s UTC)\n" % (a.hours, since.strftime("%Y-%m-%d %H:%M")))
 
+    if a.deps_only:
+        anomalies += check_dependencies(dt.date.today())
+        print("ANOMALIES=%d" % anomalies)
+        print("STATUS=%s" % ("ALL_CLEAR" if anomalies == 0 else "ATTENTION"))
+        return 0
+
     # ---------------- Sentry ----------------
     print("== SENTRY (org %s)" % ORG)
     code, out = sh([sentry_bin(), "auth", "status"])
     exp = re.search(r"Access token expires\s*[|│]\s*([^|│\n]+)", out)
     print("auth: %s%s" % ("OK" if code == 0 and "Authenticated" in out else "PROBLEM",
                           ("  (token expires %s)" % exp.group(1).strip()) if exp else ""))
+    if exp:
+        try:
+            left = (parse_ts(exp.group(1).strip().replace(" ", "T", 1)) - now).days
+            if left is not None and left < 7:
+                anomalies += 1
+                print("  !! the Sentry CLI login expires in %d day(s); renew it (`sentry auth login`)" % left)
+        except (TypeError, ValueError):
+            pass
     if code != 0 or "Authenticated" not in out:
         anomalies += 1
         print("  !! Sentry CLI is not authenticated; this part of the check is BLIND:", out.strip()[:200])
@@ -203,6 +363,9 @@ def main():
             print("note: the checkout's newest commit (%s) is NEWER than the running server's last start; "
                   "the server is on older code (cargo run does not reload)." % ct.strip()[:19])
     print()
+
+    if not a.skip_deps:
+        anomalies += check_dependencies(dt.date.today())
 
     print("ANOMALIES=%d" % anomalies)
     print("STATUS=%s" % ("ALL_CLEAR" if anomalies == 0 else "ATTENTION"))
