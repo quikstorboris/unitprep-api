@@ -6,11 +6,13 @@ Everything is behind the `dev` compose profile, so a bare `docker compose up` do
 
 ## Start everything
 
-**1. API containers** (`test-db` and `api-dev`):
+**1. API containers** (`test-db`, `api-dev` and the `alloy` log shipper):
 
 ```bash
-cd ~/Development/unitprep-api && docker compose --profile dev up -d
+cd ~/Development/unitprep-api && scripts/dev_up.sh
 ```
+
+Use this script rather than a bare `docker compose --profile dev up -d`: the log shipper (`alloy`) is in its own `logs` profile, so the bare command starts everything except it and Grafana quietly stops getting logs (it happened for a day on 2026-10-22/23). The script runs `docker compose --env-file .env.local --profile dev --profile logs up -d`.
 
 **2. API server** (stays open: the server runs in this terminal):
 

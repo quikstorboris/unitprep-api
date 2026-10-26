@@ -7,6 +7,8 @@ versioning follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Tooling
+- **The log shipper can no longer be forgotten.** New `scripts/dev_up.sh` starts the whole dev stack (`test-db`, `api-dev` and `alloy`) with the right profiles and `--env-file`; `docs/DOCKER.md` now points at it instead of the bare `docker compose --profile dev up -d`, which left out `alloy` and let Grafana go empty for a day (2026-10-22/23). `alloy` also gets `restart: unless-stopped`, so a Docker/WSL restart brings it back by itself.
+- `scripts/anomaly_check.py` gains a **warnings-only "DEV STACK STATE" section** and a `WARNINGS=n` line: is the API answering on `:8080`, are `test-db`/`api-dev`/`alloy` running, when the last request was logged. Warnings are never anomalies, never change `STATUS`, and nothing acts on or notifies about them.
 - `scripts/anomaly_check.py` (the twice-daily check) now also reports **dependencies and CI**: `cargo audit`, `npm audit` for the UI, review dates of the exceptions in `.cargo/audit.toml` (`REVIEW by YYYY-MM-DD`; past due is an anomaly), whether the UI's installed `node_modules` match `package-lock.json` (and Next.js specifically: `npm audit` reads the lockfile, so a stale install looked clean), the latest GitHub Actions run per branch/tag in both repos, and a Sentry login expiring within 7 days. `--deps-only` runs just that part (about 15 s); `--skip-deps` omits it. Read-only. Its first run found the UI dev checkout still on Next.js 16.4.0 while the lockfile pinned 16.4.3.
 
 ### Added

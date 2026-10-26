@@ -12,6 +12,12 @@ prints a plain-text report and ends with two machine-readable lines:
     ANOMALIES=<n>
     STATUS=ALL_CLEAR | ATTENTION
 
+plus an informational `WARNINGS=<n>` line for the dev stack state (is the
+API answering, are the test-db / api-dev / alloy containers running). Warnings
+are NEVER counted as anomalies, never change STATUS, and nothing acts on them
+or notifies anyone: they exist so a stopped server or log shipper is visible
+in the report instead of silent (Boris, 2026-10-26).
+
 An anomaly is: an UNRESOLVED Sentry issue in either project, an ERROR log
 line in the window, an HTTP 5xx in the window, a dependency vulnerability
 (`cargo audit` / `npm audit`), an advisory exception past its review date, a
@@ -35,6 +41,7 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.request
 
 ORG = "quikstor-wf"
 PROJECTS = ["orchestrator", "orchestrator-ui"]
@@ -218,6 +225,52 @@ def check_dependencies(today, since_unused=None):
     return n
 
 
+def check_stack_state(last_request):
+    """Warnings only: is the local dev stack actually up?
+
+    Prints WARNING lines and returns how many there were. These are never
+    counted as anomalies, never change STATUS, and nothing acts on them: a
+    dead process cannot log that it is dead, so this looks from the outside.
+    `last_request` is the newest "request completed" log time (or None).
+    """
+    print("== DEV STACK STATE (warnings only; nothing acts on these)")
+    warnings = 0
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8080/health", timeout=4) as resp:
+            answering = resp.status == 200
+    except Exception:  # noqa: BLE001 - refused, reset, timeout: all mean "not answering"
+        answering = False
+    if answering:
+        print("API server: answering on http://127.0.0.1:8080/health")
+    else:
+        warnings += 1
+        print("WARNING: the API server is not answering on http://127.0.0.1:8080/health "
+              "(not running, or still starting). Start it with `docker compose exec api-dev cargo run`.")
+    code, out = sh(["docker", "compose", "ps", "-a", "--format", "{{.Service}}|{{.State}}"], cwd=ROOT)
+    if code != 0:
+        warnings += 1
+        print("WARNING: could not ask Docker about the containers: %s" % out.strip()[:160])
+    else:
+        states = dict(line.split("|", 1) for line in out.splitlines() if "|" in line)
+        for svc in ("test-db", "api-dev", "alloy"):
+            state = states.get(svc)
+            if state == "running":
+                print("container %s: running" % svc)
+                continue
+            warnings += 1
+            print("WARNING: container %s is %s." % (svc, state or "missing"))
+            if svc == "alloy":
+                print("         The log shipper is in its own compose profile: until it runs, Grafana gets no new logs "
+                      "while ./logs keeps filling. Start everything with scripts/dev_up.sh.")
+    if last_request is not None:
+        age = (dt.datetime.now(dt.timezone.utc) - last_request).total_seconds() / 3600
+        print("last request seen in the logs: %s UTC (%.1f h ago)" % (last_request.strftime("%Y-%m-%d %H:%M:%S"), age))
+    else:
+        print("last request seen in the logs: none in the local files")
+    print()
+    return warnings
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--hours", type=float, default=14.0, help="look-back window for the log part (default 14)")
@@ -364,11 +417,16 @@ def main():
                   "the server is on older code (cargo run does not reload)." % ct.strip()[:19])
     print()
 
+    last_request = max(
+        (r["_t"] for r in rows if r.get("fields", {}).get("message") == "request completed"), default=None)
+    warnings = check_stack_state(last_request)
+
     if not a.skip_deps:
         anomalies += check_dependencies(dt.date.today())
 
     print("ANOMALIES=%d" % anomalies)
     print("STATUS=%s" % ("ALL_CLEAR" if anomalies == 0 else "ATTENTION"))
+    print("WARNINGS=%d" % warnings)
     return 0
 
 
