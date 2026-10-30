@@ -3,7 +3,7 @@
 -- local test-db, via
 --   pg_dump --schema-only --no-owner --no-privileges
 -- Read-only reference, not applied by sqlx and not part of the migrations/
--- directory -- the 117 incremental migrations under migrations/
+-- directory -- the 118 incremental migrations under migrations/
 -- remain the actual source of truth and the real "how did we get here"
 -- history. This file exists so a newcomer (human or AI) can see current
 -- table/column/RLS/index shape in one place without reading them all in
@@ -14,7 +14,7 @@
 -- psql's per-dump \restrict/\unrestrict guard lines (a random token that
 -- changes on every dump) are stripped so a regeneration only shows real
 -- schema changes in the diff.
--- Generated 2026-10-14.
+-- Generated 2026-10-29.
 
 --
 -- PostgreSQL database dump
@@ -592,6 +592,27 @@ BEGIN
         RETURN QUERY SELECT resolved, 1;
     END IF;
 END;
+$$;
+
+
+--
+-- Name: session_profile(bytea, integer); Type: FUNCTION; Schema: auth; Owner: -
+--
+
+CREATE FUNCTION auth.session_profile(p_token_hash bytea, p_idle_minutes integer) RETURNS TABLE(first_name text, last_name text, totp_enrolled boolean)
+    LANGUAGE sql SECURITY DEFINER
+    SET search_path TO 'auth', 'public'
+    AS $$
+    SELECT u.first_name,
+           u.last_name,
+           EXISTS (
+               SELECT 1
+                 FROM auth.totp_credentials t
+                WHERE t.user_id = rs.user_id
+                  AND t.confirmed_at IS NOT NULL
+           )
+      FROM auth.resolve_session(p_token_hash, p_idle_minutes) rs
+      JOIN auth.users u ON u.id = rs.user_id;
 $$;
 
 

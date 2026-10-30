@@ -6,6 +6,13 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.137] - 2026-10-29
+
+One additive migration (`20261029160000`, a new function only): apply it to production **before** deploying this code. No API response shape change, no `unitprep-ui` change needed.
+
+### Changed
+- **`GET /health/whoami` is two database statements instead of six.** Every page load waits on it, and against Neon each statement is a network round trip, so it measured 217-555 ms server-side. After the extractor's `resolve_session` it used to open an RLS transaction (BEGIN, `set_config`, a TOTP read, a name read, COMMIT). It now makes one call to the new `auth.session_profile(token_hash, idle_minutes)` (migration `20261029160000`), which returns the caller's own first name, last name and whether a confirmed TOTP credential exists. **Security shape:** keyed by the session token with no user-id parameter, so it can only describe the owner of a live session the caller holds; validity is delegated to `resolve_session` (no duplicated checks, so revoked, expired, idle and deactivated sessions return nothing and `whoami` answers 401); names and a boolean only; pinned `search_path`; `EXECUTE` revoked from `PUBLIC`, granted to `app_service`. The read no longer runs under RLS (same trust model as `resolve_session`); recorded in `THREAT_MODEL.md`. The response shape is unchanged, so `unitprep-ui` needs no change. The migration is additive (one new function), so applying it before the code, or rolling the code back and leaving it, are both safe. Four real-database tests in `src/api/session_profile_db_tests.rs`. `SCHEMA.sql` regenerated.
+
 ### Tooling
 - **The log shipper can no longer be forgotten.** New `scripts/dev_up.sh` starts the whole dev stack (`test-db`, `api-dev` and `alloy`) with the right profiles and `--env-file`; `docs/DOCKER.md` now points at it instead of the bare `docker compose --profile dev up -d`, which left out `alloy` and let Grafana go empty for a day (2026-10-22/23). `alloy` also gets `restart: unless-stopped`, so a Docker/WSL restart brings it back by itself.
 - `scripts/anomaly_check.py` gains a **warnings-only "DEV STACK STATE" section** and a `WARNINGS=n` line: is the API answering on `:8080`, are `test-db`/`api-dev`/`alloy` running, when the last request was logged. Warnings are never anomalies, never change `STATUS`, and nothing acts on or notifies about them.

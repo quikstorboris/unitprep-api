@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use unitprep_core::session_store::SessionMetrics;
 
-use super::{internal_error, AppState};
+use super::{error_response, internal_error, AppState};
 
 #[derive(Serialize)]
 pub(super) struct HealthResponse {
@@ -101,48 +101,35 @@ pub(super) async fn whoami(
     State(state): State<AppState>,
     user: crate::auth::AuthenticatedUser,
 ) -> Result<Json<WhoamiResponse>, Response> {
-    let mut tx = crate::auth::begin_owner_rls_transaction(&state.db, user.user_id)
+    // One statement, not an RLS transaction of five -- each statement is a
+    // network round trip, and every page load waits on this call. See
+    // `auth.session_profile` (migration `20261029160000`) for why this is
+    // safe: it is keyed by this request's own session token and decides
+    // session validity through `resolve_session`, so it can only describe
+    // the signed-in user.
+    let profile = crate::auth::query_session_profile(&user.token_hash, &state.db)
         .await
         .map_err(|err| {
-            tracing::error!(error = %err, user_id = %user.user_id, "whoami: failed to open transaction");
+            tracing::error!(error = %err, user_id = %user.user_id, "whoami: profile lookup failed");
             internal_error("Could not look up your account")
+        })?
+        .ok_or_else(|| {
+            // The session stopped being valid between the extractor's check
+            // and this read (revoked, expired, user deactivated).
+            error_response(
+                StatusCode::UNAUTHORIZED,
+                "unauthorized",
+                "Sign in required".to_string(),
+            )
         })?;
-
-    let totp_enrolled: bool = sqlx::query_scalar(
-        "SELECT confirmed_at IS NOT NULL FROM auth.totp_credentials WHERE user_id = $1",
-    )
-    .bind(user.user_id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|err| {
-        tracing::error!(error = %err, user_id = %user.user_id, "whoami: totp lookup failed");
-        internal_error("Could not look up your account")
-    })?
-    .unwrap_or(false);
-
-    let (first_name, last_name): (String, String) = sqlx::query_as(
-        "SELECT first_name, last_name FROM auth.users WHERE id = $1",
-    )
-    .bind(user.user_id)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|err| {
-        tracing::error!(error = %err, user_id = %user.user_id, "whoami: name lookup failed");
-        internal_error("Could not look up your account")
-    })?;
-
-    tx.commit().await.map_err(|err| {
-        tracing::error!(error = %err, user_id = %user.user_id, "whoami: commit failed");
-        internal_error("Could not look up your account")
-    })?;
 
     Ok(Json(WhoamiResponse {
         user_id: user.user_id.to_string(),
-        first_name,
-        last_name,
+        first_name: profile.first_name,
+        last_name: profile.last_name,
         roles: user.role_keys.clone(),
         permissions: user.permission_keys.iter().cloned().collect(),
-        totp_enrolled,
+        totp_enrolled: profile.totp_enrolled,
         step_up_required: user.requires_step_up,
     }))
 }

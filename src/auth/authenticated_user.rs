@@ -274,6 +274,37 @@ pub(crate) async fn query_session(
     .await
 }
 
+/// What `GET /health/whoami` adds to the identity the extractor already
+/// resolved: the caller's own display name and whether a confirmed TOTP
+/// credential exists. Names and a flag only, never a secret.
+#[derive(Debug, PartialEq, sqlx::FromRow)]
+pub struct SessionProfile {
+    pub first_name: String,
+    pub last_name: String,
+    pub totp_enrolled: bool,
+}
+
+/// The one query behind `whoami`'s profile, via `auth.session_profile`
+/// (migration `20261029160000`): one statement and one network round trip,
+/// where this used to be an RLS transaction of five.
+///
+/// Keyed by the session's own token hash, never by a user id, so it can only
+/// describe the owner of a live session whose token the caller holds. Session
+/// validity is decided inside the function by `auth.resolve_session`, the same
+/// single place the extractor uses, so `None` means the session stopped being
+/// valid between the extractor's check and this call (revoked, expired, user
+/// deactivated); the caller should answer 401.
+pub async fn query_session_profile(
+    token_hash: &[u8],
+    db: &PgPool,
+) -> Result<Option<SessionProfile>, sqlx::Error> {
+    sqlx::query_as("SELECT first_name, last_name, totp_enrolled FROM auth.session_profile($1, $2)")
+        .bind(token_hash)
+        .bind(session_idle_timeout_minutes())
+        .fetch_optional(db)
+        .await
+}
+
 /// Runs only on the "no valid session" path, to tell an ordinary stale or
 /// forged cookie apart from one that named a session which genuinely
 /// existed and had crossed its idle or absolute expiry -- only the latter

@@ -94,6 +94,11 @@ shipped since and what's genuinely still open.
   Postgres functions (`auth.create_session`, `auth.resolve_session`),
   which also validate the user is still active and non-deleted on every
   request and bump `last_seen_at` (throttled, see the idle clock below).
+  `GET /health/whoami` adds one more, `auth.session_profile` (migration
+  `20261029160000`), for the caller's own name and confirmed-TOTP flag in
+  one statement instead of an RLS transaction: keyed by the same token
+  hash (no user-id parameter) and delegating validity to `resolve_session`
+  rather than repeating its checks, so it cannot disagree with it.
 - Two independent expiry clocks (Phase II item 2): an **absolute**
   ceiling (`SESSION_LIFETIME_HOURS`, default 12h) fixed at login and
   never extended, and an **idle** timeout (`SESSION_IDLE_TIMEOUT_MINUTES`,

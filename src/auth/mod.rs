@@ -12,9 +12,12 @@ mod totp;
 mod webauthn_backend;
 
 pub use authenticated_user::{
-    begin_owner_rls_transaction, begin_rls_transaction, step_up_required, try_authenticated_user,
-    AuthenticatedUser,
+    begin_owner_rls_transaction, begin_rls_transaction, query_session_profile, step_up_required,
+    try_authenticated_user, AuthenticatedUser,
 };
+// Named only by the real-database tests; `whoami` just uses its fields.
+#[cfg(test)]
+pub use authenticated_user::SessionProfile;
 pub use authentication_ceremony::AuthenticationCeremony;
 pub use ceremony_cookie::{
     clear_ceremony_cookie, issue_ceremony_cookie, read_ceremony_cookie, LOGIN_CEREMONY_COOKIE,

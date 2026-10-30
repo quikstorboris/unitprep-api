@@ -24,7 +24,11 @@ use super::clickup_db_tests::{create_user, superuser_pool};
 
 const IDLE_MINUTES: i32 = 30;
 
-async fn insert_session(superuser: &PgPool, user_id: Uuid, last_seen_minutes_ago: i32) -> Vec<u8> {
+pub(super) async fn insert_session(
+    superuser: &PgPool,
+    user_id: Uuid,
+    last_seen_minutes_ago: i32,
+) -> Vec<u8> {
     let (_, token_hash) = crate::auth::generate_token();
     sqlx::query(
         "INSERT INTO auth.sessions (user_id, token_hash, expires_at, last_seen_at)

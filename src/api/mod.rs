@@ -407,6 +407,12 @@ mod process_street_task_roles_db_tests;
 #[path = "session_resolution_db_tests.rs"]
 mod session_resolution_db_tests;
 
+/// Real-database tests for `auth.session_profile`, the one-statement read
+/// behind `GET /health/whoami`; every test `#[ignore]`d, `test-db` only.
+#[cfg(test)]
+#[path = "session_profile_db_tests.rs"]
+mod session_profile_db_tests;
+
 /// Real-database test that  seals the source and records
 /// off the async workers and still stores them correctly; d.
 #[cfg(test)]
