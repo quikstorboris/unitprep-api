@@ -30,6 +30,7 @@ pub mod report;
 pub mod similarity;
 pub mod types;
 pub mod unidentified;
+pub mod unit_link;
 
 pub use duplicate_records::DuplicateCustomerRecord;
 pub use note_composer::{NoteComposer, TemplateNoteComposer};

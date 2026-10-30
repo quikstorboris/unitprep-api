@@ -252,7 +252,7 @@ async fn the_seeded_registry_classifies_real_export_headers() {
         "the alternate-contacts file must not be mistaken for the tenant file"
     );
     // The street-address header variant (Davidson Road) is a QuikStor Cloud
-    // pull too: tenants file primary, alternate contacts and leases
+    // pull too: tenants file primary, leases a join file, alternate contacts
     // supporting (and the alternate file is not mistaken for the tenants).
     assert_eq!(
         format_of("Davidson Tenants.csv"),
@@ -270,7 +270,8 @@ async fn the_seeded_registry_classifies_real_export_headers() {
     );
     assert_eq!(
         format_of("Davidson Leases.csv"),
-        Some(("QuikStor Cloud Leases".to_string(), FileRole::Supporting))
+        Some(("QuikStor Cloud Leases".to_string(), FileRole::Join)),
+        "leases link tenants to units, so they ride along with the tenants file"
     );
     assert_eq!(format_of("Units.csv"), None);
     assert_eq!(

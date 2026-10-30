@@ -6,6 +6,17 @@ versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.9.138] - 2026-10-30
+
+One data-only migration (`20261030120000`, edits three `client_ops.vendor_format` rows): apply it to production before relying on the new behaviour. No API response shape change, no `unitprep-ui` change needed. The running API caches the vendor registry for 4 hours, so restart it for the new row settings to take effect.
+
+### Added
+- **Dedup uses QuikStor Cloud's `Leases.csv` to give every record its real unit number.** `Tenants.csv` never names a unit, so findings said "unit 1034223" (a tenant ID). `Leases.csv` (tenant ID + unit, one row per lease) is now a join file selected alongside the tenants file; a tenant with several leases becomes one record per unit, as in a QMS export, and findings name the real units. New `dedup/src/unit_link.rs` (a join with no customer name is read as a unit link rather than matched by name); the existing name-and-unit join is untouched. A tenant with no lease keeps its row; different rows for one tenant that do not line up with their units are refused rather than guessed.
+- Verified on two real pulls (counts only, no tenant data in the repo): Davidson Road 344 records / 291 tenants / 4 duplicate-customer records, Freeland 129 records / 107 tenants / 7 (both unchanged from the runs without leases). Ignored tests `quikstor_cloud_leases_fixtures` re-run them from env-var paths.
+
+### Changed
+- Registry: `QuikStor Cloud Leases` goes from `supporting` to `join` with a `TenantId` + `UnitNumber` mapping; the guidance on the two QuikStor Cloud tenants rows now describes the leases file.
+
 ## [1.9.137] - 2026-10-29
 
 One additive migration (`20261029160000`, a new function only): apply it to production **before** deploying this code. No API response shape change, no `unitprep-ui` change needed.

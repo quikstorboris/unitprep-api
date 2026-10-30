@@ -32,6 +32,16 @@ fn row_key(unit: &str, name: &str) -> (String, String) {
 /// join file has no unit or no name column to match on, because rows from
 /// it could then only be attached by guessing.
 pub fn merge_joined(mut primary: CsvDocument, joins: &[CsvDocument]) -> Result<CsvDocument> {
+    // A report that only links tenants to units (QuikStor Cloud's
+    // Leases.csv) can't be matched by name; it supplies the real unit
+    // numbers instead. Applied first, so every other join sees them.
+    let (links, joins): (Vec<&CsvDocument>, Vec<&CsvDocument>) = joins
+        .iter()
+        .partition(|doc| crate::unit_link::is_unit_link(doc));
+    for link in links {
+        primary = crate::unit_link::attach_units(primary, link)?;
+    }
+
     let (Some(unit_idx), Some(name_idx)) = (primary.header_index(UNIT), primary.header_index(NAME))
     else {
         bail!("The main file has no unit or customer name column, so the other files can't be matched to it");

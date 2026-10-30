@@ -1077,3 +1077,169 @@ fn syrasoft_one_record_with_several_units_is_not_flagged() {
     assert!(report.flagged_groups.is_empty());
     assert!(report.duplicate_customer_records.is_empty());
 }
+
+/// Mirrors the `QuikStor Cloud Leases` row of
+/// `20261030120000_use_quikstor_cloud_leases_for_units`: a join file that
+/// supplies only the tenant ID and the unit number.
+fn quikstor_cloud_leases_vendor() -> VendorFormat {
+    VendorFormat {
+        name: "QuikStor Cloud Leases".to_string(),
+        content_type: ContentType::Tenants,
+        signature_headers: [
+            "LegacyLeaseId",
+            "LegacyTenantId",
+            "LegacyUnitId",
+            "UnitNumber",
+        ]
+        .iter()
+        .map(|h| h.to_string())
+        .collect(),
+        field_mapping: [("TenantId", "LegacyTenantId"), ("UnitNumber", "UnitNumber")]
+            .iter()
+            .map(|(t, s)| (t.to_string(), s.to_string()))
+            .collect(),
+        transform_key: None,
+    }
+}
+
+fn quikstor_cloud_leases_document(rows: Vec<Vec<&str>>) -> CsvDocument {
+    document(
+        vec![
+            "LegacyLeaseId",
+            "LegacyTenantId",
+            "LegacyUnitId",
+            "UnitNumber",
+            "ConversionBalance",
+        ],
+        rows,
+    )
+}
+
+fn street_row<'a>(
+    tenant_id: &'a str,
+    first: &'a str,
+    last: &'a str,
+    phone: &'a str,
+) -> Vec<&'a str> {
+    vec![
+        "",
+        first,
+        "",
+        last,
+        "",
+        "Individual",
+        "",
+        "+1",
+        phone,
+        "",
+        "",
+        "",
+        "",
+        tenant_id,
+        "1 Main St",
+        "",
+        "Springfield",
+        "Ohio",
+        "45501",
+    ]
+}
+
+/// Davidson Road shape: one `Tenants.csv` row per tenant, but a tenant
+/// with several leases holds several units. With `Leases.csv` joined, each
+/// unit is its own record carrying the tenant's details, so findings name
+/// real units instead of the tenant ID.
+#[test]
+fn leases_give_each_record_its_real_unit_and_spread_a_tenant_over_their_units() {
+    let tenants = quikstor_cloud_street_document(vec![
+        street_row("101", "Ann", "Lee", "5550100"),
+        street_row("102", "Bo", "Ray", "5550101"),
+    ]);
+    let leases = quikstor_cloud_leases_document(vec![
+        vec!["1", "101", "9001", "A1", "0"],
+        vec!["2", "101", "9002", "A2", "0"],
+        vec!["3", "102", "9003", "B7", "0"],
+    ]);
+    let vendors = [
+        quikstor_cloud_street_vendor(),
+        quikstor_cloud_leases_vendor(),
+    ];
+
+    let records = records_from_documents(&tenants, &[&leases], &vendors).unwrap();
+
+    let mut units: Vec<(&str, &str)> = records
+        .iter()
+        .map(|r| (r.tenant_id.as_str(), r.unit_number.as_str()))
+        .collect();
+    units.sort();
+    assert_eq!(units, [("101", "A1"), ("101", "A2"), ("102", "B7")]);
+    assert!(
+        records.iter().all(|r| r.cust_numb == r.tenant_id),
+        "the customer number stays the tenant ID"
+    );
+    assert!(records
+        .iter()
+        .filter(|r| r.tenant_id == "101")
+        .all(|r| r.first_last == "Ann Lee" && r.phone_number == "5550100"));
+
+    // One tenant in two units with identical details is nothing to flag.
+    let report = crate::report::run(records);
+    assert!(report.flagged_groups.is_empty());
+    assert_eq!(report.unique_tenants, 2);
+}
+
+/// Freeland shape: `Tenants.csv` already repeats the same tenant once per
+/// lease. The result must be the same records, not each repeat multiplied
+/// by that tenant's leases.
+#[test]
+fn leases_do_not_multiply_a_tenant_that_is_already_repeated_once_per_lease() {
+    let tenants = quikstor_cloud_street_document(vec![
+        street_row("101", "Ann", "Lee", "5550100"),
+        street_row("101", "Ann", "Lee", "5550100"),
+        street_row("102", "Bo", "Ray", "5550101"),
+    ]);
+    let leases = quikstor_cloud_leases_document(vec![
+        vec!["1", "101", "9001", "A1", "0"],
+        vec!["2", "101", "9002", "A2", "0"],
+        vec!["3", "102", "9003", "B7", "0"],
+    ]);
+    let vendors = [
+        quikstor_cloud_street_vendor(),
+        quikstor_cloud_leases_vendor(),
+    ];
+
+    let records = records_from_documents(&tenants, &[&leases], &vendors).unwrap();
+
+    assert_eq!(records.len(), 3);
+}
+
+/// A real mismatch across a tenant's units is still found once the units
+/// are real, and the finding names the units.
+#[test]
+fn leases_make_a_flagged_finding_name_real_units() {
+    // The same person under two tenant IDs with a mistyped phone, as in the
+    // real Barrett case, now with the units each ID holds.
+    let tenants = quikstor_cloud_street_document(vec![
+        street_row("101", "Tom", "Barrett", "5550100"),
+        street_row("102", "Tom", "Barrett", "5550199"),
+    ]);
+    let leases = quikstor_cloud_leases_document(vec![
+        vec!["1", "101", "9001", "A1", "0"],
+        vec!["2", "102", "9002", "B2", "0"],
+    ]);
+    let vendors = [
+        quikstor_cloud_street_vendor(),
+        quikstor_cloud_leases_vendor(),
+    ];
+
+    let records = records_from_documents(&tenants, &[&leases], &vendors).unwrap();
+    let report = crate::report::run(records);
+
+    assert_eq!(report.duplicate_customer_records.len(), 1);
+    let mut units: Vec<&str> = report.duplicate_customer_records[0]
+        .tenants
+        .iter()
+        .flat_map(|t| t.units.iter().map(String::as_str))
+        .collect();
+    units.sort();
+    assert_eq!(units, ["A1", "B2"]);
+}
